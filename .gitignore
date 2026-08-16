@@ -1,3 +1,6 @@
 .superpowers/
 .worktrees/
 node_modules/
+tests/fixtures/.requests.json
+tests/fixtures/.rid
+
