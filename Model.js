@@ -164,6 +164,18 @@ function sanitizeError(raw) {
     .trim();
 }
 
+function nextStatusError(parsed, current) {
+  var status = parsed || {};
+  if (status.error) return String(status.error);
+  if (status.ok && status.installed && status.daemon && status.api) return "";
+  return String(current || "");
+}
+
+function installCommand(stdinIsTty) {
+  if (stdinIsTty) return ["omarchy", "pkg", "add", "qbittorrent-nox"];
+  return ["pkexec", "omarchy", "pkg", "add", "qbittorrent-nox"];
+}
+
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     classifyState: classifyState,
@@ -178,7 +190,9 @@ if (typeof module !== "undefined" && module.exports) {
     priorityLabel: priorityLabel,
     cyclePriority: cyclePriority,
     parseStatusJson: parseStatusJson,
-    sanitizeError: sanitizeError
+    sanitizeError: sanitizeError,
+    nextStatusError: nextStatusError,
+    installCommand: installCommand
   };
 }
 

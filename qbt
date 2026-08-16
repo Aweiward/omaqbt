@@ -273,7 +273,13 @@ UNIT
 }
 
 cmd_install() {
-  omarchy pkg add qbittorrent-nox
+  # Panel Process has no TTY, so sudo cannot prompt. pkexec opens the
+  # same polkit dialog Tailscale uses. A real terminal can use sudo.
+  if [[ -t 0 ]]; then
+    omarchy pkg add qbittorrent-nox
+  else
+    pkexec omarchy pkg add qbittorrent-nox
+  fi
   printf '%s\n' '{"ok":true}'
 }
 

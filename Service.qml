@@ -51,8 +51,7 @@ Item {
     dlSpeed = parsed.dlSpeed
     upSpeed = parsed.upSpeed
     torrents = parsed.torrents
-    if (parsed.error) lastError = parsed.error
-    else lastError = ""
+    lastError = Model.nextStatusError(parsed, lastError)
   }
 
   function refresh() {

@@ -170,3 +170,55 @@ test("sanitizeError strips SID cookies and password fields", () => {
   assert.match(cleaned, /leftover/);
 });
 
+test("nextStatusError keeps a previous install error when still not installed", () => {
+  const parsed = Model.parseStatusJson(JSON.stringify({
+    installed: false,
+    daemon: false,
+    lockHolder: "none",
+    api: false,
+    dlSpeed: 0,
+    upSpeed: 0,
+    torrents: []
+  }));
+  assert.equal(
+    Model.nextStatusError(parsed, "sudo: a password is required"),
+    "sudo: a password is required"
+  );
+});
+
+test("nextStatusError uses parsed.error when present", () => {
+  const parsed = Model.parseStatusJson(JSON.stringify({
+    installed: false,
+    daemon: false,
+    lockHolder: "none",
+    api: false,
+    dlSpeed: 0,
+    upSpeed: 0,
+    torrents: [],
+    error: "HTTP 403"
+  }));
+  assert.equal(Model.nextStatusError(parsed, "old"), "HTTP 403");
+});
+
+test("nextStatusError clears when the daemon is ready", () => {
+  const parsed = Model.parseStatusJson(JSON.stringify({
+    installed: true,
+    daemon: true,
+    lockHolder: "nox",
+    api: true,
+    dlSpeed: 0,
+    upSpeed: 0,
+    torrents: []
+  }));
+  assert.equal(Model.nextStatusError(parsed, "old"), "");
+});
+
+test("installCommand uses pkexec when there is no tty", () => {
+  assert.deepEqual(Model.installCommand(false), ["pkexec", "omarchy", "pkg", "add", "qbittorrent-nox"]);
+});
+
+test("installCommand uses omarchy pkg add on a tty", () => {
+  assert.deepEqual(Model.installCommand(true), ["omarchy", "pkg", "add", "qbittorrent-nox"]);
+});
+
+
