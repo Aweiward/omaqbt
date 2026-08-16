@@ -146,7 +146,7 @@ assert r"WebUI\Enabled=true" in conf
 assert r"WebUI\Address=127.0.0.1" in conf
 assert r"WebUI\LocalHostAuth=false" in conf
 assert r"WebUI\Port=9001" in conf
-unit = (home / ".config/systemd/user/omarchy-qbittorrent-nox.service").read_text()
+unit = (home / ".config/systemd/user/omaqbt-nox.service").read_text()
 assert "ExecStart=/usr/bin/qbittorrent-nox" in unit
 assert "WantedBy=default.target" in unit
 print("daemon-contract ok")

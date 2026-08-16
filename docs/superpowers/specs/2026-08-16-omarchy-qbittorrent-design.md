@@ -1,4 +1,4 @@
-# Omarchy qBittorrent plugin
+# OmaqBT
 
 Daily-driver bar widget for qBittorrent on Omarchy. Left click opens a themed panel for live transfers, magnets, start/stop, remove, and file priorities. Right click starts or stops every torrent. The Qt window becomes an escape hatch, not the everyday UI.
 
@@ -32,7 +32,7 @@ Third-party Omarchy bar widget, same contract as `aweiward.mullvad`.
 
 | | |
 |---|---|
-| Plugin id | `aweiward.qbittorrent` |
+| Plugin id | `aweiward.omaqbt` |
 | Kind | `bar-widget` |
 | Entry point | `Panel.qml` |
 | Default section | `right` |
@@ -61,7 +61,7 @@ The mark is a QML-drawn icon, not an SVG. Dim when nothing is downloading or see
 
 ### `manifest.json`
 
-`schemaVersion` 1, id `aweiward.qbittorrent`, `kinds: ["bar-widget"]`, `entryPoints.barWidget: "Panel.qml"`. One setting: `refreshIntervalSec` (integer, 5–3600, default 5). That interval is the fallback poll if live sync is not producing updates. `allowMultiple: false`. Category: Network.
+`schemaVersion` 1, id `aweiward.omaqbt`, `kinds: ["bar-widget"]`, `entryPoints.barWidget: "Panel.qml"`. One setting: `refreshIntervalSec` (integer, 5–3600, default 5). That interval is the fallback poll if live sync is not producing updates. `allowMultiple: false`. Category: Network.
 
 ### `QbittorrentIcon.qml`
 
@@ -73,7 +73,7 @@ Bar button plus one `KeyboardPanel`. Two views, never two windows.
 
 **List view**
 
-- Hero: “qBittorrent”, global ↓ / ↑, active count, start/stop-all `ToggleSwitch`
+- Hero: “OmaqBT”, global ↓ / ↑, active count, start/stop-all `ToggleSwitch`
 - Magnet field (paste, Enter adds)
 - Clipboard banner when the panel opens and the clipboard holds a `magnet:` link or an `http(s)` URL whose path ends in `.torrent`. Action: Add this. Clipboard is not watched while the panel is closed.
 - Torrent rows: name, percent, ↓ / ↑, ETA, thin progress bar
@@ -174,11 +174,11 @@ v5 endpoint names only (`start` / `stop`). Do not call `/torrents/pause` or `/to
 
 ### User service and Web UI
 
-The helper writes `~/.config/systemd/user/omarchy-qbittorrent-nox.service` if it is missing:
+The helper writes `~/.config/systemd/user/omaqbt-nox.service` if it is missing:
 
 ```
 [Unit]
-Description=qBittorrent-nox for the Omarchy bar plugin
+Description=qBittorrent-nox for OmaqBT
 After=network-online.target
 
 [Service]
@@ -189,7 +189,7 @@ Restart=on-failure
 WantedBy=default.target
 ```
 
-Named `omarchy-qbittorrent-nox` so it does not fight a packaged system unit. It runs as the user, so it uses `~/.config/qBittorrent`.
+Named `omaqbt-nox` so it does not fight a packaged system unit. It runs as the user, so it uses `~/.config/qBittorrent`.
 
 On `start-daemon`, the helper always writes these three keys (they are required for a local-only plugin and override a previous LAN Web UI):
 
@@ -279,7 +279,7 @@ No screenshot tests and no live-library tests in v1.
 
 Use `Color.foreground`, `Color.urgent`, `Style.font`, `PanelHero`, `PanelSectionHeader`, `PanelSeparator`, `ToggleSwitch`, `TextField`, `ConfirmDialog`, `KeyboardPanel`, `BarIconButton`. No third-party QML controls. No raw hex except inside theme-aware `Color` / `Style` helpers.
 
-Hero title is “qBittorrent” on the list and the torrent name on detail. Empty active list: “Nothing downloading or seeding.” Empty paused/completed filters get their own one-line empty states.
+Hero title is “OmaqBT” on the list and the torrent name on detail. Empty active list: “Nothing downloading or seeding.” Empty paused/completed filters get their own one-line empty states.
 
 ## Implementation notes
 

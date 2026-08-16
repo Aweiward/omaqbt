@@ -1,17 +1,17 @@
 {
   "schemaVersion": 1,
-  "id": "aweiward.qbittorrent",
-  "name": "qBittorrent",
+  "id": "aweiward.omaqbt",
+  "name": "OmaqBT",
   "version": "1.0.0",
   "author": "Aweiward",
   "license": "MIT",
-  "description": "qBittorrent transfers, magnets, start/stop, remove, and file priorities in the Omarchy bar.",
+  "description": "OmaqBT: transfers, magnets, start/stop, remove, and file priorities in the Omarchy bar.",
   "kinds": ["bar-widget"],
   "entryPoints": {
     "barWidget": "Panel.qml"
   },
   "barWidget": {
-    "displayName": "qBittorrent",
+    "displayName": "OmaqBT",
     "description": "Watch transfers, add magnets, start or stop, remove, and set file priorities.",
     "category": "Network",
     "allowMultiple": false,

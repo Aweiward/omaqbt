@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Ship `aweiward.qbittorrent`, a themed Omarchy bar widget that runs `qbittorrent-nox` on the existing library and handles the daily loop (live list, magnets, start/stop, remove, file priorities) without opening the Qt window.
+**Goal:** Ship `aweiward.omaqbt`, a themed Omarchy bar widget that runs `qbittorrent-nox` on the existing library and handles the daily loop (live list, magnets, start/stop, remove, file priorities) without opening the Qt window.
 
 **Architecture:** Mullvad-shaped plugin. `Panel.qml` is the bar button and `KeyboardPanel`. `Service.qml` is the only QML object that runs processes. `qbt` (bash, curl + jq) owns the localhost Web API and the user systemd unit. `Model.js` is pure and unit-tested. Desktop `qbittorrent` stays installed as an escape hatch and must not run at the same time as nox.
 
@@ -20,7 +20,7 @@ Create these files. Do not edit `omarchy-mullvad` or anything under `/usr/share/
 |------|----------------|
 | `package.json` | `node --test` runner |
 | `LICENSE` | MIT, Copyright 2026 Aweiward |
-| `manifest.json` | Plugin contract (`aweiward.qbittorrent`) |
+| `manifest.json` | Plugin contract (`aweiward.omaqbt`) |
 | `Model.js` | Pure classify/filter/format/parse/sanitize |
 | `qbt` | Helper: Web API, lock, unit, conf, install |
 | `Service.qml` | Runs `qbt`, holds live state |
@@ -67,7 +67,7 @@ Copy `/home/ethos/Projects/omarchy-mullvad/LICENSE` verbatim (MIT, Copyright (c)
 ```json
 {
   "schemaVersion": 1,
-  "id": "aweiward.qbittorrent",
+  "id": "aweiward.omaqbt",
   "name": "qBittorrent",
   "version": "1.0.0",
   "author": "Aweiward",
@@ -795,7 +795,7 @@ Create executable `qbt`. It must:
 - Use `QBT_BASE` when set, otherwise `http://127.0.0.1:<port from QBT_CONF or 8080>`
 - Refuse any host other than `127.0.0.1`
 - Honor `QBT_INSTALLED`, `QBT_DAEMON`, `QBT_LOCK` in tests
-- Persist rid + torrent map in `QBT_RID_FILE` (default `$XDG_RUNTIME_DIR/omarchy-qbittorrent/rid.json`)
+- Persist rid + torrent map in `QBT_RID_FILE` (default `$XDG_RUNTIME_DIR/omaqbt/rid.json`)
 - Map API `dlspeed`/`upspeed` to `dlSpeed`/`upSpeed`
 - Fill `hash` via hash, else infohash_v1, else infohash_v2, else the map key
 - Print only JSON on stdout
@@ -806,10 +806,10 @@ set -euo pipefail
 
 HOME_DIR="${QBT_HOME:-$HOME}"
 CONF="${QBT_CONF:-$HOME_DIR/.config/qBittorrent/qBittorrent.conf}"
-STATE_DIR="${XDG_RUNTIME_DIR:-/tmp}/omarchy-qbittorrent"
+STATE_DIR="${XDG_RUNTIME_DIR:-/tmp}/omaqbt"
 RID_FILE="${QBT_RID_FILE:-$STATE_DIR/rid.json}"
 UNIT_DIR="$HOME_DIR/.config/systemd/user"
-UNIT_FILE="$UNIT_DIR/omarchy-qbittorrent-nox.service"
+UNIT_FILE="$UNIT_DIR/omaqbt-nox.service"
 
 sanitize() {
   sed -E 's/SID=[^;[:space:]]*/SID=<redacted>/gi; s/password=[^;[:space:]]*/password=<redacted>/gi'
@@ -1203,7 +1203,7 @@ assert r"WebUI\Enabled=true" in conf
 assert r"WebUI\Address=127.0.0.1" in conf
 assert r"WebUI\LocalHostAuth=false" in conf
 assert r"WebUI\Port=9001" in conf
-unit = (home / ".config/systemd/user/omarchy-qbittorrent-nox.service").read_text()
+unit = (home / ".config/systemd/user/omaqbt-nox.service").read_text()
 assert "ExecStart=/usr/bin/qbittorrent-nox" in unit
 assert "WantedBy=default.target" in unit
 print("daemon-contract ok")
@@ -1280,14 +1280,14 @@ cmd_start_daemon() {
   ensure_port
   if [[ ${QBT_SKIP_SYSTEMCTL:-} != 1 ]]; then
     systemctl --user daemon-reload
-    systemctl --user enable --now omarchy-qbittorrent-nox.service
+    systemctl --user enable --now omaqbt-nox.service
   fi
   printf '%s\n' '{"ok":true}'
 }
 
 cmd_stop_daemon() {
   if [[ ${QBT_SKIP_SYSTEMCTL:-} != 1 ]]; then
-    systemctl --user stop omarchy-qbittorrent-nox.service
+    systemctl --user stop omaqbt-nox.service
   fi
   printf '%s\n' '{"ok":true}'
 }
@@ -1687,8 +1687,8 @@ import "Model.js" as Model
 
 Panel {
   id: root
-  moduleName: "aweiward.qbittorrent"
-  ipcTarget: "aweiward.qbittorrent"
+  moduleName: "aweiward.omaqbt"
+  ipcTarget: "aweiward.omaqbt"
   manageIpc: false
 
   property string focusSection: "header"
@@ -2420,15 +2420,15 @@ Left-click the themed mark to see what is downloading or seeding, paste a magnet
 
 ## Install
 
-    omarchy plugin add https://github.com/Aweiward/omarchy-qbittorrent.git --enable
+    omarchy plugin add https://github.com/Aweiward/omaqbt.git --enable
 
-If `qbittorrent-nox` is missing, open the widget and click **Install qBittorrent-nox**. That runs `omarchy pkg add qbittorrent-nox` and starts `omarchy-qbittorrent-nox.service`. It will not remove the desktop qBittorrent app if you already have it.
+If `qbittorrent-nox` is missing, open the widget and click **Install qBittorrent-nox**. That runs `omarchy pkg add qbittorrent-nox` and starts `omaqbt-nox.service`. It will not remove the desktop qBittorrent app if you already have it.
 
-Close the Qt qBittorrent window before starting the daemon. Stop the daemon (`systemctl --user stop omarchy-qbittorrent-nox.service`) before opening the Qt app. They share `~/.config/qBittorrent` and must not run at the same time.
+Close the Qt qBittorrent window before starting the daemon. Stop the daemon (`systemctl --user stop omaqbt-nox.service`) before opening the Qt app. They share `~/.config/qBittorrent` and must not run at the same time.
 
 ## Remove
 
-    omarchy plugin remove aweiward.qbittorrent
+    omarchy plugin remove aweiward.omaqbt
 
 That disables the widget and deletes the plugin checkout. It does **not** uninstall `qbittorrent-nox`, stop the user service, delete torrents, or change other Omarchy config.
 
@@ -2457,7 +2457,7 @@ Keys in the file view: `j`/`k` move, Enter cycle priority, `x` skip, Space start
 
 - [ ] **Step 2: Validate the plugin folder**
 
-Run: `omarchy plugin validate /home/ethos/Projects/omarchy-qbittorrent`
+Run: `omarchy plugin validate /home/ethos/Projects/omaqbt`
 
 Expected: exit 0.
 

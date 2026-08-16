@@ -3,10 +3,10 @@ set -euo pipefail
 
 HOME_DIR="${QBT_HOME:-$HOME}"
 CONF="${QBT_CONF:-$HOME_DIR/.config/qBittorrent/qBittorrent.conf}"
-STATE_DIR="${XDG_RUNTIME_DIR:-/tmp}/omarchy-qbittorrent"
+STATE_DIR="${XDG_RUNTIME_DIR:-/tmp}/omaqbt"
 RID_FILE="${QBT_RID_FILE:-$STATE_DIR/rid.json}"
 UNIT_DIR="$HOME_DIR/.config/systemd/user"
-UNIT_FILE="$UNIT_DIR/omarchy-qbittorrent-nox.service"
+UNIT_FILE="$UNIT_DIR/omaqbt-nox.service"
 
 sanitize() {
   sed -E 's/SID=[^;[:space:]]*/SID=<redacted>/gi; s/password=[^;[:space:]]*/password=<redacted>/gi'
@@ -260,7 +260,7 @@ write_unit() {
   fi
   cat >"$UNIT_FILE" <<'UNIT'
 [Unit]
-Description=qBittorrent-nox for the Omarchy bar plugin
+Description=qBittorrent-nox for OmaqBT
 After=network-online.target
 
 [Service]
@@ -296,14 +296,14 @@ cmd_start_daemon() {
   ensure_port
   if [[ ${QBT_SKIP_SYSTEMCTL:-} != 1 ]]; then
     systemctl --user daemon-reload
-    systemctl --user enable --now omarchy-qbittorrent-nox.service
+    systemctl --user enable --now omaqbt-nox.service
   fi
   printf '%s\n' '{"ok":true}'
 }
 
 cmd_stop_daemon() {
   if [[ ${QBT_SKIP_SYSTEMCTL:-} != 1 ]]; then
-    systemctl --user stop omarchy-qbittorrent-nox.service
+    systemctl --user stop omaqbt-nox.service
   fi
   printf '%s\n' '{"ok":true}'
 }

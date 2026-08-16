@@ -8,8 +8,8 @@ import "Model.js" as Model
 
 Panel {
   id: root
-  moduleName: "aweiward.qbittorrent"
-  ipcTarget: "aweiward.qbittorrent"
+  moduleName: "aweiward.omaqbt"
+  ipcTarget: "aweiward.omaqbt"
   manageIpc: false
 
   property string focusSection: "header"
@@ -44,7 +44,7 @@ Panel {
   readonly property bool headerHasCursor: cursorActive && focusSection === "header" && qbt.ready && view === "list"
   readonly property string heroTitle: {
     if (view === "detail" && detailTorrent) return detailTorrent.name
-    return "qBittorrent"
+    return "OmaqBT"
   }
   readonly property string heroMeta: {
     if (view === "detail" && detailTorrent) {
