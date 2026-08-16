@@ -150,4 +150,35 @@ unit = (home / ".config/systemd/user/omaqbt-nox.service").read_text()
 assert "ExecStart=/usr/bin/qbittorrent-nox" in unit
 assert "WantedBy=default.target" in unit
 print("daemon-contract ok")
+
+# Keys must land under [Preferences], not after a later section.
+home2 = pathlib.Path(tempfile.mkdtemp(prefix="qbt-home2-"))
+denv2 = denv.copy()
+denv2.update({
+    "QBT_HOME": str(home2),
+    "QBT_CONF": str(home2 / ".config/qBittorrent/qBittorrent.conf"),
+    "QBT_LOCK": "none",
+})
+(home2 / ".config/qBittorrent").mkdir(parents=True)
+(home2 / ".config/qBittorrent/qBittorrent.conf").write_text(
+    "[Preferences]\n"
+    "General\\CloseToTrayNotified=true\n"
+    "\n"
+    "[TorrentProperties]\n"
+    "Visible=true\n"
+    "WebUI\\Port=9001\n"
+)
+ok2 = subprocess.run(["./qbt", "start-daemon"], env=denv2, text=True, capture_output=True)
+assert ok2.returncode == 0, ok2.stderr
+conf2 = (home2 / ".config/qBittorrent/qBittorrent.conf").read_text()
+prefs = conf2.split("[TorrentProperties]", 1)[0]
+assert "[Preferences]" in prefs
+assert r"WebUI\LocalHostAuth=false" in prefs
+assert r"WebUI\Enabled=true" in prefs
+assert r"WebUI\Address=127.0.0.1" in prefs
+assert r"WebUI\Port=9001" in prefs
+later = conf2.split("[TorrentProperties]", 1)[1]
+assert r"WebUI\LocalHostAuth=false" not in later
+assert r"WebUI\Port=9001" not in later
+print("prefs-section-contract ok")
 PY

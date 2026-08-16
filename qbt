@@ -232,25 +232,38 @@ set_key() {
   local file=$1 key=$2 value=$3
   mkdir -p "$(dirname "$file")"
   touch "$file"
-  if grep -q "^\[Preferences\]" "$file"; then
-    :
-  else
-    printf '\n[Preferences]\n' >>"$file"
-  fi
-  if grep -F -q "${key}=" "$file"; then
-    local tmp
-    tmp=$(mktemp)
-    awk -v key="$key" -v value="$value" 'BEGIN{p=0} index($0, key"=")==1{print key"="value; p=1; next} {print} END{if(!p) print key"="value}' "$file" >"$tmp"
-    mv "$tmp" "$file"
-  else
-    printf '%s=%s\n' "$key" "$value" >>"$file"
-  fi
+  python3 - "$file" "$key" "$value" <<'PY'
+import sys
+from pathlib import Path
+
+path, key, value = Path(sys.argv[1]), sys.argv[2], sys.argv[3]
+lines = path.read_text().splitlines() if path.exists() else []
+lines = [ln for ln in lines if not ln.startswith(key + "=")]
+out = []
+inserted = False
+if not any(ln.strip() == "[Preferences]" for ln in lines):
+    if lines and lines[-1].strip() != "":
+        lines.append("")
+    lines.append("[Preferences]")
+for ln in lines:
+    out.append(ln)
+    if ln.strip() == "[Preferences]" and not inserted:
+        out.append(f"{key}={value}")
+        inserted = True
+if not inserted:
+    out.append("[Preferences]")
+    out.append(f"{key}={value}")
+path.write_text("\n".join(out) + "\n")
+PY
 }
 
 ensure_port() {
-  if ! grep -F -q 'WebUI\Port=' "$CONF" 2>/dev/null; then
-    set_key "$CONF" 'WebUI\Port' '8080'
+  local port=8080
+  if grep -F -q 'WebUI\Port=' "$CONF" 2>/dev/null; then
+    port=$(grep -F 'WebUI\Port=' "$CONF" | tail -n1 | cut -d= -f2)
+    [[ -n $port ]] || port=8080
   fi
+  set_key "$CONF" 'WebUI\Port' "$port"
 }
 
 write_unit() {
@@ -289,10 +302,22 @@ cmd_start_daemon() {
   if [[ $lock == gui ]]; then
     die "Close qBittorrent before starting the daemon."
   fi
+  # A running nox rewrites qBittorrent.conf from memory on exit, so
+  # write the WebUI keys only while it is stopped.
+  if [[ ${QBT_SKIP_SYSTEMCTL:-} != 1 ]] && is_daemon; then
+    systemctl --user stop omaqbt-nox.service || true
+    local i
+    for i in 1 2 3 4 5 6 7 8 9 10; do
+      is_daemon || break
+      sleep 0.2
+    done
+  fi
   write_unit
   set_key "$CONF" 'WebUI\Enabled' 'true'
   set_key "$CONF" 'WebUI\Address' '127.0.0.1'
   set_key "$CONF" 'WebUI\LocalHostAuth' 'false'
+  set_key "$CONF" 'WebUI\AuthSubnetWhitelistEnabled' 'true'
+  set_key "$CONF" 'WebUI\AuthSubnetWhitelist' '127.0.0.1, ::1'
   ensure_port
   if [[ ${QBT_SKIP_SYSTEMCTL:-} != 1 ]]; then
     systemctl --user daemon-reload
