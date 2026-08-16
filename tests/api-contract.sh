@@ -121,4 +121,33 @@ finally:
     server2.wait(timeout=5)
 
 print("api-contract ok")
+
+import tempfile, pathlib
+home = pathlib.Path(tempfile.mkdtemp(prefix="qbt-home-"))
+denv = env.copy()
+denv.update({
+    "QBT_HOME": str(home),
+    "QBT_CONF": str(home / ".config/qBittorrent/qBittorrent.conf"),
+    "QBT_SKIP_SYSTEMCTL": "1",
+    "QBT_LOCK": "gui",
+})
+(home / ".config/qBittorrent").mkdir(parents=True)
+(home / ".config/qBittorrent/qBittorrent.conf").write_text("[Preferences]\nWebUI\\Port=9001\n")
+
+gui = subprocess.run(["./qbt", "start-daemon"], env=denv, text=True, capture_output=True)
+assert gui.returncode != 0
+assert "close qbittorrent" in (gui.stderr + gui.stdout).lower()
+
+denv["QBT_LOCK"] = "none"
+ok = subprocess.run(["./qbt", "start-daemon"], env=denv, text=True, capture_output=True)
+assert ok.returncode == 0, ok.stderr
+conf = (home / ".config/qBittorrent/qBittorrent.conf").read_text()
+assert r"WebUI\Enabled=true" in conf
+assert r"WebUI\Address=127.0.0.1" in conf
+assert r"WebUI\LocalHostAuth=false" in conf
+assert r"WebUI\Port=9001" in conf
+unit = (home / ".config/systemd/user/omarchy-qbittorrent-nox.service").read_text()
+assert "ExecStart=/usr/bin/qbittorrent-nox" in unit
+assert "WantedBy=default.target" in unit
+print("daemon-contract ok")
 PY

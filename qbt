@@ -228,6 +228,80 @@ cmd_prio() {
   printf '%s\n' '{"ok":true}'
 }
 
+set_key() {
+  local file=$1 key=$2 value=$3
+  mkdir -p "$(dirname "$file")"
+  touch "$file"
+  if grep -q "^\[Preferences\]" "$file"; then
+    :
+  else
+    printf '\n[Preferences]\n' >>"$file"
+  fi
+  if grep -F -q "${key}=" "$file"; then
+    local tmp
+    tmp=$(mktemp)
+    awk -v key="$key" -v value="$value" 'BEGIN{p=0} index($0, key"=")==1{print key"="value; p=1; next} {print} END{if(!p) print key"="value}' "$file" >"$tmp"
+    mv "$tmp" "$file"
+  else
+    printf '%s=%s\n' "$key" "$value" >>"$file"
+  fi
+}
+
+ensure_port() {
+  if ! grep -F -q 'WebUI\Port=' "$CONF" 2>/dev/null; then
+    set_key "$CONF" 'WebUI\Port' '8080'
+  fi
+}
+
+write_unit() {
+  mkdir -p "$UNIT_DIR"
+  if [[ -f $UNIT_FILE ]]; then
+    return
+  fi
+  cat >"$UNIT_FILE" <<'UNIT'
+[Unit]
+Description=qBittorrent-nox for the Omarchy bar plugin
+After=network-online.target
+
+[Service]
+ExecStart=/usr/bin/qbittorrent-nox
+Restart=on-failure
+
+[Install]
+WantedBy=default.target
+UNIT
+}
+
+cmd_install() {
+  omarchy pkg add qbittorrent-nox
+  printf '%s\n' '{"ok":true}'
+}
+
+cmd_start_daemon() {
+  local lock
+  lock=$(lock_holder)
+  if [[ $lock == gui ]]; then
+    die "Close qBittorrent before starting the daemon."
+  fi
+  write_unit
+  set_key "$CONF" 'WebUI\Enabled' 'true'
+  set_key "$CONF" 'WebUI\Address' '127.0.0.1'
+  set_key "$CONF" 'WebUI\LocalHostAuth' 'false'
+  ensure_port
+  if [[ ${QBT_SKIP_SYSTEMCTL:-} != 1 ]]; then
+    systemctl --user daemon-reload
+    systemctl --user enable --now omarchy-qbittorrent-nox.service
+  fi
+  printf '%s\n' '{"ok":true}'
+}
+
+cmd_stop_daemon() {
+  if [[ ${QBT_SKIP_SYSTEMCTL:-} != 1 ]]; then
+    systemctl --user stop omarchy-qbittorrent-nox.service
+  fi
+  printf '%s\n' '{"ok":true}'
+}
+
 case ${1:-} in
   status) shift; cmd_status "$@" ;;
   add) shift; cmd_add "$@" ;;
@@ -236,5 +310,8 @@ case ${1:-} in
   delete) shift; cmd_delete "$@" ;;
   files) shift; cmd_files "$@" ;;
   prio) shift; cmd_prio "$@" ;;
+  install) shift; cmd_install "$@" ;;
+  start-daemon) shift; cmd_start_daemon "$@" ;;
+  stop-daemon) shift; cmd_stop_daemon "$@" ;;
   *) die "usage: qbt status|add|start|stop|delete|files|prio|install|start-daemon|stop-daemon" ;;
 esac
