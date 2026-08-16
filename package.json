@@ -1,0 +1,7 @@
+{
+  "name": "aweiward-qbittorrent",
+  "private": true,
+  "scripts": {
+    "test": "node --test tests/*.test.js"
+  }
+}
