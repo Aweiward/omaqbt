@@ -181,7 +181,60 @@ print(json.dumps({
     '{installed:$installed, daemon:$daemon, lockHolder:$lock, api:$api, dlSpeed:$dl, upSpeed:$up, torrents:$torrents}'
 }
 
+cmd_add() {
+  local url=${1:-}
+  [[ -n $url ]] || die "usage: qbt add <magnet-or-url>"
+  local encoded
+  encoded=$(jq -nr --arg u "$url" '$u|@uri')
+  api POST "/api/v2/torrents/add" "urls=${encoded}" >/dev/null
+  printf '%s\n' '{"ok":true}'
+}
+
+cmd_start() {
+  local hash=${1:-}
+  [[ -n $hash ]] || die "usage: qbt start <hash|all>"
+  api POST "/api/v2/torrents/start" "hashes=${hash}" >/dev/null
+  printf '%s\n' '{"ok":true}'
+}
+
+cmd_stop() {
+  local hash=${1:-}
+  [[ -n $hash ]] || die "usage: qbt stop <hash|all>"
+  api POST "/api/v2/torrents/stop" "hashes=${hash}" >/dev/null
+  printf '%s\n' '{"ok":true}'
+}
+
+cmd_delete() {
+  local hash=${1:-}
+  local files=false
+  shift || true
+  if [[ ${1:-} == --files ]]; then files=true; fi
+  [[ -n $hash ]] || die "usage: qbt delete <hash> [--files]"
+  api POST "/api/v2/torrents/delete" "hashes=${hash}&deleteFiles=${files}" >/dev/null
+  printf '%s\n' '{"ok":true}'
+}
+
+cmd_files() {
+  local hash=${1:-}
+  [[ -n $hash ]] || die "usage: qbt files <hash>"
+  api GET "/api/v2/torrents/files?hash=${hash}"
+  printf '\n'
+}
+
+cmd_prio() {
+  local hash=${1:-} index=${2:-} prio=${3:-}
+  [[ -n $hash && -n $index && -n $prio ]] || die "usage: qbt prio <hash> <index> <0|1|6|7>"
+  api POST "/api/v2/torrents/filePrio" "hash=${hash}&id=${index}&priority=${prio}" >/dev/null
+  printf '%s\n' '{"ok":true}'
+}
+
 case ${1:-} in
   status) shift; cmd_status "$@" ;;
+  add) shift; cmd_add "$@" ;;
+  start) shift; cmd_start "$@" ;;
+  stop) shift; cmd_stop "$@" ;;
+  delete) shift; cmd_delete "$@" ;;
+  files) shift; cmd_files "$@" ;;
+  prio) shift; cmd_prio "$@" ;;
   *) die "usage: qbt status|add|start|stop|delete|files|prio|install|start-daemon|stop-daemon" ;;
 esac

@@ -65,9 +65,60 @@ try:
     names = {t["name"] for t in data2["torrents"]}
     assert names == {"debian.iso"}
     assert abs(data2["torrents"][0]["progress"] - 0.5) < 1e-9
+
+    add = qbt("add", "magnet:?xt=urn:btih:abc")
+    assert add.returncode == 0, add.stderr
+    start = qbt("start", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+    assert start.returncode == 0, start.stderr
+    stop = qbt("stop", "all")
+    assert stop.returncode == 0, stop.stderr
+    delete = qbt("delete", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+    assert delete.returncode == 0, delete.stderr
+    delete_files = qbt("delete", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "--files")
+    assert delete_files.returncode == 0, delete_files.stderr
+    files = qbt("files", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+    assert files.returncode == 0, files.stderr
+    file_rows = json.loads(files.stdout)
+    assert file_rows[0]["name"] == "debian.iso"
+    prio = qbt("prio", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "1", "0")
+    assert prio.returncode == 0, prio.stderr
+
+    reqs = json.loads(log.read_text())
+    posts = [r["path"] for r in reqs if r["method"] == "POST"]
+    assert "/api/v2/torrents/add" in posts
+    assert "/api/v2/torrents/start" in posts
+    assert "/api/v2/torrents/stop" in posts
+    assert "/api/v2/torrents/delete" in posts
+    assert "/api/v2/torrents/filePrio" in posts
+    assert "/api/v2/torrents/pause" not in posts
+    assert "/api/v2/torrents/resume" not in posts
+    bodies = " ".join(r["body"] for r in reqs if r["method"] == "POST")
+    assert "urls=magnet:?xt=urn:btih:abc" in bodies or "urls=magnet%3A%3Fxt%3Durn%3Abtih%3Aabc" in bodies
+    assert "deleteFiles=true" in bodies
+    assert "deleteFiles=false" in bodies
+    assert "hashes=all" in bodies
 finally:
     server.terminate()
     server.wait(timeout=5)
 
-print("status-contract ok")
+env["QBT_FIXTURE_FORBIDDEN"] = "1"
+server2 = subprocess.Popen(["python3", "tests/fixtures/server.py"], env=env)
+try:
+    for _ in range(50):
+        try:
+            urllib.request.urlopen(f"http://127.0.0.1:{port}/api/v2/sync/maindata?rid=0", timeout=0.1)
+            break
+        except Exception as exc:
+            if "403" in str(exc):
+                break
+            time.sleep(0.05)
+    bad = qbt("status")
+    text = bad.stdout + bad.stderr
+    assert "leaked-secret-value" not in text
+    assert "SID=<redacted>" in text or "localhost auth is required" in text
+finally:
+    server2.terminate()
+    server2.wait(timeout=5)
+
+print("api-contract ok")
 PY
