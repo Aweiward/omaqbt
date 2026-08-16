@@ -1,0 +1,1 @@
+[{"method": "GET", "path": "/api/v2/sync/maindata", "body": "", "query": {"rid": ["0"]}}, {"method": "GET", "path": "/api/v2/sync/maindata", "body": "", "query": {"rid": ["0"]}}, {"method": "GET", "path": "/api/v2/sync/maindata", "body": "", "query": {"rid": ["1"]}}]

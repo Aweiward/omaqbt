@@ -1,0 +1,13 @@
+{
+  "rid": 2,
+  "full_update": false,
+  "server_state": { "dl_info_speed": 100, "up_info_speed": 0 },
+  "torrents": {
+    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa": {
+      "progress": 0.5,
+      "dlspeed": 100,
+      "eta": 600
+    }
+  },
+  "torrents_removed": ["bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"]
+}

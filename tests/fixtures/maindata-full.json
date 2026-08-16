@@ -1,0 +1,28 @@
+{
+  "rid": 1,
+  "full_update": true,
+  "server_state": { "dl_info_speed": 2202009, "up_info_speed": 143360 },
+  "torrents": {
+    "": {
+      "name": "debian.iso",
+      "state": "downloading",
+      "progress": 0.42,
+      "dlspeed": 1887436,
+      "upspeed": 0,
+      "eta": 720,
+      "ratio": 0.1,
+      "size": 661651456,
+      "infohash_v1": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb": {
+      "name": "arch.iso",
+      "state": "uploading",
+      "progress": 1,
+      "dlspeed": 0,
+      "upspeed": 143360,
+      "eta": 8640000,
+      "ratio": 1.2,
+      "size": 1048576000
+    }
+  }
+}

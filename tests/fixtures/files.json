@@ -1,0 +1,4 @@
+[
+  { "index": 0, "name": "debian.iso", "progress": 0.42, "priority": 1 },
+  { "index": 1, "name": "MD5SUMS", "progress": 1, "priority": 0 }
+]
