@@ -6,6 +6,10 @@ OmaqBT talks to `qbittorrent-nox` on your existing `~/.config/qBittorrent` libra
 
 License: [MIT](LICENSE).
 
+![OmaqBT on the Omarchy bar](preview.png)
+
+![OmaqBT torrent detail, remove, and file list](preview-detail.png)
+
 ## Install
 
 ```sh
