@@ -16,6 +16,8 @@ If `qbittorrent-nox` is missing, open the widget and click **Install qBittorrent
 
 Close the Qt qBittorrent window before starting the daemon. Stop the daemon before opening the Qt app. They share one profile and must not run at the same time.
 
+Connect Mullvad before you start the daemon if you want traffic bound to the VPN. The bind only happens when `wg0-mullvad` is already up. If nox starts with Mullvad down, it stays unbound until the next start.
+
 ```sh
 omarchy bar move aweiward.omaqbt --section right
 ```
@@ -86,6 +88,7 @@ systemctl --user stop omaqbt-nox.service
 - Installs the Arch extra package `qbittorrent-nox` through `omarchy pkg add` when you click Install. Privilege is `pkexec`, not a sudoers rule.
 - Writes `~/.config/systemd/user/omaqbt-nox.service` and enables it as your user.
 - Writes the localhost Web UI keys listed under Configure. It stops the daemon first so qBittorrent does not overwrite those keys on exit.
+- If `wg0-mullvad` is up, also writes the `[BitTorrent]` interface keys so qBittorrent binds the tunnel, not a single relay IP.
 - Stores sync state in `$XDG_RUNTIME_DIR/omaqbt/` (private, mode 700). If that variable is unset it falls back to a uid-scoped `/tmp/omaqbt-<uid>`, created with `umask 077`, and refuses to write through a symlink or a directory it does not own.
 - Does not add torrents, delete files, or start the daemon unless you click or press the matching control.
 
