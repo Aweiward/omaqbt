@@ -254,31 +254,45 @@ cmd_prio() {
 
 set_key() {
   local file=$1 key=$2 value=$3
+  local section=${4:-Preferences}
   mkdir -p "$(dirname "$file")"
   touch "$file"
-  python3 - "$file" "$key" "$value" <<'PY'
+  python3 - "$file" "$key" "$value" "$section" <<'PY'
 import sys
 from pathlib import Path
 
-path, key, value = Path(sys.argv[1]), sys.argv[2], sys.argv[3]
+path, key, value, section = Path(sys.argv[1]), sys.argv[2], sys.argv[3], sys.argv[4]
+header = "[" + section + "]"
 lines = path.read_text().splitlines() if path.exists() else []
 lines = [ln for ln in lines if not ln.startswith(key + "=")]
 out = []
 inserted = False
-if not any(ln.strip() == "[Preferences]" for ln in lines):
+if not any(ln.strip() == header for ln in lines):
     if lines and lines[-1].strip() != "":
         lines.append("")
-    lines.append("[Preferences]")
+    lines.append(header)
 for ln in lines:
     out.append(ln)
-    if ln.strip() == "[Preferences]" and not inserted:
+    if ln.strip() == header and not inserted:
         out.append(f"{key}={value}")
         inserted = True
 if not inserted:
-    out.append("[Preferences]")
+    out.append(header)
     out.append(f"{key}={value}")
 path.write_text("\n".join(out) + "\n")
 PY
+}
+
+bind_mullvad() {
+  local iface="${QBT_BIND_IFACE:-}"
+  if [[ -z $iface && -d /sys/class/net/wg0-mullvad ]]; then
+    iface=wg0-mullvad
+  fi
+  [[ -n $iface ]] || return 0
+  # Bind the tunnel interface, not a relay IP, so a city change keeps working.
+  set_key "$CONF" 'Session\Interface' "$iface" BitTorrent
+  set_key "$CONF" 'Session\InterfaceName' "$iface" BitTorrent
+  set_key "$CONF" 'Session\InterfaceAddress' "" BitTorrent
 }
 
 ensure_port() {
@@ -343,6 +357,7 @@ cmd_start_daemon() {
   set_key "$CONF" 'WebUI\AuthSubnetWhitelistEnabled' 'true'
   set_key "$CONF" 'WebUI\AuthSubnetWhitelist' '127.0.0.1, ::1'
   ensure_port
+  bind_mullvad
   if [[ ${QBT_SKIP_SYSTEMCTL:-} != 1 ]]; then
     systemctl --user daemon-reload
     systemctl --user enable --now omaqbt-nox.service

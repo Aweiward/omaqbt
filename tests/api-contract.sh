@@ -139,6 +139,7 @@ assert gui.returncode != 0
 assert "close qbittorrent" in (gui.stderr + gui.stdout).lower()
 
 denv["QBT_LOCK"] = "none"
+denv["QBT_BIND_IFACE"] = "wg0-mullvad"
 ok = subprocess.run(["./qbt", "start-daemon"], env=denv, text=True, capture_output=True)
 assert ok.returncode == 0, ok.stderr
 conf = (home / ".config/qBittorrent/qBittorrent.conf").read_text()
@@ -146,6 +147,11 @@ assert r"WebUI\Enabled=true" in conf
 assert r"WebUI\Address=127.0.0.1" in conf
 assert r"WebUI\LocalHostAuth=false" in conf
 assert r"WebUI\Port=9001" in conf
+assert r"Session\Interface=wg0-mullvad" in conf
+assert r"Session\InterfaceName=wg0-mullvad" in conf
+bittorrent = conf.split("[BitTorrent]", 1)
+assert len(bittorrent) == 2
+assert r"Session\Interface=wg0-mullvad" in bittorrent[1].split("[", 1)[0]
 unit = (home / ".config/systemd/user/omaqbt-nox.service").read_text()
 assert "ExecStart=/usr/bin/qbittorrent-nox" in unit
 assert "WantedBy=default.target" in unit

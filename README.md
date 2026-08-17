@@ -46,6 +46,16 @@ WebUI\AuthSubnetWhitelist=127.0.0.1, ::1
 WebUI\Port=<existing port, or 8080>
 ```
 
+If `wg0-mullvad` is present (or `QBT_BIND_IFACE` is set), starting the daemon also writes under `[BitTorrent]`:
+
+```
+Session\Interface=<iface>
+Session\InterfaceName=<iface>
+Session\InterfaceAddress=
+```
+
+That binds the tunnel interface, not a single relay IP, so a Mullvad city change does not stall announces.
+
 No other qBittorrent keys are rewritten. The plugin never stores a Web UI password.
 
 ## Remove
