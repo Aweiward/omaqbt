@@ -12,6 +12,11 @@
       "eta": 720,
       "ratio": 0.1,
       "size": 661651456,
+      "save_path": "/home/user/Downloads",
+      "content_path": "/home/user/Downloads/debian.iso",
+      "num_seeds": 14,
+      "num_leechs": 3,
+      "added_on": 1755300000,
       "infohash_v1": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
     },
     "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb": {
@@ -22,7 +27,12 @@
       "upspeed": 143360,
       "eta": 8640000,
       "ratio": 1.2,
-      "size": 1048576000
+      "size": 1048576000,
+      "save_path": "/home/user/Downloads",
+      "content_path": "/home/user/Downloads/arch.iso",
+      "num_seeds": 0,
+      "num_leechs": 7,
+      "added_on": 1755200000
     }
   }
 }

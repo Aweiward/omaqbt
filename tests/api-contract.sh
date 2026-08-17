@@ -64,6 +64,12 @@ try:
     hashes = {t["hash"] for t in data["torrents"]}
     assert "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" in hashes
     assert "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" in hashes
+    debian = next(t for t in data["torrents"] if t["name"] == "debian.iso")
+    assert debian["savePath"] == "/home/user/Downloads"
+    assert debian["contentPath"] == "/home/user/Downloads/debian.iso"
+    assert debian["numSeeds"] == 14
+    assert debian["numLeechs"] == 3
+    assert debian["addedOn"] == 1755300000
 
     # No VPN iface detected: no warning fields, and no preferences call at all.
     assert data["vpnIface"] == ""
@@ -76,6 +82,10 @@ try:
     names = {t["name"] for t in data2["torrents"]}
     assert names == {"debian.iso"}
     assert abs(data2["torrents"][0]["progress"] - 0.5) < 1e-9
+    # The delta does not resend detail fields; they must survive via the rid cache.
+    assert data2["torrents"][0]["savePath"] == "/home/user/Downloads"
+    assert data2["torrents"][0]["numSeeds"] == 14
+    assert data2["torrents"][0]["addedOn"] == 1755300000
 
     # With the VPN iface up: report where the running daemon is bound.
     reqs_before = json.loads(log.read_text())

@@ -315,3 +315,93 @@ test("vpnUnbound warns only when the daemon runs off the VPN while it is up", ()
   assert.equal(Model.vpnUnbound({ ...base, api: false }), false);
   assert.equal(Model.vpnUnbound(null), false);
 });
+
+test("parseStatusJson maps detail fields with safe defaults", () => {
+  const parsed = Model.parseStatusJson(JSON.stringify({
+    installed: true, daemon: true, api: true,
+    torrents: [
+      {
+        hash: "a", name: "x", state: "downloading", progress: 0.5,
+        savePath: "/dl", contentPath: "/dl/x", numSeeds: 4, numLeechs: 12, addedOn: 1755400000
+      },
+      { hash: "b", name: "y", state: "uploading", progress: 1 }
+    ]
+  }));
+  assert.equal(parsed.torrents[0].savePath, "/dl");
+  assert.equal(parsed.torrents[0].contentPath, "/dl/x");
+  assert.equal(parsed.torrents[0].numSeeds, 4);
+  assert.equal(parsed.torrents[0].numLeechs, 12);
+  assert.equal(parsed.torrents[0].addedOn, 1755400000);
+  assert.equal(parsed.torrents[1].savePath, "");
+  assert.equal(parsed.torrents[1].contentPath, "");
+  assert.equal(parsed.torrents[1].numSeeds, 0);
+  assert.equal(parsed.torrents[1].numLeechs, 0);
+  assert.equal(parsed.torrents[1].addedOn, 0);
+});
+
+const sortSample = [
+  { name: "slow", dlSpeed: 10, upSpeed: 0, eta: 8640000, addedOn: 300 },
+  { name: "fast", dlSpeed: 500, upSpeed: 100, eta: 60, addedOn: 100 },
+  { name: "mid", dlSpeed: 100, upSpeed: 0, eta: 600, addedOn: 200 }
+];
+
+test("sortTorrents default keeps original order and copies", () => {
+  const got = Model.sortTorrents(sortSample, "default");
+  assert.deepEqual(got.map((t) => t.name), ["slow", "fast", "mid"]);
+  assert.notEqual(got, sortSample);
+});
+
+test("sortTorrents speed puts the fastest first", () => {
+  const got = Model.sortTorrents(sortSample, "speed").map((t) => t.name);
+  assert.deepEqual(got, ["fast", "mid", "slow"]);
+});
+
+test("sortTorrents eta puts unknown etas last", () => {
+  const got = Model.sortTorrents(sortSample, "eta").map((t) => t.name);
+  assert.deepEqual(got, ["fast", "mid", "slow"]);
+  const zeros = Model.sortTorrents([{ name: "z", eta: 0 }, { name: "e", eta: 5 }], "eta");
+  assert.deepEqual(zeros.map((t) => t.name), ["e", "z"]);
+});
+
+test("sortTorrents added puts the newest first", () => {
+  const got = Model.sortTorrents(sortSample, "added").map((t) => t.name);
+  assert.deepEqual(got, ["slow", "mid", "fast"]);
+});
+
+test("cycleSort walks default speed eta added", () => {
+  assert.equal(Model.cycleSort("default"), "speed");
+  assert.equal(Model.cycleSort("speed"), "eta");
+  assert.equal(Model.cycleSort("eta"), "added");
+  assert.equal(Model.cycleSort("added"), "default");
+  assert.equal(Model.cycleSort("junk"), "speed");
+});
+
+test("sortLabel names the active sort", () => {
+  assert.equal(Model.sortLabel("default"), "");
+  assert.equal(Model.sortLabel("speed"), "by speed");
+  assert.equal(Model.sortLabel("eta"), "by eta");
+  assert.equal(Model.sortLabel("added"), "by added");
+});
+
+test("filterByQuery matches names case-insensitively", () => {
+  const list = [{ name: "Debian.iso" }, { name: "arch.iso" }];
+  assert.deepEqual(Model.filterByQuery(list, "DEB").map((t) => t.name), ["Debian.iso"]);
+  assert.equal(Model.filterByQuery(list, "").length, 2);
+  assert.equal(Model.filterByQuery(list, "  ").length, 2);
+  assert.equal(Model.filterByQuery(list, "zzz").length, 0);
+});
+
+test("listQuery treats addable urls as no filter", () => {
+  assert.equal(Model.listQuery("magnet:?xt=urn:btih:abc"), "");
+  assert.equal(Model.listQuery("https://example.com/x.torrent"), "");
+  assert.equal(Model.listQuery(" deb "), "deb");
+  assert.equal(Model.listQuery(""), "");
+});
+
+test("formatDate renders an ISO day or em dash", () => {
+  assert.equal(Model.formatDate(1786924800), "2026-08-17");
+  assert.equal(Model.formatDate(86400), "1970-01-02");
+  assert.equal(Model.formatDate(0), "—");
+  assert.equal(Model.formatDate(-1), "—");
+  assert.equal(Model.formatDate("junk"), "—");
+});

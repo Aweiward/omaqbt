@@ -18,6 +18,7 @@ Panel {
   property bool cursorActive: false
   property string view: "list"
   property string filterMode: "active"
+  property string sortMode: "default"
   property string detailHash: ""
   property string magnetField: ""
   property bool confirmOpen: false
@@ -30,7 +31,8 @@ Panel {
   readonly property color hoverFill: bar ? Style.hoverFillFor(bar.foreground, Color.accent) : "transparent"
   readonly property color barIconColor: qbt.transferring ? barForeground : Qt.darker(barForeground, 1.55)
   readonly property bool fieldFocused: magnetInput && magnetInput.activeFocus
-  readonly property var visibleTorrents: Model.filterTorrents(qbt.torrents, filterMode)
+  readonly property string listFilterQuery: Model.listQuery(magnetField)
+  readonly property var visibleTorrents: Model.sortTorrents(Model.filterByQuery(Model.filterTorrents(qbt.torrents, filterMode), listFilterQuery), sortMode)
   readonly property int activeCount: Model.filterTorrents(qbt.torrents, "active").length
   readonly property var selectedTorrent: {
     if (visibleTorrents.length === 0) return null
@@ -42,6 +44,7 @@ Panel {
     return null
   }
   readonly property bool headerHasCursor: cursorActive && focusSection === "header" && qbt.ready && view === "list"
+  readonly property bool detailHasFolder: detailTorrent !== null && detailTorrent.savePath !== ""
   readonly property string heroTitle: {
     if (view === "detail" && detailTorrent) return Model.plainText(detailTorrent.name)
     return "OmaqBT"
@@ -54,9 +57,12 @@ Panel {
     if (qbt.lockHolder === "gui") return "Close qBittorrent first"
     if (!qbt.daemon) return "Daemon is not running"
     if (!qbt.api) return "Web API is not reachable"
-    return Model.formatRate(qbt.dlSpeed) + " · " + Model.formatRate(qbt.upSpeed) + " · " + activeCount + " active"
+    var meta = Model.formatRate(qbt.dlSpeed) + " · " + Model.formatRate(qbt.upSpeed) + " · " + activeCount + " active"
+    if (sortMode !== "default") meta += " · " + Model.sortLabel(sortMode)
+    return meta
   }
   readonly property string emptyListText: {
+    if (listFilterQuery !== "") return "No matching torrents."
     if (filterMode === "paused") return "No paused torrents."
     if (filterMode === "completed") return "No completed torrents."
     if (filterMode === "all") return "No torrents."
@@ -75,7 +81,7 @@ Panel {
     if (qbt.lockHolder === "gui") { focusSection = "lock"; return }
     if (!qbt.daemon) { focusSection = "daemon"; return }
     if (view === "detail") {
-      if (focusSection !== "remove" && focusSection !== "deleteFiles" && focusSection !== "files")
+      if (focusSection !== "openFolder" && focusSection !== "remove" && focusSection !== "deleteFiles" && focusSection !== "files")
         focusSection = (qbt.files && qbt.files.length > 0) ? "files" : "remove"
       if (fileIndex >= qbt.files.length) fileIndex = Math.max(0, qbt.files.length - 1)
       return
@@ -123,6 +129,10 @@ Panel {
     closeDetail()
   }
 
+  function openFolder(row) {
+    if (row && row.savePath) qbt.openPath(row.savePath)
+  }
+
   function setFilter(mode) {
     filterMode = mode
     rowIndex = 0
@@ -134,8 +144,13 @@ Panel {
     ensureCursor()
     if (dy === 0) return
     if (view === "detail") {
+      if (focusSection === "openFolder") {
+        if (dy > 0) focusSection = "remove"
+        return
+      }
       if (focusSection === "remove") {
-        if (dy > 0) focusSection = "deleteFiles"
+        if (dy < 0 && detailHasFolder) focusSection = "openFolder"
+        else if (dy > 0) focusSection = "deleteFiles"
         return
       }
       if (focusSection === "deleteFiles") {
@@ -181,6 +196,7 @@ Panel {
     else if (focusSection === "clipboard") qbt.addUrl(qbt.clipboardText)
     else if (focusSection === "rows") openDetail(selectedTorrent)
     else if (focusSection === "files") cycleSelectedFile()
+    else if (focusSection === "openFolder") openFolder(detailTorrent)
     else if (focusSection === "remove") removeKeepFiles(detailHash)
     else if (focusSection === "deleteFiles") askDeleteFiles(detailHash)
   }
@@ -245,6 +261,11 @@ Panel {
       if (hash) askDeleteFiles(hash)
     } else if (t === "h" || t === "H") {
       if (view === "detail") closeDetail()
+    } else if (t === "s" || t === "S") {
+      if (view === "list") sortMode = Model.cycleSort(sortMode)
+    } else if (t === "o" || t === "O") {
+      if (view === "detail") openFolder(detailTorrent)
+      else openFolder(selectedTorrent)
     }
   }
 
@@ -435,6 +456,49 @@ Panel {
             visible: qbt.ready && root.view === "detail"
             width: parent.width
             spacing: Style.space(6)
+
+            Text {
+              visible: root.detailTorrent !== null
+              width: parent.width
+              text: {
+                var t = root.detailTorrent
+                if (!t) return ""
+                var line = Model.formatSize(t.size) + " · ratio " + Number(t.ratio).toFixed(2) +
+                  " · " + t.numSeeds + " seeds · " + t.numLeechs + " peers · added " + Model.formatDate(t.addedOn)
+                if (t.savePath !== "") line += "\n" + Model.plainText(t.savePath)
+                return line
+              }
+              color: root.dim
+              wrapMode: Text.WrapAnywhere
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.bodySmall
+            }
+
+            CursorSurface {
+              visible: root.detailHasFolder
+              width: parent.width
+              height: Style.space(36)
+              implicitHeight: height
+              hasCursor: root.cursorActive && root.focusSection === "openFolder"
+              foreground: root.foreground
+              fill: root.hoverFill
+              MouseArea {
+                anchors.fill: parent
+                hoverEnabled: true
+                cursorShape: Qt.PointingHandCursor
+                onEntered: { root.cursorActive = true; root.focusSection = "openFolder" }
+                onClicked: root.openFolder(root.detailTorrent)
+              }
+              Text {
+                anchors.verticalCenter: parent.verticalCenter
+                anchors.left: parent.left
+                anchors.leftMargin: Style.space(10)
+                text: "Open folder"
+                color: root.foreground
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.body
+              }
+            }
 
             CursorSurface {
               width: parent.width
@@ -654,15 +718,23 @@ Panel {
               id: magnetInput
               width: parent.width
               foreground: root.foreground
-              placeholderText: "Paste a magnet or .torrent URL"
+              placeholderText: "Paste a magnet or .torrent URL · type to filter"
               text: root.magnetField
               onTextChanged: root.magnetField = text
               onAccepted: {
+                if (!Model.isAddableUrl(text)) return
                 qbt.addUrl(text)
                 root.magnetField = ""
                 text = ""
               }
-              Keys.onEscapePressed: root.close()
+              Keys.onEscapePressed: {
+                if (text !== "") {
+                  text = ""
+                  root.magnetField = ""
+                } else {
+                  root.close()
+                }
+              }
             }
 
             CursorSurface {

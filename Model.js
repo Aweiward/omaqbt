@@ -108,6 +108,66 @@ function completionText(names) {
   return list.length + " torrents finished downloading";
 }
 
+var SORT_ORDER = ["default", "speed", "eta", "added"];
+var SORT_LABELS = { default: "", speed: "by speed", eta: "by eta", added: "by added" };
+
+function sortTorrents(list, mode) {
+  var rows = (list || []).slice();
+  if (mode === "speed") {
+    rows.sort(function(a, b) {
+      return (Number(b.dlSpeed || 0) + Number(b.upSpeed || 0)) - (Number(a.dlSpeed || 0) + Number(a.upSpeed || 0));
+    });
+  } else if (mode === "eta") {
+    rows.sort(function(a, b) {
+      var ea = Number(a.eta || 0);
+      var eb = Number(b.eta || 0);
+      if (ea <= 0 || ea >= 8640000) ea = Infinity;
+      if (eb <= 0 || eb >= 8640000) eb = Infinity;
+      if (ea === eb) return 0;
+      return ea < eb ? -1 : 1;
+    });
+  } else if (mode === "added") {
+    rows.sort(function(a, b) {
+      return Number(b.addedOn || 0) - Number(a.addedOn || 0);
+    });
+  }
+  return rows;
+}
+
+function cycleSort(mode) {
+  var i = SORT_ORDER.indexOf(String(mode));
+  if (i === -1) return SORT_ORDER[1];
+  return SORT_ORDER[(i + 1) % SORT_ORDER.length];
+}
+
+function sortLabel(mode) {
+  var label = SORT_LABELS[String(mode)];
+  return label == null ? "" : label;
+}
+
+function filterByQuery(list, query) {
+  var q = String(query || "").trim().toLowerCase();
+  var rows = list || [];
+  if (q === "") return rows.slice();
+  var out = [];
+  for (var i = 0; i < rows.length; i++) {
+    if (String(rows[i].name || "").toLowerCase().indexOf(q) !== -1) out.push(rows[i]);
+  }
+  return out;
+}
+
+function listQuery(fieldText) {
+  var s = String(fieldText || "").trim();
+  if (s === "" || isAddableUrl(s)) return "";
+  return s;
+}
+
+function formatDate(epochSec) {
+  var n = Number(epochSec);
+  if (!isFinite(n) || n <= 0) return "—";
+  return new Date(n * 1000).toISOString().slice(0, 10);
+}
+
 function vpnUnbound(status) {
   var s = status || {};
   if (s.daemon !== true || s.api !== true) return false;
@@ -201,6 +261,11 @@ function parseStatusJson(raw) {
       eta: Number(row.eta || 0),
       ratio: Number(row.ratio || 0),
       size: Number(row.size || 0),
+      savePath: String(row.savePath || ""),
+      contentPath: String(row.contentPath || ""),
+      numSeeds: Number(row.numSeeds || 0),
+      numLeechs: Number(row.numLeechs || 0),
+      addedOn: Number(row.addedOn || 0),
       bucket: classifyState(row.state, row.progress)
     });
   }
@@ -252,6 +317,12 @@ if (typeof module !== "undefined" && module.exports) {
     newlyCompleted: newlyCompleted,
     completionText: completionText,
     vpnUnbound: vpnUnbound,
+    sortTorrents: sortTorrents,
+    cycleSort: cycleSort,
+    sortLabel: sortLabel,
+    filterByQuery: filterByQuery,
+    listQuery: listQuery,
+    formatDate: formatDate,
     formatEta: formatEta,
     formatPercent: formatPercent,
     plainText: plainText,

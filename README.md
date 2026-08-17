@@ -37,11 +37,13 @@ While a torrent is downloading or seeding, compact ↓/↑ speeds appear next to
 
 If Mullvad (or `QBT_BIND_IFACE`) is up but the running daemon is not bound to it, the mark shows the warning badge and the panel offers **Restart daemon to bind**. Restarting writes the bind keys and brings the daemon back on the tunnel.
 
-List keys: `j`/`k` move, Enter opens files, Space start/stop, `x` remove (keep files), `X` delete files, `t` start/stop all, `a`/`p`/`c`/`*` filter, `/` magnet field, `y` add clipboard magnet, `r` refresh.
+List keys: `j`/`k` move, Enter opens files, Space start/stop, `o` open the save folder, `x` remove (keep files), `X` delete files, `t` start/stop all, `s` cycle sort (default → speed → eta → added), `a`/`p`/`c`/`*` filter, `/` magnet field, `y` add clipboard magnet, `r` refresh.
+
+Typing anything that is not a magnet or URL into the field filters the list by name; Esc clears the filter. Enter only adds when the text is a magnet or a `.torrent` URL.
 
 File view keys: `j`/`k` move, Enter cycle priority, `x` skip, Space start/stop, `X` delete files, Backspace or `h` back.
 
-On a torrent’s detail view, **Remove, keep files** and **Delete files** sit under the title. Remove takes it out of the list and leaves the download on disk. Delete asks first, then removes the torrent and its files.
+On a torrent’s detail view, size, ratio, seeds/peers, the added date, and the save path sit under the title, followed by **Open folder**, **Remove, keep files** and **Delete files**. Open folder (`o`) opens the save path in your file manager. Remove takes it out of the list and leaves the download on disk. Delete asks first, then removes the torrent and its files.
 
 ## Configure
 
@@ -90,6 +92,7 @@ systemctl --user stop omaqbt-nox.service
 - `qbittorrent-nox` 5.2+ (installed from the panel if missing)
 - On PATH for the helper: `curl`, `jq`, `python3`
 - `notify-send` (libnotify) for completion notifications; without it they are skipped silently
+- `xdg-open` (xdg-utils) for **Open folder**
 - `pkexec` only when installing the package from the panel (no TTY for `sudo`)
 - `systemctl --user` for `omaqbt-nox.service`
 

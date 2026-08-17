@@ -140,6 +140,13 @@ Item {
     actionProcess.running = true
   }
 
+  function openPath(path) {
+    var p = String(path || "")
+    if (p === "" || openProcess.running) return
+    openProcess.command = ["xdg-open", p]
+    openProcess.running = true
+  }
+
   function installDaemon() {
     clearError()
     actionStatus = "Installing qbittorrent-nox…"
@@ -173,6 +180,14 @@ Item {
       if (exitCode === 0) root.applyStatus(statusOut.text)
       else root.lastError = Model.sanitizeError(statusErr.text || "qBittorrent is not reachable")
     }
+  }
+
+  Process {
+    id: openProcess
+    running: false
+    command: []
+    // Best effort: the file manager owns any failure UI from here.
+    onExited: function() {}
   }
 
   Process {

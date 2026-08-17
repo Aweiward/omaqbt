@@ -191,6 +191,11 @@ for key, t in torrents.items():
         "eta": t.get("eta") or 0,
         "ratio": t.get("ratio") or 0,
         "size": t.get("size") or 0,
+        "savePath": t.get("save_path") or "",
+        "contentPath": t.get("content_path") or "",
+        "numSeeds": t.get("num_seeds") or 0,
+        "numLeechs": t.get("num_leechs") or 0,
+        "addedOn": t.get("added_on") or 0,
     })
 print(json.dumps({
     "rid": raw.get("rid") or 0,
