@@ -79,16 +79,24 @@ Item {
     clipProcess.running = true
   }
 
-  function addUrl(url) {
-    if (!Model.isAddableUrl(url) || actionProcess.running) {
-      if (!Model.isAddableUrl(url)) lastError = "Paste a magnet or a .torrent URL."
+  function addTarget(target, stopped, savePath) {
+    var t = String(target || "").trim()
+    if (!Model.isAddableTarget(t) || actionProcess.running) {
+      if (!Model.isAddableTarget(t)) lastError = "Paste a magnet, a .torrent URL, or a .torrent file path."
       return
     }
     clearError()
-    actionStatus = "Adding torrent…"
-    actionProcess.command = [helperPath, "add", String(url).trim()]
+    actionStatus = stopped ? "Adding torrent (stopped)…" : "Adding torrent…"
+    var cmd = [helperPath, "add"]
+    if (stopped) cmd.push("--stopped")
+    var dir = String(savePath || "").trim()
+    if (dir !== "") { cmd.push("--savepath"); cmd.push(dir) }
+    cmd.push(t)
+    actionProcess.command = cmd
     actionProcess.running = true
   }
+
+  function addUrl(url) { addTarget(url, false, "") }
 
   function startHash(hash) {
     if (actionProcess.running) return

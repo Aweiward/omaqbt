@@ -158,7 +158,7 @@ function filterByQuery(list, query) {
 
 function listQuery(fieldText) {
   var s = String(fieldText || "").trim();
-  if (s === "" || isAddableUrl(s)) return "";
+  if (s === "" || isAddableTarget(s)) return "";
   return s;
 }
 
@@ -205,6 +205,17 @@ function isAddableUrl(text) {
   if (!/^https?:\/\//i.test(s)) return false;
   var path = s.split("?")[0].split("#")[0];
   return /\.torrent$/i.test(path);
+}
+
+function isAddableFile(text) {
+  var s = String(text || "").trim();
+  if (s.indexOf("file://") === 0) s = s.substring(7);
+  if (!/\.torrent$/i.test(s)) return false;
+  return s.indexOf("/") === 0 || s.indexOf("~/") === 0;
+}
+
+function isAddableTarget(text) {
+  return isAddableUrl(text) || isAddableFile(text);
 }
 
 var PRIORITY_ORDER = [0, 1, 6, 7];
@@ -327,6 +338,8 @@ if (typeof module !== "undefined" && module.exports) {
     formatPercent: formatPercent,
     plainText: plainText,
     isAddableUrl: isAddableUrl,
+    isAddableFile: isAddableFile,
+    isAddableTarget: isAddableTarget,
     priorityLabel: priorityLabel,
     cyclePriority: cyclePriority,
     parseStatusJson: parseStatusJson,

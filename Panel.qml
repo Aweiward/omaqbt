@@ -21,6 +21,7 @@ Panel {
   property string sortMode: "default"
   property string detailHash: ""
   property string magnetField: ""
+  property string savePathField: ""
   property bool confirmOpen: false
   property string pendingDeleteHash: ""
 
@@ -30,7 +31,8 @@ Panel {
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
   readonly property color hoverFill: bar ? Style.hoverFillFor(bar.foreground, Color.accent) : "transparent"
   readonly property color barIconColor: qbt.transferring ? barForeground : Qt.darker(barForeground, 1.55)
-  readonly property bool fieldFocused: magnetInput && magnetInput.activeFocus
+  readonly property bool fieldFocused: (magnetInput && magnetInput.activeFocus) || (savePathInput && savePathInput.activeFocus)
+  readonly property bool fieldAddable: Model.isAddableTarget(magnetField)
   readonly property string listFilterQuery: Model.listQuery(magnetField)
   readonly property var visibleTorrents: Model.sortTorrents(Model.filterByQuery(Model.filterTorrents(qbt.torrents, filterMode), listFilterQuery), sortMode)
   readonly property int activeCount: Model.filterTorrents(qbt.torrents, "active").length
@@ -69,7 +71,7 @@ Panel {
     return "Nothing downloading or seeding."
   }
   readonly property string toggleHint: qbt.transferring ? "Stop all torrents" : "Start all torrents"
-  readonly property bool showClipboard: qbt.ready && view === "list" && Model.isAddableUrl(qbt.clipboardText)
+  readonly property bool showClipboard: qbt.ready && view === "list" && Model.isAddableTarget(qbt.clipboardText)
 
   function selectedFile() {
     if (!qbt.files || qbt.files.length === 0) return null
@@ -131,6 +133,15 @@ Panel {
 
   function openFolder(row) {
     if (row && row.savePath) qbt.openPath(row.savePath)
+  }
+
+  function submitAdd(stopped) {
+    if (!fieldAddable) return
+    qbt.addTarget(magnetField, stopped, savePathField)
+    magnetField = ""
+    savePathField = ""
+    if (magnetInput) magnetInput.text = ""
+    if (savePathInput) savePathInput.text = ""
   }
 
   function setFilter(mode) {
@@ -371,6 +382,23 @@ Panel {
       onCloseRequested: root.close()
       onTabRequested: function(direction) { root.switchPanel(direction) }
       onTextKey: function(t) { root.handleTextKey(t) }
+
+      DropArea {
+        anchors.fill: parent
+        onDropped: function(drop) {
+          if (!qbt.ready) return
+          var target = ""
+          if (drop.hasUrls && drop.urls.length > 0) {
+            for (var i = 0; i < drop.urls.length; i++) {
+              if (Model.isAddableTarget(String(drop.urls[i]))) { target = String(drop.urls[i]); break }
+            }
+          }
+          if (target === "" && drop.hasText && Model.isAddableTarget(drop.text)) target = drop.text
+          if (target === "") return
+          qbt.addTarget(target, false, "")
+          drop.accept()
+        }
+      }
 
       Flickable {
         id: panelFlick
@@ -718,15 +746,10 @@ Panel {
               id: magnetInput
               width: parent.width
               foreground: root.foreground
-              placeholderText: "Paste a magnet or .torrent URL · type to filter"
+              placeholderText: "Paste a magnet, URL, or .torrent path · type to filter"
               text: root.magnetField
               onTextChanged: root.magnetField = text
-              onAccepted: {
-                if (!Model.isAddableUrl(text)) return
-                qbt.addUrl(text)
-                root.magnetField = ""
-                text = ""
-              }
+              onAccepted: root.submitAdd(false)
               Keys.onEscapePressed: {
                 if (text !== "") {
                   text = ""
@@ -734,6 +757,49 @@ Panel {
                 } else {
                   root.close()
                 }
+              }
+            }
+
+            TextField {
+              id: savePathInput
+              visible: root.fieldAddable
+              width: parent.width
+              foreground: root.foreground
+              placeholderText: "Save to… (leave empty for the default path)"
+              text: root.savePathField
+              onTextChanged: root.savePathField = text
+              onAccepted: root.submitAdd(false)
+              Keys.onEscapePressed: {
+                if (text !== "") {
+                  text = ""
+                  root.savePathField = ""
+                } else {
+                  root.close()
+                }
+              }
+            }
+
+            CursorSurface {
+              visible: root.fieldAddable
+              width: parent.width
+              implicitHeight: Style.space(36)
+              hasCursor: false
+              foreground: root.foreground
+              fill: root.hoverFill
+              MouseArea {
+                anchors.fill: parent
+                hoverEnabled: true
+                cursorShape: Qt.PointingHandCursor
+                onClicked: root.submitAdd(true)
+              }
+              Text {
+                anchors.verticalCenter: parent.verticalCenter
+                anchors.left: parent.left
+                anchors.leftMargin: Style.space(10)
+                text: "Add stopped"
+                color: root.foreground
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.body
               }
             }
 
@@ -749,13 +815,13 @@ Panel {
                 hoverEnabled: true
                 cursorShape: Qt.PointingHandCursor
                 onEntered: { root.cursorActive = true; root.focusSection = "clipboard" }
-                onClicked: qbt.addUrl(qbt.clipboardText)
+                onClicked: qbt.addTarget(qbt.clipboardText, false, "")
               }
               Text {
                 anchors.verticalCenter: parent.verticalCenter
                 anchors.left: parent.left
                 anchors.leftMargin: Style.space(10)
-                text: "Add magnet from clipboard"
+                text: "Add from clipboard"
                 color: root.foreground
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.body

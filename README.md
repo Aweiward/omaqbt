@@ -1,6 +1,6 @@
 # OmaqBT
 
-A themed [Omarchy](https://omarchy.org) Quattro bar widget for qBittorrent. The mark shows live ↓/↑ speeds while anything is transferring, and a desktop notification fires when a download finishes. Left-click the mark to watch live transfers, add a magnet, start or stop, remove a torrent, and set file priorities. Right-click starts or stops everything. The official Qt window stays as an escape hatch.
+A themed [Omarchy](https://omarchy.org) Quattro bar widget for qBittorrent. The mark shows live ↓/↑ speeds while anything is transferring, and a desktop notification fires when a download finishes. Left-click the mark to watch live transfers, add a magnet or a `.torrent` file, start or stop, remove a torrent, and set file priorities. Right-click starts or stops everything. The official Qt window stays as an escape hatch.
 
 OmaqBT talks to `qbittorrent-nox` on your existing `~/.config/qBittorrent` library through the local Web API. It does not talk to any host other than `127.0.0.1`.
 
@@ -39,7 +39,9 @@ If Mullvad (or `QBT_BIND_IFACE`) is up but the running daemon is not bound to it
 
 List keys: `j`/`k` move, Enter opens files, Space start/stop, `o` open the save folder, `x` remove (keep files), `X` delete files, `t` start/stop all, `s` cycle sort (default → speed → eta → added), `a`/`p`/`c`/`*` filter, `/` magnet field, `y` add clipboard magnet, `r` refresh.
 
-Typing anything that is not a magnet or URL into the field filters the list by name; Esc clears the filter. Enter only adds when the text is a magnet or a `.torrent` URL.
+The field takes a magnet, a `.torrent` URL, or a local `.torrent` path (`/…`, `~/…`, or `file://…`). Once it holds something addable, a **Save to…** field and an **Add stopped** row appear: Enter adds and starts, Add stopped adds without starting, and the save path overrides qBittorrent’s default when filled. Dropping a `.torrent` file or magnet link onto the open panel adds it too. From a terminal, `qbt add` also accepts `--category <name>`.
+
+Typing anything that is not addable filters the list by name; Esc clears the filter first, then closes.
 
 File view keys: `j`/`k` move, Enter cycle priority, `x` skip, Space start/stop, `X` delete files, Backspace or `h` back.
 

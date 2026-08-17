@@ -405,3 +405,25 @@ test("formatDate renders an ISO day or em dash", () => {
   assert.equal(Model.formatDate(-1), "—");
   assert.equal(Model.formatDate("junk"), "—");
 });
+
+test("isAddableFile accepts local .torrent paths only", () => {
+  assert.equal(Model.isAddableFile("/home/u/d.torrent"), true);
+  assert.equal(Model.isAddableFile("~/dl/d.torrent"), true);
+  assert.equal(Model.isAddableFile("file:///home/u/d.torrent"), true);
+  assert.equal(Model.isAddableFile(" /home/u/d.torrent "), true);
+  assert.equal(Model.isAddableFile("/home/u/d.iso"), false);
+  assert.equal(Model.isAddableFile("magnet:?xt=urn:btih:abc"), false);
+  assert.equal(Model.isAddableFile("https://x.com/d.torrent"), false);
+  assert.equal(Model.isAddableFile("relative/d.torrent"), false);
+  assert.equal(Model.isAddableFile(""), false);
+});
+
+test("isAddableTarget accepts urls and local files", () => {
+  assert.equal(Model.isAddableTarget("magnet:?xt=urn:btih:abc"), true);
+  assert.equal(Model.isAddableTarget("/home/u/d.torrent"), true);
+  assert.equal(Model.isAddableTarget("plain words"), false);
+});
+
+test("listQuery treats local torrent files as no filter", () => {
+  assert.equal(Model.listQuery("/home/u/d.torrent"), "");
+});

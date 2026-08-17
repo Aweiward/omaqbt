@@ -107,19 +107,10 @@ is_daemon() {
   pgrep -x qbittorrent-nox >/dev/null 2>&1
 }
 
-api() {
-  assert_local_base
-  local method=$1 path=$2
-  local body=${3:-}
-  local url
-  url="$(base_url)$path"
-  local args=(-sS -g --max-time 5 -X "$method" "$url")
-  if [[ -n $body ]]; then
-    args+=(-H "Content-Type: application/x-www-form-urlencoded" --data "$body")
-  fi
+api_exec() {
   local tmp code
   tmp=$(mktemp)
-  code=$(curl -o "$tmp" -w '%{http_code}' "${args[@]}" || true)
+  code=$(curl -o "$tmp" -w '%{http_code}' "$@" || true)
   local resp
   resp=$(cat "$tmp")
   rm -f "$tmp"
@@ -130,6 +121,26 @@ api() {
     die "HTTP $code $(printf '%s' "$resp" | sanitize)"
   fi
   printf '%s' "$resp"
+}
+
+api() {
+  assert_local_base
+  local method=$1 path=$2
+  local body=${3:-}
+  local url
+  url="$(base_url)$path"
+  local args=(-sS -g --max-time 5 -X "$method" "$url")
+  if [[ -n $body ]]; then
+    args+=(-H "Content-Type: application/x-www-form-urlencoded" --data "$body")
+  fi
+  api_exec "${args[@]}"
+}
+
+api_form() {
+  assert_local_base
+  local method=$1 path=$2
+  shift 2
+  api_exec -sS -g --max-time 30 -X "$method" "$(base_url)$path" "$@"
 }
 
 cmd_status() {
@@ -239,11 +250,34 @@ print(json.dumps({
 }
 
 cmd_add() {
-  local url=${1:-}
-  [[ -n $url ]] || die "usage: qbt add <magnet-or-url>"
-  local encoded
-  encoded=$(jq -nr --arg u "$url" '$u|@uri')
-  api POST "/api/v2/torrents/add" "urls=${encoded}" >/dev/null
+  local stopped=false savepath="" category="" target=""
+  while [[ $# -gt 0 ]]; do
+    case $1 in
+      --stopped) stopped=true; shift ;;
+      --savepath) [[ $# -ge 2 ]] || die "--savepath needs a value"; savepath=$2; shift 2 ;;
+      --category) [[ $# -ge 2 ]] || die "--category needs a value"; category=$2; shift 2 ;;
+      *) target=$1; shift ;;
+    esac
+  done
+  [[ -n $target ]] || die "usage: qbt add [--stopped] [--savepath <dir>] [--category <name>] <magnet, .torrent URL, or .torrent file>"
+  local path=$target
+  [[ $path == file://* ]] && path=${path#file://}
+  [[ $path == "~/"* ]] && path=$HOME/${path#\~/}
+  if [[ $path == /* ]]; then
+    [[ -f $path ]] || die "no such torrent file: $path"
+    local args=(-F "torrents=@${path}")
+    [[ $stopped == true ]] && args+=(-F "stopped=true")
+    [[ -n $savepath ]] && args+=(-F "savepath=${savepath}")
+    [[ -n $category ]] && args+=(-F "category=${category}")
+    api_form POST "/api/v2/torrents/add" "${args[@]}" >/dev/null
+  else
+    local body
+    body="urls=$(jq -nr --arg u "$target" '$u|@uri')"
+    [[ $stopped == true ]] && body+="&stopped=true"
+    [[ -n $savepath ]] && body+="&savepath=$(jq -nr --arg v "$savepath" '$v|@uri')"
+    [[ -n $category ]] && body+="&category=$(jq -nr --arg v "$category" '$v|@uri')"
+    api POST "/api/v2/torrents/add" "$body" >/dev/null
+  fi
   printf '%s\n' '{"ok":true}'
 }
 

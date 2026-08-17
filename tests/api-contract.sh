@@ -109,6 +109,22 @@ try:
 
     add = qbt("add", "magnet:?xt=urn:btih:abc")
     assert add.returncode == 0, add.stderr
+
+    import tempfile as tf
+    updir = Path(tf.mkdtemp(prefix="qbt-upload-"))
+    torrent_file = updir / "upload me.torrent"
+    torrent_file.write_bytes(b"d8:announce4:teste")
+    addf = qbt("add", str(torrent_file))
+    assert addf.returncode == 0, addf.stderr
+    addfu = qbt("add", "file://" + str(torrent_file))
+    assert addfu.returncode == 0, addfu.stderr
+    addflags = qbt("add", "--stopped", "--savepath", "/dl/iso", "magnet:?xt=urn:btih:def")
+    assert addflags.returncode == 0, addflags.stderr
+    addfstop = qbt("add", "--stopped", str(torrent_file))
+    assert addfstop.returncode == 0, addfstop.stderr
+    missing = qbt("add", "/no/such/file.torrent")
+    assert missing.returncode != 0
+    assert "no such" in (missing.stderr + missing.stdout).lower() or "not" in (missing.stderr + missing.stdout).lower()
     start = qbt("start", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
     assert start.returncode == 0, start.stderr
     stop = qbt("stop", "all")
@@ -138,6 +154,13 @@ try:
     assert "deleteFiles=true" in bodies
     assert "deleteFiles=false" in bodies
     assert "hashes=all" in bodies
+    # .torrent uploads go multipart with the file under "torrents".
+    assert 'name="torrents"' in bodies
+    assert 'filename="upload me.torrent"' in bodies
+    # Flag adds carry qBittorrent 5 field names.
+    assert "stopped=true" in bodies
+    assert "savepath=%2Fdl%2Fiso" in bodies or "savepath=/dl/iso" in bodies
+    assert 'name="stopped"' in bodies
 finally:
     server.terminate()
     server.wait(timeout=5)
