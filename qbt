@@ -281,14 +281,15 @@ cmd_add() {
   if [[ $path == /* ]]; then
     [[ -f $path ]] || die "no such torrent file: $path"
     local args=(-F "torrents=@${path}")
-    [[ $stopped == true ]] && args+=(-F "stopped=true")
+    # qBittorrent 5 reads "stopped"; older builds read "paused". Send both.
+    [[ $stopped == true ]] && args+=(-F "stopped=true" -F "paused=true")
     [[ -n $savepath ]] && args+=(-F "savepath=${savepath}")
     [[ -n $category ]] && args+=(-F "category=${category}")
     api_form POST "/api/v2/torrents/add" "${args[@]}" >/dev/null
   else
     local body
     body="urls=$(jq -nr --arg u "$target" '$u|@uri')"
-    [[ $stopped == true ]] && body+="&stopped=true"
+    [[ $stopped == true ]] && body+="&stopped=true&paused=true"
     [[ -n $savepath ]] && body+="&savepath=$(jq -nr --arg v "$savepath" '$v|@uri')"
     [[ -n $category ]] && body+="&category=$(jq -nr --arg v "$category" '$v|@uri')"
     api POST "/api/v2/torrents/add" "$body" >/dev/null
