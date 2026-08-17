@@ -144,7 +144,7 @@ api_form() {
 }
 
 cmd_status() {
-  local installed=false daemon=false api=false
+  local installed=false daemon=false api=false alt_speed=false
   local vpn_if bind_if=""
   vpn_if=$(vpn_iface)
   if is_installed; then installed=true; fi
@@ -207,6 +207,10 @@ for key, t in torrents.items():
         "numSeeds": t.get("num_seeds") or 0,
         "numLeechs": t.get("num_leechs") or 0,
         "addedOn": t.get("added_on") or 0,
+        "dlLimit": t.get("dl_limit") or 0,
+        "upLimit": t.get("up_limit") or 0,
+        "seqDl": t.get("seq_dl") is True,
+        "ratioLimit": -2 if t.get("ratio_limit") is None else t.get("ratio_limit"),
     })
 print(json.dumps({
     "rid": raw.get("rid") or 0,
@@ -220,6 +224,16 @@ print(json.dumps({
       torrents=$(printf '%s' "$merged" | jq -c '.torrents')
       dl=$(printf '%s' "$merged" | jq '.dlSpeed')
       up=$(printf '%s' "$merged" | jq '.upSpeed')
+    fi
+  fi
+  if [[ $api == true ]]; then
+    local mode ok_mode
+    set +e
+    mode=$(api GET "/api/v2/transfer/speedLimitsMode")
+    ok_mode=$?
+    set -e
+    if [[ $ok_mode -eq 0 && $mode == 1 ]]; then
+      alt_speed=true
     fi
   fi
   # Only ask where the session is bound when a VPN iface is expected; if the
@@ -241,12 +255,13 @@ print(json.dumps({
     --argjson daemon "$daemon" \
     --arg lock "$lock" \
     --argjson api "$api" \
+    --argjson altSpeed "$alt_speed" \
     --argjson dl "$dl" \
     --argjson up "$up" \
     --argjson torrents "$torrents" \
     --arg vpnIface "$vpn_if" \
     --arg bindIface "$bind_if" \
-    '{installed:$installed, daemon:$daemon, lockHolder:$lock, api:$api, dlSpeed:$dl, upSpeed:$up, torrents:$torrents, vpnIface:$vpnIface, bindIface:$bindIface}'
+    '{installed:$installed, daemon:$daemon, lockHolder:$lock, api:$api, altSpeed:$altSpeed, dlSpeed:$dl, upSpeed:$up, torrents:$torrents, vpnIface:$vpnIface, bindIface:$bindIface}'
 }
 
 cmd_add() {
@@ -302,6 +317,34 @@ cmd_delete() {
   if [[ ${1:-} == --files ]]; then files=true; fi
   [[ -n $hash ]] || die "usage: qbt delete <hash> [--files]"
   api POST "/api/v2/torrents/delete" "hashes=${hash}&deleteFiles=${files}" >/dev/null
+  printf '%s\n' '{"ok":true}'
+}
+
+cmd_turtle() {
+  api POST "/api/v2/transfer/toggleSpeedLimitsMode" >/dev/null
+  printf '%s\n' '{"ok":true}'
+}
+
+cmd_limit() {
+  local hash=${1:-} kind=${2:-} bytes=${3:-}
+  [[ -n $hash && -n $bytes && ( $kind == dl || $kind == up ) ]] || die "usage: qbt limit <hash|all> <dl|up> <bytes-per-sec, 0 = unlimited>"
+  local endpoint=setDownloadLimit
+  [[ $kind == up ]] && endpoint=setUploadLimit
+  api POST "/api/v2/torrents/${endpoint}" "hashes=${hash}&limit=${bytes}" >/dev/null
+  printf '%s\n' '{"ok":true}'
+}
+
+cmd_sequential() {
+  local hash=${1:-}
+  [[ -n $hash ]] || die "usage: qbt sequential <hash>"
+  api POST "/api/v2/torrents/toggleSequentialDownload" "hashes=${hash}" >/dev/null
+  printf '%s\n' '{"ok":true}'
+}
+
+cmd_sharelimit() {
+  local hash=${1:-} ratio=${2:-}
+  [[ -n $hash && -n $ratio ]] || die "usage: qbt sharelimit <hash> <ratio, -2 = global, -1 = none>"
+  api POST "/api/v2/torrents/setShareLimits" "hashes=${hash}&ratioLimit=${ratio}&seedingTimeLimit=-2&inactiveSeedingTimeLimit=-2" >/dev/null
   printf '%s\n' '{"ok":true}'
 }
 
@@ -445,8 +488,12 @@ case ${1:-} in
   delete) shift; cmd_delete "$@" ;;
   files) shift; cmd_files "$@" ;;
   prio) shift; cmd_prio "$@" ;;
+  turtle) shift; cmd_turtle "$@" ;;
+  limit) shift; cmd_limit "$@" ;;
+  sequential) shift; cmd_sequential "$@" ;;
+  sharelimit) shift; cmd_sharelimit "$@" ;;
   install) shift; cmd_install "$@" ;;
   start-daemon) shift; cmd_start_daemon "$@" ;;
   stop-daemon) shift; cmd_stop_daemon "$@" ;;
-  *) die "usage: qbt status|add|start|stop|delete|files|prio|install|start-daemon|stop-daemon" ;;
+  *) die "usage: qbt status|add|start|stop|delete|files|prio|turtle|limit|sequential|sharelimit|install|start-daemon|stop-daemon" ;;
 esac

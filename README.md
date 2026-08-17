@@ -37,7 +37,7 @@ While a torrent is downloading or seeding, compact ↓/↑ speeds appear next to
 
 If Mullvad (or `QBT_BIND_IFACE`) is up but the running daemon is not bound to it, the mark shows the warning badge and the panel offers **Restart daemon to bind**. Restarting writes the bind keys and brings the daemon back on the tunnel.
 
-List keys: `j`/`k` move, Enter opens files, Space start/stop, `o` open the save folder, `x` remove (keep files), `X` delete files, `t` start/stop all, `s` cycle sort (default → speed → eta → added), `a`/`p`/`c`/`*` filter, `/` magnet field, `y` add clipboard magnet, `r` refresh.
+List keys: `j`/`k` move, Enter opens files, Space start/stop, `o` open the save folder, `x` remove (keep files), `X` delete files, `t` start/stop all, `s` cycle sort (default → speed → eta → added), `z` turtle mode, `a`/`p`/`c`/`*` filter, `/` magnet field, `y` add clipboard magnet, `r` refresh.
 
 The field takes a magnet, a `.torrent` URL, or a local `.torrent` path (`/…`, `~/…`, or `file://…`). Once it holds something addable, a **Save to…** field and an **Add stopped** row appear: Enter adds and starts, Add stopped adds without starting, and the save path overrides qBittorrent’s default when filled. Dropping a `.torrent` file or magnet link onto the open panel adds it too. From a terminal, `qbt add` also accepts `--category <name>`.
 
@@ -45,7 +45,9 @@ Typing anything that is not addable filters the list by name; Esc clears the fil
 
 File view keys: `j`/`k` move, Enter cycle priority, `x` skip, Space start/stop, `X` delete files, Backspace or `h` back.
 
-On a torrent’s detail view, size, ratio, seeds/peers, the added date, and the save path sit under the title, followed by **Open folder**, **Remove, keep files** and **Delete files**. Open folder (`o`) opens the save path in your file manager. Remove takes it out of the list and leaves the download on disk. Delete asks first, then removes the torrent and its files.
+**Turtle mode** (`z`, or the row in the list) toggles qBittorrent’s alternative speed limits; the header shows “turtle” while it is on. Configure the alternative rates themselves in qBittorrent.
+
+On a torrent’s detail view, size, ratio, seeds/peers, the added date, and the save path sit under the title, followed by **Open folder**, **Remove, keep files** and **Delete files**. Below the file list controls, clickable rows cycle the per-torrent download/upload limit (∞ → 8M → 4M → 1M → 256K), toggle sequential download, and cycle the seed ratio limit (global → 1.0 → 2.0 → none). Open folder (`o`) opens the save path in your file manager. Remove takes it out of the list and leaves the download on disk. Delete asks first, then removes the torrent and its files.
 
 ## Configure
 

@@ -168,6 +168,36 @@ function formatDate(epochSec) {
   return new Date(n * 1000).toISOString().slice(0, 10);
 }
 
+var LIMIT_ORDER = [0, 8388608, 4194304, 1048576, 262144];
+
+function cycleLimit(bytesPerSec) {
+  var i = LIMIT_ORDER.indexOf(Number(bytesPerSec));
+  if (i === -1) return Number(bytesPerSec) < 0 ? LIMIT_ORDER[1] : 0;
+  return LIMIT_ORDER[(i + 1) % LIMIT_ORDER.length];
+}
+
+function limitLabel(bytesPerSec) {
+  var n = Number(bytesPerSec);
+  if (!isFinite(n) || n <= 0) return "∞";
+  if (n >= 1048576) return (n / 1048576).toFixed(1) + "M/s";
+  return Math.round(n / 1024) + "K/s";
+}
+
+var RATIO_ORDER = [-2, 1, 2, -1];
+
+function cycleRatioLimit(ratio) {
+  var i = RATIO_ORDER.indexOf(Number(ratio));
+  if (i === -1) return -1;
+  return RATIO_ORDER[(i + 1) % RATIO_ORDER.length];
+}
+
+function ratioLimitLabel(ratio) {
+  var n = Number(ratio);
+  if (n === -2) return "global";
+  if (n === -1 || !isFinite(n)) return "none";
+  return n.toFixed(1);
+}
+
 function vpnUnbound(status) {
   var s = status || {};
   if (s.daemon !== true || s.api !== true) return false;
@@ -240,6 +270,7 @@ function emptyStatus() {
     daemon: false,
     lockHolder: "none",
     api: false,
+    altSpeed: false,
     dlSpeed: 0,
     upSpeed: 0,
     torrents: [],
@@ -277,6 +308,10 @@ function parseStatusJson(raw) {
       numSeeds: Number(row.numSeeds || 0),
       numLeechs: Number(row.numLeechs || 0),
       addedOn: Number(row.addedOn || 0),
+      dlLimit: Number(row.dlLimit || 0),
+      upLimit: Number(row.upLimit || 0),
+      seqDl: row.seqDl === true,
+      ratioLimit: row.ratioLimit == null ? -2 : Number(row.ratioLimit),
       bucket: classifyState(row.state, row.progress)
     });
   }
@@ -286,6 +321,7 @@ function parseStatusJson(raw) {
     daemon: parsed.daemon === true,
     lockHolder: String(parsed.lockHolder || "none"),
     api: parsed.api === true,
+    altSpeed: parsed.altSpeed === true,
     dlSpeed: Number(parsed.dlSpeed || 0),
     upSpeed: Number(parsed.upSpeed || 0),
     torrents: torrents,
@@ -334,6 +370,10 @@ if (typeof module !== "undefined" && module.exports) {
     filterByQuery: filterByQuery,
     listQuery: listQuery,
     formatDate: formatDate,
+    cycleLimit: cycleLimit,
+    limitLabel: limitLabel,
+    cycleRatioLimit: cycleRatioLimit,
+    ratioLimitLabel: ratioLimitLabel,
     formatEta: formatEta,
     formatPercent: formatPercent,
     plainText: plainText,

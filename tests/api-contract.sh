@@ -64,7 +64,12 @@ try:
     hashes = {t["hash"] for t in data["torrents"]}
     assert "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" in hashes
     assert "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" in hashes
+    assert data["altSpeed"] is True
     debian = next(t for t in data["torrents"] if t["name"] == "debian.iso")
+    assert debian["dlLimit"] == 1048576
+    assert debian["upLimit"] == 0
+    assert debian["seqDl"] is True
+    assert debian["ratioLimit"] == -2
     assert debian["savePath"] == "/home/user/Downloads"
     assert debian["contentPath"] == "/home/user/Downloads/debian.iso"
     assert debian["numSeeds"] == 14
@@ -139,6 +144,18 @@ try:
     assert file_rows[0]["name"] == "debian.iso"
     prio = qbt("prio", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "1", "0")
     assert prio.returncode == 0, prio.stderr
+    turtle = qbt("turtle")
+    assert turtle.returncode == 0, turtle.stderr
+    lim = qbt("limit", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "dl", "1048576")
+    assert lim.returncode == 0, lim.stderr
+    limu = qbt("limit", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "up", "262144")
+    assert limu.returncode == 0, limu.stderr
+    badlim = qbt("limit", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "sideways", "1")
+    assert badlim.returncode != 0
+    seq = qbt("sequential", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+    assert seq.returncode == 0, seq.stderr
+    share = qbt("sharelimit", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "1")
+    assert share.returncode == 0, share.stderr
 
     reqs = json.loads(log.read_text())
     posts = [r["path"] for r in reqs if r["method"] == "POST"]
@@ -154,6 +171,16 @@ try:
     assert "deleteFiles=true" in bodies
     assert "deleteFiles=false" in bodies
     assert "hashes=all" in bodies
+    assert "/api/v2/transfer/toggleSpeedLimitsMode" in posts
+    assert "/api/v2/torrents/setDownloadLimit" in posts
+    assert "/api/v2/torrents/setUploadLimit" in posts
+    assert "/api/v2/torrents/toggleSequentialDownload" in posts
+    assert "/api/v2/torrents/setShareLimits" in posts
+    assert "limit=1048576" in bodies
+    assert "limit=262144" in bodies
+    assert "ratioLimit=1" in bodies
+    assert "seedingTimeLimit=-2" in bodies
+    assert "inactiveSeedingTimeLimit=-2" in bodies
     # .torrent uploads go multipart with the file under "torrents".
     assert 'name="torrents"' in bodies
     assert 'filename="upload me.torrent"' in bodies

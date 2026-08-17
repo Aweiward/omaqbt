@@ -427,3 +427,58 @@ test("isAddableTarget accepts urls and local files", () => {
 test("listQuery treats local torrent files as no filter", () => {
   assert.equal(Model.listQuery("/home/u/d.torrent"), "");
 });
+
+test("parseStatusJson carries altSpeed and per-torrent limit fields", () => {
+  const parsed = Model.parseStatusJson(JSON.stringify({
+    installed: true, daemon: true, api: true, altSpeed: true,
+    torrents: [
+      { hash: "a", name: "x", state: "downloading", progress: 0.5, dlLimit: 1048576, upLimit: 0, seqDl: true, ratioLimit: -2 },
+      { hash: "b", name: "y", state: "uploading", progress: 1 }
+    ]
+  }));
+  assert.equal(parsed.altSpeed, true);
+  assert.equal(parsed.torrents[0].dlLimit, 1048576);
+  assert.equal(parsed.torrents[0].upLimit, 0);
+  assert.equal(parsed.torrents[0].seqDl, true);
+  assert.equal(parsed.torrents[0].ratioLimit, -2);
+  assert.equal(parsed.torrents[1].dlLimit, 0);
+  assert.equal(parsed.torrents[1].seqDl, false);
+  assert.equal(parsed.torrents[1].ratioLimit, -2);
+});
+
+test("parseStatusJson defaults altSpeed to false", () => {
+  const parsed = Model.parseStatusJson(JSON.stringify({ installed: true, torrents: [] }));
+  assert.equal(parsed.altSpeed, false);
+});
+
+test("cycleLimit walks unlimited down through presets and back", () => {
+  assert.equal(Model.cycleLimit(0), 8388608);
+  assert.equal(Model.cycleLimit(8388608), 4194304);
+  assert.equal(Model.cycleLimit(4194304), 1048576);
+  assert.equal(Model.cycleLimit(1048576), 262144);
+  assert.equal(Model.cycleLimit(262144), 0);
+  assert.equal(Model.cycleLimit(999999), 0);
+  assert.equal(Model.cycleLimit(-1), 8388608);
+});
+
+test("limitLabel shows infinity or a compact rate", () => {
+  assert.equal(Model.limitLabel(0), "∞");
+  assert.equal(Model.limitLabel(-1), "∞");
+  assert.equal(Model.limitLabel(1048576), "1.0M/s");
+  assert.equal(Model.limitLabel(262144), "256K/s");
+});
+
+test("cycleRatioLimit walks global, 1.0, 2.0, none", () => {
+  assert.equal(Model.cycleRatioLimit(-2), 1);
+  assert.equal(Model.cycleRatioLimit(1), 2);
+  assert.equal(Model.cycleRatioLimit(2), -1);
+  assert.equal(Model.cycleRatioLimit(-1), -2);
+  assert.equal(Model.cycleRatioLimit(1.5), -1);
+});
+
+test("ratioLimitLabel names global and none", () => {
+  assert.equal(Model.ratioLimitLabel(-2), "global");
+  assert.equal(Model.ratioLimitLabel(-1), "none");
+  assert.equal(Model.ratioLimitLabel(1), "1.0");
+  assert.equal(Model.ratioLimitLabel(1.5), "1.5");
+});

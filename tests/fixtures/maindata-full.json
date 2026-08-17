@@ -17,6 +17,10 @@
       "num_seeds": 14,
       "num_leechs": 3,
       "added_on": 1755300000,
+      "dl_limit": 1048576,
+      "up_limit": 0,
+      "seq_dl": true,
+      "ratio_limit": -2,
       "infohash_v1": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
     },
     "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb": {

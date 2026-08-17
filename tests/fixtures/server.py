@@ -53,6 +53,9 @@ class Handler(BaseHTTPRequestHandler):
         if parsed.path == "/api/v2/torrents/files":
             self._send(200, json.dumps(FILES).encode())
             return
+        if parsed.path == "/api/v2/transfer/speedLimitsMode":
+            self._send(200, b"1")
+            return
         if parsed.path == "/api/v2/app/preferences":
             bind = ""
             bind_file = os.environ.get("QBT_FIXTURE_BIND_FILE")
@@ -72,6 +75,11 @@ class Handler(BaseHTTPRequestHandler):
             "/api/v2/torrents/stop",
             "/api/v2/torrents/delete",
             "/api/v2/torrents/filePrio",
+            "/api/v2/torrents/setDownloadLimit",
+            "/api/v2/torrents/setUploadLimit",
+            "/api/v2/torrents/toggleSequentialDownload",
+            "/api/v2/torrents/setShareLimits",
+            "/api/v2/transfer/toggleSpeedLimitsMode",
         ):
             self._send(200, b"Ok.")
             return

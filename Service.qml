@@ -11,6 +11,7 @@ Item {
   property bool daemon: false
   property string lockHolder: "none"
   property bool api: false
+  property bool altSpeed: false
   property real dlSpeed: 0
   property real upSpeed: 0
   property string vpnIface: ""
@@ -52,6 +53,7 @@ Item {
     daemon = parsed.daemon
     lockHolder = parsed.lockHolder
     api = parsed.api
+    altSpeed = parsed.altSpeed
     dlSpeed = parsed.dlSpeed
     upSpeed = parsed.upSpeed
     vpnIface = parsed.vpnIface
@@ -145,6 +147,34 @@ Item {
   function setPrio(hash, index, prio) {
     if (actionProcess.running) return
     actionProcess.command = [helperPath, "prio", hash, String(index), String(prio)]
+    actionProcess.running = true
+  }
+
+  function toggleTurtle() {
+    if (actionProcess.running) return
+    clearError()
+    actionProcess.command = [helperPath, "turtle"]
+    actionProcess.running = true
+  }
+
+  function setLimit(hash, kind, bytes) {
+    if (actionProcess.running) return
+    clearError()
+    actionProcess.command = [helperPath, "limit", hash, kind, String(bytes)]
+    actionProcess.running = true
+  }
+
+  function toggleSequential(hash) {
+    if (actionProcess.running) return
+    clearError()
+    actionProcess.command = [helperPath, "sequential", hash]
+    actionProcess.running = true
+  }
+
+  function setShareRatio(hash, ratio) {
+    if (actionProcess.running) return
+    clearError()
+    actionProcess.command = [helperPath, "sharelimit", hash, String(ratio)]
     actionProcess.running = true
   }
 

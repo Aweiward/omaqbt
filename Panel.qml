@@ -60,6 +60,7 @@ Panel {
     if (!qbt.daemon) return "Daemon is not running"
     if (!qbt.api) return "Web API is not reachable"
     var meta = Model.formatRate(qbt.dlSpeed) + " · " + Model.formatRate(qbt.upSpeed) + " · " + activeCount + " active"
+    if (qbt.altSpeed) meta += " · turtle"
     if (sortMode !== "default") meta += " · " + Model.sortLabel(sortMode)
     return meta
   }
@@ -274,6 +275,8 @@ Panel {
       if (view === "detail") closeDetail()
     } else if (t === "s" || t === "S") {
       if (view === "list") sortMode = Model.cycleSort(sortMode)
+    } else if (t === "z" || t === "Z") {
+      if (qbt.ready) qbt.toggleTurtle()
     } else if (t === "o" || t === "O") {
       if (view === "detail") openFolder(detailTorrent)
       else openFolder(selectedTorrent)
@@ -579,6 +582,59 @@ Panel {
                 font.pixelSize: Style.font.body
               }
             }
+
+            Repeater {
+              model: root.detailTorrent === null ? [] : [
+                {
+                  label: "Download limit: " + Model.limitLabel(root.detailTorrent.dlLimit),
+                  action: "dlLimit"
+                },
+                {
+                  label: "Upload limit: " + Model.limitLabel(root.detailTorrent.upLimit),
+                  action: "upLimit"
+                },
+                {
+                  label: "Sequential download: " + (root.detailTorrent.seqDl ? "on" : "off"),
+                  action: "sequential"
+                },
+                {
+                  label: "Seed ratio limit: " + Model.ratioLimitLabel(root.detailTorrent.ratioLimit),
+                  action: "shareRatio"
+                }
+              ]
+              delegate: CursorSurface {
+                required property var modelData
+                width: parent ? parent.width : 0
+                height: Style.space(30)
+                implicitHeight: height
+                hasCursor: false
+                foreground: root.foreground
+                fill: root.hoverFill
+                MouseArea {
+                  anchors.fill: parent
+                  hoverEnabled: true
+                  cursorShape: qbt.busy ? Qt.ArrowCursor : Qt.PointingHandCursor
+                  enabled: !qbt.busy && root.detailTorrent !== null
+                  onClicked: {
+                    var t = root.detailTorrent
+                    if (!t) return
+                    if (modelData.action === "dlLimit") qbt.setLimit(t.hash, "dl", Model.cycleLimit(t.dlLimit))
+                    else if (modelData.action === "upLimit") qbt.setLimit(t.hash, "up", Model.cycleLimit(t.upLimit))
+                    else if (modelData.action === "sequential") qbt.toggleSequential(t.hash)
+                    else if (modelData.action === "shareRatio") qbt.setShareRatio(t.hash, Model.cycleRatioLimit(t.ratioLimit))
+                  }
+                }
+                Text {
+                  anchors.verticalCenter: parent.verticalCenter
+                  anchors.left: parent.left
+                  anchors.leftMargin: Style.space(10)
+                  text: parent.modelData.label
+                  color: root.dim
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.bodySmall
+                }
+              }
+            }
           }
 
           Text {
@@ -823,6 +879,30 @@ Panel {
                 anchors.leftMargin: Style.space(10)
                 text: "Add from clipboard"
                 color: root.foreground
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.body
+              }
+            }
+
+            CursorSurface {
+              width: parent.width
+              implicitHeight: Style.space(36)
+              hasCursor: false
+              foreground: root.foreground
+              fill: root.hoverFill
+              MouseArea {
+                anchors.fill: parent
+                hoverEnabled: true
+                cursorShape: qbt.busy ? Qt.ArrowCursor : Qt.PointingHandCursor
+                enabled: !qbt.busy
+                onClicked: qbt.toggleTurtle()
+              }
+              Text {
+                anchors.verticalCenter: parent.verticalCenter
+                anchors.left: parent.left
+                anchors.leftMargin: Style.space(10)
+                text: "Turtle mode: " + (qbt.altSpeed ? "on" : "off")
+                color: qbt.altSpeed ? root.foreground : root.dim
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.body
               }
