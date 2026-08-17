@@ -43,7 +43,7 @@ Panel {
   }
   readonly property bool headerHasCursor: cursorActive && focusSection === "header" && qbt.ready && view === "list"
   readonly property string heroTitle: {
-    if (view === "detail" && detailTorrent) return detailTorrent.name
+    if (view === "detail" && detailTorrent) return Model.plainText(detailTorrent.name)
     return "OmaqBT"
   }
   readonly property string heroMeta: {
@@ -587,6 +587,7 @@ Panel {
                   Text {
                     width: parent.width - rowCol.leftPadding - rowCol.rightPadding
                     text: modelData.name
+                    textFormat: Text.PlainText
                     elide: Text.ElideRight
                     color: root.foreground
                     font.family: root.fontFamily
@@ -658,6 +659,7 @@ Panel {
                   anchors.right: prioLabel.left
                   anchors.rightMargin: Style.space(8)
                   text: modelData.name
+                  textFormat: Text.PlainText
                   elide: Text.ElideMiddle
                   color: root.foreground
                   font.family: root.fontFamily

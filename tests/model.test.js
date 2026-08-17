@@ -125,6 +125,16 @@ test("isAddableUrl accepts magnets and http .torrent URLs", () => {
   assert.equal(Model.isAddableUrl(""), false);
 });
 
+test("plainText strips angle brackets so hero title cannot become rich text", () => {
+  assert.equal(
+    Model.plainText('<img src="http://evil/x">Ubuntu'),
+    'img src="http://evil/x"Ubuntu'
+  );
+  assert.equal(Model.plainText("<b>100%</b>"), "b100%/b");
+  assert.equal(Model.plainText("Plain Torrent Name"), "Plain Torrent Name");
+  assert.equal(Model.plainText(null), "");
+});
+
 test("priorityLabel and cycle walk Skip Low Normal High", () => {
   assert.equal(Model.priorityLabel(0), "Skip");
   assert.equal(Model.priorityLabel(1), "Low");

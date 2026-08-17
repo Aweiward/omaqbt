@@ -80,6 +80,14 @@ function formatPercent(progress) {
   return Math.round(n * 100) + "%";
 }
 
+function plainText(text) {
+  // PanelHero renders its title with Text.AutoText, which promotes any string
+  // containing markup to rich text (so <img src=…> would trigger a network
+  // fetch). Torrent names are attacker-controlled, so strip the angle brackets
+  // that Qt's rich-text heuristic keys on before the name reaches the hero.
+  return String(text || "").replace(/[<>]/g, "");
+}
+
 function isAddableUrl(text) {
   var s = String(text || "").trim();
   if (s.indexOf("magnet:") === 0) return true;
@@ -186,6 +194,7 @@ if (typeof module !== "undefined" && module.exports) {
     formatRate: formatRate,
     formatEta: formatEta,
     formatPercent: formatPercent,
+    plainText: plainText,
     isAddableUrl: isAddableUrl,
     priorityLabel: priorityLabel,
     cyclePriority: cyclePriority,
