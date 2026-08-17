@@ -99,8 +99,9 @@ Panel {
     view = "detail"
     detailHash = row.hash
     fileIndex = 0
-    focusSection = "files"
+    focusSection = "remove"
     qbt.loadFiles(row.hash)
+    if (panelFlick) panelFlick.contentY = 0
   }
 
   function closeDetail() {
@@ -408,6 +409,64 @@ Panel {
             }
           }
 
+          Column {
+            visible: qbt.ready && root.view === "detail"
+            width: parent.width
+            spacing: Style.space(6)
+
+            CursorSurface {
+              width: parent.width
+              height: Style.space(36)
+              implicitHeight: height
+              hasCursor: root.cursorActive && root.focusSection === "remove"
+              foreground: root.foreground
+              fill: root.hoverFill
+              MouseArea {
+                anchors.fill: parent
+                hoverEnabled: true
+                cursorShape: qbt.busy ? Qt.ArrowCursor : Qt.PointingHandCursor
+                enabled: !qbt.busy && root.detailHash !== ""
+                onEntered: { root.cursorActive = true; root.focusSection = "remove" }
+                onClicked: root.removeKeepFiles(root.detailHash)
+              }
+              Text {
+                anchors.verticalCenter: parent.verticalCenter
+                anchors.left: parent.left
+                anchors.leftMargin: Style.space(10)
+                text: "Remove, keep files"
+                color: root.foreground
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.body
+              }
+            }
+
+            CursorSurface {
+              width: parent.width
+              height: Style.space(36)
+              implicitHeight: height
+              hasCursor: root.cursorActive && root.focusSection === "deleteFiles"
+              foreground: root.urgent
+              fill: root.hoverFill
+              MouseArea {
+                anchors.fill: parent
+                hoverEnabled: true
+                cursorShape: qbt.busy ? Qt.ArrowCursor : Qt.PointingHandCursor
+                enabled: !qbt.busy && root.detailHash !== ""
+                onEntered: { root.cursorActive = true; root.focusSection = "deleteFiles" }
+                onClicked: root.askDeleteFiles(root.detailHash)
+              }
+              Text {
+                anchors.verticalCenter: parent.verticalCenter
+                anchors.left: parent.left
+                anchors.leftMargin: Style.space(10)
+                text: "Delete files"
+                color: root.urgent
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.body
+              }
+            }
+          }
+
           Text {
             visible: qbt.actionStatus !== "" || qbt.lastError !== ""
             width: parent.width
@@ -643,56 +702,6 @@ Panel {
             visible: qbt.ready && root.view === "detail"
             width: parent.width
             spacing: Style.space(6)
-
-            CursorSurface {
-              width: parent.width
-              implicitHeight: Style.space(36)
-              hasCursor: root.cursorActive && root.focusSection === "remove"
-              foreground: root.foreground
-              fill: root.hoverFill
-              MouseArea {
-                anchors.fill: parent
-                hoverEnabled: true
-                cursorShape: qbt.busy ? Qt.ArrowCursor : Qt.PointingHandCursor
-                enabled: !qbt.busy && root.detailHash !== ""
-                onEntered: { root.cursorActive = true; root.focusSection = "remove" }
-                onClicked: root.removeKeepFiles(root.detailHash)
-              }
-              Text {
-                anchors.verticalCenter: parent.verticalCenter
-                anchors.left: parent.left
-                anchors.leftMargin: Style.space(10)
-                text: "Remove, keep files"
-                color: root.foreground
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.body
-              }
-            }
-
-            CursorSurface {
-              width: parent.width
-              implicitHeight: Style.space(36)
-              hasCursor: root.cursorActive && root.focusSection === "deleteFiles"
-              foreground: root.urgent
-              fill: root.hoverFill
-              MouseArea {
-                anchors.fill: parent
-                hoverEnabled: true
-                cursorShape: qbt.busy ? Qt.ArrowCursor : Qt.PointingHandCursor
-                enabled: !qbt.busy && root.detailHash !== ""
-                onEntered: { root.cursorActive = true; root.focusSection = "deleteFiles" }
-                onClicked: root.askDeleteFiles(root.detailHash)
-              }
-              Text {
-                anchors.verticalCenter: parent.verticalCenter
-                anchors.left: parent.left
-                anchors.leftMargin: Style.space(10)
-                text: "Delete files"
-                color: root.urgent
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.body
-              }
-            }
 
             Text {
               visible: !qbt.files || qbt.files.length === 0
