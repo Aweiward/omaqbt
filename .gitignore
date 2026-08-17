@@ -1,5 +1,6 @@
 .superpowers/
 .worktrees/
+.gstack/
 node_modules/
 tests/fixtures/.requests.json
 tests/fixtures/.rid
