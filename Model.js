@@ -65,6 +65,57 @@ function formatRate(bytesPerSec) {
   return formatSize(bytesPerSec) + "/s";
 }
 
+function formatCompactRate(bytesPerSec) {
+  var n = Number(bytesPerSec);
+  if (!isFinite(n) || n < 0) n = 0;
+  var units = ["K", "M", "G"];
+  var v = n / 1024;
+  var i = 0;
+  while (v >= 1000 && i < units.length - 1) {
+    v = v / 1024;
+    i++;
+  }
+  var text = i === 0 || v >= 10 ? String(Math.round(v)) : v.toFixed(1);
+  return text + units[i];
+}
+
+function barSpeedText(dlSpeed, upSpeed, active) {
+  if (!active) return "";
+  return "↓" + formatCompactRate(dlSpeed) + " ↑" + formatCompactRate(upSpeed);
+}
+
+function newlyCompleted(prevList, nextList) {
+  var prev = prevList || [];
+  var progressById = {};
+  for (var i = 0; i < prev.length; i++) {
+    progressById[torrentId(prev[i])] = Number(prev[i].progress || 0);
+  }
+  var names = [];
+  var next = nextList || [];
+  for (var j = 0; j < next.length; j++) {
+    var id = torrentId(next[j]);
+    if (Number(next[j].progress || 0) < 1) continue;
+    if (!(id in progressById) || progressById[id] >= 1) continue;
+    names.push(String(next[j].name || ""));
+  }
+  return names;
+}
+
+function completionText(names) {
+  var list = names || [];
+  if (list.length === 0) return "";
+  if (list.length === 1) return plainText(list[0]) + " finished downloading";
+  return list.length + " torrents finished downloading";
+}
+
+function vpnUnbound(status) {
+  var s = status || {};
+  if (s.daemon !== true || s.api !== true) return false;
+  var vpn = String(s.vpnIface || "");
+  if (vpn === "") return false;
+  return String(s.bindIface || "") !== vpn;
+}
+
 function formatEta(seconds) {
   var n = Number(seconds);
   if (!isFinite(n) || n < 0 || n >= 8640000) return "—";
@@ -121,6 +172,8 @@ function emptyStatus() {
     dlSpeed: 0,
     upSpeed: 0,
     torrents: [],
+    vpnIface: "",
+    bindIface: "",
     error: ""
   };
 }
@@ -160,6 +213,8 @@ function parseStatusJson(raw) {
     dlSpeed: Number(parsed.dlSpeed || 0),
     upSpeed: Number(parsed.upSpeed || 0),
     torrents: torrents,
+    vpnIface: String(parsed.vpnIface || ""),
+    bindIface: String(parsed.bindIface || ""),
     error: String(parsed.error || "")
   };
 }
@@ -192,6 +247,11 @@ if (typeof module !== "undefined" && module.exports) {
     anyActive: anyActive,
     formatSize: formatSize,
     formatRate: formatRate,
+    formatCompactRate: formatCompactRate,
+    barSpeedText: barSpeedText,
+    newlyCompleted: newlyCompleted,
+    completionText: completionText,
+    vpnUnbound: vpnUnbound,
     formatEta: formatEta,
     formatPercent: formatPercent,
     plainText: plainText,

@@ -248,8 +248,22 @@ Panel {
     }
   }
 
-  implicitWidth: button.implicitWidth
+  readonly property bool barVertical: bar ? bar.vertical : false
+  readonly property string barSpeeds: barVertical ? "" : Model.barSpeedText(qbt.dlSpeed, qbt.upSpeed, qbt.transferring)
+
+  implicitWidth: button.implicitWidth + (speedButton.visible ? speedButton.implicitWidth : 0)
   implicitHeight: button.implicitHeight
+
+  function barPressed(buttonCode) {
+    if (buttonCode === Qt.RightButton) {
+      if (qbt.ready) qbt.toggleAll()
+      else root.toggle()
+    } else if (buttonCode === Qt.MiddleButton) {
+      qbt.refresh()
+    } else {
+      root.toggle()
+    }
+  }
 
   onOpenedChanged: if (opened) {
     cursorActive = false
@@ -281,7 +295,10 @@ Panel {
 
   BarIconButton {
     id: button
-    anchors.fill: parent
+    anchors.left: parent.left
+    anchors.top: parent.top
+    anchors.bottom: parent.bottom
+    width: root.barVertical ? parent.width : implicitWidth
     bar: root.bar
     iconComponent: Component {
       Item {
@@ -294,16 +311,21 @@ Panel {
         }
       }
     }
-    onPressed: function(buttonCode) {
-      if (buttonCode === Qt.RightButton) {
-        if (qbt.ready) qbt.toggleAll()
-        else root.toggle()
-      } else if (buttonCode === Qt.MiddleButton) {
-        qbt.refresh()
-      } else {
-        root.toggle()
-      }
-    }
+    onPressed: function(buttonCode) { root.barPressed(buttonCode) }
+  }
+
+  WidgetButton {
+    id: speedButton
+    anchors.left: button.right
+    anchors.top: parent.top
+    anchors.bottom: parent.bottom
+    width: visible ? implicitWidth : 0
+    bar: root.bar
+    text: root.barSpeeds
+    fontSize: Style.font.bodySmall
+    horizontalMargin: 3
+    tooltipText: Model.formatRate(qbt.dlSpeed) + " down · " + Model.formatRate(qbt.upSpeed) + " up"
+    onPressed: function(buttonCode) { root.barPressed(buttonCode) }
   }
 
   KeyboardPanel {
@@ -579,6 +601,44 @@ Panel {
               Text {
                 text: qbt.busy ? "Starting…" : "Start daemon"
                 color: root.foreground
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.body
+              }
+            }
+          }
+
+          CursorSurface {
+            visible: qbt.vpnUnbound
+            width: parent.width
+            implicitHeight: vpnCol.implicitHeight + Style.spacing.rowPaddingX
+            hasCursor: false
+            foreground: root.urgent
+            fill: root.hoverFill
+            MouseArea {
+              anchors.fill: parent
+              hoverEnabled: true
+              cursorShape: qbt.busy ? Qt.ArrowCursor : Qt.PointingHandCursor
+              enabled: !qbt.busy
+              onClicked: qbt.startDaemon()
+            }
+            Column {
+              id: vpnCol
+              width: parent.width
+              spacing: Style.space(8)
+              anchors.verticalCenter: parent.verticalCenter
+              leftPadding: Style.space(10)
+              rightPadding: Style.space(10)
+              Text {
+                width: parent.width - vpnCol.leftPadding - vpnCol.rightPadding
+                text: "VPN is up but qBittorrent is not bound to " + qbt.vpnIface + ". If the VPN drops, transfers keep going outside it."
+                color: root.dim
+                wrapMode: Text.WordWrap
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.body
+              }
+              Text {
+                text: qbt.busy ? "Restarting…" : "Restart daemon to bind"
+                color: root.urgent
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.body
               }

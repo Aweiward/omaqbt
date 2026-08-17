@@ -13,6 +13,8 @@ Item {
   property bool api: false
   property real dlSpeed: 0
   property real upSpeed: 0
+  property string vpnIface: ""
+  property string bindIface: ""
   property var torrents: []
   property var files: []
   property string lastError: ""
@@ -34,7 +36,8 @@ Item {
   readonly property bool busy: statusProcess.running || actionProcess.running || filesProcess.running || installProcess.running || daemonProcess.running || clipProcess.running
   readonly property bool ready: installed && daemon && lockHolder !== "gui" && api
   readonly property bool transferring: Model.anyActive(torrents)
-  readonly property bool warning: !installed || !daemon || lockHolder === "gui" || !api
+  readonly property bool vpnUnbound: Model.vpnUnbound({ daemon: daemon, api: api, vpnIface: vpnIface, bindIface: bindIface })
+  readonly property bool warning: !installed || !daemon || lockHolder === "gui" || !api || vpnUnbound
 
   function clearError() { lastError = "" }
 
@@ -44,14 +47,24 @@ Item {
       lastError = parsed.error || "Failed to read qBittorrent status"
       return
     }
+    var finished = Model.newlyCompleted(torrents, parsed.torrents)
     installed = parsed.installed
     daemon = parsed.daemon
     lockHolder = parsed.lockHolder
     api = parsed.api
     dlSpeed = parsed.dlSpeed
     upSpeed = parsed.upSpeed
+    vpnIface = parsed.vpnIface
+    bindIface = parsed.bindIface
     torrents = parsed.torrents
     lastError = Model.nextStatusError(parsed, lastError)
+    if (finished.length > 0) notify(Model.completionText(finished))
+  }
+
+  function notify(text) {
+    if (!text || notifyProcess.running) return
+    notifyProcess.command = ["notify-send", "-a", "OmaqBT", "OmaqBT", text]
+    notifyProcess.running = true
   }
 
   function refresh() {
@@ -160,6 +173,14 @@ Item {
       if (exitCode === 0) root.applyStatus(statusOut.text)
       else root.lastError = Model.sanitizeError(statusErr.text || "qBittorrent is not reachable")
     }
+  }
+
+  Process {
+    id: notifyProcess
+    running: false
+    command: []
+    // Best effort: a missing notify-send must not surface as a plugin error.
+    onExited: function() {}
   }
 
   Process {

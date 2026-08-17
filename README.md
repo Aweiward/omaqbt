@@ -1,6 +1,6 @@
 # OmaqBT
 
-A themed [Omarchy](https://omarchy.org) Quattro bar widget for qBittorrent. Left-click the mark to watch live transfers, add a magnet, start or stop, remove a torrent, and set file priorities. Right-click starts or stops everything. The official Qt window stays as an escape hatch.
+A themed [Omarchy](https://omarchy.org) Quattro bar widget for qBittorrent. The mark shows live ↓/↑ speeds while anything is transferring, and a desktop notification fires when a download finishes. Left-click the mark to watch live transfers, add a magnet, start or stop, remove a torrent, and set file priorities. Right-click starts or stops everything. The official Qt window stays as an escape hatch.
 
 OmaqBT talks to `qbittorrent-nox` on your existing `~/.config/qBittorrent` library through the local Web API. It does not talk to any host other than `127.0.0.1`.
 
@@ -32,6 +32,10 @@ omarchy bar move aweiward.omaqbt --section right
 - Right click: start or stop all torrents
 - Middle click: refresh
 - Esc: close the panel
+
+While a torrent is downloading or seeding, compact ↓/↑ speeds appear next to the bar mark (horizontal bars only; hover for exact rates). When a download reaches 100% between two polls, a desktop notification fires through `notify-send`. Already-finished torrents never re-notify, including on shell restart.
+
+If Mullvad (or `QBT_BIND_IFACE`) is up but the running daemon is not bound to it, the mark shows the warning badge and the panel offers **Restart daemon to bind**. Restarting writes the bind keys and brings the daemon back on the tunnel.
 
 List keys: `j`/`k` move, Enter opens files, Space start/stop, `x` remove (keep files), `X` delete files, `t` start/stop all, `a`/`p`/`c`/`*` filter, `/` magnet field, `y` add clipboard magnet, `r` refresh.
 
@@ -85,6 +89,7 @@ systemctl --user stop omaqbt-nox.service
 - Omarchy 4 (Quattro) / `omarchy-shell`
 - `qbittorrent-nox` 5.2+ (installed from the panel if missing)
 - On PATH for the helper: `curl`, `jq`, `python3`
+- `notify-send` (libnotify) for completion notifications; without it they are skipped silently
 - `pkexec` only when installing the package from the panel (no TTY for `sudo`)
 - `systemctl --user` for `omaqbt-nox.service`
 
@@ -96,6 +101,7 @@ systemctl --user stop omaqbt-nox.service
 - Writes the localhost Web UI keys listed under Configure. It stops the daemon first so qBittorrent does not overwrite those keys on exit.
 - If `wg0-mullvad` is up, also writes the `[BitTorrent]` interface keys so qBittorrent binds the tunnel, not a single relay IP.
 - Stores sync state in `$XDG_RUNTIME_DIR/omaqbt/` (private, mode 700). If that variable is unset it falls back to a uid-scoped `/tmp/omaqbt-<uid>`, created with `umask 077`, and refuses to write through a symlink or a directory it does not own.
+- Sends a desktop notification through `notify-send` when a download completes. Nothing else notifies.
 - Does not add torrents, delete files, or start the daemon unless you click or press the matching control.
 
 ## Dev

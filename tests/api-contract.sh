@@ -26,7 +26,14 @@ env.update({
     "QBT_LOCK": "nox",
     "QBT_RID_FILE": str(root / "tests/fixtures/.rid"),
     "QBT_CONF": str(root / "tests/fixtures/qBittorrent.conf"),
+    # Point iface detection at a dir with no wg0-mullvad so the host's real
+    # VPN state cannot leak into the assertions below.
+    "QBT_NET_DIR": str(root / "tests/fixtures/.no-such-net"),
+    "QBT_FIXTURE_BIND_FILE": str(root / "tests/fixtures/.bind"),
 })
+bind_file = Path(env["QBT_FIXTURE_BIND_FILE"])
+if bind_file.exists():
+    bind_file.unlink()
 rid = Path(env["QBT_RID_FILE"])
 if rid.exists():
     rid.unlink()
@@ -58,6 +65,10 @@ try:
     assert "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" in hashes
     assert "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" in hashes
 
+    # No VPN iface detected: no warning fields, and no preferences call at all.
+    assert data["vpnIface"] == ""
+    assert data["bindIface"] == ""
+
     second = qbt("status")
     assert second.returncode == 0, second.stderr
     data2 = json.loads(second.stdout)
@@ -65,6 +76,26 @@ try:
     names = {t["name"] for t in data2["torrents"]}
     assert names == {"debian.iso"}
     assert abs(data2["torrents"][0]["progress"] - 0.5) < 1e-9
+
+    # With the VPN iface up: report where the running daemon is bound.
+    reqs_before = json.loads(log.read_text())
+    assert "/api/v2/app/preferences" not in [r["path"] for r in reqs_before]
+
+    venv = env.copy()
+    venv["QBT_BIND_IFACE"] = "wg0-mullvad"
+    bind_file.write_text("wg0-mullvad")
+    bound = subprocess.run(["./qbt", "status"], env=venv, text=True, capture_output=True)
+    assert bound.returncode == 0, bound.stderr
+    bdata = json.loads(bound.stdout)
+    assert bdata["vpnIface"] == "wg0-mullvad"
+    assert bdata["bindIface"] == "wg0-mullvad"
+
+    bind_file.write_text("")
+    unbound = subprocess.run(["./qbt", "status"], env=venv, text=True, capture_output=True)
+    assert unbound.returncode == 0, unbound.stderr
+    udata = json.loads(unbound.stdout)
+    assert udata["vpnIface"] == "wg0-mullvad"
+    assert udata["bindIface"] == ""
 
     add = qbt("add", "magnet:?xt=urn:btih:abc")
     assert add.returncode == 0, add.stderr

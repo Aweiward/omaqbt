@@ -81,6 +81,16 @@ lock_holder() {
   fi
 }
 
+vpn_iface() {
+  if [[ -n ${QBT_BIND_IFACE:-} ]]; then
+    printf '%s' "$QBT_BIND_IFACE"
+    return
+  fi
+  if [[ -d ${QBT_NET_DIR:-/sys/class/net}/wg0-mullvad ]]; then
+    printf 'wg0-mullvad'
+  fi
+}
+
 is_installed() {
   if [[ -n ${QBT_INSTALLED:-} ]]; then
     [[ $QBT_INSTALLED == 1 ]]
@@ -124,6 +134,8 @@ api() {
 
 cmd_status() {
   local installed=false daemon=false api=false
+  local vpn_if bind_if=""
+  vpn_if=$(vpn_iface)
   if is_installed; then installed=true; fi
   if is_daemon; then daemon=true; fi
   local lock
@@ -194,6 +206,20 @@ print(json.dumps({
       up=$(printf '%s' "$merged" | jq '.upSpeed')
     fi
   fi
+  # Only ask where the session is bound when a VPN iface is expected; if the
+  # preferences call fails, report both as unknown rather than warn on no data.
+  if [[ $api == true && -n $vpn_if ]]; then
+    local prefs ok_prefs
+    set +e
+    prefs=$(api GET "/api/v2/app/preferences")
+    ok_prefs=$?
+    set -e
+    if [[ $ok_prefs -eq 0 ]]; then
+      bind_if=$(printf '%s' "$prefs" | jq -r '.current_network_interface // ""')
+    else
+      vpn_if=""
+    fi
+  fi
   jq -n \
     --argjson installed "$installed" \
     --argjson daemon "$daemon" \
@@ -202,7 +228,9 @@ print(json.dumps({
     --argjson dl "$dl" \
     --argjson up "$up" \
     --argjson torrents "$torrents" \
-    '{installed:$installed, daemon:$daemon, lockHolder:$lock, api:$api, dlSpeed:$dl, upSpeed:$up, torrents:$torrents}'
+    --arg vpnIface "$vpn_if" \
+    --arg bindIface "$bind_if" \
+    '{installed:$installed, daemon:$daemon, lockHolder:$lock, api:$api, dlSpeed:$dl, upSpeed:$up, torrents:$torrents, vpnIface:$vpnIface, bindIface:$bindIface}'
 }
 
 cmd_add() {
@@ -284,10 +312,8 @@ PY
 }
 
 bind_mullvad() {
-  local iface="${QBT_BIND_IFACE:-}"
-  if [[ -z $iface && -d /sys/class/net/wg0-mullvad ]]; then
-    iface=wg0-mullvad
-  fi
+  local iface
+  iface=$(vpn_iface)
   [[ -n $iface ]] || return 0
   # Bind the tunnel interface, not a relay IP, so a city change keeps working.
   set_key "$CONF" 'Session\Interface' "$iface" BitTorrent

@@ -53,6 +53,13 @@ class Handler(BaseHTTPRequestHandler):
         if parsed.path == "/api/v2/torrents/files":
             self._send(200, json.dumps(FILES).encode())
             return
+        if parsed.path == "/api/v2/app/preferences":
+            bind = ""
+            bind_file = os.environ.get("QBT_FIXTURE_BIND_FILE")
+            if bind_file and Path(bind_file).exists():
+                bind = Path(bind_file).read_text().strip()
+            self._send(200, json.dumps({"current_network_interface": bind}).encode())
+            return
         self._send(404, b"{}")
 
     def do_POST(self):

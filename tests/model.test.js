@@ -232,3 +232,86 @@ test("installCommand uses omarchy pkg add on a tty", () => {
 });
 
 
+
+test("formatCompactRate rounds into bare K/M/G units", () => {
+  assert.equal(Model.formatCompactRate(0), "0K");
+  assert.equal(Model.formatCompactRate(143360), "140K");
+  assert.equal(Model.formatCompactRate(1258291), "1.2M");
+  assert.equal(Model.formatCompactRate(22 * 1048576), "22M");
+  assert.equal(Model.formatCompactRate(1.5 * 1073741824), "1.5G");
+  assert.equal(Model.formatCompactRate(-5), "0K");
+  assert.equal(Model.formatCompactRate("junk"), "0K");
+});
+
+test("barSpeedText is empty when idle", () => {
+  assert.equal(Model.barSpeedText(1000, 2000, false), "");
+});
+
+test("barSpeedText shows compact down and up rates when active", () => {
+  assert.equal(Model.barSpeedText(143360, 1258291, true), "↓140K ↑1.2M");
+  assert.equal(Model.barSpeedText(0, 0, true), "↓0K ↑0K");
+});
+
+const prevPoll = [
+  { hash: "a", name: "almost", progress: 0.98 },
+  { hash: "b", name: "done-already", progress: 1 },
+  { hash: "c", name: "midway", progress: 0.4 }
+];
+
+test("newlyCompleted reports torrents that crossed the finish line", () => {
+  const next = [
+    { hash: "a", name: "almost", progress: 1 },
+    { hash: "b", name: "done-already", progress: 1 },
+    { hash: "c", name: "midway", progress: 0.6 }
+  ];
+  assert.deepEqual(Model.newlyCompleted(prevPoll, next), ["almost"]);
+});
+
+test("newlyCompleted ignores torrents unseen in the previous poll", () => {
+  const next = [{ hash: "new", name: "instant", progress: 1 }];
+  assert.deepEqual(Model.newlyCompleted(prevPoll, next), []);
+  assert.deepEqual(Model.newlyCompleted([], next), []);
+});
+
+test("newlyCompleted does not re-report torrents that stay complete", () => {
+  assert.deepEqual(Model.newlyCompleted(prevPoll, prevPoll), []);
+});
+
+test("completionText names one finisher and counts many", () => {
+  assert.equal(Model.completionText([]), "");
+  assert.equal(Model.completionText(["debian.iso"]), "debian.iso finished downloading");
+  assert.equal(Model.completionText(["<b>x</b>"]), "bx/b finished downloading");
+  assert.equal(Model.completionText(["a", "b", "c"]), "3 torrents finished downloading");
+});
+
+test("parseStatusJson carries vpnIface and bindIface", () => {
+  const parsed = Model.parseStatusJson(JSON.stringify({
+    installed: true,
+    daemon: true,
+    lockHolder: "nox",
+    api: true,
+    dlSpeed: 0,
+    upSpeed: 0,
+    torrents: [],
+    vpnIface: "wg0-mullvad",
+    bindIface: ""
+  }));
+  assert.equal(parsed.vpnIface, "wg0-mullvad");
+  assert.equal(parsed.bindIface, "");
+});
+
+test("parseStatusJson defaults missing iface fields to empty strings", () => {
+  const parsed = Model.parseStatusJson(JSON.stringify({ installed: true, daemon: true, api: true, torrents: [] }));
+  assert.equal(parsed.vpnIface, "");
+  assert.equal(parsed.bindIface, "");
+});
+
+test("vpnUnbound warns only when the daemon runs off the VPN while it is up", () => {
+  const base = { daemon: true, api: true, vpnIface: "wg0-mullvad", bindIface: "" };
+  assert.equal(Model.vpnUnbound(base), true);
+  assert.equal(Model.vpnUnbound({ ...base, bindIface: "wg0-mullvad" }), false);
+  assert.equal(Model.vpnUnbound({ ...base, vpnIface: "" }), false);
+  assert.equal(Model.vpnUnbound({ ...base, daemon: false }), false);
+  assert.equal(Model.vpnUnbound({ ...base, api: false }), false);
+  assert.equal(Model.vpnUnbound(null), false);
+});
