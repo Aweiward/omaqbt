@@ -75,7 +75,8 @@ Panel {
     if (qbt.lockHolder === "gui") { focusSection = "lock"; return }
     if (!qbt.daemon) { focusSection = "daemon"; return }
     if (view === "detail") {
-      focusSection = "files"
+      if (focusSection !== "remove" && focusSection !== "deleteFiles" && focusSection !== "files")
+        focusSection = (qbt.files && qbt.files.length > 0) ? "files" : "remove"
       if (fileIndex >= qbt.files.length) fileIndex = Math.max(0, qbt.files.length - 1)
       return
     }
@@ -115,6 +116,12 @@ Panel {
     Qt.callLater(syncFocus)
   }
 
+  function removeKeepFiles(hash) {
+    if (!hash) return
+    qbt.deleteHash(hash, false)
+    closeDetail()
+  }
+
   function setFilter(mode) {
     filterMode = mode
     rowIndex = 0
@@ -126,7 +133,27 @@ Panel {
     ensureCursor()
     if (dy === 0) return
     if (view === "detail") {
-      if (qbt.files.length === 0) return
+      if (focusSection === "remove") {
+        if (dy < 0) {
+          focusSection = "files"
+          fileIndex = Math.max(0, qbt.files.length - 1)
+        } else if (dy > 0) {
+          focusSection = "deleteFiles"
+        }
+        return
+      }
+      if (focusSection === "deleteFiles") {
+        if (dy < 0) focusSection = "remove"
+        return
+      }
+      if (qbt.files.length === 0) {
+        if (dy > 0) focusSection = "remove"
+        return
+      }
+      if (dy > 0 && fileIndex >= qbt.files.length - 1) {
+        focusSection = "remove"
+        return
+      }
       fileIndex = Math.max(0, Math.min(qbt.files.length - 1, fileIndex + dy))
       return
     }
@@ -157,6 +184,8 @@ Panel {
     else if (focusSection === "clipboard") qbt.addUrl(qbt.clipboardText)
     else if (focusSection === "rows") openDetail(selectedTorrent)
     else if (focusSection === "files") cycleSelectedFile()
+    else if (focusSection === "remove") removeKeepFiles(detailHash)
+    else if (focusSection === "deleteFiles") askDeleteFiles(detailHash)
   }
 
   function cycleSelectedFile() {
@@ -675,6 +704,56 @@ Panel {
                   font.family: root.fontFamily
                   font.pixelSize: Style.font.bodySmall
                 }
+              }
+            }
+
+            CursorSurface {
+              width: parent.width
+              implicitHeight: Style.space(36)
+              hasCursor: root.cursorActive && root.focusSection === "remove"
+              foreground: root.foreground
+              fill: root.hoverFill
+              MouseArea {
+                anchors.fill: parent
+                hoverEnabled: true
+                cursorShape: qbt.busy ? Qt.ArrowCursor : Qt.PointingHandCursor
+                enabled: !qbt.busy && root.detailHash !== ""
+                onEntered: { root.cursorActive = true; root.focusSection = "remove" }
+                onClicked: root.removeKeepFiles(root.detailHash)
+              }
+              Text {
+                anchors.verticalCenter: parent.verticalCenter
+                anchors.left: parent.left
+                anchors.leftMargin: Style.space(10)
+                text: "Remove, keep files"
+                color: root.foreground
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.body
+              }
+            }
+
+            CursorSurface {
+              width: parent.width
+              implicitHeight: Style.space(36)
+              hasCursor: root.cursorActive && root.focusSection === "deleteFiles"
+              foreground: root.urgent
+              fill: root.hoverFill
+              MouseArea {
+                anchors.fill: parent
+                hoverEnabled: true
+                cursorShape: qbt.busy ? Qt.ArrowCursor : Qt.PointingHandCursor
+                enabled: !qbt.busy && root.detailHash !== ""
+                onEntered: { root.cursorActive = true; root.focusSection = "deleteFiles" }
+                onClicked: root.askDeleteFiles(root.detailHash)
+              }
+              Text {
+                anchors.verticalCenter: parent.verticalCenter
+                anchors.left: parent.left
+                anchors.leftMargin: Style.space(10)
+                text: "Delete files"
+                color: root.urgent
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.body
               }
             }
           }

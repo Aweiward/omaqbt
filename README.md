@@ -33,6 +33,8 @@ List keys: `j`/`k` move, Enter opens files, Space start/stop, `x` remove (keep f
 
 File view keys: `j`/`k` move, Enter cycle priority, `x` skip, Space start/stop, `X` delete files, Backspace or `h` back.
 
+On a torrent’s detail view, **Remove, keep files** takes it out of the list and leaves the download on disk. **Delete files** asks first, then removes the torrent and its files.
+
 ## Configure
 
 The only plugin setting is `refreshIntervalSec` (default 5) on the widget entry in `~/.config/omarchy/shell.json`.
