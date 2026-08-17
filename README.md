@@ -76,7 +76,7 @@ systemctl --user stop omaqbt-nox.service
 - Installs the Arch extra package `qbittorrent-nox` through `omarchy pkg add` when you click Install. Privilege is `pkexec`, not a sudoers rule.
 - Writes `~/.config/systemd/user/omaqbt-nox.service` and enables it as your user.
 - Writes the localhost Web UI keys listed under Configure. It stops the daemon first so qBittorrent does not overwrite those keys on exit.
-- Stores sync state in `$XDG_RUNTIME_DIR/omaqbt/`, not in `/tmp`.
+- Stores sync state in `$XDG_RUNTIME_DIR/omaqbt/` (private, mode 700). If that variable is unset it falls back to a uid-scoped `/tmp/omaqbt-<uid>`, created with `umask 077`, and refuses to write through a symlink or a directory it does not own.
 - Does not add torrents, delete files, or start the daemon unless you click or press the matching control.
 
 ## Dev

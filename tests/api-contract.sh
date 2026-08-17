@@ -181,4 +181,28 @@ later = conf2.split("[TorrentProperties]", 1)[1]
 assert r"WebUI\LocalHostAuth=false" not in later
 assert r"WebUI\Port=9001" not in later
 print("prefs-section-contract ok")
+
+# State dir hardening: refuse a symlinked state dir, and create the real one 0700.
+# The fixture server is stopped, so the API call fails gracefully; ensure_state_dir
+# runs before that call, which is what we are exercising here.
+sbase = pathlib.Path(tempfile.mkdtemp(prefix="qbt-state-"))
+real = sbase / "real"
+real.mkdir()
+link = sbase / "link"
+link.symlink_to(real)
+senv = env.copy()
+senv["QBT_RID_FILE"] = str(link / "rid.json")
+bad_state = subprocess.run(["./qbt", "status"], env=senv, text=True, capture_output=True)
+assert bad_state.returncode != 0
+assert "refusing symlinked state dir" in (bad_state.stderr + bad_state.stdout).lower()
+
+fresh = sbase / "fresh" / "omaqbt"
+senv2 = env.copy()
+senv2["QBT_RID_FILE"] = str(fresh / "rid.json")
+ok_state = subprocess.run(["./qbt", "status"], env=senv2, text=True, capture_output=True)
+assert ok_state.returncode == 0, ok_state.stderr
+assert fresh.is_dir()
+mode = oct(fresh.stat().st_mode & 0o777)
+assert mode == "0o700", mode
+print("state-dir-contract ok")
 PY
