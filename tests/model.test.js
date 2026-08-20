@@ -482,3 +482,54 @@ test("ratioLimitLabel names global and none", () => {
   assert.equal(Model.ratioLimitLabel(1), "1.0");
   assert.equal(Model.ratioLimitLabel(1.5), "1.5");
 });
+
+test("isRealName rejects empty and hash-equal names", () => {
+  const hash = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+  assert.equal(Model.isRealName("", hash), false);
+  assert.equal(Model.isRealName(hash, hash), false);
+  assert.equal(Model.isRealName(hash.toUpperCase(), hash), false);
+  assert.equal(Model.isRealName("debian.iso", hash), true);
+});
+
+test("excludePending drops rows whose hash is pending", () => {
+  const rows = [
+    { name: "dl", state: "downloading", progress: 0.2, hash: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" },
+    { name: "seed", state: "uploading", progress: 1, hash: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" }
+  ];
+  const got = Model.excludePending(rows, ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]).map((t) => t.name);
+  assert.deepEqual(got, ["seed"]);
+});
+
+test("anyActive ignores pending hashes", () => {
+  const onlyDl = [
+    { name: "dl", state: "downloading", progress: 0.2, hash: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" }
+  ];
+  assert.equal(Model.anyActive(onlyDl), true);
+  assert.equal(Model.anyActive(onlyDl, ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]), false);
+});
+
+test("pendingNeedsStop is true while metadata or payload is running", () => {
+  for (const state of ["metaDL", "downloading", "checkingDL", "forcedDL", "stalledDL"]) {
+    assert.equal(Model.pendingNeedsStop(state), true, state);
+  }
+  assert.equal(Model.pendingNeedsStop("stoppedDL"), false);
+  assert.equal(Model.pendingNeedsStop("pausedDL"), false);
+});
+
+test("magnetMoreWaiting counts the queue after the current item", () => {
+  assert.equal(Model.magnetMoreWaiting(1, 0), 0);
+  assert.equal(Model.magnetMoreWaiting(1, 1), 1);
+  assert.equal(Model.magnetMoreWaiting(0, 2), 1);
+  assert.equal(Model.magnetMoreWaiting(0, 0), 0);
+});
+
+test("enqueueAction keeps FIFO order", () => {
+  let q = [];
+  q = Model.enqueueAction(q, { cmd: ["start", "a"] });
+  q = Model.enqueueAction(q, { cmd: ["start", "b"] });
+  const first = Model.shiftAction(q);
+  assert.deepEqual(first.item.cmd, ["start", "a"]);
+  const second = Model.shiftAction(first.rest);
+  assert.deepEqual(second.item.cmd, ["start", "b"]);
+  assert.equal(second.rest.length, 0);
+});

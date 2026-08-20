@@ -481,6 +481,382 @@ cmd_stop_daemon() {
   printf '%s\n' '{"ok":true}'
 }
 
+magnet_state_dir() {
+  printf '%s' "${QBT_MAGNET_STATE:-${XDG_STATE_HOME:-$HOME_DIR/.local/state}/omaqbt}"
+}
+
+magnet_inbox_path() { printf '%s/magnet-inbox.jsonl' "$(magnet_state_dir)"; }
+magnet_pending_path() { printf '%s/magnet-pending.json' "$(magnet_state_dir)"; }
+magnet_cancel_path() { printf '%s/magnet-cancel.json' "$(magnet_state_dir)"; }
+magnet_desktop_path() {
+  printf '%s' "${QBT_MAGNET_DESKTOP:-$HOME_DIR/.local/share/applications/omaqbt-magnet.desktop}"
+}
+
+magnet_notify() {
+  local text=$1
+  local cmd
+  cmd=${QBT_NOTIFY_CMD:-notify-send}
+  command -v "$cmd" >/dev/null 2>&1 || return 0
+  "$cmd" -a OmaqBT OmaqBT "$text" >/dev/null 2>&1 || true
+}
+
+magnet_meta() {
+  python3 - "$1" <<'PY'
+import json, re, sys, base64
+from urllib.parse import parse_qs, unquote_plus
+url = sys.argv[1]
+ids = []
+for m in re.finditer(r"xt=urn:btih:([A-Za-z0-9]+)", url, re.I):
+    v = m.group(1)
+    if len(v) == 40 and re.fullmatch(r"[0-9a-fA-F]+", v):
+        ids.append(v.lower())
+    elif len(v) == 32:
+        try:
+            ids.append(base64.b32decode(v.upper()).hex())
+        except Exception:
+            pass
+for m in re.finditer(r"xt=urn:btmh:([A-Za-z0-9]+)", url, re.I):
+    ids.append(m.group(1).lower())
+qs = parse_qs(url.split("?", 1)[-1], keep_blank_values=True)
+dn = unquote_plus((qs.get("dn") or [""])[0])
+print(json.dumps({"ids": ids, "dn": dn}))
+PY
+}
+
+magnet_read_pending() {
+  local path
+  path=$(magnet_pending_path)
+  if [[ -f $path ]]; then
+    jq -c '.' "$path" 2>/dev/null || printf '[]'
+  else
+    printf '[]'
+  fi
+}
+
+magnet_write_pending() {
+  local path dir
+  path=$(magnet_pending_path)
+  dir=$(magnet_state_dir)
+  ensure_state_dir "$dir"
+  printf '%s\n' "$1" >"$path"
+  chmod 600 "$path" 2>/dev/null || true
+}
+
+magnet_read_cancel() {
+  local path
+  path=$(magnet_cancel_path)
+  if [[ -f $path ]]; then
+    jq -c '.' "$path" 2>/dev/null || printf '[]'
+  else
+    printf '[]'
+  fi
+}
+
+magnet_write_cancel() {
+  local path dir
+  path=$(magnet_cancel_path)
+  dir=$(magnet_state_dir)
+  ensure_state_dir "$dir"
+  printf '%s\n' "$1" >"$path"
+  chmod 600 "$path" 2>/dev/null || true
+}
+
+magnet_info() {
+  api GET "/api/v2/torrents/info"
+}
+
+cmd_magnet_paths() {
+  jq -n \
+    --arg state "$(magnet_state_dir)" \
+    --arg inbox "$(magnet_inbox_path)" \
+    --arg pending "$(magnet_pending_path)" \
+    --arg desktop "$(magnet_desktop_path)" \
+    '{state:$state,inbox:$inbox,pending:$pending,desktop:$desktop}'
+  printf '\n'
+}
+
+cmd_magnet_snapshot() {
+  local inbox='[]' pending
+  pending=$(magnet_read_pending)
+  if [[ -f $(magnet_inbox_path) ]]; then
+    inbox=$(python3 - "$(magnet_inbox_path)" <<'PY'
+import json, sys
+rows = []
+path = sys.argv[1]
+try:
+    for ln in open(path):
+        if ln.strip():
+            rows.append(json.loads(ln))
+except FileNotFoundError:
+    pass
+print(json.dumps(rows))
+PY
+)
+  fi
+  jq -n --argjson inbox "$inbox" --argjson pending "$pending" '{inbox:$inbox,pending:$pending}'
+  printf '\n'
+}
+
+cmd_magnet_desktop_body() {
+  local exec_path
+  exec_path=$(readlink -f "$0" 2>/dev/null || printf '%s' "$0")
+  [[ $exec_path == /* ]] || exec_path="$PWD/$0"
+  cat <<EOF
+[Desktop Entry]
+Type=Application
+Name=OmaqBT
+NoDisplay=true
+StartupNotify=false
+MimeType=x-scheme-handler/magnet;
+Exec=${exec_path} magnet-inbox %u
+EOF
+}
+
+cmd_magnet_install_handler() {
+  if [[ ${1:-} == --print ]]; then
+    cmd_magnet_desktop_body
+    return 0
+  fi
+  local desktop dir
+  desktop=$(magnet_desktop_path)
+  dir=$(dirname "$desktop")
+  mkdir -p "$dir"
+  cmd_magnet_desktop_body >"$desktop"
+  chmod 600 "$desktop"
+  PATH="/usr/bin:$PATH"
+  xdg-mime default omaqbt-magnet.desktop x-scheme-handler/magnet >/dev/null 2>&1 || true
+  update-desktop-database "$dir" >/dev/null 2>&1 || true
+  printf '%s\n' '{"ok":true}'
+}
+
+cmd_magnet_uninstall_handler() {
+  local desktop
+  desktop=$(magnet_desktop_path)
+  rm -f "$desktop"
+  PATH="/usr/bin:$PATH"
+  if [[ -f /usr/share/applications/org.qbittorrent.qBittorrent.desktop ]]; then
+    xdg-mime default org.qbittorrent.qBittorrent.desktop x-scheme-handler/magnet >/dev/null 2>&1 || true
+  fi
+  update-desktop-database "$(dirname "$desktop")" >/dev/null 2>&1 || true
+  printf '%s\n' '{"ok":true}'
+}
+
+cmd_magnet_inbox() {
+  local url=${1:-}
+  [[ $url == magnet:* ]] || die "usage: qbt magnet-inbox <magnet-url>"
+  export PATH="/usr/bin:$PATH"
+  local dir inbox pending meta
+  dir=$(magnet_state_dir)
+  ensure_state_dir "$dir"
+  inbox=$(magnet_inbox_path)
+  pending=$(magnet_pending_path)
+  meta=$(magnet_meta "$url")
+  set +e
+  python3 - "$inbox" "$pending" "$url" "$meta" <<'PY'
+import json, os, sys, time
+inbox_path, pending_path, url, meta_raw = sys.argv[1:5]
+meta = json.loads(meta_raw)
+ids = set(meta.get("ids") or [])
+pending = []
+if os.path.isfile(pending_path):
+    pending = json.loads(open(pending_path).read() or "[]")
+lines = []
+if os.path.isfile(inbox_path):
+    lines = [ln for ln in open(inbox_path) if ln.strip()]
+def line_ids(obj):
+    m = obj.get("ids") or []
+    if m:
+        return set(m)
+    # parsed later; compare url
+    return set()
+count = len(lines) + len(pending)
+if count >= 20:
+    sys.exit(20)
+for ln in lines:
+    obj = json.loads(ln)
+    if obj.get("url") == url:
+        sys.exit(0)
+    if ids and set(obj.get("ids") or []) & ids:
+        sys.exit(0)
+for row in pending:
+    if row.get("url") == url:
+        sys.exit(0)
+    if ids and set(row.get("hashes") or [row.get("hash")]) & ids:
+        sys.exit(0)
+obj = {"url": url, "ts": int(time.time()), "notified": False, "ids": list(ids), "dn": meta.get("dn") or ""}
+with open(inbox_path, "a") as f:
+    f.write(json.dumps(obj) + "\n")
+os.chmod(inbox_path, 0o600)
+sys.exit(0)
+PY
+  local st=$?
+  set -e
+  if [[ $st -eq 20 ]]; then
+    magnet_notify "Inbox full. Click the mark when the daemon is up."
+    die "inbox full"
+  fi
+  [[ $st -eq 0 ]] || die "magnet-inbox failed"
+  local raised=0
+  local raise_cmd
+  raise_cmd=${QBT_RAISE_CMD:-omarchy-shell}
+  if command -v "$raise_cmd" >/dev/null 2>&1; then
+    if "$raise_cmd" aweiward.omaqbt open >/dev/null 2>&1; then
+      raised=1
+    fi
+  fi
+  if [[ $raised -eq 0 ]]; then
+    local label
+    label=$(jq -r '.dn // empty' <<<"$meta")
+    [[ -n $label ]] || label=$(jq -r '.ids[0] // "magnet"' <<<"$meta")
+    magnet_notify "Click the mark to start ${label}"
+    python3 - "$(magnet_inbox_path)" "$url" <<'PY'
+import json, os, sys
+path, url = sys.argv[1:3]
+rows = []
+if os.path.isfile(path):
+    for ln in open(path):
+        if not ln.strip():
+            continue
+        obj = json.loads(ln)
+        if obj.get("url") == url:
+            obj["notified"] = True
+        rows.append(obj)
+with open(path, "w") as f:
+    for obj in rows:
+        f.write(json.dumps(obj) + "\n")
+PY
+  fi
+  printf '%s\n' '{"ok":true}'
+}
+
+cmd_magnet_pending_list() {
+  magnet_read_pending
+  printf '\n'
+}
+
+cmd_magnet_pending_drop() {
+  local hash=${1:-}
+  [[ -n $hash ]] || die "usage: qbt magnet-pending-drop <hash>"
+  local next
+  next=$(magnet_read_pending | jq -c --arg h "$hash" '[.[] | select((.hash // "") != $h and ((.hashes // []) | index($h) | not))]')
+  magnet_write_pending "$next"
+  printf '%s\n' '{"ok":true}'
+}
+
+cmd_magnet_inbox_drop() {
+  local dir inbox first url
+  dir=$(magnet_state_dir)
+  ensure_state_dir "$dir"
+  inbox=$(magnet_inbox_path)
+  [[ -f $inbox ]] || { printf '%s\n' '{"ok":true}'; return 0; }
+  first=$(head -1 "$inbox" || true)
+  [[ -n $first ]] || { printf '%s\n' '{"ok":true}'; return 0; }
+  url=$(jq -r '.url // empty' <<<"$first")
+  local rest
+  rest=$(tail -n +2 "$inbox" || true)
+  printf '%s' "$rest" >"$inbox"
+  local cancel
+  cancel=$(magnet_read_cancel | jq -c --arg u "$url" '. + [$u] | unique')
+  magnet_write_cancel "$cancel"
+  printf '%s\n' '{"ok":true}'
+}
+
+cmd_magnet_drain() {
+  local inbox first url
+  inbox=$(magnet_inbox_path)
+  [[ -f $inbox ]] || die "inbox empty"
+  first=$(head -1 "$inbox" || true)
+  [[ -n $first ]] || die "inbox empty"
+  url=$(jq -r '.url // empty' <<<"$first")
+  [[ -n $url ]] || die "inbox empty"
+  local meta ids_json
+  meta=$(magnet_meta "$url")
+  ids_json=$(jq -c '.ids' <<<"$meta")
+  local info
+  info=$(magnet_info)
+  local match
+  match=$(INFO="$info" IDS="$ids_json" URL="$url" python3 - <<'PY'
+import json, os
+info = json.loads(os.environ["INFO"] or "[]")
+ids = set(json.loads(os.environ["IDS"] or "[]"))
+hits = []
+for row in info:
+    cands = [row.get("hash"), row.get("infohash_v1"), row.get("infohash_v2")]
+    for c in cands:
+        if c and str(c).lower() in ids:
+            hits.append(row)
+            break
+print(json.dumps(hits))
+PY
+)
+  local pending
+  pending=$(magnet_read_pending)
+  local already_pending
+  already_pending=$(jq -e --argjson ids "$ids_json" --arg u "$url" '
+    [.[] | select(.url == $u or ((.hashes // [.hash]) | map(ascii_downcase) | any(. as $h | ($ids | map(ascii_downcase) | index($h)))) ) ] | length > 0
+  ' <<<"$pending" && echo yes || echo no)
+  if [[ $already_pending == yes ]]; then
+    tail -n +2 "$inbox" >"${inbox}.tmp" || true
+    mv "${inbox}.tmp" "$inbox"
+    printf '%s\n' '{"ok":true,"duplicate":"pending"}'
+    return 0
+  fi
+  local n_hits
+  n_hits=$(jq 'length' <<<"$match")
+  if [[ $n_hits -gt 0 ]]; then
+    tail -n +2 "$inbox" >"${inbox}.tmp" || true
+    mv "${inbox}.tmp" "$inbox"
+    magnet_notify "Already in the list"
+    printf '%s\n' '{"ok":true,"duplicate":"library"}'
+    return 0
+  fi
+  local body
+  body="urls=$(jq -nr --arg u "$url" '$u|@uri')"
+  body+="&stopCondition=MetadataReceived&stopped=false&paused=false"
+  api POST "/api/v2/torrents/add" "$body" >/dev/null
+  info=$(magnet_info)
+  match=$(INFO="$info" IDS="$ids_json" python3 - <<'PY'
+import json, os
+info = json.loads(os.environ["INFO"] or "[]")
+ids = set(json.loads(os.environ["IDS"] or "[]"))
+hits = []
+for row in info:
+    cands = [row.get("hash"), row.get("infohash_v1"), row.get("infohash_v2")]
+    for c in cands:
+        if c and str(c).lower() in ids:
+            hits.append({"hash": row.get("hash") or "", "v1": row.get("infohash_v1") or "", "v2": row.get("infohash_v2") or ""})
+            break
+print(json.dumps(hits))
+PY
+)
+  n_hits=$(jq 'length' <<<"$match")
+  if [[ $n_hits -eq 0 ]]; then
+    printf '%s\n' '{"ok":false,"error":"unidentified"}' >&2
+    die "unidentified torrent"
+  fi
+  local hash hashes dn
+  hash=$(jq -r '.[0].hash' <<<"$match")
+  hashes=$(jq -c '[.[].hash, .[].v1, .[].v2] | map(select(. != "")) | unique' <<<"$match")
+  dn=$(jq -r '.dn // empty' <<<"$meta")
+  local cancel
+  cancel=$(magnet_read_cancel)
+  if jq -e --arg u "$url" --arg h "$hash" 'index($u) or index($h)' <<<"$cancel" >/dev/null; then
+    api POST "/api/v2/torrents/delete" "hashes=${hash}&deleteFiles=true" >/dev/null || true
+    tail -n +2 "$inbox" >"${inbox}.tmp" || true
+    mv "${inbox}.tmp" "$inbox"
+    magnet_write_cancel "$(jq -c --arg u "$url" --arg h "$hash" '[.[] | select(. != $u and . != $h)]' <<<"$cancel")"
+    printf '%s\n' '{"ok":true,"cancelled":true}'
+    return 0
+  fi
+  tail -n +2 "$inbox" >"${inbox}.tmp" || true
+  mv "${inbox}.tmp" "$inbox"
+  local row
+  row=$(jq -n --arg hash "$hash" --arg url "$url" --argjson hashes "$hashes" --arg dn "$dn" --argjson addedAt "$(date +%s)" \
+    '{hash:$hash,url:$url,hashes:$hashes,dn:$dn,addedAt:$addedAt}')
+  magnet_write_pending "$(jq -c --argjson row "$row" '. + [$row]' <<<"$pending")"
+  printf '%s\n' '{"ok":true}'
+}
+
 case ${1:-} in
   status) shift; cmd_status "$@" ;;
   add) shift; cmd_add "$@" ;;
@@ -496,5 +872,14 @@ case ${1:-} in
   install) shift; cmd_install "$@" ;;
   start-daemon) shift; cmd_start_daemon "$@" ;;
   stop-daemon) shift; cmd_stop_daemon "$@" ;;
-  *) die "usage: qbt status|add|start|stop|delete|files|prio|turtle|limit|sequential|sharelimit|install|start-daemon|stop-daemon" ;;
+  magnet-paths) shift; cmd_magnet_paths "$@" ;;
+  magnet-snapshot) shift; cmd_magnet_snapshot "$@" ;;
+  magnet-inbox) shift; cmd_magnet_inbox "$@" ;;
+  magnet-inbox-drop) shift; cmd_magnet_inbox_drop "$@" ;;
+  magnet-drain) shift; cmd_magnet_drain "$@" ;;
+  magnet-pending-list) shift; cmd_magnet_pending_list "$@" ;;
+  magnet-pending-drop) shift; cmd_magnet_pending_drop "$@" ;;
+  magnet-install-handler) shift; cmd_magnet_install_handler "$@" ;;
+  magnet-uninstall-handler) shift; cmd_magnet_uninstall_handler "$@" ;;
+  *) die "usage: qbt status|add|start|stop|delete|files|prio|turtle|limit|sequential|sharelimit|install|start-daemon|stop-daemon|magnet-paths|magnet-inbox|magnet-drain|magnet-pending-list|magnet-pending-drop|magnet-install-handler|magnet-uninstall-handler" ;;
 esac

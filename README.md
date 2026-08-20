@@ -37,7 +37,9 @@ While a torrent is downloading or seeding, compact ↓/↑ speeds appear next to
 
 If Mullvad (or `QBT_BIND_IFACE`) is up but the running daemon is not bound to it, the mark shows the warning badge and the panel offers **Restart daemon to bind**. Restarting writes the bind keys and brings the daemon back on the tunnel.
 
-List keys: `j`/`k` move, Enter opens files, Space start/stop, `o` open the save folder, `x` remove (keep files), `X` delete files, `t` start/stop all, `s` cycle sort (default → speed → eta → added), `z` turtle mode, `a`/`p`/`c`/`*` filter, `/` magnet field, `y` add clipboard magnet, `r` refresh.
+Clicking a `magnet:` link in a browser opens this panel (after the browser’s own “open xdg-open?” prompt, if any). The torrent is added so metadata can load, then stopped. The confirm row shows the name (and size when known). Enter starts it. Esc cancels and deletes it. Paste, `y`, and drag-drop are unchanged.
+
+List keys: `j`/`k` move, Enter opens files, Space start/stop, `o` open the save folder, `x` remove (keep files), `X` delete files, `t` start/stop all, `s` cycle sort (default → speed → eta → added), `z` turtle mode, `a`/`p`/`c`/`*` filter, `/` magnet field, `y` add clipboard magnet, `r` refresh. While a browser magnet is waiting, Enter starts it and Esc cancels it (unless the paste field is focused).
 
 The field takes a magnet, a `.torrent` URL, or a local `.torrent` path (`/…`, `~/…`, or `file://…`). Once it holds something addable, a **Save to…** field and an **Add stopped** row appear: Enter adds and starts, Add stopped adds without starting, and the save path overrides qBittorrent’s default when filled. Dropping a `.torrent` file or magnet link onto the open panel adds it too. From a terminal, `qbt add` also accepts `--category <name>`.
 
@@ -82,7 +84,21 @@ No other qBittorrent keys are rewritten. The plugin never stores a Web UI passwo
 omarchy plugin remove aweiward.omaqbt
 ```
 
-That disables the widget and deletes the plugin checkout. It does **not** uninstall `qbittorrent-nox`, stop `omaqbt-nox.service`, delete torrents, or revert the Web UI keys above.
+Restore the Qt magnet handler **before** removing the plugin:
+
+```sh
+qbt magnet-uninstall-handler
+```
+
+`qbt` here is the helper in the plugin checkout. That points `magnet:` back at `org.qbittorrent.qBittorrent.desktop` when the Qt app is installed, and removes `~/.local/share/applications/omaqbt-magnet.desktop`.
+
+If the plugin is already gone:
+
+```sh
+xdg-mime default org.qbittorrent.qBittorrent.desktop x-scheme-handler/magnet
+```
+
+That disables the widget and deletes the plugin checkout. It does **not** uninstall `qbittorrent-nox`, stop `omaqbt-nox.service`, delete torrents, or revert the Web UI keys above. It also does **not** restore the magnet handler unless you ran uninstall first.
 
 To stop the daemon yourself:
 
@@ -108,14 +124,17 @@ systemctl --user stop omaqbt-nox.service
 - Writes the localhost Web UI keys listed under Configure. It stops the daemon first so qBittorrent does not overwrite those keys on exit.
 - If `wg0-mullvad` is up, also writes the `[BitTorrent]` interface keys so qBittorrent binds the tunnel, not a single relay IP.
 - Stores sync state in `$XDG_RUNTIME_DIR/omaqbt/` (private, mode 700). If that variable is unset it falls back to a uid-scoped `/tmp/omaqbt-<uid>`, created with `umask 077`, and refuses to write through a symlink or a directory it does not own.
-- Sends a desktop notification through `notify-send` when a download completes. Nothing else notifies.
-- Does not add torrents, delete files, or start the daemon unless you click or press the matching control.
+- Sends a desktop notification through `notify-send` when a download completes, and when a browser magnet arrives but the panel could not open.
+- On widget load, writes `~/.local/share/applications/omaqbt-magnet.desktop` and claims `x-scheme-handler/magnet`. Chromium may still ask to open xdg-open; that is a browser prompt, not a bug in this plugin.
+- Stores pending browser magnets in `${XDG_STATE_HOME:-$HOME/.local/state}/omaqbt/` (not the runtime rid dir).
+- Does not add torrents, delete files, or start the daemon unless you click or press the matching control, or click a `magnet:` link that this handler claimed.
 
 ## Dev
 
 ```sh
 node --test tests/*.test.js
 tests/api-contract.sh
+tests/magnet-handler.sh
 omarchy plugin validate .
 ```
 

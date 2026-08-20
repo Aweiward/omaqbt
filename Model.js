@@ -44,8 +44,72 @@ function torrentId(row) {
   return String(r.infohash_v2 || "");
 }
 
-function anyActive(list) {
-  return filterTorrents(list, "active").length > 0;
+function anyActive(list, pending) {
+  return filterTorrents(excludePending(list, pending), "active").length > 0;
+}
+
+function isRealName(name, hash) {
+  var n = String(name || "").trim();
+  var h = String(hash || "").trim().toLowerCase();
+  if (n === "") return false;
+  if (h !== "" && n.toLowerCase() === h) return false;
+  return true;
+}
+
+function pendingIdSet(pending) {
+  var hashes = {};
+  var p = pending || [];
+  for (var i = 0; i < p.length; i++) {
+    var id = typeof p[i] === "string" ? p[i] : torrentId(p[i]);
+    if (!id && p[i] && typeof p[i] === "object") id = String(p[i].hash || "");
+    if (id) hashes[String(id).toLowerCase()] = true;
+  }
+  return hashes;
+}
+
+function rowIsPending(row, hashes) {
+  var ids = [
+    torrentId(row),
+    row && row.hash,
+    row && row.infohash_v1,
+    row && row.infohash_v2
+  ];
+  for (var i = 0; i < ids.length; i++) {
+    var id = String(ids[i] || "").toLowerCase();
+    if (id && hashes[id]) return true;
+  }
+  return false;
+}
+
+function excludePending(list, pending) {
+  var hashes = pendingIdSet(pending);
+  var rows = list || [];
+  var out = [];
+  for (var i = 0; i < rows.length; i++) {
+    if (!rowIsPending(rows[i], hashes)) out.push(rows[i]);
+  }
+  return out;
+}
+
+function pendingNeedsStop(state) {
+  var bucket = classifyState(state, 0);
+  return bucket === "downloading" || bucket === "seeding";
+}
+
+function magnetMoreWaiting(pendingLen, inboxLen) {
+  var n = Number(pendingLen || 0) + Number(inboxLen || 0);
+  if (!isFinite(n) || n <= 1) return 0;
+  return n - 1;
+}
+
+function enqueueAction(queue, item) {
+  return (queue || []).concat([item]);
+}
+
+function shiftAction(queue) {
+  var q = queue || [];
+  if (q.length === 0) return { item: null, rest: [] };
+  return { item: q[0], rest: q.slice(1) };
 }
 
 function formatSize(bytes) {
@@ -357,6 +421,12 @@ if (typeof module !== "undefined" && module.exports) {
     filterTorrents: filterTorrents,
     torrentId: torrentId,
     anyActive: anyActive,
+    isRealName: isRealName,
+    excludePending: excludePending,
+    pendingNeedsStop: pendingNeedsStop,
+    magnetMoreWaiting: magnetMoreWaiting,
+    enqueueAction: enqueueAction,
+    shiftAction: shiftAction,
     formatSize: formatSize,
     formatRate: formatRate,
     formatCompactRate: formatCompactRate,

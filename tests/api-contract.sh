@@ -30,7 +30,12 @@ env.update({
     # VPN state cannot leak into the assertions below.
     "QBT_NET_DIR": str(root / "tests/fixtures/.no-such-net"),
     "QBT_FIXTURE_BIND_FILE": str(root / "tests/fixtures/.bind"),
+    "XDG_STATE_HOME": str(root / "tests/fixtures/.magnet-state"),
 })
+magnet_state = Path(env["XDG_STATE_HOME"])
+if magnet_state.exists():
+    import shutil
+    shutil.rmtree(magnet_state)
 bind_file = Path(env["QBT_FIXTURE_BIND_FILE"])
 if bind_file.exists():
     bind_file.unlink()
@@ -123,6 +128,13 @@ try:
     assert addf.returncode == 0, addf.stderr
     addfu = qbt("add", "file://" + str(torrent_file))
     assert addfu.returncode == 0, addfu.stderr
+    magnet_hash = "c" * 40
+    magnet_url = f"magnet:?xt=urn:btih:{magnet_hash}"
+    inbox = Path(env["XDG_STATE_HOME"]) / "omaqbt" / "magnet-inbox.jsonl"
+    inbox.parent.mkdir(parents=True, exist_ok=True)
+    inbox.write_text(json.dumps({"url": magnet_url, "ts": 1}) + "\n")
+    drain = qbt("magnet-drain")
+    assert drain.returncode == 0, drain.stderr
     addflags = qbt("add", "--stopped", "--savepath", "/dl/iso", "magnet:?xt=urn:btih:def")
     assert addflags.returncode == 0, addflags.stderr
     addfstop = qbt("add", "--stopped", str(torrent_file))
@@ -184,6 +196,10 @@ try:
     # .torrent uploads go multipart with the file under "torrents".
     assert 'name="torrents"' in bodies
     assert 'filename="upload me.torrent"' in bodies
+    # Browser magnet drain must fetch metadata, not inherit add-stopped.
+    assert "stopCondition=MetadataReceived" in bodies
+    assert "stopped=false" in bodies
+    assert "paused=false" in bodies
     # Flag adds carry qBittorrent 5 field names.
     assert "stopped=true" in bodies
     assert "savepath=%2Fdl%2Fiso" in bodies or "savepath=/dl/iso" in bodies

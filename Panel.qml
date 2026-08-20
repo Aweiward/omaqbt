@@ -34,7 +34,7 @@ Panel {
   readonly property bool fieldFocused: (magnetInput && magnetInput.activeFocus) || (savePathInput && savePathInput.activeFocus)
   readonly property bool fieldAddable: Model.isAddableTarget(magnetField)
   readonly property string listFilterQuery: Model.listQuery(magnetField)
-  readonly property var visibleTorrents: Model.sortTorrents(Model.filterByQuery(Model.filterTorrents(qbt.torrents, filterMode), listFilterQuery), sortMode)
+  readonly property var visibleTorrents: Model.sortTorrents(Model.filterByQuery(Model.filterTorrents(Model.excludePending(qbt.torrents, qbt.magnetPendingHashes), filterMode), listFilterQuery), sortMode)
   readonly property int activeCount: Model.filterTorrents(qbt.torrents, "active").length
   readonly property var selectedTorrent: {
     if (visibleTorrents.length === 0) return null
@@ -73,6 +73,45 @@ Panel {
   }
   readonly property string toggleHint: qbt.transferring ? "Stop all torrents" : "Start all torrents"
   readonly property bool showClipboard: qbt.ready && view === "list" && Model.isAddableTarget(qbt.clipboardText)
+  readonly property var magnetCurrentPending: (qbt.magnetPending && qbt.magnetPending.length > 0) ? qbt.magnetPending[0] : null
+  readonly property var magnetCurrentInbox: (qbt.magnetInbox && qbt.magnetInbox.length > 0) ? qbt.magnetInbox[0] : null
+  readonly property var magnetCurrentRow: {
+    var p = magnetCurrentPending
+    if (!p || !p.hash) return null
+    for (var i = 0; i < qbt.torrents.length; i++) {
+      if (qbt.torrents[i].hash === p.hash || Model.torrentId(qbt.torrents[i]) === p.hash) return qbt.torrents[i]
+    }
+    return null
+  }
+  readonly property bool magnetHasQueue: ((qbt.magnetPending && qbt.magnetPending.length > 0) || (qbt.magnetInbox && qbt.magnetInbox.length > 0))
+  readonly property bool magnetIsError: {
+    if (magnetCurrentPending) return false
+    var line = magnetCurrentInbox
+    return !!(line && line.error)
+  }
+  readonly property bool magnetCanStart: {
+    var p = magnetCurrentPending
+    var row = magnetCurrentRow
+    if (!p || !row) return false
+    if (Model.isRealName(row.name, p.hash) && !Model.pendingNeedsStop(row.state)) return true
+    var age = Date.now() / 1000 - Number(p.addedAt || 0)
+    return age >= 15 && !Model.pendingNeedsStop(row.state)
+  }
+  readonly property string magnetTitle: {
+    var row = magnetCurrentRow
+    var p = magnetCurrentPending
+    if (row && p && Model.isRealName(row.name, p.hash)) return Model.plainText(row.name)
+    if (magnetCanStart && p && (p.dn || (row && row.name))) return Model.plainText(p.dn || row.name)
+    if (magnetCurrentPending || magnetCurrentInbox) return "Fetching name…"
+    return ""
+  }
+  readonly property string magnetSizeText: {
+    var row = magnetCurrentRow
+    if (row && Number(row.size) > 0) return Model.formatSize(row.size)
+    return ""
+  }
+  readonly property int magnetMore: Model.magnetMoreWaiting((qbt.magnetPending || []).length, (qbt.magnetInbox || []).length)
+  readonly property bool magnetConfirmOpen: magnetHasQueue && view === "list"
 
   function selectedFile() {
     if (!qbt.files || qbt.files.length === 0) return null
@@ -134,6 +173,19 @@ Panel {
 
   function openFolder(row) {
     if (row && row.savePath) qbt.openPath(row.savePath)
+  }
+
+  function startMagnetConfirm() {
+    if (!magnetCanStart || !magnetCurrentPending) return
+    qbt.startPending(magnetCurrentPending.hash)
+  }
+
+  function cancelMagnetConfirm() {
+    if (magnetCurrentPending && magnetCurrentPending.hash) {
+      qbt.cancelPending(magnetCurrentPending.hash)
+      return
+    }
+    if (magnetCurrentInbox) qbt.dropInboxCurrent()
   }
 
   function submitAdd(stopped) {
@@ -204,6 +256,9 @@ Panel {
     ensureCursor()
     if (focusSection === "install") qbt.installDaemon()
     else if (focusSection === "daemon") qbt.startDaemon()
+    else if (focusSection === "magnetConfirm") {
+      if (magnetCanStart) startMagnetConfirm()
+    }
     else if (focusSection === "header") qbt.toggleAll()
     else if (focusSection === "clipboard") qbt.addUrl(qbt.clipboardText)
     else if (focusSection === "rows") openDetail(selectedTorrent)
@@ -248,6 +303,10 @@ Panel {
 
   function handleTextKey(t) {
     if (confirmOpen) return
+    if (magnetConfirmOpen && (t === "t" || t === "T")) {
+      if (qbt.ready) qbt.toggleAll()
+      return
+    }
     if (t === "t" || t === "T") {
       if (qbt.ready) qbt.toggleAll()
     } else if (t === "/") {
@@ -308,6 +367,7 @@ Panel {
     confirmOpen = false
     if (panelFlick) panelFlick.contentY = 0
     qbt.refresh()
+    qbt.loadMagnetSnapshot()
     qbt.readClipboard()
     ensureCursor()
     Qt.callLater(syncFocus)
@@ -317,6 +377,8 @@ Panel {
     id: qbt
     settings: root.settings
   }
+
+  onMagnetHasQueueChanged: if (magnetHasQueue) view = "list"
 
   IpcHandler {
     target: root.ipcTarget
@@ -381,8 +443,20 @@ Panel {
         if (!root.cursorActive) { root.cursorActive = true; return }
         root.moveCursor(dx, dy)
       }
-      onActivateRequested: root.activateCursor()
-      onCloseRequested: root.close()
+      onActivateRequested: {
+        if (root.magnetConfirmOpen && !root.fieldFocused) {
+          root.startMagnetConfirm()
+          return
+        }
+        root.activateCursor()
+      }
+      onCloseRequested: {
+        if (root.magnetConfirmOpen && !root.fieldFocused) {
+          root.cancelMagnetConfirm()
+          return
+        }
+        root.close()
+      }
       onTabRequested: function(direction) { root.switchPanel(direction) }
       onTextKey: function(t) { root.handleTextKey(t) }
 
@@ -798,6 +872,109 @@ Panel {
             width: parent.width
             spacing: Style.space(8)
 
+            Column {
+              visible: root.magnetConfirmOpen
+              width: parent.width
+              spacing: Style.space(6)
+
+              CursorSurface {
+                width: parent.width
+                implicitHeight: magnetCol.implicitHeight + Style.spacing.rowPaddingX
+                hasCursor: root.cursorActive && root.focusSection === "magnetConfirm"
+                foreground: root.foreground
+                fill: root.hoverFill
+                MouseArea {
+                  anchors.fill: parent
+                  hoverEnabled: true
+                  onEntered: { root.cursorActive = true; root.focusSection = "magnetConfirm" }
+                }
+                Column {
+                  id: magnetCol
+                  width: parent.width
+                  anchors.verticalCenter: parent.verticalCenter
+                  leftPadding: Style.space(10)
+                  rightPadding: Style.space(10)
+                  spacing: Style.space(4)
+                  Text {
+                    text: "From browser"
+                    color: root.dim
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.bodySmall
+                  }
+                  Text {
+                    width: parent.width - magnetCol.leftPadding - magnetCol.rightPadding
+                    text: root.magnetTitle
+                    textFormat: Text.PlainText
+                    wrapMode: Text.Wrap
+                    color: root.foreground
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.body
+                  }
+                  Text {
+                    visible: root.magnetSizeText !== ""
+                    text: root.magnetSizeText
+                    color: root.dim
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.bodySmall
+                  }
+                  Text {
+                    visible: root.magnetMore > 0
+                    text: "and " + root.magnetMore + " more waiting"
+                    color: root.dim
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.bodySmall
+                  }
+                }
+              }
+
+              CursorSurface {
+                visible: root.magnetCanStart
+                width: parent.width
+                implicitHeight: Style.space(36)
+                hasCursor: false
+                foreground: root.foreground
+                fill: root.hoverFill
+                MouseArea {
+                  anchors.fill: parent
+                  hoverEnabled: true
+                  cursorShape: Qt.PointingHandCursor
+                  onClicked: root.startMagnetConfirm()
+                }
+                Text {
+                  anchors.verticalCenter: parent.verticalCenter
+                  anchors.left: parent.left
+                  anchors.leftMargin: Style.space(10)
+                  text: "Start  Enter"
+                  color: root.foreground
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.body
+                }
+              }
+
+              CursorSurface {
+                width: parent.width
+                implicitHeight: Style.space(36)
+                hasCursor: false
+                foreground: root.foreground
+                fill: root.hoverFill
+                MouseArea {
+                  anchors.fill: parent
+                  hoverEnabled: true
+                  cursorShape: Qt.PointingHandCursor
+                  onClicked: root.cancelMagnetConfirm()
+                }
+                Text {
+                  anchors.verticalCenter: parent.verticalCenter
+                  anchors.left: parent.left
+                  anchors.leftMargin: Style.space(10)
+                  text: "Cancel  Esc"
+                  color: root.foreground
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.body
+                }
+              }
+            }
+
             TextField {
               id: magnetInput
               width: parent.width
@@ -1080,7 +1257,7 @@ Panel {
 
   Shortcut {
     sequences: ["Space"]
-    enabled: root.opened && qbt.ready && !root.fieldFocused && !root.confirmOpen
+    enabled: root.opened && qbt.ready && !root.fieldFocused && !root.confirmOpen && !(root.magnetConfirmOpen && root.focusSection === "magnetConfirm")
     onActivated: {
       if (root.view === "detail" && root.detailHash) qbt.toggleHash(root.detailHash)
       else if (root.selectedTorrent) qbt.toggleHash(root.selectedTorrent.hash)
