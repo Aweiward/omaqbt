@@ -2,7 +2,11 @@
 .worktrees/
 .gstack/
 node_modules/
+AGENTS.md
+TODOS.md
+/docs/
 tests/fixtures/.requests.json
 tests/fixtures/.rid
 
 tests/fixtures/.bind
+tests/fixtures/.magnet-state
