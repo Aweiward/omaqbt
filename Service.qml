@@ -214,6 +214,33 @@ Item {
     runAction([helperPath, "sharelimit", hash, String(ratio)], "")
   }
 
+  function copyMagnet(row) {
+    var uri = Model.magnetUriFor(row)
+    if (!uri) {
+      lastError = "No magnet for this torrent."
+      return
+    }
+    if (copyProcess.running) return
+    clearError()
+    actionStatus = "Copied magnet."
+    copyProcess.command = ["wl-copy", "--", uri]
+    copyProcess.running = true
+  }
+
+  function recheckHash(hash) {
+    if (!hash) return
+    runAction([helperPath, "recheck", hash], "Rechecking…")
+  }
+
+  function setLocation(hash, dir) {
+    var path = String(dir || "").trim()
+    if (!hash || path === "") {
+      lastError = "Enter an absolute path to move to."
+      return
+    }
+    runAction([helperPath, "set-location", hash, path], "Moving…")
+  }
+
   function installMagnetHandler() {
     if (magnetHandlerInstalled) return
     magnetHandlerInstalled = true
@@ -378,6 +405,20 @@ Item {
     command: []
     stdout: StdioCollector { id: clipOut; waitForEnd: true }
     onExited: function() { root.clipboardText = String(clipOut.text || "") }
+  }
+
+  Process {
+    id: copyProcess
+    running: false
+    command: []
+    stderr: StdioCollector { id: copyErr; waitForEnd: true }
+    onExited: function(exitCode) {
+      if (exitCode !== 0) {
+        root.actionStatus = ""
+        root.lastError = Model.sanitizeError(copyErr.text || "Could not copy magnet")
+        return
+      }
+    }
   }
 
   Process {
