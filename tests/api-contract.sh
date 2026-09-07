@@ -176,6 +176,14 @@ try:
     assert recheck.returncode == 0, recheck.stderr
     bad_recheck = qbt("recheck")
     assert bad_recheck.returncode != 0
+    moved = qbt("set-location", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "/dl/iso")
+    assert moved.returncode == 0, moved.stderr
+    home_move = qbt("set-location", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "~/iso")
+    assert home_move.returncode == 0, home_move.stderr
+    rel = qbt("set-location", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "relative/path")
+    assert rel.returncode != 0
+    missing_loc = qbt("set-location", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+    assert missing_loc.returncode != 0
 
     reqs = json.loads(log.read_text())
     posts = [r["path"] for r in reqs if r["method"] == "POST"]
@@ -197,6 +205,7 @@ try:
     assert "/api/v2/torrents/toggleSequentialDownload" in posts
     assert "/api/v2/torrents/setShareLimits" in posts
     assert "/api/v2/torrents/recheck" in posts
+    assert "/api/v2/torrents/setLocation" in posts
     assert "limit=1048576" in bodies
     assert "limit=262144" in bodies
     assert "ratioLimit=1" in bodies
@@ -212,6 +221,10 @@ try:
     # Flag adds carry qBittorrent 5 field names.
     assert "stopped=true" in bodies
     assert "savepath=%2Fdl%2Fiso" in bodies or "savepath=/dl/iso" in bodies
+    assert "location=%2Fdl%2Fiso" in bodies or "location=/dl/iso" in bodies
+    home_loc = os.path.expanduser("~/iso")
+    import urllib.parse
+    assert f"location={urllib.parse.quote(home_loc, safe='')}" in bodies or f"location={home_loc}" in bodies
     assert 'name="stopped"' in bodies
 finally:
     server.terminate()

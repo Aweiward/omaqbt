@@ -319,6 +319,15 @@ cmd_recheck() {
   printf '%s\n' '{"ok":true}'
 }
 
+cmd_set_location() {
+  local hash=${1:-} location=${2:-}
+  [[ -n $hash && -n $location ]] || die "usage: qbt set-location <hash> <dir>"
+  [[ $location == "~/"* ]] && location=$HOME/${location#\~/}
+  [[ $location == /* ]] || die "location must be an absolute path"
+  api POST "/api/v2/torrents/setLocation" "hashes=${hash}&location=$(jq -nr --arg v "$location" '$v|@uri')" >/dev/null
+  printf '%s\n' '{"ok":true}'
+}
+
 cmd_delete() {
   local hash=${1:-}
   local files=false
@@ -871,6 +880,7 @@ case ${1:-} in
   start) shift; cmd_start "$@" ;;
   stop) shift; cmd_stop "$@" ;;
   recheck) shift; cmd_recheck "$@" ;;
+  set-location) shift; cmd_set_location "$@" ;;
   delete) shift; cmd_delete "$@" ;;
   files) shift; cmd_files "$@" ;;
   prio) shift; cmd_prio "$@" ;;
@@ -890,5 +900,5 @@ case ${1:-} in
   magnet-pending-drop) shift; cmd_magnet_pending_drop "$@" ;;
   magnet-install-handler) shift; cmd_magnet_install_handler "$@" ;;
   magnet-uninstall-handler) shift; cmd_magnet_uninstall_handler "$@" ;;
-  *) die "usage: qbt status|add|start|stop|recheck|delete|files|prio|turtle|limit|sequential|sharelimit|install|start-daemon|stop-daemon|magnet-paths|magnet-inbox|magnet-drain|magnet-pending-list|magnet-pending-drop|magnet-install-handler|magnet-uninstall-handler" ;;
+  *) die "usage: qbt status|add|start|stop|recheck|set-location|delete|files|prio|turtle|limit|sequential|sharelimit|install|start-daemon|stop-daemon|magnet-paths|magnet-inbox|magnet-drain|magnet-pending-list|magnet-pending-drop|magnet-install-handler|magnet-uninstall-handler" ;;
 esac
