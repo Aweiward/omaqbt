@@ -22,6 +22,8 @@ Panel {
   property string detailHash: ""
   property string magnetField: ""
   property string savePathField: ""
+  property bool moveFieldOpen: false
+  property string movePathField: ""
   property bool confirmOpen: false
   property string pendingDeleteHash: ""
 
@@ -31,7 +33,7 @@ Panel {
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
   readonly property color hoverFill: bar ? Style.hoverFillFor(bar.foreground, Color.accent) : "transparent"
   readonly property color barIconColor: qbt.transferring ? barForeground : Qt.darker(barForeground, 1.55)
-  readonly property bool fieldFocused: (magnetInput && magnetInput.activeFocus) || (savePathInput && savePathInput.activeFocus)
+  readonly property bool fieldFocused: (magnetInput && magnetInput.activeFocus) || (savePathInput && savePathInput.activeFocus) || (movePathInput && movePathInput.activeFocus)
   readonly property bool fieldAddable: Model.isAddableTarget(magnetField)
   readonly property string listFilterQuery: Model.listQuery(magnetField)
   readonly property var visibleTorrents: Model.sortTorrents(Model.filterByQuery(Model.filterTorrents(Model.excludePending(qbt.torrents, qbt.magnetPendingHashes), filterMode), listFilterQuery), sortMode)
@@ -123,8 +125,13 @@ Panel {
     if (qbt.lockHolder === "gui") { focusSection = "lock"; return }
     if (!qbt.daemon) { focusSection = "daemon"; return }
     if (view === "detail") {
-      if (focusSection !== "openFolder" && focusSection !== "remove" && focusSection !== "deleteFiles" && focusSection !== "files")
-        focusSection = (qbt.files && qbt.files.length > 0) ? "files" : "remove"
+      var allowed = {
+        openFolder: true, copyMagnet: true, moveTo: true, recheck: true,
+        remove: true, deleteFiles: true, files: true
+      }
+      if (!allowed[focusSection])
+        focusSection = detailHasFolder ? "openFolder" : "copyMagnet"
+      if (focusSection === "openFolder" && !detailHasFolder) focusSection = "copyMagnet"
       if (fileIndex >= qbt.files.length) fileIndex = Math.max(0, qbt.files.length - 1)
       return
     }
@@ -156,6 +163,8 @@ Panel {
     view = "list"
     detailHash = ""
     fileIndex = 0
+    moveFieldOpen = false
+    movePathField = ""
     focusSection = visibleTorrents.length ? "rows" : "header"
   }
 
@@ -173,6 +182,43 @@ Panel {
 
   function openFolder(row) {
     if (row && row.savePath) qbt.openPath(row.savePath)
+  }
+
+  function openMoveField() {
+    if (!detailTorrent) return
+    moveFieldOpen = true
+    movePathField = String(detailTorrent.savePath || "")
+    focusSection = "moveTo"
+    Qt.callLater(function() {
+      if (movePathInput) movePathInput.forceActiveFocus()
+    })
+  }
+
+  function closeMoveField() {
+    moveFieldOpen = false
+    movePathField = ""
+    if (movePathInput) movePathInput.text = ""
+    focusSection = "moveTo"
+    Qt.callLater(syncFocus)
+  }
+
+  function submitMove() {
+    if (!detailHash) return
+    var path = String(movePathField || "").trim()
+    if (path === "") {
+      qbt.lastError = "Enter an absolute path to move to."
+      return
+    }
+    qbt.setLocation(detailHash, path)
+    closeMoveField()
+  }
+
+  function copyDetailMagnet() {
+    if (detailTorrent) qbt.copyMagnet(detailTorrent)
+  }
+
+  function recheckDetail() {
+    if (detailHash) qbt.recheckHash(detailHash)
   }
 
   function startMagnetConfirm() {
@@ -208,29 +254,30 @@ Panel {
     ensureCursor()
     if (dy === 0) return
     if (view === "detail") {
-      if (focusSection === "openFolder") {
-        if (dy > 0) focusSection = "remove"
+      if (moveFieldOpen) return
+      var order = []
+      if (detailHasFolder) order.push("openFolder")
+      order.push("copyMagnet", "moveTo", "recheck", "remove", "deleteFiles")
+      if (qbt.files.length > 0) order.push("files")
+      var idx = order.indexOf(focusSection)
+      if (idx < 0) {
+        focusSection = order[0]
         return
       }
-      if (focusSection === "remove") {
-        if (dy < 0 && detailHasFolder) focusSection = "openFolder"
-        else if (dy > 0) focusSection = "deleteFiles"
-        return
-      }
-      if (focusSection === "deleteFiles") {
-        if (dy < 0) focusSection = "remove"
-        else if (dy > 0 && qbt.files.length > 0) {
-          focusSection = "files"
-          fileIndex = 0
+      if (focusSection === "files") {
+        if (dy < 0 && fileIndex === 0) {
+          focusSection = "deleteFiles"
+          return
+        }
+        if (dy < 0 || dy > 0) {
+          fileIndex = Math.max(0, Math.min(qbt.files.length - 1, fileIndex + dy))
         }
         return
       }
-      if (qbt.files.length === 0) return
-      if (dy < 0 && fileIndex === 0) {
-        focusSection = "deleteFiles"
-        return
-      }
-      fileIndex = Math.max(0, Math.min(qbt.files.length - 1, fileIndex + dy))
+      var next = idx + dy
+      if (next < 0 || next >= order.length) return
+      focusSection = order[next]
+      if (focusSection === "files") fileIndex = 0
       return
     }
     if (focusSection === "header") {
@@ -263,6 +310,9 @@ Panel {
     else if (focusSection === "clipboard") qbt.addUrl(qbt.clipboardText)
     else if (focusSection === "rows") openDetail(selectedTorrent)
     else if (focusSection === "files") cycleSelectedFile()
+    else if (focusSection === "copyMagnet") copyDetailMagnet()
+    else if (focusSection === "moveTo") openMoveField()
+    else if (focusSection === "recheck") recheckDetail()
     else if (focusSection === "openFolder") openFolder(detailTorrent)
     else if (focusSection === "remove") removeKeepFiles(detailHash)
     else if (focusSection === "deleteFiles") askDeleteFiles(detailHash)
@@ -312,7 +362,12 @@ Panel {
     } else if (t === "/") {
       if (qbt.ready && view === "list" && magnetInput) magnetInput.forceActiveFocus()
     } else if (t === "y" || t === "Y") {
-      if (showClipboard) qbt.addUrl(qbt.clipboardText)
+      if (view === "detail") copyDetailMagnet()
+      else if (showClipboard) qbt.addUrl(qbt.clipboardText)
+    } else if (t === "l" || t === "L") {
+      if (view === "detail") openMoveField()
+    } else if (t === "e" || t === "E") {
+      if (view === "detail") recheckDetail()
     } else if (t === "r" || t === "R") {
       qbt.refresh()
       if (view === "detail" && detailHash) qbt.loadFiles(detailHash)
@@ -599,6 +654,97 @@ Panel {
                 anchors.left: parent.left
                 anchors.leftMargin: Style.space(10)
                 text: "Open folder"
+                color: root.foreground
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.body
+              }
+            }
+
+            CursorSurface {
+              width: parent.width
+              height: Style.space(36)
+              implicitHeight: height
+              hasCursor: root.cursorActive && root.focusSection === "copyMagnet"
+              foreground: root.foreground
+              fill: root.hoverFill
+              MouseArea {
+                anchors.fill: parent
+                hoverEnabled: true
+                cursorShape: Qt.PointingHandCursor
+                enabled: root.detailTorrent !== null
+                onEntered: { root.cursorActive = true; root.focusSection = "copyMagnet" }
+                onClicked: root.copyDetailMagnet()
+              }
+              Text {
+                anchors.verticalCenter: parent.verticalCenter
+                anchors.left: parent.left
+                anchors.leftMargin: Style.space(10)
+                text: "Copy magnet"
+                color: root.foreground
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.body
+              }
+            }
+
+            CursorSurface {
+              width: parent.width
+              height: Style.space(36)
+              implicitHeight: height
+              visible: !root.moveFieldOpen
+              hasCursor: root.cursorActive && root.focusSection === "moveTo"
+              foreground: root.foreground
+              fill: root.hoverFill
+              MouseArea {
+                anchors.fill: parent
+                hoverEnabled: true
+                cursorShape: qbt.busy ? Qt.ArrowCursor : Qt.PointingHandCursor
+                enabled: !qbt.busy && root.detailHash !== ""
+                onEntered: { root.cursorActive = true; root.focusSection = "moveTo" }
+                onClicked: root.openMoveField()
+              }
+              Text {
+                anchors.verticalCenter: parent.verticalCenter
+                anchors.left: parent.left
+                anchors.leftMargin: Style.space(10)
+                text: "Move to…"
+                color: root.foreground
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.body
+              }
+            }
+
+            TextField {
+              id: movePathInput
+              visible: root.moveFieldOpen
+              width: parent.width
+              foreground: root.foreground
+              placeholderText: "Move to… (absolute path)"
+              text: root.movePathField
+              onTextChanged: root.movePathField = text
+              onAccepted: root.submitMove()
+              Keys.onEscapePressed: root.closeMoveField()
+            }
+
+            CursorSurface {
+              width: parent.width
+              height: Style.space(36)
+              implicitHeight: height
+              hasCursor: root.cursorActive && root.focusSection === "recheck"
+              foreground: root.foreground
+              fill: root.hoverFill
+              MouseArea {
+                anchors.fill: parent
+                hoverEnabled: true
+                cursorShape: qbt.busy ? Qt.ArrowCursor : Qt.PointingHandCursor
+                enabled: !qbt.busy && root.detailHash !== ""
+                onEntered: { root.cursorActive = true; root.focusSection = "recheck" }
+                onClicked: root.recheckDetail()
+              }
+              Text {
+                anchors.verticalCenter: parent.verticalCenter
+                anchors.left: parent.left
+                anchors.leftMargin: Style.space(10)
+                text: "Force recheck"
                 color: root.foreground
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.body
