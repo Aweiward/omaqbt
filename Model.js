@@ -44,6 +44,14 @@ function torrentId(row) {
   return String(r.infohash_v2 || "");
 }
 
+function magnetUriFor(row) {
+  var uri = String((row && row.magnetUri) || "").trim();
+  if (uri.indexOf("magnet:") === 0) return uri;
+  var hash = torrentId(row || {});
+  if (!hash) return "";
+  return "magnet:?xt=urn:btih:" + hash;
+}
+
 function anyActive(list, pending) {
   return filterTorrents(excludePending(list, pending), "active").length > 0;
 }
@@ -368,6 +376,7 @@ function parseStatusJson(raw) {
       ratio: Number(row.ratio || 0),
       size: Number(row.size || 0),
       savePath: String(row.savePath || ""),
+      magnetUri: String(row.magnetUri || ""),
       contentPath: String(row.contentPath || ""),
       numSeeds: Number(row.numSeeds || 0),
       numLeechs: Number(row.numLeechs || 0),
@@ -420,6 +429,7 @@ if (typeof module !== "undefined" && module.exports) {
     classifyState: classifyState,
     filterTorrents: filterTorrents,
     torrentId: torrentId,
+    magnetUriFor: magnetUriFor,
     anyActive: anyActive,
     isRealName: isRealName,
     excludePending: excludePending,

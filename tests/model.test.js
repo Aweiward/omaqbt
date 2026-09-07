@@ -339,6 +339,41 @@ test("parseStatusJson maps detail fields with safe defaults", () => {
   assert.equal(parsed.torrents[1].addedOn, 0);
 });
 
+test("magnetUriFor prefers magnetUri when it is a magnet", () => {
+  assert.equal(
+    Model.magnetUriFor({ magnetUri: "magnet:?xt=urn:btih:abc", hash: "deadbeef" }),
+    "magnet:?xt=urn:btih:abc"
+  );
+});
+
+test("magnetUriFor ignores non-magnet magnetUri and builds from hash", () => {
+  assert.equal(
+    Model.magnetUriFor({ magnetUri: "http://example.invalid/x.torrent", hash: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" }),
+    "magnet:?xt=urn:btih:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  );
+});
+
+test("magnetUriFor builds from torrentId when magnetUri is empty", () => {
+  assert.equal(
+    Model.magnetUriFor({ hash: "", infohash_v1: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" }),
+    "magnet:?xt=urn:btih:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  );
+  assert.equal(Model.magnetUriFor({}), "");
+  assert.equal(Model.magnetUriFor(null), "");
+});
+
+test("parseStatusJson copies magnetUri and defaults to empty", () => {
+  const parsed = Model.parseStatusJson(JSON.stringify({
+    installed: true, daemon: true, api: true,
+    torrents: [
+      { hash: "a", name: "x", state: "downloading", magnetUri: "magnet:?xt=urn:btih:a" },
+      { hash: "b", name: "y", state: "uploading" }
+    ]
+  }));
+  assert.equal(parsed.torrents[0].magnetUri, "magnet:?xt=urn:btih:a");
+  assert.equal(parsed.torrents[1].magnetUri, "");
+});
+
 const sortSample = [
   { name: "slow", dlSpeed: 10, upSpeed: 0, eta: 8640000, addedOn: 300 },
   { name: "fast", dlSpeed: 500, upSpeed: 100, eta: 60, addedOn: 100 },
