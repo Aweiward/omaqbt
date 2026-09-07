@@ -172,6 +172,10 @@ try:
     assert seq.returncode == 0, seq.stderr
     share = qbt("sharelimit", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "1")
     assert share.returncode == 0, share.stderr
+    recheck = qbt("recheck", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+    assert recheck.returncode == 0, recheck.stderr
+    bad_recheck = qbt("recheck")
+    assert bad_recheck.returncode != 0
 
     reqs = json.loads(log.read_text())
     posts = [r["path"] for r in reqs if r["method"] == "POST"]
@@ -192,6 +196,7 @@ try:
     assert "/api/v2/torrents/setUploadLimit" in posts
     assert "/api/v2/torrents/toggleSequentialDownload" in posts
     assert "/api/v2/torrents/setShareLimits" in posts
+    assert "/api/v2/torrents/recheck" in posts
     assert "limit=1048576" in bodies
     assert "limit=262144" in bodies
     assert "ratioLimit=1" in bodies

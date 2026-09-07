@@ -312,6 +312,13 @@ cmd_stop() {
   printf '%s\n' '{"ok":true}'
 }
 
+cmd_recheck() {
+  local hash=${1:-}
+  [[ -n $hash ]] || die "usage: qbt recheck <hash>"
+  api POST "/api/v2/torrents/recheck" "hashes=${hash}" >/dev/null
+  printf '%s\n' '{"ok":true}'
+}
+
 cmd_delete() {
   local hash=${1:-}
   local files=false
@@ -863,6 +870,7 @@ case ${1:-} in
   add) shift; cmd_add "$@" ;;
   start) shift; cmd_start "$@" ;;
   stop) shift; cmd_stop "$@" ;;
+  recheck) shift; cmd_recheck "$@" ;;
   delete) shift; cmd_delete "$@" ;;
   files) shift; cmd_files "$@" ;;
   prio) shift; cmd_prio "$@" ;;
@@ -882,5 +890,5 @@ case ${1:-} in
   magnet-pending-drop) shift; cmd_magnet_pending_drop "$@" ;;
   magnet-install-handler) shift; cmd_magnet_install_handler "$@" ;;
   magnet-uninstall-handler) shift; cmd_magnet_uninstall_handler "$@" ;;
-  *) die "usage: qbt status|add|start|stop|delete|files|prio|turtle|limit|sequential|sharelimit|install|start-daemon|stop-daemon|magnet-paths|magnet-inbox|magnet-drain|magnet-pending-list|magnet-pending-drop|magnet-install-handler|magnet-uninstall-handler" ;;
+  *) die "usage: qbt status|add|start|stop|recheck|delete|files|prio|turtle|limit|sequential|sharelimit|install|start-daemon|stop-daemon|magnet-paths|magnet-inbox|magnet-drain|magnet-pending-list|magnet-pending-drop|magnet-install-handler|magnet-uninstall-handler" ;;
 esac

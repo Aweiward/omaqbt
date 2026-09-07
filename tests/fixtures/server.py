@@ -95,6 +95,7 @@ class Handler(BaseHTTPRequestHandler):
         if parsed.path in (
             "/api/v2/torrents/start",
             "/api/v2/torrents/stop",
+            "/api/v2/torrents/recheck",
             "/api/v2/torrents/delete",
             "/api/v2/torrents/filePrio",
             "/api/v2/torrents/setDownloadLimit",
