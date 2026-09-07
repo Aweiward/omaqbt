@@ -76,6 +76,9 @@ try:
     assert debian["seqDl"] is True
     assert debian["ratioLimit"] == -2
     assert debian["savePath"] == "/home/user/Downloads"
+    assert debian["magnetUri"] == "magnet:?xt=urn:btih:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    arch = next(t for t in data["torrents"] if t["name"] == "arch.iso")
+    assert arch["magnetUri"] == ""
     assert debian["contentPath"] == "/home/user/Downloads/debian.iso"
     assert debian["numSeeds"] == 14
     assert debian["numLeechs"] == 3
@@ -94,6 +97,7 @@ try:
     assert abs(data2["torrents"][0]["progress"] - 0.5) < 1e-9
     # The delta does not resend detail fields; they must survive via the rid cache.
     assert data2["torrents"][0]["savePath"] == "/home/user/Downloads"
+    assert data2["torrents"][0]["magnetUri"] == "magnet:?xt=urn:btih:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
     assert data2["torrents"][0]["numSeeds"] == 14
     assert data2["torrents"][0]["addedOn"] == 1755300000
 

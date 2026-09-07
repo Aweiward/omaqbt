@@ -21,6 +21,7 @@
       "up_limit": 0,
       "seq_dl": true,
       "ratio_limit": -2,
+      "magnet_uri": "magnet:?xt=urn:btih:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "infohash_v1": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
     },
     "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb": {
