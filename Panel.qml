@@ -364,7 +364,7 @@ Panel {
     } else if (t === "y" || t === "Y") {
       if (view === "detail") copyDetailMagnet()
       else if (showClipboard) qbt.addUrl(qbt.clipboardText)
-    } else if (t === "l" || t === "L") {
+    } else if (t === "m" || t === "M") {
       if (view === "detail") openMoveField()
     } else if (t === "e" || t === "E") {
       if (view === "detail") recheckDetail()
