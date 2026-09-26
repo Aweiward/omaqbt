@@ -266,6 +266,9 @@ Item {
     sortMode = View.validSort(v.sort)
     sortDesc = v.desc
     cursorHash = v.cursorHash
+    // Not setPane: that saves, and a restore must not count as a user
+    // change (viewTouched). VISUAL is table-only, so it ends here too.
+    leaveVisual()
     pane = v.pane
     rebuildRows(true)
   }

@@ -491,6 +491,19 @@ TestCase {
     compare(o.c.messageLine.text, "")
   }
 
+  function test_view_state_restore_ends_visual() {
+    var o = make()
+    o.svc.torrents = list3()
+    key(o.c, "V", 0x56, 0x02000000); key(o.c, "j")
+    compare(o.c.mode, "VISUAL")
+    var savedBefore = o.svc.saved.length
+    o.c.applyViewState({ filter: { group: "status", value: "All" }, sort: "added", desc: true, cursorHash: hh("a"), pane: "filters" })
+    compare(o.c.pane, "filters")
+    compare(o.c.mode, "NORMAL", "a restored pane change leaves VISUAL")
+    compare(o.c.anchorHash, "")
+    compare(o.svc.saved.length, savedBefore, "a restore is not saved")
+  }
+
   function test_visual_x_over_two_confirms_then_deletes_both() {
     var o = make()
     o.svc.torrents = list3()

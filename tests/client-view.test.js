@@ -309,7 +309,7 @@ test("stateCopy: daemon down, Qt open and empty use the final copy", () => {
   const d = V.stateCopy("daemon");
   assert.equal(d.title, "qbittorrent-nox isn't running");
   assert.equal(d.body, "Your library and settings are untouched. Start the daemon to see them.");
-  assert.deepEqual(d.keys.map((k) => k.key), ["Enter", ":"]);
+  assert.deepEqual(d.keys.map((k) => k.key), ["Enter"], "no \":\" Commands hint until the palette ships (slice 1b)");
   const g = V.stateCopy("gui");
   assert.equal(g.title, "qBittorrent (Qt) is open");
   assert.equal(g.tone, "urgent");

@@ -376,7 +376,8 @@ function stateCopy(state, ctx) {
       title: "qbittorrent-nox isn't running",
       tone: "fg",
       body: "Your library and settings are untouched. Start the daemon to see them.",
-      keys: [{ key: "Enter", label: "Start daemon" }, { key: ":", label: "Commands" }]
+      // No ":" "Commands" key yet: the command palette arrives in slice 1b.
+      keys: [{ key: "Enter", label: "Start daemon" }]
     };
   }
   if (state === "api") {
