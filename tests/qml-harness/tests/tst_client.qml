@@ -1011,4 +1011,178 @@ TestCase {
     compare(o.c.pane, "filters")
     compare(o.c.sortMode, "name")
   }
+
+  // ---- narrow window (slice 1b, D5) ----------------------------------------
+
+  function paneTitled(c, title) {
+    return (function find(obj) {
+      if (!obj) return null
+      if (obj.collapsed !== undefined && obj.title === title) return obj
+      for (var i = 0; i < (obj.children || []).length; i++) { var r = find(obj.children[i]); if (r) return r }
+      return null
+    })(winOf(c).contentItem)
+  }
+  // The platform resizes the window's content item asynchronously.
+  function setWidth(c, width) {
+    var win = winOf(c)
+    win.width = width
+    tryVerify(function() { return win.contentItem.width === width }, 2000, "the window is " + width + " px wide")
+  }
+  function narrow(width) {
+    var o = make()
+    o.svc.torrents = list3()
+    setWidth(o.c, width)
+    return o
+  }
+  function ctrlH(c) { key(c, "\b", 0x48, 0x04000000) }
+  function ctrlL(c) { key(c, "\f", 0x4c, 0x04000000) }
+  function tab(c) { key(c, "\t", 0x01000001) }
+  function esc(c) { key(c, "\u001b", 0x01000000) }
+
+  function test_narrow_ctrl_h_opens_filters_overlay_and_esc_closes_it() {
+    var o = narrow(850)
+    compare(o.c.layout.filters, "collapsed")
+    compare(o.c.layout.inspector, "collapsed")
+    var filters = paneTitled(o.c, "Filters")
+    var torrents = paneTitled(o.c, "Torrents")
+    var inspector = paneTitled(o.c, "Inspector")
+    compare(filters.visible, false, "a collapsed pane is hidden")
+    compare(inspector.visible, false)
+    compare(torrents.x, 0, "a collapsed pane takes no width")
+    compare(torrents.width, winOf(o.c).width)
+    o.c.textQuery = "a"
+    ctrlH(o.c)
+    compare(o.c.pane, "filters")
+    compare(filters.visible, true, "Ctrl-h opens the filters overlay")
+    compare(filters.overlay, true)
+    compare(filters.x, 0, "on the left edge")
+    verify(filters.width > 0 && filters.width < torrents.width)
+    verify(filters.z > torrents.z, "over the table")
+    compare(torrents.width, winOf(o.c).width, "the table keeps its width under the overlay")
+    esc(o.c)
+    compare(o.c.pane, "table")
+    compare(filters.visible, false, "Esc closes it")
+    compare(o.c.textQuery, "a", "that Esc doesn't clear the query")
+    compare(o.c.regState.prefix, null, "nor arm Esc Esc")
+    // the same key closes it too
+    ctrlH(o.c)
+    compare(filters.visible, true)
+    ctrlH(o.c)
+    compare(o.c.pane, "table")
+    compare(filters.visible, false)
+    // Ctrl-l opens the inspector on the right, and closes it again
+    ctrlL(o.c)
+    compare(o.c.pane, "inspector")
+    compare(inspector.visible, true)
+    compare(inspector.x + inspector.width, torrents.width, "on the right edge")
+    ctrlL(o.c)
+    compare(o.c.pane, "table")
+    compare(inspector.visible, false)
+  }
+
+  function test_narrow_tab_opens_each_overlay_in_turn() {
+    var o = narrow(850)
+    var filters = paneTitled(o.c, "Filters")
+    var inspector = paneTitled(o.c, "Inspector")
+    tab(o.c)
+    compare(o.c.pane, "inspector")
+    compare(inspector.visible, true)
+    compare(filters.visible, false)
+    tab(o.c)
+    compare(o.c.pane, "filters")
+    compare(filters.visible, true)
+    compare(inspector.visible, false)
+    tab(o.c)
+    compare(o.c.pane, "table")
+    compare(filters.visible, false)
+    compare(inspector.visible, false)
+    key(o.c, "", 0x01000002)   // Shift-Tab goes the other way
+    compare(o.c.pane, "filters")
+    compare(filters.visible, true)
+  }
+
+  function test_narrow_overlay_leaves_visual() {
+    var o = narrow(850)
+    key(o.c, "V", 0x56, 0x02000000)
+    compare(o.c.mode, "VISUAL")
+    // pane keys are NORMAL-only, as at full width
+    ctrlH(o.c)
+    compare(o.c.pane, "table")
+    compare(o.c.mode, "VISUAL")
+    // Esc in VISUAL leaves VISUAL (no overlay is open to close)
+    esc(o.c)
+    compare(o.c.mode, "NORMAL")
+    // any pane change that opens an overlay ends VISUAL first
+    key(o.c, "V", 0x56, 0x02000000)
+    o.c.setPane("filters")
+    compare(o.c.mode, "NORMAL", "a pane change leaves VISUAL")
+    compare(paneTitled(o.c, "Filters").visible, true)
+  }
+
+  function test_narrow_filter_chip() {
+    var o = narrow(850)
+    var line = findPane(o.c, "filterChip")
+    verify(line !== null)
+    compare(line.filterChip, "", "no chip for All")
+    ctrlH(o.c)
+    o.c.applyFilter({ group: "status", value: "Seeding" })
+    esc(o.c)
+    compare(line.filterChip, "▸ Seeding")
+    verify(findText(line, "▸ Seeding") !== null, "the status line shows it")
+    setWidth(o.c, 1000)
+    compare(line.filterChip, "", "no chip while the filters are docked")
+  }
+
+  function test_narrow_columns_hide_below_700() {
+    var o = narrow(850)
+    var table = findWith(winOf(o.c).contentItem, "setRows")
+    compare(table.hideColumns, [])
+    verify(table.ulWidth > 0)
+    verify(findText(table, "ETA") !== null)
+    setWidth(o.c, 690)
+    compare(table.hideColumns, ["ul", "eta", "ratio"])
+    compare(table.ulWidth, 0)
+    compare(table.etaWidth, 0)
+    compare(table.ratioWidth, 0)
+    compare(findText(table, "ETA"), null, "the ETA header hides")
+    compare(findText(table, "Ratio"), null)
+    verify(findText(table, "Name") !== null, "Name, Size, Progress and ↓ stay")
+    verify(findText(table, "Size") !== null)
+    verify(findText(table, "Progress") !== null)
+    verify(table.dlWidth > 0)
+  }
+
+  function test_resize_collapsing_the_focused_pane_returns_to_table() {
+    var o = make()
+    o.svc.torrents = list3()
+    tab(o.c)
+    compare(o.c.pane, "inspector")
+    setWidth(o.c, 1299)
+    compare(o.c.pane, "table", "the inspector collapsed under focus")
+    compare(paneTitled(o.c, "Inspector").visible, false)
+    key(o.c, "", 0x01000002)
+    compare(o.c.pane, "filters", "docked at 1299")
+    compare(paneTitled(o.c, "Filters").overlay, false)
+    setWidth(o.c, 899)
+    compare(o.c.pane, "table")
+    // an overlay that is already open stays open as the window shrinks
+    ctrlH(o.c)
+    setWidth(o.c, 800)
+    compare(o.c.pane, "filters")
+    compare(paneTitled(o.c, "Filters").visible, true)
+  }
+
+  function test_close_with_palette_open_closes_it() {
+    var o = make()
+    o.svc.torrents = list3()
+    key(o.c, ":")
+    compare(o.c.mode, "COMMAND")
+    o.c.close()
+    compare(o.c.opened, false)
+    compare(o.c.mode, "NORMAL", "close() ends COMMAND")
+    o.c.open("")
+    compare(pal(o.c).visible, false, "reopening doesn't show a stale palette")
+    key(o.c, "j")
+    compare(o.c.cursorHash, hh("b"), "keys go to the table")
+  }
 }

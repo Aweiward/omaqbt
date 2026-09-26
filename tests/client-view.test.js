@@ -1097,3 +1097,85 @@ test("palette notes and empty copy", () => {
   assert.equal(V.paletteReasonNote({ title: "Copy magnet", reason: "needs a selected torrent" }), "Copy magnet: needs a selected torrent.");
   assert.equal(V.paletteEmptyText("q"), "No command matches “q”");
 });
+
+// --- Responsive layout (D5) ----------------------------------------------
+
+test("layoutFor docks, collapses and hides columns at the D5 breakpoints", () => {
+  const all = { filters: "docked", inspector: "docked", hideColumns: [] };
+  const noInspector = { filters: "docked", inspector: "collapsed", hideColumns: [] };
+  const narrow = { filters: "collapsed", inspector: "collapsed", hideColumns: [] };
+  const narrowest = { filters: "collapsed", inspector: "collapsed", hideColumns: ["ul", "eta", "ratio"] };
+  assert.deepEqual(V.layoutFor(1600), all);
+  assert.deepEqual(V.layoutFor(1300), all);
+  assert.deepEqual(V.layoutFor(1299), noInspector);
+  assert.deepEqual(V.layoutFor(900), noInspector);
+  assert.deepEqual(V.layoutFor(899), narrow);
+  assert.deepEqual(V.layoutFor(700), narrow);
+  assert.deepEqual(V.layoutFor(699), narrowest);
+});
+
+test("layoutFor treats an unknown width as wide and never hides the core columns", () => {
+  assert.deepEqual(V.layoutFor(0), V.layoutFor(1600));
+  assert.deepEqual(V.layoutFor(undefined), V.layoutFor(1600));
+  for (const col of ["name", "size", "progress", "dl"]) {
+    assert.equal(V.layoutFor(320).hideColumns.indexOf(col), -1);
+  }
+  // Each call returns its own array.
+  V.layoutFor(600).hideColumns.push("x");
+  assert.deepEqual(V.layoutFor(600).hideColumns, ["ul", "eta", "ratio"]);
+});
+
+test("overlayPane is the focused pane only while it is collapsed", () => {
+  const narrow = V.layoutFor(850);
+  const medium = V.layoutFor(1000);
+  assert.equal(V.overlayPane(narrow, "filters"), "filters");
+  assert.equal(V.overlayPane(narrow, "inspector"), "inspector");
+  assert.equal(V.overlayPane(narrow, "table"), "");
+  assert.equal(V.overlayPane(medium, "filters"), "");
+  assert.equal(V.overlayPane(medium, "inspector"), "inspector");
+  assert.equal(V.overlayPane(V.layoutFor(1600), "inspector"), "");
+});
+
+test("paneStep: Ctrl-h/Ctrl-l close an overlay, Tab/Shift-Tab keep cycling", () => {
+  const narrow = V.layoutFor(850);
+  const ctrlH = V.keyEvent(KEY.H, "\b", V.MOD.Control, 0);
+  const ctrlL = V.keyEvent(KEY.L, "\f", V.MOD.Control, 0);
+  const tab = V.keyEvent(KEY.Tab, "\t", 0, 0);
+  const backtab = V.keyEvent(KEY.Backtab, "", V.MOD.Shift, 0);
+  // from the table, the same as nextPane
+  assert.equal(V.paneStep("table", -1, narrow, ctrlH), "filters");
+  assert.equal(V.paneStep("table", 1, narrow, ctrlL), "inspector");
+  // the same key again closes the overlay
+  assert.equal(V.paneStep("filters", -1, narrow, ctrlH), "table");
+  assert.equal(V.paneStep("inspector", 1, narrow, ctrlL), "table");
+  // Tab walks through each overlay in turn
+  assert.equal(V.paneStep("table", 1, narrow, tab), "inspector");
+  assert.equal(V.paneStep("inspector", 1, narrow, tab), "filters");
+  assert.equal(V.paneStep("filters", 1, narrow, tab), "table");
+  assert.equal(V.paneStep("filters", -1, narrow, backtab), "inspector");
+  // docked panes cycle as before, whatever the key
+  const wide = V.layoutFor(1600);
+  assert.equal(V.paneStep("filters", -1, wide, ctrlH), "inspector");
+  assert.equal(V.paneStep("inspector", 1, wide, ctrlL), "filters");
+  // a palette-run pane.next (a neutral event) cycles
+  assert.equal(V.paneStep("inspector", 1, narrow, V.keyEvent(0, "", 0, 0)), "filters");
+});
+
+test("overlayEscape only takes a NORMAL Esc while an overlay is open", () => {
+  const narrow = V.layoutFor(850);
+  const esc = V.keyEvent(KEY.Escape, "\u001b", 0, 0);
+  assert.equal(V.overlayEscape(esc, "NORMAL", narrow, "filters"), true);
+  assert.equal(V.overlayEscape(esc, "NORMAL", narrow, "table"), false);
+  assert.equal(V.overlayEscape(esc, "INSERT", narrow, "filters"), false);
+  assert.equal(V.overlayEscape(esc, "CONFIRM", narrow, "inspector"), false);
+  assert.equal(V.overlayEscape(esc, "NORMAL", V.layoutFor(1600), "filters"), false);
+  assert.equal(V.overlayEscape(V.keyEvent(0x4a, "j", 0, 0), "NORMAL", narrow, "filters"), false);
+});
+
+test("filterChip shows the active filter only while the filters are collapsed", () => {
+  const seeding = { group: "status", value: "Seeding" };
+  assert.equal(V.filterChip(V.layoutFor(850), seeding), "▸ Seeding");
+  assert.equal(V.filterChip(V.layoutFor(850), { group: "category", value: "" }), "▸ Uncategorized");
+  assert.equal(V.filterChip(V.layoutFor(850), V.defaultFilter()), "");
+  assert.equal(V.filterChip(V.layoutFor(1000), seeding), "");
+});

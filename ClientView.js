@@ -311,6 +311,62 @@ function nextPane(pane, delta) {
   return PANES[(((i + delta) % n) + n) % n];
 }
 
+// --- Responsive layout (D5) -------------------------------------------------
+
+var LAYOUT_WIDE = 1300;
+var LAYOUT_MEDIUM = 900;
+var LAYOUT_NARROW = 700;
+var NARROW_HIDDEN_COLUMNS = ["ul", "eta", "ratio"];
+
+// layoutFor(width) -> {filters, inspector: "docked"|"collapsed",
+// hideColumns}. From 1300 px everything docks; from 900 the inspector
+// collapses; below 900 the filters too; below 700 the ↑, ETA and Ratio
+// columns hide (Name, Size, Progress and ↓ never do). A width of 0 or
+// less (a window not laid out yet) counts as wide, so a restored side
+// pane isn't treated as just collapsed before the first real size.
+function layoutFor(width) {
+  var w = Number(width) || 0;
+  if (w <= 0) w = LAYOUT_WIDE;
+  return {
+    filters: w >= LAYOUT_MEDIUM ? "docked" : "collapsed",
+    inspector: w >= LAYOUT_WIDE ? "docked" : "collapsed",
+    hideColumns: w < LAYOUT_NARROW ? NARROW_HIDDEN_COLUMNS.slice() : []
+  };
+}
+
+// overlayPane(layout, pane) -> the focused pane when it is collapsed (it
+// shows as an overlay over the table's edge), else "".
+function overlayPane(layout, pane) {
+  var l = layout || {};
+  if ((pane === "filters" || pane === "inspector") && l[pane] === "collapsed") return pane;
+  return "";
+}
+
+// paneStep(pane, delta, layout, ev) -> the pane pane.next/pane.prev goes
+// to. Ctrl-h/Ctrl-l on an open overlay close it (back to the table);
+// Tab/Shift-Tab keep cycling, opening each collapsed pane in turn.
+function paneStep(pane, delta, layout, ev) {
+  var e = ev || {};
+  var directional = !!(e.modifiers && e.modifiers.ctrl) && (e.key === Registry.KEY.H || e.key === Registry.KEY.L);
+  if (directional && overlayPane(layout, pane) !== "") return "table";
+  return nextPane(pane, delta);
+}
+
+// overlayEscape(ev, mode, layout, pane) -> true when this key is a plain
+// Esc in NORMAL with an overlay open: it closes the overlay instead of
+// clearing the query or arming Esc Esc.
+function overlayEscape(ev, mode, layout, pane) {
+  var e = ev || {};
+  return mode === "NORMAL" && e.key === Registry.KEY.Escape && overlayPane(layout, pane) !== "";
+}
+
+// filterChip(layout, filter) -> the status-line chip ("▸ Seeding") shown
+// while the filters are collapsed and the active filter isn't All.
+function filterChip(layout, filter) {
+  if (!layout || layout.filters !== "collapsed" || isDefaultFilter(filter)) return "";
+  return "▸ " + filterLabel(filter);
+}
+
 // --- States ---------------------------------------------------------------
 
 // tableState(s) -> what the center pane shows:
@@ -1419,6 +1475,11 @@ if (typeof module !== "undefined" && module.exports) {
     moveCursor: moveCursor,
     PANES: PANES,
     nextPane: nextPane,
+    layoutFor: layoutFor,
+    overlayPane: overlayPane,
+    paneStep: paneStep,
+    overlayEscape: overlayEscape,
+    filterChip: filterChip,
     tableState: tableState,
     dispatchPane: dispatchPane,
     countText: countText,

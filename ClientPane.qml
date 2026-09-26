@@ -5,14 +5,37 @@ import qs.Commons
 
 // A titled, bordered pane. A focused pane gets a 1 px accent outline and
 // an accent title; the others a normalBorderAlpha line and a muted title.
+//
+// A collapsed pane (spec D5, a narrow window) is hidden and takes no
+// width in the layout; while it has focus it shows as an overlay: raised
+// above the table's edge, on an opaque background that takes the clicks
+// its content doesn't, with the focused outline as its border.
 Item {
   id: paneItem
   property string title: ""
   property string titleRight: ""
   property bool focusedPane: false
   property bool rightLine: true
+  property bool collapsed: false
+  readonly property bool overlay: collapsed && focusedPane
   default property alias content: paneBody.data
   readonly property color lineColor: Util.alpha(Color.foreground, Style.normalBorderAlpha)
+
+  visible: !collapsed || overlay
+  z: overlay ? 1 : 0
+
+  Rectangle {
+    visible: paneItem.overlay
+    anchors.fill: parent
+    color: Color.background
+
+    // Clicks on the overlay's empty space must not reach the table rows
+    // underneath it.
+    MouseArea {
+      anchors.fill: parent
+      acceptedButtons: Qt.AllButtons
+    }
+  }
 
   Item {
     id: titleBar

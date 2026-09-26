@@ -109,6 +109,15 @@ Item {
   property string filesLoadedHash: ""
   property bool filesErrorPending: false
 
+  // ---- responsive layout (D5) ------------------------------------------------------
+  // A collapsed pane with focus shows as an overlay; a resize that
+  // collapses the focused pane gives focus back to the table.
+  readonly property var layout: View.layoutFor(keyRoot.width)
+  readonly property bool filtersDocked: layout.filters === "docked"
+  readonly property bool inspectorDocked: layout.inspector === "docked"
+  onFiltersDockedChanged: if (!filtersDocked && pane === "filters") setPane("table")
+  onInspectorDockedChanged: if (!inspectorDocked && pane === "inspector") setPane("table")
+
   // ---- help ------------------------------------------------------------------------
   property bool helpOpen: false
   property string helpPane: "table"
@@ -158,6 +167,8 @@ Item {
   function close() {
     if (closing) return
     closing = true
+    // A palette left open would come back without its field focused.
+    if (mode === "COMMAND") commands.closePalette()
     opened = false
     window.visible = false
     if (service) service.windowOpen = false
@@ -355,6 +366,8 @@ Item {
       helpOpen = false
       return
     }
+    // Esc on an open overlay closes it (no query clear, no Esc Esc).
+    if (View.overlayEscape(ev, regState.mode, layout, pane)) { setPane("table"); return }
     dispatchWith(function(st) { return Registry.dispatch(st, ev) }, ev)
   }
 
@@ -498,7 +511,7 @@ Item {
         event.accepted = true
       }
 
-      Row {
+      Item {
         id: panes
         anchors.left: parent.left
         anchors.right: parent.right
@@ -506,10 +519,12 @@ Item {
         anchors.bottom: statusLine.top
 
         ClientPane {
+          anchors.left: parent.left
           width: Style.space(210)
           height: panes.height
           title: "Filters"
           focusedPane: root.pane === "filters"
+          collapsed: !root.filtersDocked
 
           FilterPane {
             id: filterPane
@@ -529,7 +544,8 @@ Item {
         }
 
         ClientPane {
-          width: Math.max(0, panes.width - Style.space(210) - Style.space(380))
+          x: root.filtersDocked ? Style.space(210) : 0
+          width: Math.max(0, panes.width - x - (root.inspectorDocked ? Style.space(380) : 0))
           height: panes.height
           title: "Torrents"
           titleRight: View.paneTitle(root.filter, root.textQuery, root.sortMode, root.sortDesc)
@@ -546,6 +562,7 @@ Item {
             showLoadingText: root.loadingTextDue
             rangeHashes: root.rangeHashes
             errorHashes: root.errorHashes
+            hideColumns: root.layout.hideColumns
             onRowClicked: function(hash) {
               root.leaveInsert()
               root.setPane("table")
@@ -556,10 +573,12 @@ Item {
         }
 
         ClientPane {
+          anchors.right: parent.right
           width: Style.space(380)
           height: panes.height
           title: "Inspector"
           focusedPane: root.pane === "inspector"
+          collapsed: !root.inspectorDocked
           rightLine: false
 
           InspectorPane {
@@ -603,6 +622,7 @@ Item {
         message: root.messageLine.text
         messageTone: root.messageLine.tone
         inputPurpose: root.inputPurpose
+        filterChip: View.filterChip(root.layout, root.filter)
         hints: View.modeHints(root.mode, {
           accept: root.confirm ? View.confirmLine(root.confirm).accept : "",
           purpose: root.inputPurpose,

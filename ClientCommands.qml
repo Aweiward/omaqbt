@@ -312,11 +312,10 @@ QtObject {
       return
 
     case "pane.next":
-      c.setPane(View.nextPane(c.pane, 1))
-      return
-
     case "pane.prev":
-      c.setPane(View.nextPane(c.pane, -1))
+      // Tab/Shift-Tab cycle through collapsed panes (opening each as an
+      // overlay); Ctrl-h/Ctrl-l on an open overlay close it.
+      c.setPane(View.paneStep(c.pane, commandId === "pane.next" ? 1 : -1, c.layout, ev))
       return
 
     case "window.close":

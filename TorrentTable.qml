@@ -33,6 +33,9 @@ Item {
   // turns into an urgent `!` until the next key).
   property var rangeHashes: ({})
   property var errorHashes: ({})
+  // The columns a narrow window hides (View.layoutFor): any of "ul",
+  // "eta", "ratio". A hidden column's width is 0 and its cells don't show.
+  property var hideColumns: []
 
   signal rowClicked(string hash)
 
@@ -46,9 +49,9 @@ Item {
   readonly property int sizeWidth: Style.space(84)
   readonly property int progressWidth: Style.space(150)
   readonly property int dlWidth: Style.space(96)
-  readonly property int ulWidth: Style.space(90)
-  readonly property int etaWidth: Style.space(70)
-  readonly property int ratioWidth: Style.space(62)
+  readonly property int ulWidth: hideColumns.indexOf("ul") < 0 ? Style.space(90) : 0
+  readonly property int etaWidth: hideColumns.indexOf("eta") < 0 ? Style.space(70) : 0
+  readonly property int ratioWidth: hideColumns.indexOf("ratio") < 0 ? Style.space(62) : 0
   readonly property int fixedWidth: glyphWidth + sizeWidth + progressWidth + dlWidth + ulWidth + etaWidth + ratioWidth
   readonly property int nameWidth: Math.max(Style.space(80), width - fixedWidth)
   readonly property color lineColor: Util.alpha(Color.foreground, Style.normalBorderAlpha)
@@ -146,9 +149,9 @@ Item {
       HeaderCell { width: table.sizeWidth; column: "size"; sorted: table.sortedColumn === "size"; text: table.headerLabel(column, "Size") }
       HeaderCell { width: table.progressWidth; column: "progress"; sorted: table.sortedColumn === "progress"; horizontalAlignment: Text.AlignLeft; text: table.headerLabel(column, "Progress") }
       HeaderCell { width: table.dlWidth; column: "dl"; sorted: table.sortedColumn === "dl"; text: table.headerLabel(column, "↓") }
-      HeaderCell { width: table.ulWidth; column: "ul"; sorted: table.sortedColumn === "ul"; text: table.headerLabel(column, "↑") }
-      HeaderCell { width: table.etaWidth; column: "eta"; sorted: table.sortedColumn === "eta"; text: table.headerLabel(column, "ETA") }
-      HeaderCell { width: table.ratioWidth; column: "ratio"; sorted: table.sortedColumn === "ratio"; text: table.headerLabel(column, "Ratio") }
+      HeaderCell { width: table.ulWidth; visible: width > 0; column: "ul"; sorted: table.sortedColumn === "ul"; text: table.headerLabel(column, "↑") }
+      HeaderCell { width: table.etaWidth; visible: width > 0; column: "eta"; sorted: table.sortedColumn === "eta"; text: table.headerLabel(column, "ETA") }
+      HeaderCell { width: table.ratioWidth; visible: width > 0; column: "ratio"; sorted: table.sortedColumn === "ratio"; text: table.headerLabel(column, "Ratio") }
     }
 
     Rectangle {
@@ -255,9 +258,9 @@ Item {
           }
         }
         Cell { width: table.dlWidth; text: rowItem.dlText; color: table.valueColor(text) }
-        Cell { width: table.ulWidth; text: rowItem.ulText; color: table.valueColor(text) }
-        Cell { width: table.etaWidth; text: rowItem.etaText; color: table.valueColor(text) }
-        Cell { width: table.ratioWidth; text: rowItem.ratioText }
+        Cell { width: table.ulWidth; visible: width > 0; text: rowItem.ulText; color: table.valueColor(text) }
+        Cell { width: table.etaWidth; visible: width > 0; text: rowItem.etaText; color: table.valueColor(text) }
+        Cell { width: table.ratioWidth; visible: width > 0; text: rowItem.ratioText }
       }
 
       MouseArea {

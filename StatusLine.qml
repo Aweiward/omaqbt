@@ -35,6 +35,9 @@ Rectangle {
   property var hints: []
   // "filter" or "move" while mode is INSERT.
   property string inputPurpose: ""
+  // The active filter while the filters pane is collapsed ("▸ Seeding",
+  // View.filterChip); "" hides it.
+  property string filterChip: ""
 
   // Every edit of the INSERT field, as the user types.
   signal inputEdited(string text)
@@ -162,6 +165,11 @@ Rectangle {
       anchors.verticalCenter: parent.verticalCenter
       spacing: line.gap
 
+      Part {
+        visible: line.filterChip !== ""
+        text: line.filterChip
+        color: Color.accent
+      }
       Part {
         visible: line.message !== ""
         text: line.message
