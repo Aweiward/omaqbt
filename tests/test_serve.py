@@ -313,6 +313,62 @@ class ApiDownTests(unittest.TestCase):
             cleanup()
 
 
+# Every proxy variable points at the discard port, where nothing listens:
+# a request that honours any of them fails instead of reaching the fixture.
+_DEAD_PROXY_ENV = {
+    "http_proxy": "http://127.0.0.1:9",
+    "HTTP_PROXY": "http://127.0.0.1:9",
+    "all_proxy": "http://127.0.0.1:9",
+    "ALL_PROXY": "http://127.0.0.1:9",
+    "no_proxy": "",
+    "NO_PROXY": "",
+}
+
+
+class ProxyBypassTests(unittest.TestCase):
+    def test_status_ignores_http_proxy(self):
+        with harness.fixture_server(extra_env=_DEAD_PROXY_ENV) as (port, env):
+            with ServeProcess(env) as sp:
+                first = sp.readline()
+                self.assertEqual(first["type"], "status")
+                self.assertTrue(first["api"])
+
+    def test_bash_api_ignores_http_proxy(self):
+        with harness.fixture_server(extra_env=_DEAD_PROXY_ENV) as (port, env):
+            result = subprocess.run(
+                [str(ROOT / "qbt"), "files", "a" * 40],
+                cwd=str(ROOT), env=env, capture_output=True, text=True, timeout=15,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIsInstance(json.loads(result.stdout), list)
+
+
+class RefreshReprobeTests(unittest.TestCase):
+    def test_refresh_reprobes_before_probe_interval(self):
+        with harness.fixture_server() as (port, env):
+            tmp = Path(env["QBT_STATE_DIR"]).parent
+            daemon_file = tmp / "daemon-flag"
+            daemon_file.write_text("0")
+            # Stands in for `qbt` so the test controls what `qbt probe`
+            # reports for the daemon, the way Start daemon flips it live.
+            stub = tmp / "qbt-stub"
+            stub.write_text(
+                "#!/usr/bin/env bash\n"
+                f"QBT_DAEMON=$(cat '{daemon_file}') exec '{ROOT / 'qbt'}' \"$@\"\n"
+            )
+            stub.chmod(0o700)
+            env = dict(env, QBT_HELPER=str(stub))
+            with ServeProcess(env) as sp:
+                first = sp.readline()
+                self.assertFalse(first["daemon"])
+                self.assertFalse(first["api"])
+                daemon_file.write_text("1")
+                sp.send({"cmd": "refresh"})
+                second = sp.read_until(lambda o: o.get("type") == "status", timeout=2)
+                self.assertTrue(second["daemon"])
+                self.assertTrue(second["api"])
+
+
 class LocalhostGuardTests(unittest.TestCase):
     def test_non_local_base_is_fatal(self):
         with harness.fixture_server(extra_env={"QBT_BASE": "http://10.0.0.1:1"}) as (port, env):

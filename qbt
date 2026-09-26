@@ -133,7 +133,7 @@ api() {
   local url
   url="$(base_url)$path"
   ensure_state_dir "$(dirname "$COOKIE_FILE")"
-  local args=(-sS -g --max-time 5 -X "$method" -b "$COOKIE_FILE" -c "$COOKIE_FILE" "$url")
+  local args=(-sS -g --noproxy '*' --max-time 5 -X "$method" -b "$COOKIE_FILE" -c "$COOKIE_FILE" "$url")
   if [[ -n $body ]]; then
     args+=(-H "Content-Type: application/x-www-form-urlencoded" --data "$body")
   fi
@@ -144,7 +144,7 @@ api_form() {
   assert_local_base
   local method=$1 path=$2
   shift 2
-  api_exec -sS -g --max-time 30 -X "$method" "$(base_url)$path" "$@"
+  api_exec -sS -g --noproxy '*' --max-time 30 -X "$method" "$(base_url)$path" "$@"
 }
 
 cmd_probe() {

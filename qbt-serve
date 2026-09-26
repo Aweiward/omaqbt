@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """`qbt-serve`: a long-lived sidecar for OmaqBT's QML bar widget.
 
-It runs `qbt probe` once at startup (and again every 10s of ticking), holds
-a single in-memory WebUI session, and polls `lib/qbtsync.build_status` on
-a cadence a QML `Process` controls over stdin. Every stdout line is one
+It runs `qbt probe` once at startup (and again every 10s of ticking, or
+on an explicit `refresh`), holds a single in-memory WebUI session, and
+polls `lib/qbtsync.build_status` on a cadence a QML `Process` controls
+over stdin. Every stdout line is one
 JSON object (`{"type":...}` first) with a trailing newline; diagnostics
 (sanitized) go to stderr only.
 
@@ -139,10 +140,11 @@ def _heartbeat_thread():
         next_at += HEARTBEAT_INTERVAL
 
 
-def do_tick(state):
-    """Re-probes if stale, then assembles and prints one status line."""
+def do_tick(state, force_probe=False):
+    """Re-probes if stale (or if `force_probe`), then assembles and prints
+    one status line."""
     now_mono = time.monotonic()
-    if now_mono - state["last_probe_at"] >= PROBE_INTERVAL:
+    if force_probe or now_mono - state["last_probe_at"] >= PROBE_INTERVAL:
         new_probe, err = run_probe(state["helper"])
         state["last_probe_at"] = now_mono
         if new_probe is not None:
@@ -298,7 +300,9 @@ def main():
         except queue.Empty:
             item = None
         if item is not None and drain_and_dispatch(cmd_queue, item, state):
-            do_tick(state)
+            # An explicit refresh usually follows Start daemon / Install, so
+            # it reprobes now rather than waiting out PROBE_INTERVAL.
+            do_tick(state, force_probe=True)
             state["next_tick"] = time.monotonic() + state["cadence_ms"] / 1000.0
 
         now = time.monotonic()

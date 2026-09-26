@@ -98,8 +98,12 @@ class Client:
         self.base = base
         self.cookiejar = cookiejar
         self.timeout = timeout
+        # An empty ProxyHandler replaces urllib's default one, so http_proxy
+        # and friends can never route a localhost request (or its SID
+        # cookie) through a proxy.
         self.opener = urllib.request.build_opener(
-            urllib.request.HTTPCookieProcessor(cookiejar)
+            urllib.request.ProxyHandler({}),
+            urllib.request.HTTPCookieProcessor(cookiejar),
         )
 
     def get(self, path):
