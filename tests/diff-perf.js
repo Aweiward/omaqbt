@@ -74,19 +74,44 @@ function describeDiffResult(result) {
   return { reset: false, ops: result.length, byType: opBreakdown(result) };
 }
 
+// `count` distinct indices into [0, n), via a partial Fisher-Yates shuffle
+// (picking indices with replacement, as a naive rng()*n loop would, can and
+// did repeat an index -- 50 picks landed on only 49 distinct rows once).
+function distinctIndices(rng, n, count) {
+  var pool = [];
+  for (var i = 0; i < n; i++) pool.push(i);
+  for (var i = 0; i < count; i++) {
+    var j = i + Math.floor(rng() * (n - i));
+    var tmp = pool[i];
+    pool[i] = pool[j];
+    pool[j] = tmp;
+  }
+  return pool.slice(0, count);
+}
+
+function isSortedByDlDescending(rows) {
+  for (var i = 1; i < rows.length; i++) {
+    if (rows[i - 1].dlSpeed < rows[i].dlSpeed) return false;
+  }
+  return true;
+}
+
 function main() {
   var rng = mulberry32(20260926);
   var baseRows = buildRows(rng, ROW_COUNT);
 
   var sortTick = timeMs(function() { return Model.sortTorrents(baseRows, "dl", true); });
   var oldRows = sortTick.result;
+  if (!isSortedByDlDescending(oldRows)) {
+    throw new Error("diff-perf: oldRows is not sorted by dl descending -- sortTorrents(desc:true) regressed");
+  }
 
-  // Case 1: a tick where 50 rows change speed, then the list is re-sorted.
+  // Case 1: a tick where 50 distinct rows change speed, then the list is
+  // re-sorted by dl, descending (fastest first).
   var mutated = oldRows.map(function(row) { return Object.assign({}, row); });
-  var changedIndexes = [];
-  for (var i = 0; i < CHANGED_COUNT; i++) {
-    var idx = Math.floor(rng() * mutated.length);
-    changedIndexes.push(idx);
+  var changedIndexes = distinctIndices(rng, mutated.length, CHANGED_COUNT);
+  for (var i = 0; i < changedIndexes.length; i++) {
+    var idx = changedIndexes[i];
     mutated[idx] = Object.assign({}, mutated[idx], {
       dlSpeed: Math.floor(rng() * 5000000),
       upSpeed: Math.floor(rng() * 1000000)
@@ -94,11 +119,15 @@ function main() {
   }
   var resortTiming = timeMs(function() { return Model.sortTorrents(mutated, "dl", true); });
   var newRowsTick = resortTiming.result;
+  if (!isSortedByDlDescending(newRowsTick)) {
+    throw new Error("diff-perf: newRowsTick is not sorted by dl descending -- sortTorrents(desc:true) regressed");
+  }
 
   var diffTickTiming = timeMs(function() { return Model.diffRows(oldRows, newRowsTick, DIFF_FIELDS); });
   var tickSummary = describeDiffResult(diffTickTiming.result);
   tickSummary.rows = ROW_COUNT;
   tickSummary.changedRows = CHANGED_COUNT;
+  tickSummary.distinctChanged = changedIndexes.length;
   tickSummary.ms = Number(diffTickTiming.ms.toFixed(3));
 
   // Case 2: a full reset -- every hash replaced, so the ops count must blow

@@ -200,20 +200,6 @@ function completionText(names) {
 var SORT_ORDER = ["default", "speed", "eta", "added"];
 var SORT_LABELS = { default: "", speed: "by speed", eta: "by eta", added: "by added" };
 
-// Every field mode's natural (desc=false) direction. true means the mode's
-// default order is largest/newest-first; false means smallest/soonest-first.
-// T7 draws the sorted column's ▾/▴ from this plus the caller's `desc`.
-var SORT_FIELD_DESC_DEFAULT = {
-  added: true,
-  name: false,
-  size: true,
-  progress: false,
-  dl: true,
-  ul: true,
-  eta: false,
-  ratio: true
-};
-
 var SORT_FIELD_MODES = {
   added: true, name: true, size: true, progress: true,
   dl: true, ul: true, eta: true, ratio: true
@@ -258,8 +244,12 @@ function nameAsc(a, b) {
   return na < nb ? -1 : 1;
 }
 
+// desc is absolute, the same meaning for every mode: desc === true always
+// means newest, largest, or Z->A first; desc === false always means the
+// opposite (oldest, smallest, or A->Z first). There is no per-mode "natural
+// direction" table -- ascending is always the same numeric/alphabetic
+// ascending order, and desc just negates it.
 function fieldSortComparator(mode, desc) {
-  var naturalDesc = SORT_FIELD_DESC_DEFAULT[mode] === true;
   return function(a, b) {
     var diff;
     if (mode === "name") {
@@ -269,7 +259,6 @@ function fieldSortComparator(mode, desc) {
       var vb = sortFieldValue(mode, b);
       diff = va === vb ? 0 : (va < vb ? -1 : 1);
     }
-    if (naturalDesc) diff = -diff;
     if (desc) diff = -diff;
     if (diff === 0) return hashAsc(a, b);
     return diff;
@@ -278,17 +267,27 @@ function fieldSortComparator(mode, desc) {
 
 // sortTorrents(list, mode, desc).
 //
-// Modes: "added" (newest first; also the default when mode is falsy), "name",
-// "size", "progress", "dl", "ul", "eta" and "ratio". `desc` flips whichever
-// direction is natural for that mode. Every mode tie-breaks on hash ascending.
+// Modes: "added" (newest first when desc, the default; also the default
+// mode when mode is falsy), "name", "size", "progress", "dl", "ul", "eta"
+// and "ratio". `desc` is absolute (see fieldSortComparator above). Every
+// mode tie-breaks on hash ascending.
 //
 // "default" and "speed" are kept only so the widget's existing
 // sortTorrents(list, "default"|"speed"|"eta"|"added") call sites keep
 // producing exactly today's orders: "default" returns the list untouched
 // (exempt from the hash tie-break -- it must stay a plain unsorted copy),
-// and "speed" sorts on the dl+ul sum, same as before. Any other unrecognized
-// mode string also falls back to an untouched copy, matching the old
-// if/else chain's behavior for a mode it didn't know.
+// and "speed" sorts on the dl+ul sum, same as before (its own `desc`
+// handling, since "speed" isn't one of the eight field modes). Any other
+// unrecognized mode string also falls back to an untouched copy, matching
+// the old if/else chain's behavior for a mode it didn't know.
+//
+// "added" without an explicit `desc` defaults to desc:true (newest first)
+// so the widget's `sortTorrents(list, "added")` call site keeps today's
+// order -- this is also exactly the window's own default
+// ({sort:"added", desc:true}), so there's no real special case: calling
+// "added" with no desc behaves as if desc were true. Every other mode
+// without an explicit `desc` defaults to desc:false (ascending), which is
+// what "eta" already needs to match today's soonest-first order.
 function sortTorrents(list, mode, desc) {
   var rows = (list || []).slice();
   var m = mode;
@@ -304,7 +303,9 @@ function sortTorrents(list, mode, desc) {
     return rows;
   }
   if (SORT_FIELD_MODES[m] === true) {
-    rows.sort(fieldSortComparator(m, desc));
+    var effectiveDesc = desc;
+    if (effectiveDesc === undefined) effectiveDesc = (m === "added");
+    rows.sort(fieldSortComparator(m, effectiveDesc));
     return rows;
   }
   return rows;
@@ -483,6 +484,9 @@ function diffRows(oldRows, newRows, fields) {
     for (var j = 0; j < cur.length; j++) {
       if (rowHash(cur[j]) === h) { from = j; break; }
     }
+    if (from === -1) {
+      throw new Error("diffRows: survivor " + h + " not found in the working array (internal invariant violated)");
+    }
     cur.splice(from, 1);
     var to;
     if (i === survivorsByNewOrder.length - 1) {
@@ -492,6 +496,9 @@ function diffRows(oldRows, newRows, fields) {
       to = -1;
       for (var k = 0; k < cur.length; k++) {
         if (rowHash(cur[k]) === nextHash) { to = k; break; }
+      }
+      if (to === -1) {
+        throw new Error("diffRows: successor " + nextHash + " not found in the working array (internal invariant violated)");
       }
     }
     cur.splice(to, 0, row);
@@ -583,14 +590,17 @@ function caseInsensitiveAsc(a, b) {
 
 // filterGroups(rows, categories, tags) -> [{group, items:[{group,value,label,count,zero}]}].
 //
-// `categories` and `tags` are the top-level lists from Status
-// (parseStatusJson's `categories`/`tags`, both arrays of name strings) --
-// the authoritative source for zero-count entries, unioned with whatever
-// rows carry. Sentinel entries (Uncategorized/Untagged/Trackerless) use
-// value:"" -- never the label string -- so a real category/tag/tracker
-// named e.g. "Uncategorized" can't collide with the sentinel, and
-// matchFilter needs no special case: value:"" already equals what an
-// unset row.category/tracker/[] tags compares as.
+// The four group names are exactly "status", "category", "tag" and
+// "tracker" (singular), matching matchFilter's group check.
+//
+// `categories` and `tags` (the function's own params) are the top-level
+// lists from Status (parseStatusJson's `categories`/`tags`, both arrays of
+// name strings) -- the authoritative source for zero-count entries, unioned
+// with whatever rows carry. Sentinel entries (Uncategorized/Untagged/
+// Trackerless) use value:"" -- never the label string -- so a real
+// category/tag/tracker named e.g. "Uncategorized" can't collide with the
+// sentinel, and matchFilter needs no special case: value:"" already equals
+// what an unset row.category/tracker/[] tags compares as.
 function filterGroups(rows, categories, tags) {
   var list = rows || [];
   var i;
@@ -610,11 +620,11 @@ function filterGroups(rows, categories, tags) {
   }
   var sortedCategoryNames = Object.keys(categoryNames).sort(caseInsensitiveAsc);
   var categoryItems = [
-    makeFilterItem("categories", "", "Uncategorized", countRows(list, function(row) { return String(row.category || "") === ""; }))
+    makeFilterItem("category", "", "Uncategorized", countRows(list, function(row) { return String(row.category || "") === ""; }))
   ];
   for (i = 0; i < sortedCategoryNames.length; i++) {
     var catName = sortedCategoryNames[i];
-    categoryItems.push(makeFilterItem("categories", catName, catName, countRows(list, function(row) { return String(row.category || "") === catName; })));
+    categoryItems.push(makeFilterItem("category", catName, catName, countRows(list, function(row) { return String(row.category || "") === catName; })));
   }
 
   var tagNames = {};
@@ -625,11 +635,11 @@ function filterGroups(rows, categories, tags) {
   }
   var sortedTagNames = Object.keys(tagNames).sort(caseInsensitiveAsc);
   var tagItems = [
-    makeFilterItem("tags", "", "Untagged", countRows(list, function(row) { return !Array.isArray(row.tags) || row.tags.length === 0; }))
+    makeFilterItem("tag", "", "Untagged", countRows(list, function(row) { return !Array.isArray(row.tags) || row.tags.length === 0; }))
   ];
   for (i = 0; i < sortedTagNames.length; i++) {
     var tagName = sortedTagNames[i];
-    tagItems.push(makeFilterItem("tags", tagName, tagName, countRows(list, function(row) {
+    tagItems.push(makeFilterItem("tag", tagName, tagName, countRows(list, function(row) {
       return Array.isArray(row.tags) && row.tags.indexOf(tagName) !== -1;
     })));
   }
@@ -641,37 +651,39 @@ function filterGroups(rows, categories, tags) {
   }
   var sortedTrackerNames = Object.keys(trackerNames).sort(caseInsensitiveAsc);
   var trackerItems = [
-    makeFilterItem("trackers", "", "Trackerless", countRows(list, function(row) { return String(row.tracker || "") === ""; }))
+    makeFilterItem("tracker", "", "Trackerless", countRows(list, function(row) { return String(row.tracker || "") === ""; }))
   ];
   for (i = 0; i < sortedTrackerNames.length; i++) {
     var host = sortedTrackerNames[i];
-    trackerItems.push(makeFilterItem("trackers", host, host, countRows(list, function(row) { return String(row.tracker || "") === host; })));
+    trackerItems.push(makeFilterItem("tracker", host, host, countRows(list, function(row) { return String(row.tracker || "") === host; })));
   }
 
   return [
     { group: "status", items: statusItems },
-    { group: "categories", items: categoryItems },
-    { group: "tags", items: tagItems },
-    { group: "trackers", items: trackerItems }
+    { group: "category", items: categoryItems },
+    { group: "tag", items: tagItems },
+    { group: "tracker", items: trackerItems }
   ];
 }
 
-// matchFilter(row, filter) where filter is {group, value}. A missing or
-// unrecognized group fails open (matches everything), the same as the
-// default "All" filter.
+// matchFilter(row, filter) where filter is {group, value}. The four group
+// names are exactly "status", "category", "tag" and "tracker" -- singular,
+// matching each item's own `group` field from filterGroups. Fails closed: a
+// missing/unrecognized group, or a value that doesn't name a real bucket,
+// returns false rather than matching everything.
 function matchFilter(row, filter) {
   var f = filter || {};
   var group = f.group;
   var value = f.value;
   if (group === "status") return statusItemMatches(String(value), row);
-  if (group === "categories") return String((row && row.category) || "") === String(value || "");
-  if (group === "tags") {
+  if (group === "category") return String((row && row.category) || "") === String(value || "");
+  if (group === "tag") {
     var rowTags = Array.isArray(row && row.tags) ? row.tags : [];
     if (!value) return rowTags.length === 0;
     return rowTags.indexOf(String(value)) !== -1;
   }
-  if (group === "trackers") return String((row && row.tracker) || "") === String(value || "");
-  return true;
+  if (group === "tracker") return String((row && row.tracker) || "") === String(value || "");
+  return false;
 }
 
 function filterByQuery(list, query) {
@@ -962,7 +974,6 @@ if (typeof module !== "undefined" && module.exports) {
     sortTorrents: sortTorrents,
     cycleSort: cycleSort,
     sortLabel: sortLabel,
-    SORT_FIELD_DESC_DEFAULT: SORT_FIELD_DESC_DEFAULT,
     applyOps: applyOps,
     diffRows: diffRows,
     statusGroup: statusGroup,

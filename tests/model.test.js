@@ -806,25 +806,44 @@ test("sortTorrents tie-break stays hash-ascending under desc", () => {
   assert.deepEqual(got, ["aaa", "zzz"]);
 });
 
-test("sortTorrents new field modes use documented natural directions", () => {
-  // name: ascending A-Z
-  assert.deepEqual(Model.sortTorrents(hashedSortSample, "name").map((t) => t.name), ["fast", "mid", "slow"]);
-  // size: descending (largest first)
-  assert.deepEqual(Model.sortTorrents(hashedSortSample, "size").map((t) => t.name), ["fast", "slow", "mid"]);
-  // progress: ascending (least complete first)
-  assert.deepEqual(Model.sortTorrents(hashedSortSample, "progress").map((t) => t.name), ["slow", "mid", "fast"]);
-  // dl: descending (fastest first)
-  assert.deepEqual(Model.sortTorrents(hashedSortSample, "dl").map((t) => t.name), ["fast", "mid", "slow"]);
-  // ul: descending (ties -- slow and mid both have upSpeed 0 -- break on hash ascending)
-  assert.deepEqual(Model.sortTorrents(hashedSortSample, "ul").map((t) => t.name), ["fast", "mid", "slow"]);
-  // ratio: descending (highest first)
-  assert.deepEqual(Model.sortTorrents(hashedSortSample, "ratio").map((t) => t.name), ["fast", "mid", "slow"]);
+// desc is absolute: false is always ascending (oldest/smallest/A->Z first),
+// true is always descending (newest/largest/Z->A first), the same meaning
+// for every mode. There is no per-mode "natural direction" -- both
+// directions are pinned explicitly for every mode below.
+test("sortTorrents desc:false is ascending for every mode (oldest/smallest/A->Z first)", () => {
+  assert.deepEqual(Model.sortTorrents(hashedSortSample, "added", false).map((t) => t.name), ["fast", "mid", "slow"]);
+  assert.deepEqual(Model.sortTorrents(hashedSortSample, "name", false).map((t) => t.name), ["fast", "mid", "slow"]);
+  assert.deepEqual(Model.sortTorrents(hashedSortSample, "size", false).map((t) => t.name), ["mid", "slow", "fast"]);
+  assert.deepEqual(Model.sortTorrents(hashedSortSample, "progress", false).map((t) => t.name), ["slow", "mid", "fast"]);
+  assert.deepEqual(Model.sortTorrents(hashedSortSample, "dl", false).map((t) => t.name), ["slow", "mid", "fast"]);
+  // ul: slow and mid both have upSpeed 0 -- their tie always breaks on hash
+  // ascending (h-mid < h-slow), regardless of desc.
+  assert.deepEqual(Model.sortTorrents(hashedSortSample, "ul", false).map((t) => t.name), ["mid", "slow", "fast"]);
+  assert.deepEqual(Model.sortTorrents(hashedSortSample, "ratio", false).map((t) => t.name), ["slow", "mid", "fast"]);
+  assert.deepEqual(Model.sortTorrents(hashedSortSample, "eta", false).map((t) => t.name), ["fast", "mid", "slow"]);
 });
 
-test("sortTorrents desc flips a mode's natural direction", () => {
+test("sortTorrents desc:true is descending for every mode (newest/largest/Z->A first)", () => {
+  assert.deepEqual(Model.sortTorrents(hashedSortSample, "added", true).map((t) => t.name), ["slow", "mid", "fast"]);
   assert.deepEqual(Model.sortTorrents(hashedSortSample, "name", true).map((t) => t.name), ["slow", "mid", "fast"]);
-  assert.deepEqual(Model.sortTorrents(hashedSortSample, "added", true).map((t) => t.name), ["fast", "mid", "slow"]);
+  assert.deepEqual(Model.sortTorrents(hashedSortSample, "size", true).map((t) => t.name), ["fast", "slow", "mid"]);
+  assert.deepEqual(Model.sortTorrents(hashedSortSample, "progress", true).map((t) => t.name), ["fast", "mid", "slow"]);
+  assert.deepEqual(Model.sortTorrents(hashedSortSample, "dl", true).map((t) => t.name), ["fast", "mid", "slow"]);
+  // The mid/slow tie still breaks on hash ascending even under desc:true --
+  // only the non-tied comparison (against fast) flips.
+  assert.deepEqual(Model.sortTorrents(hashedSortSample, "ul", true).map((t) => t.name), ["fast", "mid", "slow"]);
+  assert.deepEqual(Model.sortTorrents(hashedSortSample, "ratio", true).map((t) => t.name), ["fast", "mid", "slow"]);
   assert.deepEqual(Model.sortTorrents(hashedSortSample, "eta", true).map((t) => t.name), ["slow", "mid", "fast"]);
+});
+
+test("sortTorrents 'added' with no explicit desc defaults to true (newest first), matching the widget and the window's own default", () => {
+  assert.deepEqual(Model.sortTorrents(hashedSortSample, "added").map((t) => t.name), ["slow", "mid", "fast"]);
+  assert.deepEqual(Model.sortTorrents(hashedSortSample, "added"), Model.sortTorrents(hashedSortSample, "added", true));
+});
+
+test("every other mode with no explicit desc defaults to false (ascending), matching 'eta' today", () => {
+  assert.deepEqual(Model.sortTorrents(hashedSortSample, "eta"), Model.sortTorrents(hashedSortSample, "eta", false));
+  assert.deepEqual(Model.sortTorrents(hashedSortSample, "size"), Model.sortTorrents(hashedSortSample, "size", false));
 });
 
 test("sortTorrents name compares case-insensitively without locale surprises", () => {
@@ -958,6 +977,38 @@ test("diffRows does not mutate its inputs", () => {
   assert.deepEqual(newRows, newCopy);
 });
 
+test("diffRows handles an empty old list (every row is an insert)", () => {
+  const oldRows = [];
+  const newRows = [{ hash: "a", name: "A" }, { hash: "b", name: "B" }, { hash: "c", name: "C" }];
+  const ops = Model.diffRows(oldRows, newRows, DIFF_FIELDS);
+  assert.ok(Array.isArray(ops), `expected ops, got ${JSON.stringify(ops)}`);
+  assert.ok(ops.every((op) => op.op === "insert"));
+  assert.deepEqual(Model.applyOps(oldRows, ops), newRows);
+});
+
+test("diffRows handles an empty new list (every row is a remove)", () => {
+  const oldRows = [{ hash: "a", name: "A" }, { hash: "b", name: "B" }, { hash: "c", name: "C" }];
+  const newRows = [];
+  const ops = Model.diffRows(oldRows, newRows, DIFF_FIELDS);
+  assert.ok(Array.isArray(ops), `expected ops, got ${JSON.stringify(ops)}`);
+  assert.ok(ops.every((op) => op.op === "remove"));
+  assert.deepEqual(Model.applyOps(oldRows, ops), []);
+});
+
+test("diffRows handles both lists empty (no ops)", () => {
+  assert.deepEqual(Model.diffRows([], [], DIFF_FIELDS), []);
+});
+
+test("applyOps handles an empty rows array and/or an empty ops list", () => {
+  assert.deepEqual(Model.applyOps([], []), []);
+  assert.deepEqual(Model.applyOps([], [{ op: "insert", index: 0, row: { hash: "a" } }]), [{ hash: "a" }]);
+  assert.deepEqual(Model.applyOps([{ hash: "a" }], []), [{ hash: "a" }]);
+});
+
+test("applyOps throws rather than splicing at index -1 when a move's from/to is missing", () => {
+  assert.throws(() => Model.applyOps([{ hash: "a" }], [{ op: "move", from: -1, to: 0 }]));
+});
+
 // --- Task 5: diffRows fuzz (applyOps is the executable contract) -----------
 
 function mulberry32(seed) {
@@ -1069,39 +1120,42 @@ test("filterGroups Status counts partition all rows and All equals the total", (
   assert.equal(byLabel.Checking, 2);
 });
 
-test("filterGroups Categories includes Uncategorized and zero-count known categories", () => {
+test("filterGroups category includes Uncategorized and zero-count known categories", () => {
   const groups = Model.filterGroups(filterRows, ["movies", "tv", "books"], []);
-  const categories = groups.find((g) => g.group === "categories");
+  const category = groups.find((g) => g.group === "category");
   const byLabel = {};
-  categories.items.forEach((item) => { byLabel[item.label] = item; });
+  category.items.forEach((item) => { byLabel[item.label] = item; });
   assert.equal(byLabel.Uncategorized.count, 2);
   assert.equal(byLabel.Uncategorized.value, "");
   assert.equal(byLabel.movies.count, 2);
   assert.equal(byLabel.tv.count, 2);
   assert.equal(byLabel.books.count, 0);
   assert.equal(byLabel.books.zero, true);
+  category.items.forEach((item) => assert.equal(item.group, "category"));
 });
 
-test("filterGroups Tags includes Untagged and counts multi-valued tags", () => {
+test("filterGroups tag includes Untagged and counts multi-valued tags", () => {
   const groups = Model.filterGroups(filterRows, [], ["a", "b", "c"]);
-  const tags = groups.find((g) => g.group === "tags");
+  const tag = groups.find((g) => g.group === "tag");
   const byLabel = {};
-  tags.items.forEach((item) => { byLabel[item.label] = item; });
+  tag.items.forEach((item) => { byLabel[item.label] = item; });
   assert.equal(byLabel.Untagged.count, 3);
   assert.equal(byLabel.a.count, 2);
   assert.equal(byLabel.b.count, 2);
   assert.equal(byLabel.c.count, 0);
   assert.equal(byLabel.c.zero, true);
+  tag.items.forEach((item) => assert.equal(item.group, "tag"));
 });
 
-test("filterGroups Trackers includes Trackerless and hosts from rows", () => {
+test("filterGroups tracker includes Trackerless and hosts from rows", () => {
   const groups = Model.filterGroups(filterRows, [], []);
-  const trackers = groups.find((g) => g.group === "trackers");
+  const tracker = groups.find((g) => g.group === "tracker");
   const byLabel = {};
-  trackers.items.forEach((item) => { byLabel[item.label] = item; });
+  tracker.items.forEach((item) => { byLabel[item.label] = item; });
   assert.equal(byLabel.Trackerless.count, 2);
   assert.equal(byLabel["tracker1.example"].count, 2);
   assert.equal(byLabel["tracker2.example"].count, 2);
+  tracker.items.forEach((item) => assert.equal(item.group, "tracker"));
 });
 
 test("matchFilter status All matches every row", () => {
@@ -1114,18 +1168,32 @@ test("matchFilter status matches statusGroup buckets", () => {
   assert.equal(Model.matchFilter(filterRows[0], { group: "status", value: "Active" }), true);
 });
 
-test("matchFilter categories/tags/trackers use value:'' as the sentinel, not the label", () => {
-  assert.equal(Model.matchFilter(filterRows[2], { group: "categories", value: "" }), true);
-  assert.equal(Model.matchFilter(filterRows[0], { group: "categories", value: "" }), false);
-  assert.equal(Model.matchFilter(filterRows[0], { group: "categories", value: "movies" }), true);
-  assert.equal(Model.matchFilter(filterRows[2], { group: "tags", value: "" }), true);
-  assert.equal(Model.matchFilter(filterRows[0], { group: "tags", value: "b" }), true);
-  assert.equal(Model.matchFilter(filterRows[0], { group: "tags", value: "z" }), false);
-  assert.equal(Model.matchFilter(filterRows[2], { group: "trackers", value: "" }), true);
-  assert.equal(Model.matchFilter(filterRows[0], { group: "trackers", value: "tracker1.example" }), true);
+test("matchFilter category/tag/tracker use value:'' as the sentinel, not the label", () => {
+  assert.equal(Model.matchFilter(filterRows[2], { group: "category", value: "" }), true);
+  assert.equal(Model.matchFilter(filterRows[0], { group: "category", value: "" }), false);
+  assert.equal(Model.matchFilter(filterRows[0], { group: "category", value: "movies" }), true);
+  assert.equal(Model.matchFilter(filterRows[2], { group: "tag", value: "" }), true);
+  assert.equal(Model.matchFilter(filterRows[0], { group: "tag", value: "b" }), true);
+  assert.equal(Model.matchFilter(filterRows[0], { group: "tag", value: "z" }), false);
+  assert.equal(Model.matchFilter(filterRows[2], { group: "tracker", value: "" }), true);
+  assert.equal(Model.matchFilter(filterRows[0], { group: "tracker", value: "tracker1.example" }), true);
 });
 
-test("matchFilter is permissive for a missing/unknown filter (fails open to All)", () => {
-  assert.equal(Model.matchFilter(filterRows[0], null), true);
-  assert.equal(Model.matchFilter(filterRows[0], {}), true);
+test("matchFilter category excludes a row whose category doesn't match", () => {
+  // filterRows[0].category === "movies"; a filter for a different category
+  // must exclude it, not just fail to include the right one.
+  const row = { hash: "x", category: "x", tags: [], tracker: "" };
+  assert.equal(Model.matchFilter(row, { group: "category", value: "movies" }), false);
+});
+
+test("matchFilter fails closed: an unknown group matches nothing", () => {
+  assert.equal(Model.matchFilter(filterRows[0], { group: "bogus", value: "whatever" }), false);
+  assert.equal(Model.matchFilter(filterRows[0], null), false);
+  assert.equal(Model.matchFilter(filterRows[0], {}), false);
+  assert.equal(Model.matchFilter(filterRows[0], { group: undefined, value: "All" }), false);
+});
+
+test("matchFilter fails closed: an unrecognized status value matches nothing", () => {
+  assert.equal(Model.matchFilter(filterRows[0], { group: "status", value: "Bogus" }), false);
+  assert.equal(Model.matchFilter(filterRows[0], { group: "status", value: undefined }), false);
 });
