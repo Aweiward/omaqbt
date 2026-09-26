@@ -204,6 +204,7 @@ TestCase {
     key(o.c, "x")
     compare(o.c.mode, "CONFIRM")
     verify(o.c.confirm !== null)
+    compare(lastCall(o.svc, "delete"), null, "no delete call before y is pressed")
     key(o.c, "y")
     compare(o.c.mode, "NORMAL")
     compare(lastCall(o.svc, "delete").args[1], false)
