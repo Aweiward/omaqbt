@@ -360,6 +360,8 @@ TestCase {
     var t = ticketOf(o.svc, "startPending")
     verify(t > 0)
     o.svc.actionFinished(t + 99, false, "boom", "window", [hh("d")])
+    compare(row(o.c).visible, false, "another ticket with the same hash is ignored")
+    wait(900)   // past the 800 ms settle, so a wrong re-raise would show
     compare(o.c.mode, "NORMAL", "another ticket with the same hash is ignored")
     o.svc.actionFinished(t, false, "boom", "window", [hh("d")])
     tryCompare(o.c, "mode", "CONFIRM")
@@ -377,8 +379,10 @@ TestCase {
     compare(o.c.mode, "NORMAL")
     var t = ticketOf(o.svc, "cancelPending")
     o.svc.actionFinished(t, true, "", "window", [hh("d")])
-    compare(o.c.mode, "NORMAL", "success keeps it handled")
+    compare(row(o.c).visible, false, "success keeps it handled")
     o.svc.actionFinished(t, false, "boom", "window", [hh("d")])
+    compare(row(o.c).visible, false, "only this row's ticket, once")
+    wait(900)   // past the 800 ms settle, so a wrong re-raise would show
     compare(o.c.mode, "NORMAL", "only this row's ticket, once")
     var o2 = make()
     addPending(o2, "d", false)
