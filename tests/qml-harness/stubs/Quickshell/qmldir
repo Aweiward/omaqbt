@@ -1,2 +1,4 @@
 module Quickshell
 FloatingWindow 1.0 FloatingWindow.qml
+Scope 1.0 Scope.qml
+singleton Quickshell 1.0 Quickshell.qml

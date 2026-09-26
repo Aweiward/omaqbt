@@ -1010,8 +1010,42 @@ function sidecarGaveUp(failures) {
   return Number(failures) >= 5;
 }
 
+// --- Files load origin ------------------------------------------------------
+//
+// Service remembers which hashes' latest files load came from the window
+// (quiet: a failure stays out of the widget's lastError). These keep that
+// bookkeeping pure so every load and replay path can be tested in node.
+
+// filesQuietAfterLoad(quiet, hash, fromWindow) -> the quiet map after a
+// load of hash starts: set for a window load, cleared for a widget load.
+function filesQuietAfterLoad(quiet, hash, fromWindow) {
+  var key = String(hash || "");
+  var out = {};
+  for (var k in quiet || {}) {
+    if (k !== key && quiet[k]) out[k] = true;
+  }
+  if (fromWindow === true && key !== "") out[key] = true;
+  return out;
+}
+
+// filesReplayOpts(quiet, hash) -> the opts a replayed load of hash (a
+// queued bash load, or a sidecar orphan retried through bash) must carry
+// so it keeps the origin of the load it replaces.
+function filesReplayOpts(quiet, hash) {
+  return (quiet || {})[String(hash || "")] ? { origin: "window" } : undefined;
+}
+
+// filesFailureWritesLastError(quiet, hash) -> whether a failed read of
+// hash belongs in the widget's shared lastError.
+function filesFailureWritesLastError(quiet, hash) {
+  return !(quiet || {})[String(hash || "")];
+}
+
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
+    filesQuietAfterLoad: filesQuietAfterLoad,
+    filesReplayOpts: filesReplayOpts,
+    filesFailureWritesLastError: filesFailureWritesLastError,
     classifyState: classifyState,
     filterTorrents: filterTorrents,
     torrentId: torrentId,

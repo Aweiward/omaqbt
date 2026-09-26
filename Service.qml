@@ -346,7 +346,7 @@ Scope {
   // A failed files read: the widget's lastError unless the window asked.
   function filesFailed(hash, error) {
     var key = String(hash || "")
-    if (!filesQuietHashes[key]) lastError = error
+    if (Model.filesFailureWritesLastError(filesQuietHashes, key)) lastError = error
     setFilesFor(key, [])
     setFilesStatus(key, "error", error)
   }
@@ -355,10 +355,7 @@ Scope {
   // reads filesStatusByHash instead). The widget calls it without opts.
   function loadFiles(hash, opts) {
     if (!started || !hash) return
-    var quiet = ({})
-    for (var q in filesQuietHashes) if (q !== String(hash)) quiet[q] = true
-    if (isWindowOrigin(opts)) quiet[String(hash)] = true
-    filesQuietHashes = quiet
+    filesQuietHashes = Model.filesQuietAfterLoad(filesQuietHashes, hash, isWindowOrigin(opts))
     setFilesFor(hash, [])
     setFilesStatus(hash, "loading", "")
     if (sidecarState === "up") {
@@ -655,7 +652,7 @@ Scope {
     // keeping the origin of the load it replaces.
     var lastHash = ""
     for (var k in orphans) lastHash = orphans[k]
-    if (lastHash !== "") loadFiles(lastHash, filesQuietHashes[lastHash] ? { origin: "window" } : undefined)
+    if (lastHash !== "") loadFiles(lastHash, Model.filesReplayOpts(filesQuietHashes, lastHash))
   }
 
   onActiveChanged: {
@@ -902,7 +899,9 @@ Scope {
         root.setFilesFor(done, rows)
         root.setFilesStatus(done, "ok", "")
       }
-      if (next !== "" && next !== done) root.loadFiles(next)
+      // A queued load keeps its origin: replaying it bare would make a
+      // window load's failure land in the widget's lastError.
+      if (next !== "" && next !== done) root.loadFiles(next, Model.filesReplayOpts(root.filesQuietHashes, next))
     }
   }
 

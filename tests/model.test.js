@@ -1294,3 +1294,26 @@ test("serializeViewState normalizes garbage input the same way parseViewState do
   const text = Model.serializeViewState({ sort: "bogus", pane: "nope" });
   assert.deepEqual(JSON.parse(text), DEFAULT_VIEW_STATE);
 });
+
+// --- files load origin (Service's quiet map) --------------------------------
+
+test("filesQuietAfterLoad sets a window load, clears a widget load, keeps others", () => {
+  const a = "a".repeat(40), b = "b".repeat(40);
+  let q = Model.filesQuietAfterLoad({}, a, true);
+  assert.deepEqual(q, { [a]: true });
+  q = Model.filesQuietAfterLoad(q, b, true);
+  assert.deepEqual(q, { [a]: true, [b]: true });
+  q = Model.filesQuietAfterLoad(q, a, false);
+  assert.deepEqual(q, { [b]: true });
+});
+
+test("filesReplayOpts keeps a replayed load's origin", () => {
+  const a = "a".repeat(40);
+  assert.deepEqual(Model.filesReplayOpts({ [a]: true }, a), { origin: "window" });
+  assert.equal(Model.filesReplayOpts({}, a), undefined);
+  // replaying with those opts leaves the hash quiet, so its failure
+  // stays out of lastError
+  const q = Model.filesQuietAfterLoad({ [a]: true }, a, Model.filesReplayOpts({ [a]: true }, a) !== undefined);
+  assert.equal(Model.filesFailureWritesLastError(q, a), false);
+  assert.equal(Model.filesFailureWritesLastError({}, a), true);
+});
