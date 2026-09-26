@@ -1075,9 +1075,10 @@ function fuzzyMatch(query, title) {
 }
 
 // mruPush(mru, id) -> mru with `id` moved (or inserted) at the front,
-// deduped, capped at 20. Pure: never mutates `mru`.
-var PALETTE_MRU_CAP = 20;
-
+// deduped, capped at 20. Pure: never mutates `mru`. The cap is
+// Model.PALETTE_MRU_CAP, not a second local constant, so the storage cap
+// here and the one sanitizeMruList enforces on load (Model.js) can't drift
+// apart.
 function mruPush(mru, id) {
   var pushed = String(id);
   var out = [pushed];
@@ -1085,7 +1086,7 @@ function mruPush(mru, id) {
   for (var i = 0; i < list.length; i++) {
     if (String(list[i]) !== pushed) out.push(list[i]);
   }
-  return out.slice(0, PALETTE_MRU_CAP);
+  return out.slice(0, Model.PALETTE_MRU_CAP);
 }
 
 // The groups (and their order) a palette row can belong to -- the same
@@ -1104,6 +1105,24 @@ function paletteRunsFromTable(rows) {
     if (Registry.paneMatches(rows[i], "table")) return true;
   }
   return false;
+}
+
+// The "focus the <pane>" reason for a command whose rows never cover the
+// table pane, named after whichever specific pane its rows do require
+// (e.g. the Files tab's file.* rows name "inspector"; the filters pane's
+// filter.* rows name "filters"). Every current such command's rows agree
+// on a single pane, so the first one found is used.
+var PALETTE_FOCUS_REASON = { filters: "focus the filters", inspector: "focus the inspector" };
+
+function paletteFocusReason(rows) {
+  for (var i = 0; i < rows.length; i++) {
+    var panes = rows[i].panes || [];
+    for (var j = 0; j < panes.length; j++) {
+      var reason = PALETTE_FOCUS_REASON[panes[j]];
+      if (reason) return reason;
+    }
+  }
+  return "focus the inspector";
 }
 
 // Every raw commands-table row for one command id, merged: keys collected
@@ -1145,15 +1164,19 @@ function paletteKeysText(rows) {
 // paletteRowFrom(entry, state, indices) -> one {kind:"command", ...} row.
 // enabled/reason follow the table's own precondition function (reused from
 // CommandRegistry, never copied): a command whose rows never cover the
-// table pane is disabled with "focus the inspector" (e.g. the Files tab's
-// file.* rows); otherwise a failed `needs` precondition disables it with
-// "needs a selected torrent".
+// table pane is disabled with "focus the <pane>" it actually needs (e.g.
+// "focus the inspector" for the Files tab's file.* rows, "focus the
+// filters" for the filters pane's filter.* rows -- see
+// paletteFocusReason); otherwise a failed `needs` precondition disables it
+// with "needs a selected torrent". A row that fails both checks reports
+// the pane reason: focusing the right pane is the prerequisite for the
+// precondition mattering at all.
 function paletteRowFrom(entry, state, indices) {
   var enabled = true;
   var reason = "";
   if (!paletteRunsFromTable(entry.rows)) {
     enabled = false;
-    reason = "focus the inspector";
+    reason = paletteFocusReason(entry.rows);
   } else if (!Registry.preconditionMet(entry.needs, state)) {
     enabled = false;
     reason = "needs a selected torrent";

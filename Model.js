@@ -1176,6 +1176,7 @@ if (typeof module !== "undefined" && module.exports) {
     parseServeLine: parseServeLine,
     defaultViewState: defaultViewState,
     parseViewState: parseViewState,
+    PALETTE_MRU_CAP: PALETTE_MRU_CAP,
     HASH_CHUNK: HASH_CHUNK,
     chunkHashes: chunkHashes,
     toggleAllTargets: toggleAllTargets,

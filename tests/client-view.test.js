@@ -939,9 +939,29 @@ test("paletteRows: a torrent.* row is enabled when there is a cursor torrent", (
 
 test("paletteRows: file.* rows (Files-tab-only) are disabled with 'focus the inspector', even with a torrent selected", () => {
   const rows = V.paletteRows("", Registry.commands, [], paletteState({ hasTorrent: true }));
-  const fileDown = rows.find((r) => r.id === "file.down");
-  assert.equal(fileDown.enabled, false);
-  assert.equal(fileDown.reason, "focus the inspector");
+  for (const id of ["file.down", "file.up", "file.cycle"]) {
+    const row = rows.find((r) => r.id === id);
+    assert.equal(row.enabled, false, id);
+    assert.equal(row.reason, "focus the inspector", id);
+  }
+});
+
+test("paletteRows: filter.* rows (filters-pane-only) are disabled with 'focus the filters'", () => {
+  const rows = V.paletteRows("", Registry.commands, [], paletteState({ hasTorrent: true }));
+  for (const id of ["filter.down", "filter.up", "filter.apply"]) {
+    const row = rows.find((r) => r.id === id);
+    assert.equal(row.enabled, false, id);
+    assert.equal(row.reason, "focus the filters", id);
+  }
+});
+
+test("paletteRows: a pane-mismatch reason wins over a failed precondition when both fail", () => {
+  // file.cycle needs a torrent AND only runs from the inspector; with no
+  // torrent selected, both checks fail -- the pane reason must be reported.
+  const rows = V.paletteRows("", Registry.commands, [], paletteState({ hasTorrent: false }));
+  const fileCycle = rows.find((r) => r.id === "file.cycle");
+  assert.equal(fileCycle.enabled, false);
+  assert.equal(fileCycle.reason, "focus the inspector");
 });
 
 test("paletteRows: a command runnable from the table (any-pane or table+inspector) is enabled", () => {
