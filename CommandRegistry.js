@@ -105,8 +105,10 @@ var commands = [
   { id: "insert.cancel", title: "Cancel", group: "App", keys: ["Esc"], modes: ["INSERT"], panes: [PANE_ANY], needs: "none" },
   { id: "insert.commit", title: "Commit", group: "App", keys: ["Enter"], modes: ["INSERT"], panes: [PANE_ANY], needs: "none" },
 
-  // CONFIRM. "confirm.accept" is display-only: dispatch() resolves `y` to
-  // the pending command's own id, never to this literal id.
+  // CONFIRM (pending.kind "delete" or "remove"; a "magnet" CONFIRM resolves
+  // its own keys, see dispatchMagnetConfirm). "confirm.accept" is
+  // display-only: dispatch() resolves `y` to the pending command's own id,
+  // never to this literal id.
   { id: "confirm.accept", title: "Confirm", group: "App", keys: ["y"], modes: ["CONFIRM"], panes: [PANE_ANY], needs: "none" },
   { id: "confirm.cancel", title: "Cancel", group: "App", keys: ["n", "Esc"], modes: ["CONFIRM"], panes: [PANE_ANY], needs: "none" }
 ];
@@ -250,11 +252,29 @@ function buildArgs(row, s) {
   return args;
 }
 
+// A browser-magnet confirm (pending.kind "magnet", raised by the window,
+// not by a key): Enter or y asks to start it, Esc or n to cancel it, and
+// every other key does nothing. The state stays CONFIRM either way: the
+// window leaves it once the magnet is handled, and can refuse the start
+// while the name is still being fetched.
+function dispatchMagnetConfirm(s, ev) {
+  var ctrl = (ev.modifiers || {}).ctrl === true;
+  var text = ev.text || "";
+  if ((!ctrl && text === "y") || matchLabel("Enter", ev)) {
+    return { state: s, commandId: "magnet.start", args: {} };
+  }
+  if ((!ctrl && text === "n") || ev.key === KEY.Escape) {
+    return { state: s, commandId: "magnet.cancel", args: {} };
+  }
+  return { state: s, commandId: null };
+}
+
 function dispatchConfirm(s, ev) {
   var mods = ev.modifiers || {};
   var ctrl = mods.ctrl === true;
   var text = ev.text || "";
   var pending = s.pending || null;
+  if (pending && pending.kind === "magnet") return dispatchMagnetConfirm(s, ev);
   // Resolving CONFIRM always lands in NORMAL. If the command that led here
   // was raised from VISUAL, its range must not survive into NORMAL (see
   // confirmCount/buildArgs) -- so this clears selectionCount unconditionally,
@@ -342,7 +362,7 @@ function resolveRow(s, row, now) {
   if (needsConfirm(row.id, s)) {
     var count = confirmCount(s);
     var withFiles = row.id === "torrent.delete";
-    var pending = { commandId: row.id, args: args, count: count, withFiles: withFiles };
+    var pending = { kind: withFiles ? "delete" : "remove", commandId: row.id, args: args, count: count, withFiles: withFiles };
     return {
       state: assign(clearPrefix(s), { mode: "CONFIRM", pending: pending }),
       commandId: null,

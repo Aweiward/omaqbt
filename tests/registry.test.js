@@ -877,3 +877,59 @@ test("dispatchCommand blocks an unmet precondition and ignores wrong-pane ids", 
   assert.equal(Registry.dispatchCommand(state(), "no.such").commandId, null);
   assert.equal(Registry.dispatchCommand(state(), null).commandId, null);
 });
+
+// --- magnet CONFIRM (slice 1b Task 4) ---------------------------------------
+
+const MAGNET_PENDING = { kind: "magnet", commandId: "magnet.start" };
+
+test("x and X raise CONFIRM pendings of kind remove and delete", () => {
+  assert.equal(dispatch(state(), ev("x", keyOf("x"))).state.pending.kind, "remove");
+  assert.equal(dispatch(state(), ev("X", keyOf("X"), { ctrl: false, shift: true, alt: false })).state.pending.kind, "delete");
+});
+
+test("magnet CONFIRM: Enter, Return and y ask to start; the state stays CONFIRM", () => {
+  const s = state({ mode: "CONFIRM", pending: MAGNET_PENDING });
+  for (const e of [ev("\r", KEY.Return), ev("\u0003", KEY.Enter), ev("y", keyOf("y"))]) {
+    const r = dispatch(s, e);
+    assert.equal(r.commandId, "magnet.start");
+    assert.deepEqual(r.args, {});
+    assert.equal(r.state.mode, "CONFIRM");
+    assert.deepEqual(r.state.pending, MAGNET_PENDING);
+  }
+});
+
+test("magnet CONFIRM: Esc and n ask to cancel; the state stays CONFIRM", () => {
+  const s = state({ mode: "CONFIRM", pending: MAGNET_PENDING });
+  for (const e of [ev("\u001b", KEY.Escape), ev("n", keyOf("n"))]) {
+    const r = dispatch(s, e);
+    assert.equal(r.commandId, "magnet.cancel");
+    assert.equal(r.state.mode, "CONFIRM");
+    assert.deepEqual(r.state.pending, MAGNET_PENDING);
+  }
+});
+
+test("magnet CONFIRM: every other key does nothing", () => {
+  const s = state({ mode: "CONFIRM", pending: MAGNET_PENDING });
+  const others = [
+    ev("j", keyOf("j")), ev("x", keyOf("x")), ev(":", 0x3a), ev("q", keyOf("q")), ev("/", 0x2f),
+    ev(" ", KEY.Space), ev("\t", KEY.Tab), ev("V", keyOf("V")), ev("?", 0x3f),
+    ev("\u0019", keyOf("y"), { ctrl: true, shift: false, alt: false }),
+    ev("\u000e", keyOf("n"), { ctrl: true, shift: false, alt: false })
+  ];
+  for (const e of others) {
+    const r = dispatch(s, e);
+    assert.equal(r.commandId, null, JSON.stringify(e));
+    assert.equal(r.state.mode, "CONFIRM");
+    assert.deepEqual(r.state.pending, MAGNET_PENDING);
+  }
+});
+
+test("a delete CONFIRM still resolves y/n/Esc as before (Enter does nothing)", () => {
+  const pending = { kind: "delete", commandId: "torrent.delete", args: {}, count: 1, withFiles: true };
+  const s = state({ mode: "CONFIRM", pending });
+  assert.equal(dispatch(s, ev("y", keyOf("y"))).commandId, "torrent.delete");
+  assert.equal(dispatch(s, ev("\u001b", KEY.Escape)).commandId, "confirm.cancel");
+  const enter = dispatch(s, ev("\r", KEY.Return));
+  assert.equal(enter.commandId, null);
+  assert.equal(enter.state.mode, "CONFIRM");
+});
