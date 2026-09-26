@@ -96,9 +96,13 @@ Item {
   readonly property var inspectorInfo: View.inspectorInfo(cursorRow, function(sec) {
     return Qt.formatDateTime(new Date(sec * 1000), "yyyy-MM-dd hh:mm")
   })
+  // Bound to a bool, not to cursorRow: cursorRow is a fresh object every
+  // status tick, and re-running filesView would hand the Files ListView a
+  // new model and reset its scroll on every tick.
+  readonly property bool hasCursorRow: tableState === "rows" && cursorIndex >= 0
   readonly property var filesState: View.filesView(
-    service && cursorRow ? (service.filesByHash || {})[cursorHash] : [],
-    service && cursorRow ? (service.filesStatusByHash || {})[cursorHash] : undefined)
+    service && hasCursorRow ? (service.filesByHash || {})[cursorHash] : [],
+    service && hasCursorRow ? (service.filesStatusByHash || {})[cursorHash] : undefined)
   property int fileIndex: 0
   // The hash whose files this window last asked for, and whether a failed
   // answer for it still has to be reported on the status line.

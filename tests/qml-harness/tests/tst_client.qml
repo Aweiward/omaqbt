@@ -641,4 +641,40 @@ TestCase {
     o.svc.actionFinished(o.svc.seq, false, "exit 1", "window", [])
     compare(o.c.messageLine.text, "Couldn't start qbittorrent-nox: exit 1")
   }
+
+  function test_files_list_survives_status_ticks() {
+    var o = make()
+    o.svc.torrents = list3()
+    key(o.c, "4")
+    var files = []
+    for (var i = 0; i < 80; i++) files.push({ index: i, name: "f" + i, progress: 0, priority: 1 })
+    o.svc.setFilesFor(hh("c"), files)
+    o.svc.setFilesStatus(hh("c"), "ok", "")
+    var insp = (function find(obj) {
+      if (!obj) return null
+      if (typeof obj.positionFile === "function") return obj
+      for (var j = 0; j < (obj.children || []).length; j++) { var r = find(obj.children[j]); if (r) return r }
+      return null
+    })(winOf(o.c).contentItem)
+    var lv = null
+    ;(function find(obj) {
+      if (!obj || lv) return
+      if (obj.count !== undefined && obj.model !== undefined && obj.contentY !== undefined && obj.count === 80) { lv = obj; return }
+      for (var j = 0; j < (obj.children || []).length; j++) find(obj.children[j])
+    })(insp)
+    verify(lv !== null)
+    tryVerify(function() { return lv.contentHeight > lv.height })
+    lv.contentY = 28 * 40
+    wait(50)
+    var before = lv.contentY
+    var state = o.c.filesState
+    // ticks that reorder rows and change speeds
+    var t = list3(); t[0].dlSpeed = 999999
+    o.svc.torrents = t
+    o.svc.torrents = list3()
+    wait(100)
+    verify(o.c.filesState === state, "filesState is not recomputed on a tick")
+    compare(lv.contentY, before, "the files list keeps its scroll across ticks")
+  }
 }
+
