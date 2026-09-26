@@ -230,7 +230,7 @@ Item {
     sortDesc = v.desc
     cursorHash = v.cursorHash
     pane = v.pane
-    rebuildRows()
+    rebuildRows(true)
   }
 
   function saveView() {
@@ -247,7 +247,15 @@ Item {
 
   // ---- rows ------------------------------------------------------------------
 
-  function rebuildRows() {
+  // Scrolls the cursor row into view once the ListView has laid out the
+  // latest rows (ListView.Contain: no scroll when it is already visible).
+  function revealCursor() {
+    Qt.callLater(function() { table.positionAt(root.cursorIndex) })
+  }
+
+  // reveal: also scroll the cursor into view even if its index is the same
+  // (restore, re-sort). Otherwise it is revealed only when its index moved.
+  function rebuildRows(reveal) {
     if (!service) return
     var torrents = service.torrents || []
     var pending = service.magnetPendingHashes || []
@@ -262,6 +270,8 @@ Item {
     // An automatic cursor move (its torrent went away, or a restored hash
     // no longer exists) isn't saved; only user moves are.
     cursorHash = View.resolveCursor(v.rows, cursorHash, prevIndex)
+    var nextIndex = View.indexOfHash(v.rows, cursorHash)
+    if (nextIndex >= 0 && (reveal === true || nextIndex !== prevIndex)) revealCursor()
   }
 
   function setCursor(hash) {
@@ -334,7 +344,7 @@ Item {
     noteText = ""
     var st = ({})
     for (var k in regState) st[k] = regState[k]
-    st.pane = pane
+    st.pane = View.dispatchPane(pane, tableState)
     st.hasTorrent = tableState === "rows" && cursorIndex >= 0
     st.selectionCount = 0
     var res = Registry.dispatch(st, ev)
@@ -416,6 +426,17 @@ Item {
       rebuildRows()
     }
     endInput()
+  }
+
+  // Ends INSERT the way Esc does (insert.cancel: the filter query goes
+  // back to what it was before `/`, a move is dropped), e.g. on a click.
+  function leaveInsert() {
+    if (regState.mode !== "INSERT") return
+    var st = ({})
+    for (var k in regState) st[k] = regState[k]
+    st.mode = "NORMAL"
+    regState = st
+    cancelInput()
   }
 
   function cancelInput() {
@@ -521,13 +542,13 @@ Item {
       var n = View.nextSort(sortMode)
       sortMode = n.sort
       sortDesc = n.desc
-      rebuildRows()
+      rebuildRows(true)
       saveView()
       return
 
     case "sort.reverse":
       sortDesc = !sortDesc
-      rebuildRows()
+      rebuildRows(true)
       saveView()
       return
 
@@ -789,6 +810,7 @@ Item {
             stateCopy: root.stateCopy
             showLoadingText: root.loadingTextDue
             onRowClicked: function(hash) {
+              root.leaveInsert()
               root.setPane("table")
               root.setCursor(hash)
               keyRoot.forceActiveFocus()

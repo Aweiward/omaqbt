@@ -329,6 +329,17 @@ function tableState(s) {
   return "rows";
 }
 
+// dispatchPane(pane, state) -> the pane handed to CommandRegistry.dispatch.
+// A blocking state (daemon down, not installed, Qt open, API down, empty
+// library, loading) replaces the whole center with its own keys (Enter,
+// y, r), and those keys are table-pane rows in the registry. So while one
+// shows, keys dispatch as if the table were focused, whatever pane was
+// restored; with rows (or a no-match filter) the real pane is used.
+function dispatchPane(pane, state) {
+  if (state === "rows" || state === "noMatch") return String(pane || "table");
+  return "table";
+}
+
 function plural(n, one, many) {
   return n + " " + (n === 1 ? one : many);
 }
@@ -525,6 +536,7 @@ if (typeof module !== "undefined" && module.exports) {
     PANES: PANES,
     nextPane: nextPane,
     tableState: tableState,
+    dispatchPane: dispatchPane,
     countText: countText,
     stateCopy: stateCopy,
     toggleStarts: toggleStarts,

@@ -379,3 +379,38 @@ test("isAbsolutePath rejects relative, ~ and bare / paths", () => {
   assert.equal(V.isAbsolutePath("/"), false);
   assert.equal(V.isAbsolutePath(""), false);
 });
+
+// --- blocking states dispatch as the table pane ---------------------------
+
+test("dispatchPane: rows and noMatch keep the real pane", () => {
+  assert.equal(V.dispatchPane("inspector", "rows"), "inspector");
+  assert.equal(V.dispatchPane("filters", "noMatch"), "filters");
+});
+
+test("dispatchPane: blocking states dispatch as the table pane", () => {
+  for (const st of ["loading", "gui", "notInstalled", "daemon", "api", "empty"]) {
+    for (const pane of ["filters", "inspector", "table"]) {
+      assert.equal(V.dispatchPane(pane, st), "table", st + "/" + pane);
+    }
+  }
+});
+
+test("dispatchPane makes Enter and y reach their commands from any restored pane", () => {
+  for (const pane of ["filters", "inspector"]) {
+    const base = { mode: "NORMAL", hasTorrent: false };
+    // daemon / notInstalled: Enter must come back as inspector.files (the
+    // window turns it into start daemon / install), not filter.apply.
+    for (const st of ["daemon", "notInstalled"]) {
+      const r = Registry.dispatch(Object.assign({}, base, { pane: V.dispatchPane(pane, st) }), V.keyEvent(KEY.Return, "\r", 0, 0));
+      assert.equal(r.commandId, "inspector.files", st + "/" + pane);
+    }
+    // empty: y must come back blocked (the window reads that as add from
+    // clipboard), not silently unmatched.
+    const y = Registry.dispatch(Object.assign({}, base, { pane: V.dispatchPane(pane, "empty") }), V.keyEvent(0x59, "y", 0, 0));
+    assert.equal(y.commandId, null);
+    assert.equal(y.blocked, "needs a selected torrent", "empty/" + pane);
+    // and without the fix the same keys do nothing from that pane
+    const raw = Registry.dispatch(Object.assign({}, base, { pane: pane }), V.keyEvent(0x59, "y", 0, 0));
+    assert.equal(raw.blocked, undefined);
+  }
+});

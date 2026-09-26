@@ -88,7 +88,11 @@ Item {
 
   // Scrolls just enough to show the row; used on user cursor moves only.
   function positionAt(index) {
-    if (index >= 0 && index < rowModel.count) list.positionViewAtIndex(index, ListView.Contain)
+    if (index < 0 || index >= rowModel.count) return
+    // After a burst of ops (or a reset) the view may not have laid out the
+    // new rows yet; positioning against the old layout would be undone.
+    list.forceLayout()
+    list.positionViewAtIndex(index, ListView.Contain)
   }
 
   ListModel { id: rowModel }
