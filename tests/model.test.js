@@ -602,6 +602,31 @@ test("enqueueAction keeps FIFO order", () => {
   assert.equal(second.rest.length, 0);
 });
 
+test("makeActionItem shapes a widget item by default", () => {
+  for (const opts of [undefined, null, {}, { origin: "widget" }, { origin: "Window" }, { origin: 1 }]) {
+    const item = Model.makeActionItem(3, ["qbt", "start", "a"], "Starting…", opts);
+    assert.deepEqual(item, {
+      cmd: ["qbt", "start", "a"], status: "Starting…", ticket: 3, origin: "widget", hashes: []
+    }, JSON.stringify(opts));
+  }
+});
+
+test("makeActionItem keeps the window origin and copies hashes", () => {
+  const hashes = ["a", "b"];
+  const item = Model.makeActionItem(7, ["qbt", "stop", "a|b"], undefined, { origin: "window", hashes });
+  assert.equal(item.origin, "window");
+  assert.equal(item.ticket, 7);
+  assert.equal(item.status, "");
+  assert.deepEqual(item.hashes, ["a", "b"]);
+  hashes.push("c");
+  assert.deepEqual(item.hashes, ["a", "b"]);
+});
+
+test("makeActionItem drops empty hashes and ignores a non-array", () => {
+  assert.deepEqual(Model.makeActionItem(1, ["x"], "", { hashes: ["a", "", null, "b"] }).hashes, ["a", "b"]);
+  assert.deepEqual(Model.makeActionItem(1, ["x"], "", { hashes: "a" }).hashes, []);
+});
+
 // Tests for parseServeLine
 test("parseServeLine parses a valid status line", () => {
   const result = Model.parseServeLine('{"type":"status","foo":"bar"}');

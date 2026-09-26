@@ -30,6 +30,9 @@ Scope {
   property string actionStatus: ""
   property string clipboardText: ""
   property var actionQueue: []
+  // Tickets are 1-based so a method can return 0 for "nothing queued".
+  property int actionTicketSeq: 0
+  property var currentAction: null
   property var notifyQueue: []
   property var magnetInbox: []
   property var magnetPending: []
@@ -82,6 +85,10 @@ Scope {
   readonly property bool vpnUnbound: Model.vpnUnbound({ daemon: daemon, api: api, vpnIface: vpnIface, bindIface: bindIface })
   readonly property bool warning: !installed || !daemon || lockHolder === "gui" || !api || vpnUnbound
 
+  // Emitted after every queued action ends, once the queue has moved on.
+  // error is sanitized and empty on success.
+  signal actionFinished(int ticket, bool ok, string error, string origin, var hashes)
+
   function clearError() { lastError = "" }
 
   function applyStatus(raw) {
@@ -124,19 +131,32 @@ Scope {
     if (next.item && next.item.text) notify(next.item.text)
   }
 
-  function runAction(cmd, statusText) {
-    var item = { cmd: cmd, status: statusText || "" }
+  // opts: {origin: "widget"|"window", hashes: [...]}. Returns the ticket.
+  // Window actions leave actionStatus and lastError alone; the window builds
+  // its own message from actionFinished.
+  function runAction(cmd, statusText, opts) {
+    var ticket = actionTicketSeq + 1
+    actionTicketSeq = ticket
+    var item = Model.makeActionItem(ticket, cmd, statusText, opts)
     if (actionProcess.running) {
       actionQueue = Model.enqueueAction(actionQueue, item)
-      return
+      return ticket
     }
     startQueuedAction(item)
+    return ticket
+  }
+
+  function isWindowOrigin(opts) {
+    return !!opts && opts.origin === "window"
   }
 
   function startQueuedAction(item) {
     if (!item || !item.cmd) return
-    clearError()
-    actionStatus = item.status || ""
+    currentAction = item
+    if (item.origin !== "window") {
+      clearError()
+      actionStatus = item.status || ""
+    }
     actionProcess.command = item.cmd
     actionProcess.running = true
   }
@@ -167,57 +187,57 @@ Scope {
     clipProcess.running = true
   }
 
-  function addTarget(target, stopped, savePath) {
+  function addTarget(target, stopped, savePath, opts) {
     var t = String(target || "").trim()
     if (!Model.isAddableTarget(t)) {
-      lastError = "Paste a magnet, a .torrent URL, or a .torrent file path."
-      return
+      if (!isWindowOrigin(opts)) lastError = "Paste a magnet, a .torrent URL, or a .torrent file path."
+      return 0
     }
     var cmd = [helperPath, "add"]
     if (stopped) cmd.push("--stopped")
     var dir = String(savePath || "").trim()
     if (dir !== "") { cmd.push("--savepath"); cmd.push(dir) }
     cmd.push(t)
-    runAction(cmd, stopped ? "Adding torrent (stopped)…" : "Adding torrent…")
+    return runAction(cmd, stopped ? "Adding torrent (stopped)…" : "Adding torrent…", opts)
   }
 
-  function addUrl(url) { addTarget(url, false, "") }
+  function addUrl(url, opts) { return addTarget(url, false, "", opts) }
 
-  function startHash(hash) {
-    runAction([helperPath, "start", hash], "")
+  function startHash(hash, opts) {
+    return runAction([helperPath, "start", hash], "", opts)
   }
 
-  function stopHash(hash) {
-    runAction([helperPath, "stop", hash], "")
+  function stopHash(hash, opts) {
+    return runAction([helperPath, "stop", hash], "", opts)
   }
 
-  function toggleHash(hash) {
+  function toggleHash(hash, opts) {
     var row = null
     for (var i = 0; i < torrents.length; i++) if (torrents[i].hash === hash) row = torrents[i]
-    if (!row) return
+    if (!row) return 0
     var bucket = Model.classifyState(row.state, row.progress)
-    if (bucket === "paused" || bucket === "completed") startHash(hash)
-    else stopHash(hash)
+    if (bucket === "paused" || bucket === "completed") return startHash(hash, opts)
+    return stopHash(hash, opts)
   }
 
-  function toggleAll() {
+  function toggleAll(opts) {
     var live = Model.excludePending(torrents, magnetPendingHashes)
-    if (live.length === 0) return
+    if (live.length === 0) return 0
     var start = !Model.anyActive(live)
     var hashes = []
     for (var i = 0; i < live.length; i++) {
       var h = Model.torrentId(live[i])
       if (h) hashes.push(h)
     }
-    if (hashes.length === 0) return
-    if (start) runAction([helperPath, "start", hashes.join("|")], "")
-    else runAction([helperPath, "stop", hashes.join("|")], "")
+    if (hashes.length === 0) return 0
+    if (start) return runAction([helperPath, "start", hashes.join("|")], "", opts)
+    return runAction([helperPath, "stop", hashes.join("|")], "", opts)
   }
 
-  function deleteHash(hash, withFiles) {
+  function deleteHash(hash, withFiles, opts) {
     var cmd = [helperPath, "delete", hash]
     if (withFiles) cmd.push("--files")
-    runAction(cmd, withFiles ? "Deleting torrent and files…" : "Removing torrent…")
+    return runAction(cmd, withFiles ? "Deleting torrent and files…" : "Removing torrent…", opts)
   }
 
   function filesFor(hash) {
@@ -265,24 +285,24 @@ Scope {
     return String(hash)
   }
 
-  function setPrio(hash, index, prio) {
-    runAction([helperPath, "prio", hash, String(index), String(prio)], "")
+  function setPrio(hash, index, prio, opts) {
+    return runAction([helperPath, "prio", hash, String(index), String(prio)], "", opts)
   }
 
-  function toggleTurtle() {
-    runAction([helperPath, "turtle"], "")
+  function toggleTurtle(opts) {
+    return runAction([helperPath, "turtle"], "", opts)
   }
 
-  function setLimit(hash, kind, bytes) {
-    runAction([helperPath, "limit", hash, kind, String(bytes)], "")
+  function setLimit(hash, kind, bytes, opts) {
+    return runAction([helperPath, "limit", hash, kind, String(bytes)], "", opts)
   }
 
-  function toggleSequential(hash) {
-    runAction([helperPath, "sequential", hash], "")
+  function toggleSequential(hash, opts) {
+    return runAction([helperPath, "sequential", hash], "", opts)
   }
 
-  function setShareRatio(hash, ratio) {
-    runAction([helperPath, "sharelimit", hash, String(ratio)], "")
+  function setShareRatio(hash, ratio, opts) {
+    return runAction([helperPath, "sharelimit", hash, String(ratio)], "", opts)
   }
 
   function copyMagnet(row) {
@@ -298,24 +318,24 @@ Scope {
     copyProcess.running = true
   }
 
-  function recheckHash(hash) {
-    if (!hash) return
-    runAction([helperPath, "recheck", hash], "Rechecking…")
+  function recheckHash(hash, opts) {
+    if (!hash) return 0
+    return runAction([helperPath, "recheck", hash], "Rechecking…", opts)
   }
 
-  function setLocation(hash, dir) {
+  function setLocation(hash, dir, opts) {
     var path = String(dir || "").trim()
     if (!hash || path === "") {
-      lastError = "Enter an absolute path to move to."
-      return
+      if (!isWindowOrigin(opts)) lastError = "Enter an absolute path to move to."
+      return 0
     }
-    runAction([helperPath, "set-location", hash, path], "Moving…")
+    return runAction([helperPath, "set-location", hash, path], "Moving…", opts)
   }
 
-  function installMagnetHandler() {
-    if (!started || magnetHandlerInstalled) return
+  function installMagnetHandler(opts) {
+    if (!started || magnetHandlerInstalled) return 0
     magnetHandlerInstalled = true
-    runAction([helperPath, "magnet-install-handler"], "")
+    return runAction([helperPath, "magnet-install-handler"], "", opts)
   }
 
   function loadMagnetSnapshot() {
@@ -359,22 +379,26 @@ Scope {
     }
   }
 
-  function dropPending(hash) {
-    runAction([helperPath, "magnet-pending-drop", hash], "")
+  function dropPending(hash, opts) {
+    return runAction([helperPath, "magnet-pending-drop", hash], "", opts)
   }
 
-  function dropInboxCurrent() {
-    runAction([helperPath, "magnet-inbox-drop"], "")
+  function dropInboxCurrent(opts) {
+    return runAction([helperPath, "magnet-inbox-drop"], "", opts)
   }
 
-  function startPending(hash) {
-    startHash(hash)
-    dropPending(hash)
+  // Two actions each; both carry opts and the primary action's ticket is
+  // returned (start / delete), not the pending-drop bookkeeping.
+  function startPending(hash, opts) {
+    var ticket = startHash(hash, opts)
+    dropPending(hash, opts)
+    return ticket
   }
 
-  function cancelPending(hash) {
-    deleteHash(hash, true)
-    dropPending(hash)
+  function cancelPending(hash, opts) {
+    var ticket = deleteHash(hash, true, opts)
+    dropPending(hash, opts)
+    return ticket
   }
 
   function openPath(path) {
@@ -628,19 +652,27 @@ Scope {
     stdout: StdioCollector { id: actionOut; waitForEnd: true }
     stderr: StdioCollector { id: actionErr; waitForEnd: true }
     onExited: function(exitCode) {
+      var done = root.currentAction
+      root.currentAction = null
+      var fromWindow = !!done && done.origin === "window"
       var kind = ""
       try { kind = String((command && command.length > 1) ? command[1] : "") } catch (e) { kind = "" }
       if (kind === "magnet-drain") root.magnetDrainQueued = false
-      root.actionStatus = ""
+      if (!fromWindow) root.actionStatus = ""
       if (exitCode !== 0) {
-        root.lastError = Model.sanitizeError(actionErr.text || actionOut.text || "qBittorrent command failed")
+        var err = Model.sanitizeError(actionErr.text || actionOut.text || "qBittorrent command failed")
+        if (!fromWindow) root.lastError = err
         if (kind === "magnet-drain") root.magnetBackoffUntil = Date.now() + 2000
         root.pumpActionQueue()
+        // Emitted last so a handler that queues another action sees a
+        // consistent actionProcess.
+        if (done) root.actionFinished(done.ticket, false, err, done.origin, done.hashes)
         return
       }
       root.refresh()
       root.loadMagnetSnapshot()
       root.pumpActionQueue()
+      if (done) root.actionFinished(done.ticket, true, "", done.origin, done.hashes)
     }
   }
 

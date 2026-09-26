@@ -114,6 +114,23 @@ function enqueueAction(queue, item) {
   return (queue || []).concat([item]);
 }
 
+// A queued action. origin is "window" only when asked for exactly; everything
+// else is the bar widget, which keeps its actionStatus/lastError behaviour.
+function makeActionItem(ticket, cmd, statusText, opts) {
+  var o = opts || {};
+  var hashes = [];
+  if (Array.isArray(o.hashes)) {
+    for (var i = 0; i < o.hashes.length; i++) if (o.hashes[i]) hashes.push(String(o.hashes[i]));
+  }
+  return {
+    cmd: cmd,
+    status: statusText || "",
+    ticket: ticket,
+    origin: o.origin === "window" ? "window" : "widget",
+    hashes: hashes
+  };
+}
+
 function shiftAction(queue) {
   var q = queue || [];
   if (q.length === 0) return { item: null, rest: [] };
@@ -493,6 +510,7 @@ if (typeof module !== "undefined" && module.exports) {
     pendingNeedsStop: pendingNeedsStop,
     magnetMoreWaiting: magnetMoreWaiting,
     enqueueAction: enqueueAction,
+    makeActionItem: makeActionItem,
     shiftAction: shiftAction,
     formatSize: formatSize,
     formatRate: formatRate,
