@@ -282,4 +282,189 @@ TestCase {
     compare(svc.copyMagnet(row, { origin: "window", hashes: [hh("a")] }), 0, "busy: refused")
     compare(svc.actionStatus, "")
   }
+
+  // --- inspect store ---------------------------------------------------
+
+  // The Sidecar Scope among svc's children (unique property: attemptOpen).
+  function sidecarObj(svc) {
+    for (var i = 0; i < svc.data.length; i++) {
+      var o = svc.data[i]
+      if (o && o.attemptOpen !== undefined) return o
+    }
+    return null
+  }
+  // The stub Process wrapped by the Sidecar (unique property: stdinEnabled).
+  function sidecarWire(svc) {
+    var sc = sidecarObj(svc)
+    if (!sc) return null
+    for (var i = 0; i < sc.data.length; i++) {
+      var o = sc.data[i]
+      if (o && o.stdinEnabled !== undefined) return o
+    }
+    return null
+  }
+  // Every {cmd:"watch",...} object written to the wire, in order.
+  function watchWrites(wire) {
+    var out = []
+    var w = (wire && wire.writes) || []
+    for (var i = 0; i < w.length; i++) {
+      try {
+        var obj = JSON.parse(w[i])
+        if (obj && obj.cmd === "watch") out.push(obj)
+      } catch (e) {}
+    }
+    return out
+  }
+  function statusLine(hashes) {
+    var rows = []
+    for (var i = 0; i < hashes.length; i++) rows.push({ hash: hashes[i] })
+    return JSON.stringify({ type: "status", torrents: rows })
+  }
+
+  function test_inspect_info_stores_props_and_pieces_null_keeps_pieces() {
+    var svc = createTemporaryObject(serviceComp, tc)
+    var h = hh("a")
+    var key = h + "|info"
+    svc.handleSidecarLine(JSON.stringify({ type: "inspect", hash: h, tab: "info", props: { name: "x" }, pieces: [0, 1] }))
+    verify(svc.inspectByKey[key] !== undefined)
+    compare(svc.inspectByKey[key].props.name, "x")
+    compare(svc.inspectByKey[key].pieces, [0, 1])
+    verify(svc.inspectByKey[key].at > 0)
+    svc.handleSidecarLine(JSON.stringify({ type: "inspect", hash: h, tab: "info", props: { name: "y" }, pieces: null }))
+    compare(svc.inspectByKey[key].props.name, "y", "props still update")
+    compare(svc.inspectByKey[key].pieces, [0, 1], "pieces:null keeps the previous pieces")
+  }
+
+  function test_inspect_trackers_and_peers_store_under_their_own_keys() {
+    var svc = createTemporaryObject(serviceComp, tc)
+    var h = hh("a")
+    svc.handleSidecarLine(JSON.stringify({ type: "inspect", hash: h, tab: "trackers", trackers: [{ url: "u" }] }))
+    svc.handleSidecarLine(JSON.stringify({ type: "inspect", hash: h, tab: "peers", peers: { "1.2.3.4:1": {} } }))
+    compare(svc.inspectByKey[h + "|trackers"].trackers.length, 1)
+    compare(Object.keys(svc.inspectByKey[h + "|peers"].peers).length, 1)
+    verify(svc.inspectByKey[h + "|trackers"].peers === undefined, "keys don't leak across tabs")
+  }
+
+  function test_inspect_error_line_stores_sanitized_error() {
+    var svc = createTemporaryObject(serviceComp, tc)
+    var h = hh("a")
+    svc.handleSidecarLine(JSON.stringify({ type: "inspect", hash: h, tab: "peers", error: "HTTP 500 SID=deadbeef" }))
+    var entry = svc.inspectByKey[h + "|peers"]
+    verify(entry.error.indexOf("SID=") === -1, "sanitized like the files path")
+    compare(entry.error.indexOf("HTTP 500"), 0)
+  }
+
+  function test_inspect_error_line_with_no_message_still_sets_a_truthy_error() {
+    // A transport failure (e.g. connection reset) can sanitize to "": a
+    // falsy entry.error would make a tab render kept-prior data as fresh.
+    var svc = createTemporaryObject(serviceComp, tc)
+    var h = hh("a")
+    svc.handleSidecarLine(JSON.stringify({ type: "inspect", hash: h, tab: "trackers", error: "" }))
+    var entry = svc.inspectByKey[h + "|trackers"]
+    verify(!!entry.error, "error stays truthy even with an empty message")
+  }
+
+  function test_inspect_error_keeps_prior_data_for_a_transient_failure() {
+    var svc = createTemporaryObject(serviceComp, tc)
+    var h = hh("a")
+    svc.handleSidecarLine(JSON.stringify({ type: "inspect", hash: h, tab: "info", props: { name: "x" }, pieces: null }))
+    svc.handleSidecarLine(JSON.stringify({ type: "inspect", hash: h, tab: "info", error: "boom" }))
+    var entry = svc.inspectByKey[h + "|info"]
+    compare(entry.error, "boom")
+    compare(entry.props.name, "x", "a transient failure doesn't blank the tab")
+    svc.handleSidecarLine(JSON.stringify({ type: "inspect", hash: h, tab: "info", props: { name: "z" }, pieces: null }))
+    verify(svc.inspectByKey[h + "|info"].error === undefined, "a success line drops the stale error")
+  }
+
+  function test_prunes_inspect_entries_for_hashes_no_longer_in_torrents() {
+    var svc = createTemporaryObject(serviceComp, tc)
+    var a = hh("a"), b = hh("b")
+    svc.handleSidecarLine(JSON.stringify({ type: "inspect", hash: a, tab: "info", props: {}, pieces: null }))
+    svc.handleSidecarLine(JSON.stringify({ type: "inspect", hash: b, tab: "info", props: {}, pieces: null }))
+    svc.applyStatus(JSON.stringify({ torrents: [{ hash: a }] }))
+    verify(svc.inspectByKey[a + "|info"] !== undefined, "a is still in torrents")
+    verify(svc.inspectByKey[b + "|info"] === undefined, "b left torrents and is dropped")
+  }
+
+  // --- watch ------------------------------------------------------------
+
+  function test_watch_sends_only_when_up_and_is_resent_on_up() {
+    var svc = createTemporaryObject(serviceComp, tc)
+    var wire = sidecarWire(svc)
+    verify(wire !== null)
+    var h = hh("a")
+    svc.watch(h, "trackers")
+    compare(svc.watchedHash, h)
+    compare(svc.watchedTab, "trackers")
+    compare(watchWrites(wire).length, 0, "nothing sent while the sidecar is still starting")
+    svc.handleSidecarLine(statusLine([h]))
+    compare(svc.sidecarState, "up")
+    var sent = watchWrites(wire)
+    compare(sent.length, 1, "the watch is resent once the sidecar comes up (F11)")
+    compare(sent[0].hash, h)
+    compare(sent[0].tab, "trackers")
+  }
+
+  function test_watch_files_tab_sends_hash_null_with_tab_info() {
+    var svc = createTemporaryObject(serviceComp, tc)
+    var wire = sidecarWire(svc)
+    var h = hh("a")
+    svc.handleSidecarLine(statusLine([h]))
+    svc.watch(h, "files")
+    var sent = watchWrites(wire)
+    compare(sent.length, 1)
+    compare(sent[0].hash, null)
+    compare(sent[0].tab, "info")
+  }
+
+  function test_watch_skips_an_identical_resend() {
+    var svc = createTemporaryObject(serviceComp, tc)
+    var wire = sidecarWire(svc)
+    var h = hh("a")
+    svc.handleSidecarLine(statusLine([h]))
+    svc.watch(h, "info")
+    compare(watchWrites(wire).length, 1)
+    svc.watch(h, "info")
+    compare(watchWrites(wire).length, 1, "an identical watch is not re-sent")
+  }
+
+  function test_window_open_false_clears_the_watch_with_no_client() {
+    var svc = createTemporaryObject(serviceComp, tc)
+    var wire = sidecarWire(svc)
+    var h = hh("a")
+    svc.handleSidecarLine(statusLine([h]))
+    svc.watch(h, "peers")
+    wire.writes = []                    // drain to a known point
+    svc.windowOpen = true
+    svc.windowOpen = false
+    var sent = watchWrites(wire)
+    compare(sent.length, 1, "closing the window sends exactly one clearing watch")
+    var last = sent[0]
+    compare(last.hash, null, "closing the window clears the watch itself")
+    verify(last.tab === "info" || last.tab === "trackers" || last.tab === "peers" || last.tab === "chart", "the clearing watch still carries a valid tab")
+  }
+
+  // --- copyText -----------------------------------------------------------
+
+  function test_copy_text_from_window_returns_a_ticket_and_runs_wl_copy() {
+    var svc = createTemporaryObject(serviceComp, tc)
+    var spy = spyOn(svc)
+    var t = svc.copyText("https://tracker.example/announce?passkey=abc123", { origin: "window", hashes: [] })
+    verify(t > 0)
+    var p = null
+    for (var i = 0; i < svc.data.length; i++) {
+      var o = svc.data[i]
+      if (o && o.command && o.command[0] === "wl-copy") p = o
+    }
+    verify(p !== null)
+    compare(p.command, ["wl-copy", "--", "https://tracker.example/announce?passkey=abc123"])
+    // copyProcess has no stdout collector (only stderr), unlike finish()'s
+    // assumption -- end it directly.
+    p.running = false
+    p.exited(0, 0)
+    compare(spy.count, 1)
+    compare(spy.signalArguments[0][0], t)
+    compare(spy.signalArguments[0][1], true)
+    compare(spy.signalArguments[0][3], "window")
+  }
 }

@@ -656,6 +656,12 @@ test("parseServeLine parses a valid error line", () => {
   assert.equal(result.type, "error");
 });
 
+test("parseServeLine parses a valid inspect line", () => {
+  const result = Model.parseServeLine('{"type":"inspect","hash":"h","tab":"info","props":{},"pieces":null}');
+  assert.equal(result.type, "inspect");
+  assert.deepEqual(result.data, { type: "inspect", hash: "h", tab: "info", props: {}, pieces: null });
+});
+
 test("parseServeLine sets type to invalid for unknown type", () => {
   const result = Model.parseServeLine('{"type":"nope"}');
   assert.equal(result.type, "invalid");

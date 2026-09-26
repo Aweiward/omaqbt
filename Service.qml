@@ -74,11 +74,33 @@ Scope {
   // One of starting|up|down. "down" means the sidecar gave up and this
   // Service stays on bash polling for the rest of its lifetime.
   property string sidecarState: "starting"
+  // sidecarDown is the one the inspector tabs read: they show "Needs
+  // qbt-serve" only once the sidecar has actually given up, not while it
+  // is still starting or backing off.
+  readonly property bool sidecarUp: sidecarState === "up"
+  readonly property bool sidecarDown: sidecarState === "down"
   property int sidecarFailures: 0
   property double sidecarLastBeat: 0
   property double sidecarUpSince: 0
   property int filesRequestSeq: 0
   property var filesRequests: ({})
+
+  // hash+"|"+tab -> {props, pieces, trackers, peers, points, error, at}
+  // (only the fields that tab uses; at is Date.now() when stored). Pruned
+  // of any hash that has left torrents on every applyStatus, so a cursor
+  // that visited a torrent that later disappeared doesn't leak forever.
+  property var inspectByKey: ({})
+  // The inspector's current cursor: the hash and tab the sidecar should be
+  // reading. "files" is not a sidecar tab -- watch(hash, "files") is a
+  // clearing watch. Resent on every sidecar-up (F11); Service clears it
+  // itself when windowOpen goes false, since the window (and its Client)
+  // may already be destroyed by then.
+  property string watchedHash: ""
+  property string watchedTab: "info"
+  // The {hash, tab} last actually written to the wire, so an unchanged
+  // watch is never re-sent; null once the running sidecar has forgotten
+  // it (a fresh process, or none running at all).
+  property var lastSentWatch: null
 
   readonly property int refreshIntervalSec: {
     var n = parseInt(String(settings && settings.refreshIntervalSec != null ? settings.refreshIntervalSec : 5), 10)
@@ -193,6 +215,113 @@ Scope {
     tags = Array.isArray(parsed.tags) ? parsed.tags : []
     lastError = Model.nextStatusError(parsed, lastError)
     if (finished.length > 0) notify(Model.completionText(finished))
+    pruneInspectByKey(torrents)
+  }
+
+  // Drops any inspectByKey entry whose hash has left torrents (bounded
+  // memory for a library the cursor has wandered through). Only assigns a
+  // new object when something actually dropped, so the common case (the
+  // window closed, nothing watched) never fires inspectByKeyChanged on
+  // every tick.
+  function pruneInspectByKey(liveTorrents) {
+    var live = ({})
+    var rows = liveTorrents || []
+    for (var i = 0; i < rows.length; i++) {
+      var h = rows[i] && rows[i].hash
+      if (h) live[h] = true
+    }
+    var next = null
+    for (var k in inspectByKey) {
+      var idx = k.indexOf("|")
+      var hash = idx >= 0 ? k.substring(0, idx) : k
+      if (live[hash]) continue
+      if (next === null) {
+        next = ({})
+        for (var kk in inspectByKey) next[kk] = inspectByKey[kk]
+      }
+      delete next[k]
+    }
+    if (next !== null) inspectByKey = next
+  }
+
+  // Stores one inspect line under hash+"|"+tab. An info reply with
+  // pieces:null keeps the previous pieces (the sidecar's own throttling,
+  // F9); an error line keeps whatever data the tab already had, so a
+  // transient failure (one bad read, still within back-off) doesn't blank
+  // a tab that was already showing something -- a following success line
+  // drops the stale error. Always a fresh object, for QML's change
+  // notification.
+  function handleInspectLine(data) {
+    if (!data || typeof data.hash !== "string" || typeof data.tab !== "string") return
+    var key = data.hash + "|" + data.tab
+    var prev = inspectByKey[key] || {}
+    var entry = { at: Date.now() }
+    if (data.error !== undefined && data.error !== null) {
+      entry.error = Model.sanitizeError(data.error || ("Could not read " + data.tab))
+      if (prev.props !== undefined) entry.props = prev.props
+      if (prev.pieces !== undefined) entry.pieces = prev.pieces
+      if (prev.trackers !== undefined) entry.trackers = prev.trackers
+      if (prev.peers !== undefined) entry.peers = prev.peers
+      if (prev.points !== undefined) entry.points = prev.points
+    } else if (data.tab === "info") {
+      entry.props = data.props
+      entry.pieces = (data.pieces === null || data.pieces === undefined) ? prev.pieces : data.pieces
+    } else if (data.tab === "trackers") {
+      entry.trackers = data.trackers
+    } else if (data.tab === "peers") {
+      entry.peers = data.peers
+    } else if (data.tab === "chart") {
+      entry.points = data.points
+    } else {
+      return
+    }
+    var next = ({})
+    for (var k in inspectByKey) next[k] = inspectByKey[k]
+    next[key] = entry
+    inspectByKey = next
+  }
+
+  // The {hash, tab} qbt-serve should actually be told, given a watch()
+  // call: "files" isn't a sidecar tab, so it always maps to a clearing
+  // watch (hash:null) -- but WATCH_TABS still requires a valid tab on that
+  // clearing watch, so it comes back as "info", never "files" itself.
+  function effectiveWatch(hash, tab) {
+    var t = String(tab || "info")
+    if (t !== "info" && t !== "trackers" && t !== "peers" && t !== "chart") return { hash: null, tab: "info" }
+    var h = String(hash || "")
+    return { hash: h !== "" ? h : null, tab: t }
+  }
+
+  // hash: falsy clears the watch. tab: the pane's tab name, including
+  // "files" (translated to a clearing watch since the sidecar never reads
+  // it). Stores watchedHash/watchedTab verbatim either way, so a later
+  // watch(hash, "info") after a watch(hash, "files") still counts as a
+  // real change.
+  function watch(hash, tab) {
+    watchedHash = String(hash || "")
+    watchedTab = String(tab || "info")
+    sendWatchIfChanged()
+  }
+
+  // Sends the current watch only when it actually differs from what the
+  // running sidecar was last told (an identical re-send is harmless on
+  // the wire but pointless, F11); no-ops while the sidecar isn't up.
+  function sendWatchIfChanged() {
+    if (sidecarState !== "up") return
+    var eff = effectiveWatch(watchedHash, watchedTab)
+    if (lastSentWatch && lastSentWatch.hash === eff.hash && lastSentWatch.tab === eff.tab) return
+    lastSentWatch = eff
+    sidecar.send({ cmd: "watch", hash: eff.hash, tab: eff.tab })
+  }
+
+  // Called when windowOpen goes false: the window (and its Client, which
+  // owns the cursor) may already be destroyed, so Service clears the
+  // watch on its own rather than relying on the window to ask -- without
+  // this the sidecar would keep reading properties/peers for a torrent
+  // nobody is looking at anymore.
+  function clearWatch() {
+    watchedHash = ""
+    sendWatchIfChanged()
   }
 
   function notify(text) {
@@ -449,6 +578,26 @@ Scope {
     return runAction([helperPath, "sharelimit", hash, String(ratio)], "", opts)
   }
 
+  // Shared by copyMagnet and copyText: opts: {origin: "window", hashes}
+  // returns a ticket and reports through actionFinished, leaving
+  // actionStatus and lastError alone; without opts (the widget) it sets
+  // statusText and gets today's behavior (returns 0 while busy).
+  function startCopy(text, opts, statusText) {
+    if (copyProcess.running) return 0
+    var fromWindow = isWindowOrigin(opts)
+    var done = null
+    if (fromWindow) {
+      done = windowDone(opts)
+    } else {
+      clearError()
+      actionStatus = statusText
+    }
+    copyProcess.done = done
+    copyProcess.command = ["wl-copy", "--", text]
+    copyProcess.running = true
+    return done ? done.ticket : 0
+  }
+
   // opts: {origin: "window", hashes} returns a ticket and reports the copy
   // through actionFinished, leaving actionStatus and lastError alone. The
   // widget calls it without opts and gets today's behavior (returns 0).
@@ -459,18 +608,13 @@ Scope {
       if (!fromWindow) lastError = "No magnet for this torrent."
       return 0
     }
-    if (copyProcess.running) return 0
-    var done = null
-    if (fromWindow) {
-      done = windowDone(opts)
-    } else {
-      clearError()
-      actionStatus = "Copied magnet."
-    }
-    copyProcess.done = done
-    copyProcess.command = ["wl-copy", "--", uri]
-    copyProcess.running = true
-    return done ? done.ticket : 0
+    return startCopy(uri, opts, "Copied magnet.")
+  }
+
+  // Used by y on the trackers and peers tabs (always window origin: those
+  // panes only exist in the inspector). Same contract as copyMagnet.
+  function copyText(text, opts) {
+    return startCopy(text, opts, "Copied.")
   }
 
   function recheckHash(hash, opts) {
@@ -626,6 +770,10 @@ Scope {
       sidecarFailures = 0
     }
     filesRequests = ({})
+    // watchedHash/watchedTab are kept -- they're resent on the next
+    // sidecar-up -- but the sidecar that knew about lastSentWatch is gone,
+    // and inspectByKey stays exactly as it was.
+    lastSentWatch = null
     sidecar.stop()
   }
 
@@ -653,9 +801,16 @@ Scope {
       if (!wasUp) {
         sidecarUpSince = Date.now()
         sendCadence()
+        // A fresh (or restarted) sidecar knows nothing of any watch; resend
+        // it (F11) unless nothing is actually being watched, so a bar-only
+        // session never sends a pointless clearing watch on every start.
+        lastSentWatch = null
+        if (watchedHash !== "") sendWatchIfChanged()
       }
     } else if (msg.type === "heartbeat") {
       sidecarLastBeat = Date.now()
+    } else if (msg.type === "inspect") {
+      handleInspectLine(msg.data)
     } else if (msg.type === "files") {
       var hash = takeFilesRequest(msg.data.id)
       if (hash === "") return
@@ -679,6 +834,9 @@ Scope {
     sidecarState = "starting"
     var orphans = filesRequests
     filesRequests = ({})
+    // The exited sidecar's own watch state is gone with it; watchedHash/
+    // watchedTab are kept and resent once a replacement comes up.
+    lastSentWatch = null
     // Only a sidecar that stayed up for a minute earns a clean slate, so one
     // that dies right after its first tick still reaches sidecarGaveUp.
     if (sidecarUpSince > 0 && Date.now() - sidecarUpSince >= 60000) sidecarFailures = 0
@@ -702,6 +860,11 @@ Scope {
     if (active) activate()
     else stop()
   }
+
+  // The window is rebuilt on every toggle, so its Client may already be
+  // destroyed by the time windowOpen flips false and could never send a
+  // clearing watch itself; Service does it here instead (see clearWatch).
+  onWindowOpenChanged: if (!windowOpen) clearWatch()
 
   onSidecarCadenceMsChanged: if (sidecarState === "up") sendCadence()
 

@@ -1129,7 +1129,7 @@ function parseServeLine(line) {
     }
 
     var t = String(parsed.type || "");
-    if (t === "status" || t === "files" || t === "heartbeat" || t === "fatal" || t === "error") {
+    if (t === "status" || t === "files" || t === "heartbeat" || t === "fatal" || t === "error" || t === "inspect") {
       type = t;
       data = parsed;
     }
