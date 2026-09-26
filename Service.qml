@@ -341,14 +341,17 @@ Scope {
   }
 
   // Returns the tickets of the qbt calls it queued ([] when nothing is
-  // live). One call with "all" when no pending magnet is in torrents;
-  // otherwise the live hashes in chunks of Model.HASH_CHUNK, since one argv
-  // string can't hold every hash of a large library.
+  // live). One call with "all" when nothing is pending and the inbox is
+  // empty; otherwise the live hashes in chunks of Model.HASH_CHUNK, since
+  // one argv string can't hold every hash of a large library. A pending or
+  // inboxed magnet always forces the explicit-hash path, even when every
+  // current row is live, so "all" never touches a magnet before the user
+  // confirms it.
   function toggleAll(opts) {
     var live = Model.excludePending(torrents, magnetPendingHashes)
     if (live.length === 0) return []
     var verb = Model.anyActive(live) ? "stop" : "start"
-    var targets = Model.toggleAllTargets(torrents, magnetPendingHashes)
+    var targets = Model.toggleAllTargets(torrents, magnetPendingHashes, undefined, (magnetInbox || []).length)
     var tickets = []
     for (var i = 0; i < targets.length; i++) tickets.push(runAction([helperPath, verb, targets[i]], "", opts))
     return tickets

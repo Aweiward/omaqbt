@@ -118,16 +118,22 @@ function chunkHashes(list, size) {
   return out;
 }
 
-// toggleAllTargets(torrents, pending, size) -> the hash arguments for the
-// qbt start/stop calls that toggle every live torrent: ["all"] when no
-// pending magnet is in torrents (qBittorrent's own "all" then touches
-// exactly the live rows), otherwise the live hashes joined by "|" in
-// chunks of at most size. [] when nothing is live.
-function toggleAllTargets(torrents, pending, size) {
+// toggleAllTargets(torrents, pending, size, inboxCount) -> the hash
+// arguments for the qbt start/stop calls that toggle every live torrent:
+// ["all"] when nothing is pending and the inbox is empty (qBittorrent's own
+// "all" then touches exactly the live rows), otherwise the live hashes
+// joined by "|" in chunks of at most size. A pending magnet not yet in
+// torrents, or one still waiting in the inbox, would otherwise get toggled
+// by "all" before the user confirms it, so any pending or inbox item forces
+// the explicit-hash path even when every current row is live. [] when
+// nothing is live.
+function toggleAllTargets(torrents, pending, size, inboxCount) {
   var rows = torrents || [];
   var live = excludePending(rows, pending);
   if (live.length === 0) return [];
-  if (live.length === rows.length) return ["all"];
+  var pendingList = pending || [];
+  var inbox = Number(inboxCount || 0);
+  if (pendingList.length === 0 && (!isFinite(inbox) || inbox <= 0)) return ["all"];
   var hashes = [];
   for (var i = 0; i < live.length; i++) {
     var h = torrentId(live[i]);

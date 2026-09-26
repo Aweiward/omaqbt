@@ -182,6 +182,51 @@ TestCase {
     compare(svc.actionQueue.length, 0)
   }
 
+  function test_toggle_all_sends_chunks_when_pending_magnet_not_yet_in_torrents() {
+    // A magnet added after the last status tick: its hash is pending but
+    // no row for it exists yet. "all" must not touch it before it's
+    // confirmed, so every live row goes out as explicit chunks instead.
+    var o = idleService(), svc = o.svc, p = o.p
+    var rows = []
+    for (var i = 0; i < 5000; i++) rows.push({ hash: hx(i), state: "stoppedDL", progress: 0.5 })
+    svc.torrents = rows
+    svc.magnetPending = [{ hash: hx(99999) }]
+    var tickets = svc.toggleAll()
+    compare(tickets.length, 5)
+    compare(svc.actionQueue.length, 4)
+    var seen = {}
+    for (var n = 0; n < 5; n++) {
+      compare(p.command[1], "start")
+      verify(p.command[2] !== "all")
+      var parts = p.command[2].split("|")
+      for (var k = 0; k < parts.length; k++) seen[parts[k]] = true
+      finish(p, 0, "", "")
+    }
+    compare(Object.keys(seen).length, 5000)
+  }
+
+  function test_toggle_all_sends_chunks_when_inbox_has_an_item_waiting() {
+    // A magnet still sitting in the drain inbox isn't in torrents or
+    // magnetPending at all, so it can only be caught through magnetInbox.
+    var o = idleService(), svc = o.svc, p = o.p
+    var rows = []
+    for (var i = 0; i < 5000; i++) rows.push({ hash: hx(i), state: "stoppedDL", progress: 0.5 })
+    svc.torrents = rows
+    svc.magnetInbox = [{ notified: true }]
+    var tickets = svc.toggleAll()
+    compare(tickets.length, 5)
+    compare(svc.actionQueue.length, 4)
+    var seen = {}
+    for (var n = 0; n < 5; n++) {
+      compare(p.command[1], "start")
+      verify(p.command[2] !== "all")
+      var parts = p.command[2].split("|")
+      for (var k = 0; k < parts.length; k++) seen[parts[k]] = true
+      finish(p, 0, "", "")
+    }
+    compare(Object.keys(seen).length, 5000)
+  }
+
   function test_toggle_all_chunks_5000_live_hashes_into_5_calls() {
     var o = idleService(), svc = o.svc, p = o.p
     var rows = []

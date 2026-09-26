@@ -1370,11 +1370,30 @@ test("a chunk of 1000 v2 hashes stays under Linux's 131072-byte argv limit", () 
   assert.ok(Buffer.byteLength("hashes=" + arg) < 131072);
 });
 
-test("toggleAllTargets sends all when no pending magnet is in torrents", () => {
+test("toggleAllTargets sends all only when nothing is pending and the inbox is empty", () => {
   const rows = Array.from({ length: 5000 }, (_, i) => ({ hash: hx(i) }));
   assert.deepEqual(Model.toggleAllTargets(rows, [], 1000), ["all"]);
-  assert.deepEqual(Model.toggleAllTargets(rows, [hx(99999)], 1000), ["all"], "a pending hash not in torrents");
+  assert.deepEqual(Model.toggleAllTargets(rows, [], 1000, 0), ["all"]);
+  assert.deepEqual(Model.toggleAllTargets(rows, null, 1000), ["all"], "missing pending counts as empty");
   assert.deepEqual(Model.toggleAllTargets([], [], 1000), []);
+});
+
+test("toggleAllTargets sends explicit chunks, not all, when a pending magnet isn't in torrents yet", () => {
+  const rows = Array.from({ length: 5000 }, (_, i) => ({ hash: hx(i) }));
+  const args = Model.toggleAllTargets(rows, [hx(99999)], 1000);
+  assert.equal(args.length, 5, "still chunked, even though every row is live");
+  assert.deepEqual(
+    [].concat(...args.map((a) => a.split("|"))),
+    rows.map((r) => r.hash),
+    "every live row is included; 'all' would have wrongly touched the not-yet-listed pending magnet too"
+  );
+});
+
+test("toggleAllTargets sends explicit chunks, not all, when the inbox has an item waiting", () => {
+  const rows = Array.from({ length: 5000 }, (_, i) => ({ hash: hx(i) }));
+  const args = Model.toggleAllTargets(rows, [], 1000, 1);
+  assert.equal(args.length, 5, "inboxCount > 0 forces the explicit-hash path");
+  assert.deepEqual([].concat(...args.map((a) => a.split("|"))), rows.map((r) => r.hash));
 });
 
 test("toggleAllTargets chunks the live hashes when a pending magnet is in torrents", () => {
