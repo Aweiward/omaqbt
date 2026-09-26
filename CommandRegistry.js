@@ -195,14 +195,17 @@ function findMatch(s, ev) {
 function preconditionMet(needs, s) {
   if (!needs || needs === "none") return true;
   if (needs === "torrent") return s.hasTorrent === true;
-  if (needs === "selection") return s.hasTorrent === true || s.selectionCount > 0;
+  if (needs === "selection") return s.hasTorrent === true || (s.mode === "VISUAL" && s.selectionCount > 0);
   return true;
 }
 
 // How many torrents a "selection"/"torrent" command targets: the VISUAL
-// range if there is one, otherwise the single cursor row.
+// range if there is one, otherwise the single cursor row. selectionCount
+// only means anything while mode is VISUAL -- a range that outlived its
+// visual session (state.selectionCount left stale after leaving VISUAL)
+// must never be read as a range here.
 function confirmCount(s) {
-  if (s.selectionCount > 0) return s.selectionCount;
+  if (s.mode === "VISUAL" && s.selectionCount > 0) return s.selectionCount;
   return s.hasTorrent ? 1 : 0;
 }
 
@@ -219,7 +222,7 @@ function buildArgs(row, s) {
   }
   if (row.needs === "torrent" || row.needs === "selection") {
     args.count = confirmCount(s);
-    if (s.selectionCount > 0) args.range = true;
+    if (s.mode === "VISUAL" && s.selectionCount > 0) args.range = true;
   }
   return args;
 }
@@ -229,7 +232,12 @@ function dispatchConfirm(s, ev) {
   var ctrl = mods.ctrl === true;
   var text = ev.text || "";
   var pending = s.pending || null;
-  var resetState = assign(s, { mode: "NORMAL", pending: null, prefix: null, prefixAt: 0 });
+  // Resolving CONFIRM always lands in NORMAL. If the command that led here
+  // was raised from VISUAL, its range must not survive into NORMAL (see
+  // confirmCount/buildArgs) -- so this clears selectionCount unconditionally,
+  // which is a no-op when it was already 0 (a NORMAL-mode confirm, e.g.
+  // torrent.delete on a single cursor row).
+  var resetState = assign(s, { mode: "NORMAL", pending: null, prefix: null, prefixAt: 0, selectionCount: 0 });
 
   if (!ctrl && text === "y") {
     if (!pending) {
@@ -320,6 +328,12 @@ function dispatch(state, event) {
   }
   if (EXITS_VISUAL[row.id] === true && s.mode === "VISUAL") {
     nextState = assign(nextState, { mode: "NORMAL" });
+  }
+  // Leaving VISUAL (via visual.exit or an EXITS_VISUAL action) drops the
+  // range. Without this, a stale selectionCount would leak range semantics
+  // into the NORMAL mode that follows (see confirmCount/buildArgs).
+  if (s.mode === "VISUAL" && nextState.mode === "NORMAL") {
+    nextState = assign(nextState, { selectionCount: 0 });
   }
 
   return { state: nextState, commandId: row.id, args: args };

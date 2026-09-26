@@ -144,7 +144,7 @@ test("V enters visual mode", () => {
 // --- NORMAL, any pane --------------------------------------------------
 
 test("t toggles showing all torrents", () => {
-  for (const pane of ["table", "filters", "info"]) {
+  for (const pane of ["table", "filters", "inspector"]) {
     const r = dispatch(state({ pane }), ev("t", keyOf("t")));
     assert.equal(r.commandId, "all.toggle", pane);
   }
@@ -239,6 +239,46 @@ test("Esc Esc within 600ms resets filters", () => {
   assert.equal(second.state.prefix, null);
 });
 
+// Every "NORMAL, any pane" row, pinned across all three controller-named
+// panes -- not just table (which every other test already exercises) or a
+// single spot-check pane. "inspector" is the controller's name for the
+// third pane; the table/filters/inspector triad is what the window will
+// actually pass as `state.pane`.
+const ANY_PANE_ROWS = [
+  { id: "all.toggle", evs: [ev("t", keyOf("t"))] },
+  { id: "sort.next", evs: [ev("s", keyOf("s"))] },
+  { id: "sort.reverse", evs: [ev("S", keyOf("s"))] },
+  { id: "turtle.toggle", evs: [ev("z", keyOf("z"))] },
+  { id: "filter.text", evs: [ev("/", 0x2f)] },
+  { id: "refresh", evs: [ev("r", keyOf("r"))] },
+  { id: "inspector.info", evs: [ev("1", 0x31)] },
+  { id: "inspector.files", evs: [ev("4", 0x34)] },
+  { id: "pane.next", evs: [ev("\t", KEY.Tab), ev("\f", KEY.L, { ctrl: true })] },
+  { id: "pane.prev", evs: [ev("\t", KEY.Backtab, { shift: true }), ev("\b", KEY.H, { ctrl: true })] },
+  { id: "help.toggle", evs: [ev("?", 0x3f)] },
+  { id: "window.close", evs: [ev("q", keyOf("q"))] }
+];
+
+test("every NORMAL, any-pane row fires its command in table, filters and inspector alike", () => {
+  for (const pane of ["table", "filters", "inspector"]) {
+    for (const row of ANY_PANE_ROWS) {
+      for (const e of row.evs) {
+        const r = dispatch(state({ pane }), e);
+        assert.equal(r.commandId, row.id, pane + " " + JSON.stringify(e));
+      }
+    }
+  }
+});
+
+test("Esc and Esc Esc behave the same in table, filters and inspector", () => {
+  for (const pane of ["table", "filters", "inspector"]) {
+    const first = dispatch(state({ pane }), ev("\u001b", KEY.Escape, null, 0));
+    assert.equal(first.commandId, "filter.clearText", pane);
+    const second = dispatch(first.state, ev("\u001b", KEY.Escape, null, 500));
+    assert.equal(second.commandId, "filter.reset", pane);
+  }
+});
+
 // --- NORMAL, filters pane -------------------------------------------------
 
 test("j and k move within the filters pane instead of the cursor", () => {
@@ -293,6 +333,14 @@ test("Esc and V exit visual mode", () => {
   const r2 = dispatch(s, ev("V", keyOf("v")));
   assert.equal(r2.commandId, "visual.exit");
   assert.equal(r2.state.mode, "NORMAL");
+});
+
+test("q, ? and t do nothing in VISUAL: they are NORMAL-only any-pane rows", () => {
+  const s = state({ mode: "VISUAL" });
+  for (const e of [ev("q", keyOf("q")), ev("?", 0x3f), ev("t", keyOf("t"))]) {
+    const r = dispatch(s, e);
+    assert.equal(r.commandId, null, JSON.stringify(e));
+  }
 });
 
 // --- INSERT ------------------------------------------------------------
@@ -354,9 +402,10 @@ test("any other key in CONFIRM is ignored", () => {
 
 // --- brief's edge cases --------------------------------------------------
 
-test("y outside CONFIRM never runs a stale pending command", () => {
+test("the table wins on y: it is torrent.copyMagnet in NORMAL/table, and y never confirms outside CONFIRM", () => {
   // Mode is NORMAL, not CONFIRM: y must resolve through the normal table
-  // (torrent.copyMagnet), never through state.pending.
+  // (torrent.copyMagnet), never through state.pending, even if a pending
+  // confirm is (incorrectly) still sitting in state.
   const stalePending = { commandId: "torrent.delete", args: {}, count: 1, withFiles: true };
   const r = dispatch(state({ hasTorrent: true, pending: stalePending }), ev("y", keyOf("y")));
   assert.equal(r.commandId, "torrent.copyMagnet");
@@ -408,7 +457,7 @@ test("Esc Esc after 600ms just clears the filter text again", () => {
 });
 
 test("digits 2, 3 and 5 are no-ops in every pane", () => {
-  for (const pane of ["table", "filters"]) {
+  for (const pane of ["table", "filters", "inspector"]) {
     for (const d of ["2", "3", "5"]) {
       const r = dispatch(state({ pane }), ev(d, 0x30 + Number(d)));
       assert.equal(r.commandId, null, pane + "/" + d);
@@ -469,6 +518,72 @@ test("torrent.delete always confirms, even for one target", () => {
   const r = dispatch(state({ mode: "VISUAL", selectionCount: 1 }), ev("X", keyOf("x")));
   assert.equal(r.commandId, null);
   assert.deepEqual(r.confirm, { commandId: "torrent.delete", count: 1, withFiles: true });
+});
+
+// A VISUAL range must not leak into NORMAL. Each of these leaves VISUAL by
+// a different path (visual.exit, an EXITS_VISUAL action that fires directly,
+// and a CONFIRM resolution) and then re-feeds the *returned* state -- the
+// way the window will -- to check that Space/e/x see a plain single-cursor
+// target (count 1, no range) instead of the old selection.
+function assertNoLeftoverRange(freshState) {
+  const toggle = dispatch(freshState, ev(" ", KEY.Space));
+  assert.equal(toggle.commandId, "torrent.toggle");
+  assert.equal(toggle.args.count, 1);
+  assert.equal(toggle.args.range, undefined);
+
+  const recheck = dispatch(freshState, ev("e", keyOf("e")));
+  assert.equal(recheck.commandId, "torrent.recheck");
+  assert.equal(recheck.args.count, 1);
+  assert.equal(recheck.args.range, undefined);
+
+  const remove = dispatch(freshState, ev("x", keyOf("x")));
+  assert.equal(remove.commandId, "torrent.remove");
+  assert.equal(remove.args.count, 1);
+  assert.equal(remove.args.range, undefined);
+}
+
+test("leaving VISUAL via visual.exit (Esc) clears the range for what follows", () => {
+  const inVisual = state({ mode: "VISUAL", hasTorrent: true, selectionCount: 3 });
+  const exited = dispatch(inVisual, ev("\u001b", KEY.Escape));
+  assert.equal(exited.commandId, "visual.exit");
+  assert.equal(exited.state.mode, "NORMAL");
+  assert.equal(exited.state.selectionCount, 0);
+  assertNoLeftoverRange(exited.state);
+});
+
+test("leaving VISUAL via an EXITS_VISUAL action (Space) clears the range for what follows", () => {
+  const inVisual = state({ mode: "VISUAL", hasTorrent: true, selectionCount: 3 });
+  const acted = dispatch(inVisual, ev(" ", KEY.Space));
+  assert.equal(acted.commandId, "torrent.toggle");
+  assert.equal(acted.state.mode, "NORMAL");
+  assert.equal(acted.state.selectionCount, 0);
+  assertNoLeftoverRange(acted.state);
+});
+
+test("leaving VISUAL via CONFIRM resolution clears the range for what follows", () => {
+  const inVisual = state({ mode: "VISUAL", hasTorrent: true, selectionCount: 3 });
+  const confirmStep = dispatch(inVisual, ev("X", keyOf("x")));
+  assert.equal(confirmStep.state.mode, "CONFIRM");
+  const accepted = dispatch(confirmStep.state, ev("y", keyOf("y")));
+  assert.equal(accepted.commandId, "torrent.delete");
+  assert.equal(accepted.state.mode, "NORMAL");
+  assert.equal(accepted.state.selectionCount, 0);
+  assertNoLeftoverRange(accepted.state);
+});
+
+test("VISUAL delete through CONFIRM carries the range end to end, then confirmed: true", () => {
+  const s = state({ mode: "VISUAL", hasTorrent: true, selectionCount: 2 });
+
+  const confirmStep = dispatch(s, ev("X", keyOf("x")));
+  assert.equal(confirmStep.commandId, null);
+  assert.deepEqual(confirmStep.confirm, { commandId: "torrent.delete", count: 2, withFiles: true });
+  assert.equal(confirmStep.state.mode, "CONFIRM");
+  assert.deepEqual(confirmStep.state.pending.args, { count: 2, range: true });
+
+  const accepted = dispatch(confirmStep.state, ev("y", keyOf("y")));
+  assert.equal(accepted.commandId, "torrent.delete");
+  assert.deepEqual(accepted.args, { count: 2, range: true, confirmed: true });
+  assert.equal(accepted.state.mode, "NORMAL");
 });
 
 // --- purity ---------------------------------------------------------------
