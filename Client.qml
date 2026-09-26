@@ -343,10 +343,6 @@ Item {
 
   // ---- keys --------------------------------------------------------------------
 
-  function isEnterKey(ev) {
-    return ev.key === Registry.KEY.Return || ev.key === Registry.KEY.Enter
-  }
-
   function handleKey(event) {
     var ev = View.keyEvent(event.key, event.text, event.modifiers, Date.now())
     // Any key ends an error (and its row marks) or a note.
@@ -454,205 +450,9 @@ Item {
   }
 
   // Maps a command id from CommandRegistry to Service calls and view
-  // changes. Service calls always carry {origin: "window", hashes}.
-  // targets: View.targetHashes as it stood before dispatch (the VISUAL
-  // range, or the cursor row).
+  // changes (ClientCommands). Kept here for handleKey and the harness.
   function run(commandId, args, ev, targets) {
-    if (!service) return
-    var hashes, rows, starts, ticket
-    targets = targets || []
-
-    switch (commandId) {
-    case "cursor.down":
-    case "cursor.up":
-    case "cursor.top":
-    case "cursor.bottom":
-      setCursor(View.moveCursor(tableRows, cursorHash, commandId))
-      return
-
-    case "visual.enter":
-    case "visual.exit":
-      // The mode and the anchor were set in handleKey.
-      return
-
-    case "help.toggle":
-      helpPane = View.dispatchPane(pane, tableState)
-      helpOpen = true
-      return
-
-    case "torrent.toggle":
-      hashes = targets
-      if (hashes.length === 0) return
-      starts = View.toggleStarts(rawFor(hashes))
-      track(perChunk(hashes, function(joined, chunk) {
-        return starts ? service.startHash(joined, opts(chunk)) : service.stopHash(joined, opts(chunk))
-      }), starts ? "start" : "stop", hashes)
-      return
-
-    case "torrent.remove":
-    case "torrent.delete":
-      hashes = args.confirmed === true ? confirmHashes : targets
-      confirmHashes = []
-      if (hashes.length === 0) return
-      var withFiles = commandId === "torrent.delete"
-      track(perChunk(hashes, function(joined, chunk) {
-        return service.deleteHash(joined, withFiles, opts(chunk))
-      }), withFiles ? "delete" : "remove", hashes)
-      return
-
-    case "torrent.recheck":
-      hashes = targets
-      if (hashes.length === 0) return
-      track(perChunk(hashes, function(joined, chunk) {
-        return service.recheckHash(joined, opts(chunk))
-      }), "recheck", hashes)
-      return
-
-    case "torrent.openFolder":
-      rows = rawFor(targets)
-      if (rows.length > 0 && rows[0].savePath) service.openPath(rows[0].savePath, opts(targets))
-      return
-
-    case "torrent.copyMagnet":
-      rows = rawFor(targets)
-      if (rows.length === 0) return
-      // The window validates its own input: Service returns 0 silently.
-      if (!Model.magnetUriFor(rows[0])) {
-        note("No magnet for this torrent.", "urgent")
-        return
-      }
-      track(service.copyMagnet(rows[0], opts(targets)), "copy", targets)
-      return
-
-    case "torrent.move":
-      hashes = targets
-      rows = rawFor(hashes)
-      if (rows.length === 0) return
-      moveHashes = hashes
-      startInput("move", String(rows[0].savePath || ""))
-      return
-
-    case "inspector.files":
-      // Enter doubles as the primary action of a blocking state.
-      if (isEnterKey(ev) && tableState === "daemon") {
-        ticket = service.startDaemon(opts([]))
-        if (ticket > 0) track(ticket, "daemon", [])
-        else note(View.progressText("daemon", 0), "muted")
-        return
-      }
-      if (isEnterKey(ev) && tableState === "notInstalled") {
-        ticket = service.installDaemon(opts([]))
-        if (ticket > 0) track(ticket, "install", [])
-        else note(View.progressText("install", 0), "muted")
-        return
-      }
-      inspectorTab = "files"
-      return
-
-    case "inspector.info":
-      inspectorTab = "info"
-      return
-
-    case "all.toggle":
-      var live = Model.excludePending(service.torrents || [], service.magnetPendingHashes || [])
-      hashes = []
-      for (var i = 0; i < live.length; i++) hashes.push(Model.torrentId(live[i]))
-      if (hashes.length === 0) return
-      starts = !Model.anyActive(live)
-      track(service.toggleAll(opts(hashes)), starts ? "startAll" : "stopAll", hashes)
-      return
-
-    case "turtle.toggle":
-      track(service.toggleTurtle(opts([])), "turtle", [])
-      return
-
-    case "sort.next":
-      var n = View.nextSort(sortMode)
-      sortMode = n.sort
-      sortDesc = n.desc
-      rebuildRows(true)
-      saveView()
-      return
-
-    case "sort.reverse":
-      sortDesc = !sortDesc
-      rebuildRows(true)
-      saveView()
-      return
-
-    case "filter.text":
-      startInput("filter", textQuery)
-      return
-
-    case "filter.clearText":
-      if (textQuery === "") return
-      textQuery = ""
-      rebuildRows(true)
-      return
-
-    case "filter.reset":
-      textQuery = ""
-      filter = View.defaultFilter()
-      filterCursor = View.defaultFilter()
-      rebuildRows(true)
-      saveView()
-      return
-
-    case "filter.down":
-    case "filter.up":
-      setFilterCursor(View.moveFilterCursor(filterEntries, filterCursor, commandId === "filter.down" ? 1 : -1))
-      return
-
-    case "filter.apply":
-      if (View.filterIndex(filterEntries, filterCursor) < 0) return
-      applyFilter(filterCursor)
-      return
-
-    case "file.down":
-    case "file.up":
-      if (inspectorTab !== "files" || filesState.state !== "rows") return
-      fileIndex = View.moveIndex(filesState.rows.length, fileIndex, commandId === "file.down" ? 1 : -1)
-      inspector.positionFile(fileIndex)
-      return
-
-    case "file.cycle":
-      if (inspectorTab !== "files" || filesState.state !== "rows") return
-      cycleFile(fileIndex)
-      return
-
-    case "insert.commit":
-      commitInput()
-      return
-
-    case "insert.cancel":
-      cancelInput()
-      return
-
-    case "refresh":
-      service.refresh()
-      syncFiles(true)
-      return
-
-    case "pane.next":
-      setPane(View.nextPane(pane, 1))
-      return
-
-    case "pane.prev":
-      setPane(View.nextPane(pane, -1))
-      return
-
-    case "window.close":
-      close()
-      return
-
-    case "confirm.cancel":
-      confirm = null
-      confirmHashes = []
-      return
-
-    default:
-      return
-    }
+    commands.run(commandId, args, ev, targets)
   }
 
   // ---- wiring ----------------------------------------------------------------
@@ -694,6 +494,12 @@ Item {
       else if (outcome === "invalid") root.note("The clipboard has no magnet, .torrent URL or .torrent path.", "urgent")
     }
     function onFilesStatusByHashChanged() { root.checkFilesStatus() }
+  }
+
+  ClientCommands {
+    id: commands
+    client: root
+    inspectorPane: inspector
   }
 
   WmFocus {
