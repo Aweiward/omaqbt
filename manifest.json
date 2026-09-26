@@ -6,10 +6,11 @@
   "author": "Aweiward",
   "license": "MIT",
   "description": "OmaqBT: transfers, magnets, start/stop, remove, and file priorities in the Omarchy bar.",
-  "kinds": ["service", "bar-widget"],
+  "kinds": ["service", "bar-widget", "panel"],
   "entryPoints": {
     "service": "Service.qml",
-    "barWidget": "Panel.qml"
+    "barWidget": "Panel.qml",
+    "panel": "Client.qml"
   },
   "barWidget": {
     "displayName": "OmaqBT",
