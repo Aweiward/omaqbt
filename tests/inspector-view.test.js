@@ -231,6 +231,30 @@ test("binPieces: 10 pieces into 48 cells covers every piece (no false-empty ░)
   for (const c of cells) assert.equal(c.glyph, "█", JSON.stringify(cells));
 });
 
+test("binPieces: mixed have/missing at n much smaller than cells stays crisp (no spurious ▓ from the empty-slice widening)", () => {
+  // n < cells means every cell's slice, once widened past empty, covers
+  // exactly one piece (the widening never merges two differently-valued
+  // pieces into one cell) -- so a mixed torrent here separates cleanly
+  // into a run of full cells and a run of dim cells, never a stray ▓.
+  const states = [2, 2, 2, 2, 2, 0, 0, 0, 0, 0];
+  const cells = I.binPieces(states, 48);
+  assert.equal(cells.length, 48);
+  assert.ok(cells.slice(0, 24).every((c) => c.glyph === "█"), JSON.stringify(cells));
+  assert.ok(cells.slice(24).every((c) => c.glyph === "░"), JSON.stringify(cells));
+});
+
+test("binPieces: a cell spanning a have/missing boundary (n just above cells) is partial ▓", () => {
+  const states = new Array(96).fill(2);
+  states[93] = 0;
+  states[94] = 0;
+  states[95] = 0;
+  const cells = I.binPieces(states, 48);
+  assert.equal(cells.length, 48);
+  assert.equal(cells[46].glyph, "▓");
+  assert.equal(cells[47].glyph, "░");
+  assert.equal(cells[0].glyph, "█");
+});
+
 test("binPieces: 20,000 pieces into 48 cells still returns exactly 48 cells", () => {
   const states = new Array(20000).fill(0);
   states[0] = 2;
@@ -364,6 +388,18 @@ test("chartSeries: a 5.8 MiB/s spike gets a nice max >= the sample, via sizeText
   }
 });
 
+test("chartSeries peakText/avgText carry both directions, Speed-field convention", () => {
+  const dl1 = 5 * 1024 * 1024, ul1 = 1 * 1024 * 1024;
+  const dl2 = 1 * 1024 * 1024, ul2 = 400 * 1024;
+  const s = I.chartSeries([[1000, dl1, ul1], [1001, dl2, ul2]], 1001, 600);
+  const peakDl = Math.max(dl1, dl2), peakUl = Math.max(ul1, ul2);
+  const avgDl = (dl1 + dl2) / 2, avgUl = (ul1 + ul2) / 2;
+  assert.equal(s.peakText, "↓ " + Model.sizeText(peakDl) + "/s · ↑ " + Model.sizeText(peakUl) + "/s");
+  assert.equal(s.avgText, "↓ " + Model.sizeText(avgDl) + "/s · ↑ " + Model.sizeText(avgUl) + "/s");
+  assert.match(s.peakText, /^↓ .+\/s · ↑ .+\/s$/);
+  assert.match(s.avgText, /^↓ .+\/s · ↑ .+\/s$/);
+});
+
 test("chartSeries maxText has no trailing .0 (max is always a round mantissa)", () => {
   const spike = 5.8 * 1024 * 1024;
   const s = I.chartSeries([[1000, spike, 0]], 1000, 600);
@@ -436,6 +472,12 @@ test("emptyCopy trackers: DHT/PeX explanation", () => {
   const c = I.emptyCopy("trackers", {});
   assert.equal(c.title, "No trackers");
   assert.equal(c.body, "This torrent only finds peers through DHT and PeX.");
+});
+
+test("emptyCopy peers: a null row is treated as stopped, and never throws", () => {
+  const c = I.emptyCopy("peers", null);
+  assert.equal(c.title, "No peers");
+  assert.equal(c.body, "The torrent is stopped. Start it to connect.");
 });
 
 test("emptyCopy files: no metadata copy, no keys in 2a", () => {

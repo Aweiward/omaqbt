@@ -406,13 +406,20 @@ function niceMax(sampleBytes) {
   return mantissa * unitScale;
 }
 
+// speedPairText(dl, ul) -> "↓ 5.8 MiB/s · ↑ 402 KiB/s", the same
+// down/up convention inspectorInfo's Speed field uses.
+function speedPairText(dl, ul) {
+  return "↓ " + Model.sizeText(dl) + "/s · ↑ " + Model.sizeText(ul) + "/s";
+}
+
 // chartSeries(points, nowSec, spanSec) -> {down, up, max, maxText,
 // peakText, avgText, empty} for the SpeedChart. `points` is
 // [[t, dl, ul], …] (seconds, bytes/s); points older than the span are
 // dropped. `x` runs 0..1 across [nowSec - spanSec, nowSec]; `y` is
-// sample / max. peak/avg are the download series' peak and mean over the
-// kept points -- the download line is the pane's primary metric (the
-// Info tab's Downloaded field gets the same emphasis).
+// sample / max. peakText/avgText each carry both directions in one
+// string, "↓ <dl> · ↑ <ul>" -- the peak (or mean) of down and of up over
+// the kept points, independently (the mockup's "Peak ↓ 5.8 MiB/s ·
+// ↑ 402 KiB/s" / "Average ↓ 3.6 MiB/s · ↑ 180 KiB/s").
 function chartSeries(points, nowSec, spanSec) {
   var list = Array.isArray(points) ? points : [];
   var now = Number(nowSec) || 0;
@@ -443,15 +450,20 @@ function chartSeries(points, nowSec, spanSec) {
   var max = niceMax(largest);
   var down = [];
   var up = [];
-  var peak = 0;
-  var sum = 0;
+  var peakDl = 0;
+  var peakUl = 0;
+  var sumDl = 0;
+  var sumUl = 0;
   for (var j = 0; j < kept.length; j++) {
     down.push({ x: kept[j].x, y: max > 0 ? kept[j].dl / max : 0 });
     up.push({ x: kept[j].x, y: max > 0 ? kept[j].ul / max : 0 });
-    if (kept[j].dl > peak) peak = kept[j].dl;
-    sum += kept[j].dl;
+    if (kept[j].dl > peakDl) peakDl = kept[j].dl;
+    if (kept[j].ul > peakUl) peakUl = kept[j].ul;
+    sumDl += kept[j].dl;
+    sumUl += kept[j].ul;
   }
-  var avg = kept.length > 0 ? sum / kept.length : 0;
+  var avgDl = kept.length > 0 ? sumDl / kept.length : 0;
+  var avgUl = kept.length > 0 ? sumUl / kept.length : 0;
   return {
     down: down,
     up: up,
@@ -460,8 +472,8 @@ function chartSeries(points, nowSec, spanSec) {
     // trailing ".0" sizeText's "one decimal under 100" rule would add
     // (the Pieces field in infoGroups does the same for the same reason).
     maxText: stripPointZero(Model.sizeText(max)) + "/s",
-    peakText: Model.sizeText(peak) + "/s",
-    avgText: Model.sizeText(avg) + "/s",
+    peakText: speedPairText(peakDl, peakUl),
+    avgText: speedPairText(avgDl, avgUl),
     empty: false
   };
 }
