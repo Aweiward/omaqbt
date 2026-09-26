@@ -12,13 +12,16 @@ FULL = json.loads((ROOT / "maindata-full.json").read_text())
 DELTA = json.loads((ROOT / "maindata-delta.json").read_text())
 FILES = json.loads((ROOT / "files.json").read_text())
 ADDED = []
+# Real qBittorrent keeps sync rid state per WebUI session: a request without a
+# known SID cookie opens a new session and always gets a full update.
+SESSIONS = set()
 
 
-def record(method, path, body, query):
+def record(method, path, body, query, cookie=""):
     entries = []
     if LOG.exists():
         entries = json.loads(LOG.read_text() or "[]")
-    entries.append({"method": method, "path": path, "body": body, "query": query})
+    entries.append({"method": method, "path": path, "body": body, "query": query, "cookie": cookie})
     LOG.write_text(json.dumps(entries))
 
 
@@ -30,7 +33,17 @@ class Handler(BaseHTTPRequestHandler):
         n = int(self.headers.get("Content-Length") or 0)
         return self.rfile.read(n).decode("utf-8") if n else ""
 
-    def _send(self, code, body=b"", content_type="application/json"):
+    def _session(self):
+        """Return (sid, is_new) for this request, minting a SID when unknown."""
+        for part in (self.headers.get("Cookie") or "").split(";"):
+            name, _, value = part.strip().partition("=")
+            if name == "SID" and value in SESSIONS:
+                return value, False
+        sid = f"fixture-{len(SESSIONS) + 1}"
+        SESSIONS.add(sid)
+        return sid, True
+
+    def _send(self, code, body=b"", content_type="application/json", sid=None):
         if os.environ.get("QBT_FIXTURE_FORBIDDEN") == "1":
             self.send_response(403)
             self.send_header("Set-Cookie", COOKIE)
@@ -39,17 +52,20 @@ class Handler(BaseHTTPRequestHandler):
             return
         self.send_response(code)
         self.send_header("Content-Type", content_type)
+        if sid:
+            self.send_header("Set-Cookie", f"SID={sid}; HttpOnly; path=/")
         self.end_headers()
         if body:
             self.wfile.write(body)
 
     def do_GET(self):
         parsed = urlparse(self.path)
-        record("GET", parsed.path, "", parse_qs(parsed.query))
+        record("GET", parsed.path, "", parse_qs(parsed.query), self.headers.get("Cookie") or "")
         if parsed.path == "/api/v2/sync/maindata":
             rid = (parse_qs(parsed.query).get("rid") or ["0"])[0]
-            payload = DELTA if rid not in ("", "0") else FULL
-            self._send(200, json.dumps(payload).encode())
+            sid, is_new = self._session()
+            payload = DELTA if rid not in ("", "0") and not is_new else FULL
+            self._send(200, json.dumps(payload).encode(), sid=sid if is_new else None)
             return
         if parsed.path == "/api/v2/torrents/files":
             self._send(200, json.dumps(FILES).encode())

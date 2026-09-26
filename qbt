@@ -12,6 +12,9 @@ else
   STATE_DIR="${QBT_STATE_DIR:-/tmp/omaqbt-$(id -u)}"
 fi
 RID_FILE="${QBT_RID_FILE:-$STATE_DIR/rid.json}"
+# qBittorrent keeps sync/maindata rid state per WebUI session. Without a
+# persisted SID every poll opens a new session and gets a full update.
+COOKIE_FILE="${QBT_COOKIE_FILE:-$(dirname "$RID_FILE")/cookies}"
 UNIT_DIR="$HOME_DIR/.config/systemd/user"
 UNIT_FILE="$UNIT_DIR/omaqbt-nox.service"
 
@@ -129,11 +132,12 @@ api() {
   local body=${3:-}
   local url
   url="$(base_url)$path"
-  local args=(-sS -g --max-time 5 -X "$method" "$url")
+  ensure_state_dir "$(dirname "$COOKIE_FILE")"
+  local args=(-sS -g --max-time 5 -X "$method" -b "$COOKIE_FILE" -c "$COOKIE_FILE" "$url")
   if [[ -n $body ]]; then
     args+=(-H "Content-Type: application/x-www-form-urlencoded" --data "$body")
   fi
-  api_exec "${args[@]}"
+  (umask 077; api_exec "${args[@]}")
 }
 
 api_form() {
