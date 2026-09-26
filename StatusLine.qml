@@ -18,6 +18,9 @@ Rectangle {
   property string mode: "NORMAL"
   // View.confirmLine(...) while mode is CONFIRM, else null.
   property var confirmParts: null
+  // View.magnetLine(...) while a browser magnet's CONFIRM is up, else null:
+  // the badge reads MAGNET and the magnet's own hints replace `hints`.
+  property var magnetParts: null
   property string countText: ""
   // The VISUAL range's size ("K selected", in accent); 0 hides it.
   property int selectedCount: 0
@@ -90,6 +93,7 @@ Rectangle {
     anchors.bottom: parent.bottom
     width: badgeText.implicitWidth + Style.space(24)
     color: {
+      if (line.magnetParts !== null) return Color.accent
       if (line.mode === "CONFIRM") return Color.urgent
       if (line.badgeFilled) return Color.accent
       return "transparent"
@@ -98,7 +102,7 @@ Rectangle {
     Text {
       id: badgeText
       anchors.centerIn: parent
-      text: line.mode
+      text: line.magnetParts !== null ? "MAGNET" : line.mode
       textFormat: Text.PlainText
       font.family: Style.fontFamily
       font.pixelSize: Style.font.body
@@ -134,6 +138,22 @@ Rectangle {
       Part { text: line.confirmParts ? line.confirmParts.lead : ""; color: Color.urgent }
       Part { text: line.confirmParts ? line.confirmParts.strong : ""; color: Color.foreground; font.bold: true }
       Part { text: line.confirmParts ? line.confirmParts.tail : ""; color: Color.urgent }
+    }
+
+    // MAGNET: Start "Big Buck Bunny"? +2 more, then a note ("Still
+    // fetching the name…") when one is set.
+    Row {
+      visible: line.magnetParts !== null
+      anchors.verticalCenter: parent.verticalCenter
+      spacing: line.gap
+      Row {
+        Part { text: line.magnetParts ? line.magnetParts.lead : "" }
+        Part { text: line.magnetParts ? line.magnetParts.title : ""; font.bold: true }
+        Part { text: line.magnetParts ? line.magnetParts.tail : "" }
+        Part { text: line.magnetParts ? line.magnetParts.error : ""; color: Color.urgent }
+      }
+      Part { visible: text !== ""; text: line.magnetParts ? line.magnetParts.more : ""; color: Color.muted }
+      Part { visible: line.message !== ""; text: line.message; color: line.toneColor(line.messageTone) }
     }
 
     // INSERT: a prompt and the text field.
@@ -207,7 +227,7 @@ Rectangle {
     anchors.rightMargin: Style.space(12)
     anchors.verticalCenter: parent.verticalCenter
     Repeater {
-      model: line.hints
+      model: line.magnetParts !== null ? line.magnetParts.hints : line.hints
       delegate: Row {
         id: hint
         required property var modelData

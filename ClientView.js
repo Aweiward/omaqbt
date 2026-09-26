@@ -495,7 +495,7 @@ function toggleStarts(rawRows) {
 
 // Progress copy for the status line (muted) while this window's action
 // runs. kind: start|stop|remove|delete|recheck|move|startAll|stopAll|
-// turtle|add|daemon|install.
+// turtle|add|daemon|install|copy|prio|dropMagnet.
 function progressText(kind, count) {
   var n = Number(count) || 0;
   var t = plural(n, "torrent", "torrents");
@@ -513,6 +513,7 @@ function progressText(kind, count) {
   if (kind === "install") return "Installing qbittorrent-nox…";
   if (kind === "copy") return "Copying magnet…";
   if (kind === "prio") return "Setting file priority…";
+  if (kind === "dropMagnet") return "Dropping the magnet…";
   return "Working…";
 }
 
@@ -528,6 +529,134 @@ function confirmLine(confirm) {
     return { lead: "Delete " + t + " ", strong: "and their files", tail: " from disk?", accept: "delete" };
   }
   return { lead: "Remove " + t + "? ", strong: "", tail: "Files stay on disk.", accept: "remove" };
+}
+
+// --- Browser-magnet confirm (D3) -------------------------------------------
+//
+// The window shows Model.magnetConfirmState's current item as a pinned row
+// and a MAGNET CONFIRM. It raises that CONFIRM itself, only from NORMAL
+// with no overlay or help up, so a reflexive Esc meant for the palette, a
+// filter, VISUAL or an overlay never cancels (deletes) a magnet.
+
+var MAGNET_FETCHING_NOTE = "Still fetching the name…";
+
+// magnetItemKey(item) -> one queue item's identity: its magnet URL, which
+// an inbox line keeps when the drain turns it into a pending entry, else
+// its hash.
+function magnetItemKey(item) {
+  var i = item || {};
+  return String(i.url || i.hash || "");
+}
+
+// magnetKeys(pending, inbox) -> every queued item's key, pending first.
+function magnetKeys(pending, inbox) {
+  var out = [];
+  var lists = [pending || [], inbox || []];
+  for (var l = 0; l < lists.length; l++) {
+    for (var i = 0; i < lists[l].length; i++) out.push(magnetItemKey(lists[l][i]));
+  }
+  return out;
+}
+
+// magnetShown(ms, handledKey) -> whether the window offers ms's current
+// item: something is waiting and it isn't the item the window already
+// started or cancelled (which stays queued until the next snapshot).
+function magnetShown(ms, handledKey) {
+  if (!ms || !ms.active) return false;
+  var key = magnetItemKey(ms.pending || ms.inbox);
+  return key === "" || key !== String(handledKey || "");
+}
+
+function isMagnetConfirm(regState) {
+  var r = regState || {};
+  return r.mode === "CONFIRM" && !!r.pending && r.pending.kind === "magnet";
+}
+
+// magnetSync(mem, regState, ms, keys, ctx) -> {mem, regState, focus}, run
+// whenever the queue, the mode, the pane or the help overlay changes.
+//   mem: {seen, handled, focusDue} from the last call (null at first).
+//   keys: magnetKeys of the whole queue; ctx: {blocked, opened}, where
+//   blocked is true while help or a pane overlay is up.
+// regState is the next registry state, or null for no change: into a
+// magnet CONFIRM from NORMAL when an item is shown and nothing blocks, back
+// to NORMAL once no item is shown. focus asks for the window's attention
+// (requestWmFocus) when a new key appears while the window is open; while
+// INSERT or COMMAND owns a text field it waits (focusDue), since the focus
+// request would pull the keys out of that field.
+function magnetSync(mem, regState, ms, keys, ctx) {
+  var m = mem || { seen: [], handled: "", focusDue: false };
+  var c = ctx || {};
+  var list = keys || [];
+  var seen = m.seen || [];
+  var arrived = false;
+  for (var i = 0; i < list.length; i++) {
+    if (seen.indexOf(list[i]) === -1) arrived = true;
+  }
+  var handled = list.indexOf(m.handled) !== -1 ? m.handled : "";
+  var shown = magnetShown(ms, handled);
+  var r = regState || {};
+  var next = null;
+  if (shown && r.mode === "NORMAL" && c.blocked !== true) {
+    next = copyState(r, { mode: "CONFIRM", pending: { kind: "magnet", commandId: "magnet.start" }, prefix: null, prefixAt: 0, selectionCount: 0 });
+  } else if (!shown && isMagnetConfirm(r)) {
+    next = copyState(r, { mode: "NORMAL", pending: null });
+  }
+  var due = list.length > 0 && (m.focusDue === true || (arrived && c.opened === true));
+  var typing = r.mode === "INSERT" || r.mode === "COMMAND";
+  return {
+    mem: { seen: list.slice(), handled: handled, focusDue: due && typing },
+    regState: next,
+    focus: due && !typing
+  };
+}
+
+function copyState(base, patch) {
+  var out = {};
+  var k;
+  for (k in base) {
+    if (Object.prototype.hasOwnProperty.call(base, k)) out[k] = base[k];
+  }
+  for (k in patch) out[k] = patch[k];
+  return out;
+}
+
+// magnetAction(ms, commandId) -> what magnet.start / magnet.cancel do to
+// ms's current item: {call, kind, note}. call is "start" (startPending),
+// "cancel" (cancelPending: deletes the torrent and its files), "drop"
+// (dropInboxCurrent: an inbox line with no hash yet, or an error line) or
+// "" for nothing; kind is the msgTrack kind; note is shown instead.
+function magnetAction(ms, commandId) {
+  var s = ms || {};
+  if (!s.active) return { call: "", kind: "", note: "" };
+  if (commandId === "magnet.start") {
+    if (s.isError || s.hash === "") return { call: "", kind: "", note: s.isError ? "" : MAGNET_FETCHING_NOTE };
+    if (!s.canStart) return { call: "", kind: "", note: MAGNET_FETCHING_NOTE };
+    return { call: "start", kind: "start", note: "" };
+  }
+  if (commandId === "magnet.cancel") {
+    if (s.hash !== "") return { call: "cancel", kind: "delete", note: "" };
+    if (s.inbox) return { call: "drop", kind: "dropMagnet", note: "" };
+  }
+  return { call: "", kind: "", note: "" };
+}
+
+// magnetLine(ms) -> the status line's MAGNET CONFIRM:
+// {lead, title, tail, more, error, hints}. `Start "<title>"?` and `+N
+// more`; an error line shows its error and only Esc (dismiss).
+function magnetLine(ms) {
+  var s = ms || {};
+  var more = Number(s.more) > 0 ? "+" + Number(s.more) + " more" : "";
+  if (s.isError) {
+    return { lead: "", title: "", tail: "", more: more, error: String(s.error || ""), hints: [{ key: "Esc", label: "dismiss" }] };
+  }
+  return {
+    lead: "Start \"",
+    title: String(s.title || ""),
+    tail: "\"?",
+    more: more,
+    error: "",
+    hints: [{ key: "Enter", label: "start" }, { key: "Esc", label: "cancel" }]
+  };
 }
 
 // Key hints for the status line's right side, per mode (and, in NORMAL,
@@ -732,6 +861,7 @@ function failureText(kind, count) {
   if (kind === "copy") return "Couldn't copy the magnet";
   if (kind === "prio") return "Couldn't set the file priority";
   if (kind === "files") return "Couldn't read files";
+  if (kind === "dropMagnet") return "Couldn't drop the magnet";
   return "The action failed";
 }
 
@@ -1530,6 +1660,14 @@ if (typeof module !== "undefined" && module.exports) {
     palettePane: palettePane,
     paletteOwnsKey: paletteOwnsKey,
     paletteReasonNote: paletteReasonNote,
-    paletteEmptyText: paletteEmptyText
+    paletteEmptyText: paletteEmptyText,
+    MAGNET_FETCHING_NOTE: MAGNET_FETCHING_NOTE,
+    magnetItemKey: magnetItemKey,
+    magnetKeys: magnetKeys,
+    magnetShown: magnetShown,
+    isMagnetConfirm: isMagnetConfirm,
+    magnetSync: magnetSync,
+    magnetAction: magnetAction,
+    magnetLine: magnetLine
   };
 }

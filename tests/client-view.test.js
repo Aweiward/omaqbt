@@ -1179,3 +1179,127 @@ test("filterChip shows the active filter only while the filters are collapsed", 
   assert.equal(V.filterChip(V.layoutFor(850), V.defaultFilter()), "");
   assert.equal(V.filterChip(V.layoutFor(1000), seeding), "");
 });
+
+// --- browser-magnet confirm (slice 1b Task 4) -------------------------------
+
+const MURL = (c) => "magnet:?xt=urn:btih:" + H(c);
+const MREG = { mode: "NORMAL", pane: "table", prefix: null, prefixAt: 0, hasTorrent: true, selectionCount: 0, pending: null };
+const MAGNET_PENDING = { kind: "magnet", commandId: "magnet.start" };
+function mstate(pending, inbox, torrents) {
+  return Model.magnetConfirmState(pending || [], inbox || [], torrents || [], 1000);
+}
+function mpend(c, extra) {
+  return Object.assign({ hash: H(c), url: MURL(c), hashes: [H(c)], dn: "", addedAt: 999 }, extra || {});
+}
+
+test("magnetItemKey and magnetKeys: the url survives inbox -> pending", () => {
+  assert.equal(V.magnetItemKey({ url: MURL("a"), hash: H("a") }), MURL("a"));
+  assert.equal(V.magnetItemKey({ hash: H("a") }), H("a"));
+  assert.equal(V.magnetItemKey(null), "");
+  assert.deepEqual(V.magnetKeys([mpend("a")], [{ url: MURL("b"), ts: 1 }]), [MURL("a"), MURL("b")]);
+  assert.deepEqual(V.magnetKeys(undefined, undefined), []);
+});
+
+test("magnetShown hides only the item the window already handled", () => {
+  const ms = mstate([mpend("a")]);
+  assert.equal(V.magnetShown(ms, ""), true);
+  assert.equal(V.magnetShown(ms, MURL("a")), false);
+  assert.equal(V.magnetShown(ms, MURL("b")), true);
+  assert.equal(V.magnetShown(mstate(), ""), false);
+});
+
+test("magnetSync enters a magnet CONFIRM from NORMAL only", () => {
+  const ms = mstate([mpend("a")]);
+  const keys = [MURL("a")];
+  let r = V.magnetSync(null, MREG, ms, keys, { opened: true });
+  assert.equal(r.regState.mode, "CONFIRM");
+  assert.deepEqual(r.regState.pending, MAGNET_PENDING);
+  assert.equal(r.regState.pane, "table");
+  for (const mode of ["INSERT", "COMMAND", "VISUAL"]) {
+    r = V.magnetSync(null, Object.assign({}, MREG, { mode }), ms, keys, { opened: true });
+    assert.equal(r.regState, null, mode);
+  }
+  const del = Object.assign({}, MREG, { mode: "CONFIRM", pending: { kind: "delete", commandId: "torrent.delete" } });
+  assert.equal(V.magnetSync(null, del, ms, keys, { opened: true }).regState, null, "a delete CONFIRM is left alone");
+  assert.equal(V.magnetSync(null, MREG, ms, keys, { opened: true, blocked: true }).regState, null, "help or an overlay waits");
+  assert.equal(V.magnetSync(null, MREG, mstate(), [], { opened: true }).regState, null, "nothing waiting");
+});
+
+test("magnetSync leaves the magnet CONFIRM when no item is shown", () => {
+  const confirm = Object.assign({}, MREG, { mode: "CONFIRM", pending: MAGNET_PENDING });
+  let r = V.magnetSync({ seen: [MURL("a")], handled: "", focusDue: false }, confirm, mstate(), [], { opened: true });
+  assert.equal(r.regState.mode, "NORMAL");
+  assert.equal(r.regState.pending, null);
+  // handled: back to NORMAL while the item is still queued, and not re-entered
+  const ms = mstate([mpend("a")]);
+  r = V.magnetSync({ seen: [MURL("a")], handled: MURL("a"), focusDue: false }, confirm, ms, [MURL("a")], { opened: true });
+  assert.equal(r.regState.mode, "NORMAL");
+  assert.equal(r.mem.handled, MURL("a"));
+  r = V.magnetSync(r.mem, r.regState, ms, [MURL("a")], { opened: true });
+  assert.equal(r.regState, null);
+  // the next item is offered
+  const two = mstate([mpend("b")]);
+  r = V.magnetSync(r.mem, MREG, two, [MURL("b")], { opened: true });
+  assert.equal(r.regState.mode, "CONFIRM");
+  assert.equal(r.mem.handled, "", "a handled key is forgotten once it leaves the queue");
+});
+
+test("magnetSync asks for attention on a new key, not on inbox -> pending", () => {
+  const inboxOnly = mstate([], [{ url: MURL("a"), ts: 1 }]);
+  let r = V.magnetSync({ seen: [], handled: "", focusDue: false }, MREG, inboxOnly, [MURL("a")], { opened: true });
+  assert.equal(r.focus, true);
+  r = V.magnetSync(r.mem, r.regState, mstate([mpend("a")]), [MURL("a")], { opened: true });
+  assert.equal(r.focus, false, "the drained line is the same item");
+  r = V.magnetSync(r.mem, r.regState || MREG, mstate([mpend("a")], [{ url: MURL("b"), ts: 2 }]), [MURL("a"), MURL("b")], { opened: true });
+  assert.equal(r.focus, true, "a second magnet is new");
+  r = V.magnetSync({ seen: [], handled: "", focusDue: false }, MREG, inboxOnly, [MURL("a")], { opened: false });
+  assert.equal(r.focus, false, "a closed window asks for nothing");
+});
+
+test("magnetSync holds the attention request while a text field owns the keys", () => {
+  const ms = mstate([mpend("a")]);
+  const palette = Object.assign({}, MREG, { mode: "COMMAND" });
+  let r = V.magnetSync(null, palette, ms, [MURL("a")], { opened: true });
+  assert.equal(r.focus, false);
+  assert.equal(r.mem.focusDue, true);
+  r = V.magnetSync(r.mem, palette, ms, [MURL("a")], { opened: true });
+  assert.equal(r.focus, false);
+  r = V.magnetSync(r.mem, MREG, ms, [MURL("a")], { opened: true });
+  assert.equal(r.focus, true, "asked once the palette closes");
+  assert.equal(r.mem.focusDue, false);
+  assert.equal(r.regState.mode, "CONFIRM");
+  // the queue emptying drops a held request
+  r = V.magnetSync(null, palette, ms, [MURL("a")], { opened: true });
+  r = V.magnetSync(r.mem, palette, mstate(), [], { opened: true });
+  assert.equal(r.mem.focusDue, false);
+});
+
+test("magnetAction: start needs canStart; cancel deletes, or drops an inbox line", () => {
+  const fetching = mstate([mpend("a")], [], [torrent({ hash: H("a"), name: H("a"), state: "metaDL" })]);
+  assert.deepEqual(V.magnetAction(fetching, "magnet.start"), { call: "", kind: "", note: "Still fetching the name…" });
+  assert.deepEqual(V.magnetAction(fetching, "magnet.cancel"), { call: "cancel", kind: "delete", note: "" });
+  const ready = mstate([mpend("a")], [], [torrent({ hash: H("a"), name: "Real", state: "stoppedDL" })]);
+  assert.deepEqual(V.magnetAction(ready, "magnet.start"), { call: "start", kind: "start", note: "" });
+  const inboxOnly = mstate([], [{ url: MURL("b"), ts: 1 }]);
+  assert.deepEqual(V.magnetAction(inboxOnly, "magnet.start"), { call: "", kind: "", note: "Still fetching the name…" });
+  assert.deepEqual(V.magnetAction(inboxOnly, "magnet.cancel"), { call: "drop", kind: "dropMagnet", note: "" });
+  const error = mstate([], [{ url: MURL("b"), ts: 1, error: "unidentified" }]);
+  assert.deepEqual(V.magnetAction(error, "magnet.start"), { call: "", kind: "", note: "" });
+  assert.deepEqual(V.magnetAction(error, "magnet.cancel"), { call: "drop", kind: "dropMagnet", note: "" });
+  assert.deepEqual(V.magnetAction(mstate(), "magnet.cancel"), { call: "", kind: "", note: "" });
+  assert.equal(V.progressText("dropMagnet", 0), "Dropping the magnet…");
+  assert.equal(V.failureText("dropMagnet", 0), "Couldn't drop the magnet");
+});
+
+test("magnetLine: the MAGNET status line, +N more, and an error line", () => {
+  const ms = mstate([mpend("a"), mpend("b")], [{ url: MURL("c"), ts: 1 }], [torrent({ hash: H("a"), name: "Big Buck Bunny", state: "stoppedDL" })]);
+  assert.deepEqual(V.magnetLine(ms), {
+    lead: "Start \"", title: "Big Buck Bunny", tail: "\"?", more: "+2 more", error: "",
+    hints: [{ key: "Enter", label: "start" }, { key: "Esc", label: "cancel" }]
+  });
+  assert.equal(V.magnetLine(mstate([mpend("a")])).title, "Fetching name…");
+  assert.equal(V.magnetLine(mstate([mpend("a")])).more, "");
+  const err = V.magnetLine(mstate([], [{ url: MURL("c"), ts: 1, error: "unidentified" }]));
+  assert.equal(err.error, "unidentified");
+  assert.deepEqual(err.hints, [{ key: "Esc", label: "dismiss" }]);
+});

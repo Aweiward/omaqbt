@@ -20,6 +20,8 @@ QtObject {
   required property Item keyItem
   // The CommandPalette the palette.* commands drive.
   required property var palette
+  // The MagnetConfirm that runs magnet.start / magnet.cancel.
+  required property var magnet
 
   function isEnterKey(ev) {
     return ev.key === Registry.KEY.Return || ev.key === Registry.KEY.Enter
@@ -341,6 +343,11 @@ QtObject {
 
     case "palette.run":
       runPaletteRow(palette.currentRow())
+      return
+
+    case "magnet.start":
+    case "magnet.cancel":
+      magnet.act(commandId)
       return
 
     case "confirm.cancel":

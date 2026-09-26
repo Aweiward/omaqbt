@@ -118,6 +118,16 @@ Item {
   onFiltersDockedChanged: if (!filtersDocked && pane === "filters") setPane("table")
   onInspectorDockedChanged: if (!inspectorDocked && pane === "inspector") setPane("table")
 
+  // ---- browser-magnet confirm (D3, MagnetConfirm.qml) -------------------------------
+  readonly property var magnetState: Model.magnetConfirmState(service ? service.magnetPending : [],
+    service ? service.magnetInbox : [], service ? service.torrents : [], Date.now() / 1000)
+  onMagnetStateChanged: magnetRow.sync()
+  // Deferred, so the key that changed the mode (palette.close, insert.cancel)
+  // finishes before a waiting magnet takes the CONFIRM.
+  onModeChanged: Qt.callLater(magnetRow.sync)
+  onPaneChanged: Qt.callLater(magnetRow.sync)
+  onHelpOpenChanged: Qt.callLater(magnetRow.sync)
+
   // ---- help ------------------------------------------------------------------------
   property bool helpOpen: false
   property string helpPane: "table"
@@ -457,6 +467,7 @@ Item {
     inputLine: statusLine
     keyItem: keyRoot
     palette: cmdPalette
+    magnet: magnetRow
   }
 
   WmFocus {
@@ -551,9 +562,19 @@ Item {
           titleRight: View.paneTitle(root.filter, root.textQuery, root.sortMode, root.sortDesc)
           focusedPane: root.pane === "table"
 
+          MagnetConfirm {
+            id: magnetRow
+            anchors.left: parent.left
+            anchors.right: parent.right
+            client: root
+          }
+
           TorrentTable {
             id: table
-            anchors.fill: parent
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.top: magnetRow.bottom
+            anchors.bottom: parent.bottom
             cursorHash: root.cursorHash
             sortMode: root.sortMode
             sortDesc: root.sortDesc
@@ -612,6 +633,7 @@ Item {
         anchors.bottom: parent.bottom
         mode: root.mode
         confirmParts: root.confirm ? View.confirmLine(root.confirm) : null
+        magnetParts: magnetRow.lineParts
         countText: View.countText(root.liveCount)
         selectedCount: root.mode === "VISUAL" ? root.visualHashes.length : 0
         speedText: root.service ? "↓ " + Model.formatRate(root.service.dlSpeed) + " ↑ " + Model.formatRate(root.service.upSpeed) : ""
