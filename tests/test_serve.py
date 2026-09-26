@@ -808,6 +808,55 @@ class WatchBackoffTests(unittest.TestCase):
                 self.assertNotIn("error", recovered)
                 self.assertIsInstance(recovered["trackers"], list)
 
+    def test_identical_watch_during_backoff_produces_no_line(self):
+        with harness.fixture_server() as (port, env):
+            _write_control(env["QBT_FIXTURE_CONTROL"], {"trackers": "404"})
+            with ServeProcess(env) as sp:
+                sp.readline()
+                h = "a" * 40
+                sp.send({"cmd": "watch", "hash": h, "tab": "trackers"})
+                first_err = sp.read_until(lambda o: o.get("type") == "inspect", timeout=5)
+                self.assertIn("error", first_err)
+
+                # Re-sending the *identical* watch (same hash, same tab)
+                # must not reset the still-running back-off: no line at
+                # all within 1s, well short of the 5s window.
+                sp.send({"cmd": "watch", "hash": h, "tab": "trackers"})
+                seen = []
+                deadline = time.monotonic() + 1.0
+                while True:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        break
+                    try:
+                        obj = sp.readline(timeout=remaining)
+                    except AssertionError:
+                        break
+                    if obj.get("type") == "inspect":
+                        seen.append(obj)
+                self.assertEqual(seen, [])
+
+    def test_a_new_watch_resets_the_backoff(self):
+        with harness.fixture_server() as (port, env):
+            _write_control(env["QBT_FIXTURE_CONTROL"], {"trackers": "404"})
+            with ServeProcess(env) as sp:
+                sp.readline()
+                h1 = "a" * 40
+                h2 = "b" * 40
+                sp.send({"cmd": "watch", "hash": h1, "tab": "trackers"})
+                first_err = sp.read_until(lambda o: o.get("type") == "inspect", timeout=5)
+                self.assertIn("error", first_err)
+
+                # A *different* hash is a changed watch: it resets the
+                # back-off and is answered at once (F3), rather than
+                # being silently held behind h1's still-running back-off.
+                start = time.monotonic()
+                sp.send({"cmd": "watch", "hash": h2, "tab": "trackers"})
+                second = sp.read_until(lambda o: o.get("type") == "inspect", timeout=5)
+                elapsed = time.monotonic() - start
+                self.assertEqual(second["hash"], h2)
+                self.assertLess(elapsed, 1.0)
+
 
 if __name__ == "__main__":
     unittest.main()

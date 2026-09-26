@@ -313,9 +313,15 @@ def handle_command(cmd, state):
             state["watch"] = None
             state["watch_due"] = False
             return
-        state["watch"] = {"hash": h, "tab": tab}
-        state["watch_pieces_next"] = 0
-        state["watch_backoff_until"] = 0
+        new_watch = {"hash": h, "tab": tab}
+        # An identical re-send (same hash and tab -- e.g. a duplicate
+        # command, or the cursor settling back where it started) leaves
+        # any running back-off and the pieceStates timer alone; only an
+        # actually *changed* watch resets them.
+        if new_watch != state.get("watch"):
+            state["watch_pieces_next"] = 0
+            state["watch_backoff_until"] = 0
+        state["watch"] = new_watch
         state["watch_due"] = True
         return
 
