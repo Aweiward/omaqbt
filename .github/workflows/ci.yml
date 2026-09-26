@@ -23,6 +23,9 @@ jobs:
       - name: API contract tests
         run: bash tests/api-contract.sh
 
+      - name: Multi-hash action tests
+        run: bash tests/actions.sh
+
       # magnet-handler.sh is hermetic on its own: it shims notify-send,
       # xdg-mime, and update-desktop-database into a throwaway PATH dir and
       # points HOME/XDG_STATE_HOME/XDG_RUNTIME_DIR at a tmp tree, so it

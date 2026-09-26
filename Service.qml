@@ -204,12 +204,14 @@ Scope {
     var live = Model.excludePending(torrents, magnetPendingHashes)
     if (live.length === 0) return
     var start = !Model.anyActive(live)
+    var hashes = []
     for (var i = 0; i < live.length; i++) {
       var h = Model.torrentId(live[i])
-      if (!h) continue
-      if (start) startHash(h)
-      else stopHash(h)
+      if (h) hashes.push(h)
     }
+    if (hashes.length === 0) return
+    if (start) runAction([helperPath, "start", hashes.join("|")], "")
+    else runAction([helperPath, "stop", hashes.join("|")], "")
   }
 
   function deleteHash(hash, withFiles) {

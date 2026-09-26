@@ -1,0 +1,87 @@
+[
+  {
+    "body": "",
+    "cookie": "",
+    "method": "GET",
+    "path": "/api/v2/sync/maindata",
+    "query": {
+      "rid": [
+        "0"
+      ]
+    }
+  },
+  {
+    "body": "hashes=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "cookie": "",
+    "method": "POST",
+    "path": "/api/v2/torrents/start",
+    "query": {}
+  },
+  {
+    "body": "hashes=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "cookie": "",
+    "method": "POST",
+    "path": "/api/v2/torrents/stop",
+    "query": {}
+  },
+  {
+    "body": "hashes=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "cookie": "",
+    "method": "POST",
+    "path": "/api/v2/torrents/recheck",
+    "query": {}
+  },
+  {
+    "body": "hashes=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa&deleteFiles=true",
+    "cookie": "",
+    "method": "POST",
+    "path": "/api/v2/torrents/delete",
+    "query": {}
+  },
+  {
+    "body": "hashes=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa&limit=1048576",
+    "cookie": "",
+    "method": "POST",
+    "path": "/api/v2/torrents/setDownloadLimit",
+    "query": {}
+  },
+  {
+    "body": "hashes=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "cookie": "",
+    "method": "POST",
+    "path": "/api/v2/torrents/toggleSequentialDownload",
+    "query": {}
+  },
+  {
+    "body": "hashes=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa&ratioLimit=1&seedingTimeLimit=-2&inactiveSeedingTimeLimit=-2",
+    "cookie": "",
+    "method": "POST",
+    "path": "/api/v2/torrents/setShareLimits",
+    "query": {}
+  },
+  {
+    "body": "hash=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa&id=1&priority=0",
+    "cookie": "",
+    "method": "POST",
+    "path": "/api/v2/torrents/filePrio",
+    "query": {}
+  },
+  {
+    "body": "",
+    "cookie": "",
+    "method": "GET",
+    "path": "/api/v2/torrents/files",
+    "query": {
+      "hash": [
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      ]
+    }
+  },
+  {
+    "body": "hashes=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa&location=%2Fdl%2Fiso",
+    "cookie": "",
+    "method": "POST",
+    "path": "/api/v2/torrents/setLocation",
+    "query": {}
+  }
+]

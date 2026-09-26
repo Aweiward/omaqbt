@@ -27,6 +27,17 @@ die() {
   exit 1
 }
 
+# Accepts "all", or one or more torrent hashes joined by "|" (each a 40-char
+# v1 or 64-char v2 infohash). Anything else -- extra params, shell
+# metacharacters, empty segments -- is rejected before it ever reaches a
+# form body or query string.
+valid_hashes() {
+  local input=${1:-}
+  local hash_re='[0-9a-fA-F]{40}|[0-9a-fA-F]{64}'
+  local re="^(${hash_re})(\|(${hash_re}))*\$"
+  [[ $input == all || $input =~ $re ]]
+}
+
 ensure_state_dir() {
   local dir=$1
   [[ -n $dir ]] || return 0
@@ -214,6 +225,7 @@ cmd_add() {
 cmd_start() {
   local hash=${1:-}
   [[ -n $hash ]] || die "usage: qbt start <hash|all>"
+  valid_hashes "$hash" || die "invalid hash list"
   api POST "/api/v2/torrents/start" "hashes=${hash}" >/dev/null
   printf '%s\n' '{"ok":true}'
 }
@@ -221,6 +233,7 @@ cmd_start() {
 cmd_stop() {
   local hash=${1:-}
   [[ -n $hash ]] || die "usage: qbt stop <hash|all>"
+  valid_hashes "$hash" || die "invalid hash list"
   api POST "/api/v2/torrents/stop" "hashes=${hash}" >/dev/null
   printf '%s\n' '{"ok":true}'
 }
@@ -228,6 +241,7 @@ cmd_stop() {
 cmd_recheck() {
   local hash=${1:-}
   [[ -n $hash ]] || die "usage: qbt recheck <hash>"
+  valid_hashes "$hash" || die "invalid hash list"
   api POST "/api/v2/torrents/recheck" "hashes=${hash}" >/dev/null
   printf '%s\n' '{"ok":true}'
 }
@@ -235,6 +249,7 @@ cmd_recheck() {
 cmd_set_location() {
   local hash=${1:-} location=${2:-}
   [[ -n $hash && -n $location ]] || die "usage: qbt set-location <hash> <dir>"
+  valid_hashes "$hash" || die "invalid hash list"
   [[ $location == "~/"* ]] && location=$HOME/${location#\~/}
   [[ $location == /* ]] || die "location must be an absolute path"
   api POST "/api/v2/torrents/setLocation" "hashes=${hash}&location=$(jq -nr --arg v "$location" '$v|@uri')" >/dev/null
@@ -247,6 +262,7 @@ cmd_delete() {
   shift || true
   if [[ ${1:-} == --files ]]; then files=true; fi
   [[ -n $hash ]] || die "usage: qbt delete <hash> [--files]"
+  valid_hashes "$hash" || die "invalid hash list"
   api POST "/api/v2/torrents/delete" "hashes=${hash}&deleteFiles=${files}" >/dev/null
   printf '%s\n' '{"ok":true}'
 }
@@ -259,6 +275,7 @@ cmd_turtle() {
 cmd_limit() {
   local hash=${1:-} kind=${2:-} bytes=${3:-}
   [[ -n $hash && -n $bytes && ( $kind == dl || $kind == up ) ]] || die "usage: qbt limit <hash|all> <dl|up> <bytes-per-sec, 0 = unlimited>"
+  valid_hashes "$hash" || die "invalid hash list"
   local endpoint=setDownloadLimit
   [[ $kind == up ]] && endpoint=setUploadLimit
   api POST "/api/v2/torrents/${endpoint}" "hashes=${hash}&limit=${bytes}" >/dev/null
@@ -268,6 +285,7 @@ cmd_limit() {
 cmd_sequential() {
   local hash=${1:-}
   [[ -n $hash ]] || die "usage: qbt sequential <hash>"
+  valid_hashes "$hash" || die "invalid hash list"
   api POST "/api/v2/torrents/toggleSequentialDownload" "hashes=${hash}" >/dev/null
   printf '%s\n' '{"ok":true}'
 }
@@ -275,6 +293,7 @@ cmd_sequential() {
 cmd_sharelimit() {
   local hash=${1:-} ratio=${2:-}
   [[ -n $hash && -n $ratio ]] || die "usage: qbt sharelimit <hash> <ratio, -2 = global, -1 = none>"
+  valid_hashes "$hash" || die "invalid hash list"
   api POST "/api/v2/torrents/setShareLimits" "hashes=${hash}&ratioLimit=${ratio}&seedingTimeLimit=-2&inactiveSeedingTimeLimit=-2" >/dev/null
   printf '%s\n' '{"ok":true}'
 }
@@ -282,6 +301,7 @@ cmd_sharelimit() {
 cmd_files() {
   local hash=${1:-}
   [[ -n $hash ]] || die "usage: qbt files <hash>"
+  valid_hashes "$hash" || die "invalid hash list"
   api GET "/api/v2/torrents/files?hash=${hash}"
   printf '\n'
 }
@@ -289,6 +309,7 @@ cmd_files() {
 cmd_prio() {
   local hash=${1:-} index=${2:-} prio=${3:-}
   [[ -n $hash && -n $index && -n $prio ]] || die "usage: qbt prio <hash> <index> <0|1|6|7>"
+  valid_hashes "$hash" || die "invalid hash list"
   api POST "/api/v2/torrents/filePrio" "hash=${hash}&id=${index}&priority=${prio}" >/dev/null
   printf '%s\n' '{"ok":true}'
 }
@@ -667,6 +688,7 @@ cmd_magnet_pending_list() {
 cmd_magnet_pending_drop() {
   local hash=${1:-}
   [[ -n $hash ]] || die "usage: qbt magnet-pending-drop <hash>"
+  valid_hashes "$hash" || die "invalid hash list"
   local next
   next=$(magnet_read_pending | jq -c --arg h "$hash" '[.[] | select((.hash // "") != $h and ((.hashes // []) | index($h) | not))]')
   magnet_write_pending "$next"
