@@ -1,0 +1,351 @@
+// Command table and a pure key dispatcher for the OmaqBT window.
+//
+// Loads in node (module.exports, for `node --test`) and in QML
+// (`import "CommandRegistry.js" as Registry`), following Model.js's
+// export pattern.
+//
+// `dispatch` is pure: no Date calls, no I/O. Everything it needs (the
+// clock, the key event, the current mode/pane/selection) comes in through
+// its arguments, and everything it produces comes back out in its return
+// value. The caller (the window, in a later task) owns state and re-feeds
+// the returned `state` into the next call.
+
+// Qt key codes (Qt::Key, int form as QML's event.key delivers it).
+// Verified against /usr/include/qt6/QtCore/qnamespace.h.
+var KEY = {
+  Escape: 0x01000000,
+  Tab: 0x01000001,
+  Backtab: 0x01000002,
+  Return: 0x01000004,
+  Enter: 0x01000005,
+  Up: 0x01000013,
+  Down: 0x01000015,
+  Space: 0x20,
+  H: 0x48,
+  L: 0x4c
+};
+
+var PREFIX_TIMEOUT_MS = 600;
+
+// `panes` uses "*" for "any pane."
+var PANE_ANY = "*";
+
+// The command table. One row per binding in the spec's table. A command id
+// can appear on more than one row (e.g. inspector.files is bound to both
+// Enter in the table pane and 4 in any pane); helpFor() and dispatch() both
+// read this same array, so there is exactly one source of truth.
+//
+// `keys` doubles as the display strings AND the machine-matchable tokens:
+// each entry is either a literal printable character (matched against
+// event.text) or one of a fixed vocabulary of special-key labels that
+// matchLabel() below recognizes and matches against event.key/ctrl. This
+// is a controlled vocabulary, not free-text parsing. The two-key sequences
+// ("g g", "Esc Esc") are display-only; dispatch() implements those
+// sequences directly rather than through the generic per-key matcher.
+var commands = [
+  // NORMAL, table
+  { id: "cursor.down", title: "Down", group: "View", keys: ["j", "Down"], modes: ["NORMAL", "VISUAL"], panes: ["table"], needs: "none" },
+  { id: "cursor.up", title: "Up", group: "View", keys: ["k", "Up"], modes: ["NORMAL", "VISUAL"], panes: ["table"], needs: "none" },
+  { id: "cursor.top", title: "Top", group: "View", keys: ["g g"], modes: ["NORMAL"], panes: ["table"], needs: "none" },
+  { id: "cursor.bottom", title: "Bottom", group: "View", keys: ["G"], modes: ["NORMAL"], panes: ["table"], needs: "none" },
+  { id: "torrent.toggle", title: "Pause/resume", group: "Torrent", keys: ["Space"], modes: ["NORMAL", "VISUAL"], panes: ["table"], needs: "selection" },
+  { id: "inspector.files", title: "Files", group: "View", keys: ["Enter"], modes: ["NORMAL"], panes: ["table"], needs: "none" },
+  { id: "torrent.openFolder", title: "Open folder", group: "Torrent", keys: ["o"], modes: ["NORMAL"], panes: ["table"], needs: "torrent" },
+  { id: "torrent.remove", title: "Remove", group: "Torrent", keys: ["x"], modes: ["NORMAL", "VISUAL"], panes: ["table"], needs: "selection" },
+  { id: "torrent.delete", title: "Delete with files", group: "Torrent", keys: ["X"], modes: ["NORMAL", "VISUAL"], panes: ["table"], needs: "selection" },
+  { id: "torrent.copyMagnet", title: "Copy magnet", group: "Torrent", keys: ["y"], modes: ["NORMAL"], panes: ["table"], needs: "torrent" },
+  { id: "torrent.move", title: "Move", group: "Torrent", keys: ["m"], modes: ["NORMAL"], panes: ["table"], needs: "torrent" },
+  { id: "torrent.recheck", title: "Recheck", group: "Torrent", keys: ["e"], modes: ["NORMAL", "VISUAL"], panes: ["table"], needs: "selection" },
+  { id: "visual.enter", title: "Visual select", group: "View", keys: ["V"], modes: ["NORMAL"], panes: ["table"], needs: "torrent" },
+
+  // NORMAL, any pane
+  { id: "all.toggle", title: "Show all", group: "Library", keys: ["t"], modes: ["NORMAL"], panes: [PANE_ANY], needs: "none" },
+  { id: "sort.next", title: "Sort", group: "View", keys: ["s"], modes: ["NORMAL"], panes: [PANE_ANY], needs: "none" },
+  { id: "sort.reverse", title: "Reverse sort", group: "View", keys: ["S"], modes: ["NORMAL"], panes: [PANE_ANY], needs: "none" },
+  { id: "turtle.toggle", title: "Alt speed", group: "Library", keys: ["z"], modes: ["NORMAL"], panes: [PANE_ANY], needs: "none" },
+  { id: "filter.text", title: "Filter", group: "View", keys: ["/"], modes: ["NORMAL"], panes: [PANE_ANY], needs: "none" },
+  { id: "refresh", title: "Refresh", group: "Library", keys: ["r"], modes: ["NORMAL"], panes: [PANE_ANY], needs: "none" },
+  { id: "inspector.info", title: "Info", group: "View", keys: ["1"], modes: ["NORMAL"], panes: [PANE_ANY], needs: "none" },
+  { id: "inspector.files", title: "Files", group: "View", keys: ["4"], modes: ["NORMAL"], panes: [PANE_ANY], needs: "none" },
+  { id: null, title: "Reserved", group: "View", keys: ["2", "3", "5"], modes: ["NORMAL"], panes: [PANE_ANY], needs: "none" },
+  { id: "pane.next", title: "Next pane", group: "View", keys: ["Tab", "Ctrl-l"], modes: ["NORMAL"], panes: [PANE_ANY], needs: "none" },
+  { id: "pane.prev", title: "Prev pane", group: "View", keys: ["Shift-Tab", "Ctrl-h"], modes: ["NORMAL"], panes: [PANE_ANY], needs: "none" },
+  { id: "help.toggle", title: "Help", group: "App", keys: ["?"], modes: ["NORMAL"], panes: [PANE_ANY], needs: "none" },
+  { id: "window.close", title: "Close window", group: "App", keys: ["q"], modes: ["NORMAL"], panes: [PANE_ANY], needs: "none" },
+  { id: "filter.clearText", title: "Clear filter", group: "View", keys: ["Esc"], modes: ["NORMAL"], panes: [PANE_ANY], needs: "none" },
+  { id: "filter.reset", title: "Reset filters", group: "View", keys: ["Esc Esc"], modes: ["NORMAL"], panes: [PANE_ANY], needs: "none" },
+
+  // NORMAL, filters pane
+  { id: "filter.down", title: "Down", group: "View", keys: ["j"], modes: ["NORMAL"], panes: ["filters"], needs: "none" },
+  { id: "filter.up", title: "Up", group: "View", keys: ["k"], modes: ["NORMAL"], panes: ["filters"], needs: "none" },
+  { id: "filter.apply", title: "Apply filter", group: "View", keys: ["Enter"], modes: ["NORMAL"], panes: ["filters"], needs: "none" },
+
+  // VISUAL (j/k/Space/x/X/e reuse the NORMAL,table rows above; this is the exit)
+  { id: "visual.exit", title: "Exit visual", group: "View", keys: ["Esc", "V"], modes: ["VISUAL"], panes: ["table"], needs: "none" },
+
+  // INSERT
+  { id: "insert.cancel", title: "Cancel", group: "App", keys: ["Esc"], modes: ["INSERT"], panes: [PANE_ANY], needs: "none" },
+  { id: "insert.commit", title: "Commit", group: "App", keys: ["Enter"], modes: ["INSERT"], panes: [PANE_ANY], needs: "none" },
+
+  // CONFIRM. "confirm.accept" is display-only: dispatch() resolves `y` to
+  // the pending command's own id, never to this literal id.
+  { id: "confirm.accept", title: "Confirm", group: "App", keys: ["y"], modes: ["CONFIRM"], panes: [PANE_ANY], needs: "none" },
+  { id: "confirm.cancel", title: "Cancel", group: "App", keys: ["n", "Esc"], modes: ["CONFIRM"], panes: [PANE_ANY], needs: "none" }
+];
+
+// Commands that switch mode unconditionally when they fire.
+var MODE_AFTER = {
+  "visual.enter": "VISUAL",
+  "visual.exit": "NORMAL",
+  "filter.text": "INSERT",
+  "insert.cancel": "NORMAL",
+  "insert.commit": "NORMAL"
+};
+
+// Commands that, when they fire while mode is VISUAL, end the visual
+// selection (vim-style: an operator acting on a range leaves the range).
+// Movement (cursor.down/up) is not here: it extends the range instead.
+var EXITS_VISUAL = {
+  "torrent.toggle": true,
+  "torrent.remove": true,
+  "torrent.delete": true,
+  "torrent.recheck": true
+};
+
+var EXTEND_IDS = { "cursor.down": true, "cursor.up": true };
+
+function assign(base, patch) {
+  var out = {};
+  var k;
+  for (k in base) {
+    if (Object.prototype.hasOwnProperty.call(base, k)) out[k] = base[k];
+  }
+  for (k in patch) {
+    if (Object.prototype.hasOwnProperty.call(patch, k)) out[k] = patch[k];
+  }
+  return out;
+}
+
+function normalizeState(state) {
+  var s = state || {};
+  return {
+    mode: s.mode || "NORMAL",
+    pane: s.pane || "table",
+    prefix: s.prefix || null,
+    prefixAt: s.prefixAt || 0,
+    hasTorrent: s.hasTorrent === true,
+    selectionCount: typeof s.selectionCount === "number" ? s.selectionCount : 0,
+    pending: s.pending || null
+  };
+}
+
+function clearPrefix(s) {
+  return assign(s, { prefix: null, prefixAt: 0 });
+}
+
+function withinPrefix(now, prefixAt) {
+  return (now - prefixAt) <= PREFIX_TIMEOUT_MS;
+}
+
+// Matches one canonical key label against an event. Printable labels match
+// on event.text (case carries g vs G, ? vs /, etc., for free); special
+// labels match on event.key/modifiers.ctrl and ignore text entirely, even
+// though Qt gives Escape/Return/Tab/Space/Ctrl-combos non-empty text too
+// (e.g. "\u001b", "\r", "\t", " ", "\f").
+function matchLabel(label, ev) {
+  var text = ev.text || "";
+  var mods = ev.modifiers || {};
+  var ctrl = mods.ctrl === true;
+  var key = ev.key;
+
+  switch (label) {
+    case "Tab": return key === KEY.Tab;
+    case "Shift-Tab": return key === KEY.Backtab;
+    case "Ctrl-l": return ctrl && key === KEY.L;
+    case "Ctrl-h": return ctrl && key === KEY.H;
+    case "Enter": return key === KEY.Return || key === KEY.Enter;
+    case "Esc": return key === KEY.Escape;
+    case "Up": return key === KEY.Up;
+    case "Down": return key === KEY.Down;
+    case "Space": return key === KEY.Space;
+    default:
+      return !ctrl && text !== "" && text === label;
+  }
+}
+
+function paneMatches(row, pane) {
+  return row.panes.indexOf(PANE_ANY) !== -1 || row.panes.indexOf(pane) !== -1;
+}
+
+function findMatch(s, ev) {
+  var i, j, row, label;
+  for (i = 0; i < commands.length; i++) {
+    row = commands[i];
+    if (row.modes.indexOf(s.mode) === -1) continue;
+    if (!paneMatches(row, s.pane)) continue;
+    for (j = 0; j < row.keys.length; j++) {
+      label = row.keys[j];
+      if (label === "g g" || label === "Esc Esc") continue;
+      if (matchLabel(label, ev)) return row;
+    }
+  }
+  return null;
+}
+
+function preconditionMet(needs, s) {
+  if (!needs || needs === "none") return true;
+  if (needs === "torrent") return s.hasTorrent === true;
+  if (needs === "selection") return s.hasTorrent === true || s.selectionCount > 0;
+  return true;
+}
+
+// How many torrents a "selection"/"torrent" command targets: the VISUAL
+// range if there is one, otherwise the single cursor row.
+function confirmCount(s) {
+  if (s.selectionCount > 0) return s.selectionCount;
+  return s.hasTorrent ? 1 : 0;
+}
+
+function needsConfirm(id, s) {
+  if (id === "torrent.delete") return true;
+  if (id === "torrent.remove") return confirmCount(s) > 1;
+  return false;
+}
+
+function buildArgs(row, s) {
+  var args = {};
+  if (EXTEND_IDS[row.id] === true && s.mode === "VISUAL") {
+    args.extend = true;
+  }
+  if (row.needs === "torrent" || row.needs === "selection") {
+    args.count = confirmCount(s);
+    if (s.selectionCount > 0) args.range = true;
+  }
+  return args;
+}
+
+function dispatchConfirm(s, ev) {
+  var mods = ev.modifiers || {};
+  var ctrl = mods.ctrl === true;
+  var text = ev.text || "";
+  var pending = s.pending || null;
+  var resetState = assign(s, { mode: "NORMAL", pending: null, prefix: null, prefixAt: 0 });
+
+  if (!ctrl && text === "y") {
+    if (!pending) {
+      return { state: resetState, commandId: null };
+    }
+    return {
+      state: resetState,
+      commandId: pending.commandId,
+      args: assign(pending.args || {}, { confirmed: true })
+    };
+  }
+
+  if ((!ctrl && text === "n") || ev.key === KEY.Escape) {
+    return { state: resetState, commandId: "confirm.cancel", args: {} };
+  }
+
+  return { state: s, commandId: null };
+}
+
+// dispatch(state, event) -> {state, commandId, args?, blocked?, confirm?}
+//
+// Pure: reads only `state` and `event`, does no I/O, calls no Date/Math.random.
+// `event.now` (ms) drives the g-prefix and Esc-Esc timeouts; dispatch never
+// reads the clock itself.
+function dispatch(state, event) {
+  var s = normalizeState(state);
+  var ev = event || {};
+
+  if (s.mode === "CONFIRM") {
+    return dispatchConfirm(s, ev);
+  }
+
+  var mods = ev.modifiers || {};
+  var ctrl = mods.ctrl === true;
+  var text = ev.text || "";
+  var now = ev.now || 0;
+
+  // Continue an active "g" prefix (cursor.top).
+  if (s.prefix === "g") {
+    if (withinPrefix(now, s.prefixAt) && !ctrl && text === "g") {
+      return { state: clearPrefix(s), commandId: "cursor.top", args: {} };
+    }
+    s = clearPrefix(s);
+  }
+
+  // Continue an active "Esc" prefix (filter.reset).
+  if (s.prefix === "Esc") {
+    if (withinPrefix(now, s.prefixAt) && ev.key === KEY.Escape) {
+      return { state: clearPrefix(s), commandId: "filter.reset", args: {} };
+    }
+    s = clearPrefix(s);
+  }
+
+  // Start a "g" prefix. Only meaningful in NORMAL/table, where cursor.top
+  // lives; elsewhere a lone "g" simply falls through to "no match."
+  if (s.mode === "NORMAL" && s.pane === "table" && !ctrl && text === "g") {
+    return { state: assign(s, { prefix: "g", prefixAt: now }), commandId: null };
+  }
+
+  var row = findMatch(s, ev);
+  if (!row || row.id === null) {
+    return { state: clearPrefix(s), commandId: null };
+  }
+
+  if (!preconditionMet(row.needs, s)) {
+    return { state: clearPrefix(s), commandId: null, blocked: "needs a selected torrent" };
+  }
+
+  var args = buildArgs(row, s);
+
+  if (needsConfirm(row.id, s)) {
+    var count = confirmCount(s);
+    var withFiles = row.id === "torrent.delete";
+    var pending = { commandId: row.id, args: args, count: count, withFiles: withFiles };
+    return {
+      state: assign(clearPrefix(s), { mode: "CONFIRM", pending: pending }),
+      commandId: null,
+      confirm: { commandId: row.id, count: count, withFiles: withFiles }
+    };
+  }
+
+  var nextState = clearPrefix(s);
+  if (row.id === "filter.clearText") {
+    nextState = assign(nextState, { prefix: "Esc", prefixAt: now });
+  }
+  if (Object.prototype.hasOwnProperty.call(MODE_AFTER, row.id)) {
+    nextState = assign(nextState, { mode: MODE_AFTER[row.id] });
+  }
+  if (EXITS_VISUAL[row.id] === true && s.mode === "VISUAL") {
+    nextState = assign(nextState, { mode: "NORMAL" });
+  }
+
+  return { state: nextState, commandId: row.id, args: args };
+}
+
+// helpFor(mode, pane) -> rows from `commands` active for that mode/pane,
+// generated from the same table dispatch() reads. Reserved (id === null)
+// rows are not commands, so they are left out.
+function helpFor(mode, pane) {
+  var out = [];
+  var i, row;
+  for (i = 0; i < commands.length; i++) {
+    row = commands[i];
+    if (row.id === null) continue;
+    if (row.modes.indexOf(mode) === -1) continue;
+    if (!paneMatches(row, pane)) continue;
+    out.push(row);
+  }
+  return out;
+}
+
+if (typeof module !== "undefined" && module.exports) {
+  module.exports = {
+    KEY: KEY,
+    commands: commands,
+    dispatch: dispatch,
+    helpFor: helpFor
+  };
+}
