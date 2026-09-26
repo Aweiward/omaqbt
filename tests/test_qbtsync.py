@@ -92,6 +92,9 @@ class MergeMaindataTests(unittest.TestCase):
         self.assertEqual(row["savePath"], "/home/user/Downloads")
         self.assertEqual(row["numSeeds"], 14)
         self.assertEqual(row["addedOn"], 1755300000)
+        self.assertEqual(row["category"], "linux")
+        self.assertEqual(row["tags"], ["iso", "linux"])
+        self.assertEqual(row["tracker"], "tracker.example.com")
 
     def test_torrents_removed_drops_keys(self):
         cache_map, _ = qbtsync.merge_maindata(self.full, {})
@@ -151,12 +154,130 @@ class MergeMaindataTests(unittest.TestCase):
         self.assertEqual(rows[0]["dlSpeed"], 55)
         self.assertEqual(rows[0]["upSpeed"], 77)
 
+    def test_row_category_present_and_missing(self):
+        raw = {
+            "full_update": True,
+            "torrents": {
+                "f" * 40: {"name": "cat", "category": "linux"},
+                "0" * 40: {"name": "nocat"},
+            },
+        }
+        _, rows = qbtsync.merge_maindata(raw, {})
+        by_name = {r["name"]: r for r in rows}
+        self.assertEqual(by_name["cat"]["category"], "linux")
+        self.assertEqual(by_name["nocat"]["category"], "")
+
+    def test_row_tags_split_trimmed_and_sorted(self):
+        raw = {
+            "full_update": True,
+            "torrents": {
+                "1" * 40: {"name": "tagged", "tags": " beta ,  , alpha,beta"},
+            },
+        }
+        _, rows = qbtsync.merge_maindata(raw, {})
+        # spaces around each entry are trimmed, empties from ", ," are
+        # dropped, and the survivors come back sorted.
+        self.assertEqual(rows[0]["tags"], ["alpha", "beta", "beta"])
+
+    def test_row_tags_missing_is_empty_list(self):
+        raw = {
+            "full_update": True,
+            "torrents": {"2" * 40: {"name": "notags"}},
+        }
+        _, rows = qbtsync.merge_maindata(raw, {})
+        self.assertEqual(rows[0]["tags"], [])
+
+    def test_row_tracker_hostname_lowercased(self):
+        raw = {
+            "full_update": True,
+            "torrents": {
+                "3" * 40: {
+                    "name": "tracked",
+                    "tracker": "https://TRACKER.Example.COM:6969/announce",
+                },
+            },
+        }
+        _, rows = qbtsync.merge_maindata(raw, {})
+        self.assertEqual(rows[0]["tracker"], "tracker.example.com")
+
+    def test_row_tracker_missing_is_empty(self):
+        raw = {
+            "full_update": True,
+            "torrents": {"4" * 40: {"name": "untracked"}},
+        }
+        _, rows = qbtsync.merge_maindata(raw, {})
+        self.assertEqual(rows[0]["tracker"], "")
+
+    def test_row_tracker_malformed_url_is_empty(self):
+        raw = {
+            "full_update": True,
+            "torrents": {
+                "5" * 40: {"name": "badtracker", "tracker": "http://[::1"},
+            },
+        }
+        _, rows = qbtsync.merge_maindata(raw, {})
+        self.assertEqual(rows[0]["tracker"], "")
+
+
+class MergeCategoriesTests(unittest.TestCase):
+    def test_full_update_replaces_cache(self):
+        raw = {"full_update": True, "categories": {"linux": {"name": "linux"}}}
+        merged = qbtsync.merge_categories(raw, {"stale": {"name": "stale"}})
+        self.assertEqual(merged, {"linux": {"name": "linux"}})
+
+    def test_full_update_with_no_categories_key_is_empty(self):
+        merged = qbtsync.merge_categories({"full_update": True}, {"linux": {}})
+        self.assertEqual(merged, {})
+
+    def test_delta_adds_and_keeps_existing(self):
+        cache = {"linux": {"name": "linux"}}
+        raw = {"full_update": False, "categories": {"os": {"name": "os"}}}
+        merged = qbtsync.merge_categories(raw, cache)
+        self.assertEqual(merged, {"linux": {"name": "linux"}, "os": {"name": "os"}})
+
+    def test_categories_removed_drops_keys(self):
+        cache = {"linux": {"name": "linux"}, "os": {"name": "os"}}
+        raw = {"full_update": False, "categories_removed": ["os"]}
+        merged = qbtsync.merge_categories(raw, cache)
+        self.assertEqual(merged, {"linux": {"name": "linux"}})
+
+
+class MergeTagsTests(unittest.TestCase):
+    def test_full_update_replaces_cache(self):
+        raw = {"full_update": True, "tags": ["linux", "iso"]}
+        merged = qbtsync.merge_tags(raw, ["stale"])
+        self.assertEqual(merged, ["iso", "linux"])
+
+    def test_full_update_with_no_tags_key_is_empty(self):
+        merged = qbtsync.merge_tags({"full_update": True}, ["stale"])
+        self.assertEqual(merged, [])
+
+    def test_delta_adds_and_keeps_existing(self):
+        cache = ["linux"]
+        raw = {"full_update": False, "tags": ["iso"]}
+        merged = qbtsync.merge_tags(raw, cache)
+        self.assertEqual(merged, ["iso", "linux"])
+
+    def test_delta_does_not_duplicate_an_already_cached_tag(self):
+        cache = ["linux"]
+        raw = {"full_update": False, "tags": ["linux"]}
+        merged = qbtsync.merge_tags(raw, cache)
+        self.assertEqual(merged, ["linux"])
+
+    def test_tags_removed_drops_entries(self):
+        cache = ["iso", "linux"]
+        raw = {"full_update": False, "tags_removed": ["iso"]}
+        merged = qbtsync.merge_tags(raw, cache)
+        self.assertEqual(merged, ["linux"])
+
 
 class SyncStateTests(unittest.TestCase):
     def test_load_missing_file_is_empty(self):
         state = qbtsync.SyncState.load("/no/such/path/rid.json")
         self.assertEqual(state.rid, 0)
         self.assertEqual(state.torrents, {})
+        self.assertEqual(state.categories, {})
+        self.assertEqual(state.tags, [])
 
     def test_load_corrupt_file_is_empty(self):
         with tempfile.TemporaryDirectory() as d:
@@ -166,17 +287,50 @@ class SyncStateTests(unittest.TestCase):
             state = qbtsync.SyncState.load(path)
             self.assertEqual(state.rid, 0)
             self.assertEqual(state.torrents, {})
+            self.assertEqual(state.categories, {})
+            self.assertEqual(state.tags, [])
+
+    def test_load_old_rid_file_without_new_keys_is_empty(self):
+        # A rid file written before this task shipped has no "categories"
+        # or "tags" key at all.
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "rid.json")
+            with open(path, "w") as f:
+                json.dump({"rid": 3, "torrents": {"h": {"name": "x"}}}, f)
+            state = qbtsync.SyncState.load(path)
+            self.assertEqual(state.rid, 3)
+            self.assertEqual(state.torrents, {"h": {"name": "x"}})
+            self.assertEqual(state.categories, {})
+            self.assertEqual(state.tags, [])
+
+    def test_load_wrong_typed_new_keys_is_empty(self):
+        # A future/corrupt file with "categories"/"tags" of the wrong
+        # shape must fall back the same way a missing key does.
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "rid.json")
+            with open(path, "w") as f:
+                json.dump({"rid": 1, "categories": ["not", "a", "dict"], "tags": {"not": "a list"}}, f)
+            state = qbtsync.SyncState.load(path)
+            self.assertEqual(state.categories, {})
+            self.assertEqual(state.tags, [])
 
     def test_save_and_load_round_trip(self):
         with tempfile.TemporaryDirectory() as d:
             path = os.path.join(d, "rid.json")
-            state = qbtsync.SyncState(rid=5, torrents={"h": {"name": "x"}})
+            state = qbtsync.SyncState(
+                rid=5,
+                torrents={"h": {"name": "x"}},
+                categories={"linux": {"name": "linux"}},
+                tags=["alpha", "beta"],
+            )
             state.save(path)
             mode = oct(os.stat(path).st_mode & 0o777)
             self.assertEqual(mode, "0o600")
             loaded = qbtsync.SyncState.load(path)
             self.assertEqual(loaded.rid, 5)
             self.assertEqual(loaded.torrents, {"h": {"name": "x"}})
+            self.assertEqual(loaded.categories, {"linux": {"name": "linux"}})
+            self.assertEqual(loaded.tags, ["alpha", "beta"])
 
     def test_save_fixes_permissions_on_preexisting_file(self):
         with tempfile.TemporaryDirectory() as d:
@@ -388,6 +542,8 @@ class BuildStatusTests(unittest.TestCase):
         status, errors = qbtsync.build_status(probe, client, sync, slow, 1000.0)
         self.assertEqual(status["api"], False)
         self.assertEqual(status["torrents"], [])
+        self.assertEqual(status["categories"], [])
+        self.assertEqual(status["tags"], [])
         self.assertEqual(errors, [])
         self.assertEqual(client.calls, [])
 
@@ -420,6 +576,28 @@ class BuildStatusTests(unittest.TestCase):
         self.assertNotIn("/api/v2/app/preferences", client.calls)
         self.assertEqual(status["vpnIface"], "")
         self.assertEqual(status["bindIface"], "")
+        self.assertEqual(status["categories"], ["linux", "os"])
+        self.assertEqual(status["tags"], ["extra", "iso", "linux"])
+
+    def test_categories_and_tags_honour_delta_removed_semantics(self):
+        full = json.loads((FIXTURES / "maindata-full.json").read_text())
+        delta = json.loads((FIXTURES / "maindata-delta.json").read_text())
+        probe = self.base_probe()
+        client = self.FakeClient({
+            "/api/v2/sync/maindata?rid=0": json.dumps(full),
+            "/api/v2/sync/maindata?rid=1": json.dumps(delta),
+            "/api/v2/transfer/speedLimitsMode": "1",
+        })
+        sync = qbtsync.SyncState()
+        slow = qbtsync.SlowCache(interval=0)
+        first, _ = qbtsync.build_status(probe, client, sync, slow, 1000.0)
+        self.assertEqual(first["categories"], ["linux", "os"])
+        self.assertEqual(first["tags"], ["extra", "iso", "linux"])
+
+        second, _ = qbtsync.build_status(probe, client, sync, slow, 1001.0)
+        # the delta's categories_removed/tags_removed prune the survivors.
+        self.assertEqual(second["categories"], ["linux"])
+        self.assertEqual(second["tags"], ["iso", "linux"])
 
     def test_maindata_failure_leaves_api_false_and_reports_error(self):
         probe = self.base_probe()
@@ -550,7 +728,7 @@ class BuildStatusTests(unittest.TestCase):
         self.assertEqual(
             list(status.keys()),
             ["installed", "daemon", "lockHolder", "api", "altSpeed", "dlSpeed",
-             "upSpeed", "torrents", "vpnIface", "bindIface"],
+             "upSpeed", "torrents", "vpnIface", "bindIface", "categories", "tags"],
         )
 
 

@@ -170,6 +170,39 @@ test("parseStatusJson returns not-ok for garbage", () => {
   assert.equal(status.ok, false);
   assert.equal(status.installed, false);
   assert.deepEqual(status.torrents, []);
+  assert.deepEqual(status.categories, []);
+  assert.deepEqual(status.tags, []);
+});
+
+test("parseStatusJson copies category, tags and tracker per row with safe defaults", () => {
+  const parsed = Model.parseStatusJson(JSON.stringify({
+    installed: true, daemon: true, api: true,
+    torrents: [
+      { hash: "a", name: "x", state: "downloading", category: "linux", tags: ["alpha", "beta"], tracker: "tracker.example.com" },
+      { hash: "b", name: "y", state: "uploading" }
+    ]
+  }));
+  assert.equal(parsed.torrents[0].category, "linux");
+  assert.deepEqual(parsed.torrents[0].tags, ["alpha", "beta"]);
+  assert.equal(parsed.torrents[0].tracker, "tracker.example.com");
+  assert.equal(parsed.torrents[1].category, "");
+  assert.deepEqual(parsed.torrents[1].tags, []);
+  assert.equal(parsed.torrents[1].tracker, "");
+});
+
+test("parseStatusJson copies top-level categories and tags with safe defaults", () => {
+  const parsed = Model.parseStatusJson(JSON.stringify({
+    installed: true, daemon: true, api: true,
+    torrents: [],
+    categories: ["linux", "os"],
+    tags: ["extra", "iso"]
+  }));
+  assert.deepEqual(parsed.categories, ["linux", "os"]);
+  assert.deepEqual(parsed.tags, ["extra", "iso"]);
+
+  const missing = Model.parseStatusJson(JSON.stringify({ installed: true, torrents: [] }));
+  assert.deepEqual(missing.categories, []);
+  assert.deepEqual(missing.tags, []);
 });
 
 test("sanitizeError strips SID cookies and password fields", () => {

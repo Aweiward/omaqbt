@@ -2,6 +2,8 @@
   "rid": 2,
   "full_update": false,
   "server_state": { "dl_info_speed": 100, "up_info_speed": 0 },
+  "categories_removed": ["os"],
+  "tags_removed": ["extra"],
   "torrents": {
     "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa": {
       "progress": 0.5,

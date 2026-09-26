@@ -18,7 +18,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlsplit
 
 _SID_RE = re.compile(r"SID=[^;\s]*", re.IGNORECASE)
 _PASSWORD_RE = re.compile(r"password=[^;\s]*", re.IGNORECASE)
@@ -153,6 +153,64 @@ def _try_json_object(body):
     return data if isinstance(data, dict) else None
 
 
+def _split_tags(raw):
+    """Split qBittorrent's comma-separated tag string into a row's tag list.
+
+    Each entry is trimmed, empty entries (from a leading/trailing/double
+    comma) are dropped, and the survivors come back sorted. A missing or
+    non-string field (None) yields an empty list.
+    """
+    return sorted(t for t in (p.strip() for p in str(raw or "").split(",")) if t)
+
+
+def _tracker_host(url):
+    """The lowercased hostname of a tracker URL.
+
+    "" for a missing/empty field, or one `urlsplit` can't make sense of
+    (no hostname, or a malformed URL that raises ValueError -- e.g. an
+    unterminated IPv6 literal).
+    """
+    url = str(url or "")
+    if not url:
+        return ""
+    try:
+        host = urlsplit(url).hostname
+    except ValueError:
+        return ""
+    return (host or "").lower()
+
+
+def merge_categories(raw, cache):
+    """Merge maindata's top-level `categories` map into the persisted cache.
+
+    Mirrors `merge_maindata`'s full/delta/removed handling: a full update
+    replaces the cache outright, a delta adds/overwrites the categories it
+    resends and drops the names in `categories_removed`.
+    """
+    if raw.get("full_update"):
+        return dict(raw.get("categories") or {})
+    categories = dict(cache)
+    categories.update(raw.get("categories") or {})
+    for name in raw.get("categories_removed") or []:
+        categories.pop(name, None)
+    return categories
+
+
+def merge_tags(raw, cache):
+    """Merge maindata's top-level `tags` list into the persisted cache.
+
+    Same full/delta/removed shape as `merge_categories`. The result is
+    always a deduplicated, sorted list, so repeated deltas that resend an
+    already-cached tag can't pile up duplicates in the rid file.
+    """
+    if raw.get("full_update"):
+        return sorted(set(raw.get("tags") or []))
+    tags = set(cache)
+    tags.update(raw.get("tags") or [])
+    tags.difference_update(raw.get("tags_removed") or [])
+    return sorted(tags)
+
+
 def merge_maindata(raw, cache):
     """Faithful move of the inline python3 -c block from `qbt` cmd_status.
 
@@ -200,16 +258,21 @@ def merge_maindata(raw, cache):
             "upLimit": t.get("up_limit") or 0,
             "seqDl": t.get("seq_dl") is True,
             "ratioLimit": -2 if t.get("ratio_limit") is None else t.get("ratio_limit"),
+            "category": t.get("category") or "",
+            "tags": _split_tags(t.get("tags")),
+            "tracker": _tracker_host(t.get("tracker")),
         })
     return torrents, rows
 
 
 class SyncState:
-    """The on-disk rid cache: `{"rid":N,"torrents":{...}}`."""
+    """The on-disk rid cache: `{"rid":N,"torrents":{...},"categories":{...},"tags":[...]}`."""
 
-    def __init__(self, rid=0, torrents=None):
+    def __init__(self, rid=0, torrents=None, categories=None, tags=None):
         self.rid = rid
         self.torrents = torrents if torrents is not None else {}
+        self.categories = categories if categories is not None else {}
+        self.tags = tags if tags is not None else []
 
     @classmethod
     def load(cls, path):
@@ -224,10 +287,21 @@ class SyncState:
         torrents = data.get("torrents")
         if not isinstance(torrents, dict):
             torrents = {}
-        return cls(rid=rid, torrents=torrents)
+        categories = data.get("categories")
+        if not isinstance(categories, dict):
+            categories = {}
+        tags = data.get("tags")
+        if not isinstance(tags, list):
+            tags = []
+        return cls(rid=rid, torrents=torrents, categories=categories, tags=tags)
 
     def save(self, path):
-        body = json.dumps({"rid": self.rid, "torrents": self.torrents}, separators=(",", ":"))
+        body = json.dumps({
+            "rid": self.rid,
+            "torrents": self.torrents,
+            "categories": self.categories,
+            "tags": self.tags,
+        }, separators=(",", ":"))
         fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         try:
             with os.fdopen(fd, "w") as f:
@@ -264,6 +338,8 @@ def build_status(probe, client, sync, slow, now):
     up_speed = 0
     torrents = []
     bind_iface = ""
+    categories = []
+    tags = []
 
     if installed and daemon and lock_holder != "gui":
         try:
@@ -279,8 +355,12 @@ def build_status(probe, client, sync, slow, now):
             else:
                 merged, rows = merge_maindata(raw, sync.torrents)
                 sync.torrents = merged
+                sync.categories = merge_categories(raw, sync.categories)
+                sync.tags = merge_tags(raw, sync.tags)
                 sync.rid = raw.get("rid") or 0
                 torrents = rows
+                categories = sorted(sync.categories.keys())
+                tags = list(sync.tags)
                 server_state = raw.get("server_state") or {}
                 dl_speed = server_state.get("dl_info_speed") or 0
                 up_speed = server_state.get("up_info_speed") or 0
@@ -329,6 +409,8 @@ def build_status(probe, client, sync, slow, now):
         "torrents": torrents,
         "vpnIface": vpn_iface,
         "bindIface": bind_iface,
+        "categories": categories,
+        "tags": tags,
     }
     return status, errors
 

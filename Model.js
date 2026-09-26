@@ -348,6 +348,8 @@ function emptyStatus() {
     torrents: [],
     vpnIface: "",
     bindIface: "",
+    categories: [],
+    tags: [],
     error: ""
   };
 }
@@ -385,6 +387,9 @@ function parseStatusJson(raw) {
       upLimit: Number(row.upLimit || 0),
       seqDl: row.seqDl === true,
       ratioLimit: row.ratioLimit == null ? -2 : Number(row.ratioLimit),
+      category: String(row.category || ""),
+      tags: Array.isArray(row.tags) ? row.tags : [],
+      tracker: String(row.tracker || ""),
       bucket: classifyState(row.state, row.progress)
     });
   }
@@ -400,6 +405,8 @@ function parseStatusJson(raw) {
     torrents: torrents,
     vpnIface: String(parsed.vpnIface || ""),
     bindIface: String(parsed.bindIface || ""),
+    categories: Array.isArray(parsed.categories) ? parsed.categories : [],
+    tags: Array.isArray(parsed.tags) ? parsed.tags : [],
     error: String(parsed.error || "")
   };
 }

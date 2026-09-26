@@ -130,7 +130,8 @@ class FirstStatusLineTests(unittest.TestCase):
                 self.assertEqual(
                     list(line.keys()),
                     ["type", "installed", "daemon", "lockHolder", "api", "altSpeed",
-                     "dlSpeed", "upSpeed", "torrents", "vpnIface", "bindIface"],
+                     "dlSpeed", "upSpeed", "torrents", "vpnIface", "bindIface",
+                     "categories", "tags"],
                 )
 
 
