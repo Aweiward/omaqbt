@@ -22,7 +22,9 @@ var KEY = {
   Down: 0x01000015,
   Space: 0x20,
   H: 0x48,
-  L: 0x4c
+  L: 0x4c,
+  N: 0x4e,
+  P: 0x50
 };
 
 var PREFIX_TIMEOUT_MS = 600;
@@ -75,6 +77,15 @@ var commands = [
   { id: "window.close", title: "Close window", group: "App", keys: ["q"], modes: ["NORMAL"], panes: [PANE_ANY], needs: "none" },
   { id: "filter.clearText", title: "Clear filter", group: "View", keys: ["Esc"], modes: ["NORMAL"], panes: [PANE_ANY], needs: "none" },
   { id: "filter.reset", title: "Reset filters", group: "View", keys: ["Esc Esc"], modes: ["NORMAL"], panes: [PANE_ANY], needs: "none" },
+  { id: "palette.open", title: "Command palette", group: "App", keys: [":"], modes: ["NORMAL"], panes: [PANE_ANY], needs: "none" },
+
+  // COMMAND (the palette's TextField owns typing; these are the only keys
+  // dispatch resolves itself).
+  { id: "palette.close", title: "Close palette", group: "App", keys: ["Esc"], modes: ["COMMAND"], panes: [PANE_ANY], needs: "none" },
+  { id: "palette.run", title: "Run", group: "App", keys: ["Enter"], modes: ["COMMAND"], panes: [PANE_ANY], needs: "none" },
+  { id: "palette.up", title: "Up", group: "App", keys: ["Up", "Ctrl-p"], modes: ["COMMAND"], panes: [PANE_ANY], needs: "none" },
+  { id: "palette.down", title: "Down", group: "App", keys: ["Down", "Ctrl-n"], modes: ["COMMAND"], panes: [PANE_ANY], needs: "none" },
+  { id: "palette.complete", title: "Complete", group: "App", keys: ["Tab"], modes: ["COMMAND"], panes: [PANE_ANY], needs: "none" },
 
   // NORMAL, filters pane
   { id: "filter.down", title: "Down", group: "View", keys: ["j"], modes: ["NORMAL"], panes: ["filters"], needs: "none" },
@@ -106,7 +117,10 @@ var MODE_AFTER = {
   "visual.exit": "NORMAL",
   "filter.text": "INSERT",
   "insert.cancel": "NORMAL",
-  "insert.commit": "NORMAL"
+  "insert.commit": "NORMAL",
+  "palette.open": "COMMAND",
+  "palette.close": "NORMAL",
+  "palette.run": "NORMAL"
 };
 
 // Commands that, when they fire while mode is VISUAL, end the visual
@@ -170,6 +184,8 @@ function matchLabel(label, ev) {
     case "Shift-Tab": return key === KEY.Backtab;
     case "Ctrl-l": return ctrl && key === KEY.L;
     case "Ctrl-h": return ctrl && key === KEY.H;
+    case "Ctrl-p": return ctrl && key === KEY.P;
+    case "Ctrl-n": return ctrl && key === KEY.N;
     case "Enter": return key === KEY.Return || key === KEY.Enter;
     case "Esc": return key === KEY.Escape;
     case "Up": return key === KEY.Up;
@@ -367,6 +383,8 @@ if (typeof module !== "undefined" && module.exports) {
     KEY: KEY,
     commands: commands,
     dispatch: dispatch,
-    helpFor: helpFor
+    helpFor: helpFor,
+    preconditionMet: preconditionMet,
+    paneMatches: paneMatches
   };
 }

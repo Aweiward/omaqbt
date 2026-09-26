@@ -6,10 +6,11 @@ const vm = require("node:vm");
 const Model = require("../Model.js");
 const Registry = require("../CommandRegistry.js");
 
-// ClientView.js starts with a QML-only `.import "Model.js" as Model` line,
-// which node can't parse. Strip `.import`/`.pragma` lines and run the rest
-// as a function body in this realm (so deepEqual sees ordinary objects),
-// with `Model` supplied exactly as QML would.
+// ClientView.js starts with QML-only `.import "Model.js" as Model` /
+// `.import "CommandRegistry.js" as Registry` lines, which node can't parse.
+// Strip `.import`/`.pragma` lines and run the rest as a function body in
+// this realm (so deepEqual sees ordinary objects), with `Model` and
+// `Registry` supplied exactly as QML would.
 function loadClientView() {
   const file = path.join(__dirname, "..", "ClientView.js");
   const src = fs.readFileSync(file, "utf8")
@@ -17,7 +18,7 @@ function loadClientView() {
     .map((line) => (/^\s*\.(import|pragma)\b/.test(line) ? "" : line))
     .join("\n");
   const mod = { exports: {} };
-  vm.compileFunction(src, ["module", "Model"], { filename: file })(mod, Model);
+  vm.compileFunction(src, ["module", "Model", "Registry"], { filename: file })(mod, Model, Registry);
   return mod.exports;
 }
 
@@ -781,4 +782,208 @@ test("leaveVisualState returns to NORMAL with no range and leaves the input alon
   const esc = Registry.dispatch(Object.assign({}, st, { pane: "filters" }), V.keyEvent(KEY.Escape, "\u001b", 0, 0));
   assert.equal(esc.commandId, "filter.clearText");
   assert.equal(Registry.dispatch(Object.assign({}, st, { pane: "filters" }), V.keyEvent(0x4a, "j", 0, 0)).commandId, "filter.down");
+});
+
+// --- Task 1 (slice 1b): command palette --------------------------------------
+
+// --- fuzzyMatch -------------------------------------------------------------
+
+test("fuzzyMatch: an empty query matches everything with score 0", () => {
+  const r = V.fuzzyMatch("", "Stop torrent");
+  assert.deepEqual(r, { score: 0, indices: [] });
+  assert.deepEqual(V.fuzzyMatch("", ""), { score: 0, indices: [] });
+});
+
+test("fuzzyMatch: no match returns null", () => {
+  assert.equal(V.fuzzyMatch("xyz", "Stop torrent"), null);
+  assert.equal(V.fuzzyMatch("stop!!", "Stop"), null, "query longer than what the title can supply");
+});
+
+test("fuzzyMatch: case-insensitive subsequence match with correct indices", () => {
+  const r = V.fuzzyMatch("op", "Stop");
+  assert.ok(r);
+  assert.deepEqual(r.indices, [2, 3]);
+  const r2 = V.fuzzyMatch("STP", "stop torrent");
+  assert.ok(r2, "matching is case-insensitive on both sides");
+});
+
+test("fuzzyMatch is deterministic: repeat calls give the same result", () => {
+  const a = V.fuzzyMatch("stp", "Stop torrent");
+  const b = V.fuzzyMatch("stp", "Stop torrent");
+  assert.deepEqual(a, b);
+});
+
+test("fuzzyMatch scoring: 'stp' ranks Stop torrent above Set upload limit", () => {
+  const stop = V.fuzzyMatch("stp", "Stop torrent");
+  const setUpload = V.fuzzyMatch("stp", "Set upload limit");
+  assert.ok(stop, "Stop torrent should match");
+  assert.ok(setUpload, "Set upload limit should match");
+  assert.ok(stop.score > setUpload.score, `${stop.score} should exceed ${setUpload.score}`);
+});
+
+test("fuzzyMatch scoring: a consecutive run at the start of the title outscores a scattered match", () => {
+  // Both match "st" as a subsequence: "Stop torrent" has it as a run right
+  // at the start, "Set upload limit" only has the "s" at the start.
+  const front = V.fuzzyMatch("st", "Stop torrent");
+  const scattered = V.fuzzyMatch("st", "Set upload limit");
+  assert.ok(front && scattered);
+  assert.ok(front.score > scattered.score, `${front.score} should exceed ${scattered.score}`);
+});
+
+// --- mruPush ----------------------------------------------------------------
+
+test("mruPush inserts a new id at the front", () => {
+  assert.deepEqual(V.mruPush([], "torrent.remove"), ["torrent.remove"]);
+  assert.deepEqual(V.mruPush(["a", "b"], "c"), ["c", "a", "b"]);
+});
+
+test("mruPush moves an existing id to the front instead of duplicating it", () => {
+  assert.deepEqual(V.mruPush(["a", "b", "c"], "b"), ["b", "a", "c"]);
+  assert.deepEqual(V.mruPush(["a", "b", "c"], "a"), ["a", "b", "c"]);
+});
+
+test("mruPush caps the list at 20 entries", () => {
+  const full = [];
+  for (let i = 0; i < 20; i++) full.push("cmd" + i);
+  const r = V.mruPush(full, "new");
+  assert.equal(r.length, 20);
+  assert.equal(r[0], "new");
+  assert.ok(!r.includes("cmd19"), "the oldest entry falls off the cap");
+});
+
+test("mruPush does not mutate its input", () => {
+  const input = ["a", "b"];
+  V.mruPush(input, "c");
+  assert.deepEqual(input, ["a", "b"]);
+});
+
+// --- paletteRows --------------------------------------------------------------
+
+function paletteState(overrides) {
+  return Object.assign({ mode: "COMMAND", pane: "table", hasTorrent: true, selectionCount: 0 }, overrides || {});
+}
+
+test("paletteRows: empty query with no MRU lists no divider, just the grouped commands", () => {
+  const rows = V.paletteRows("", Registry.commands, [], paletteState());
+  assert.equal(rows.some((r) => r.kind === "divider"), false, "no divider when there is nothing recent");
+  assert.ok(rows.every((r) => r.kind === "command"));
+});
+
+test("paletteRows: empty query with MRU lists up to 5 recents, then a divider, then the groups", () => {
+  const mru = ["torrent.recheck", "sort.next", "torrent.move"];
+  const rows = V.paletteRows("", Registry.commands, mru, paletteState());
+  assert.deepEqual(rows.slice(0, 3).map((r) => r.id), mru);
+  assert.equal(rows[3].kind, "divider");
+  assert.ok(rows.slice(4).every((r) => r.kind === "command"));
+  // the recents don't repeat further down the list
+  const idsAfterDivider = rows.slice(4).map((r) => r.id);
+  for (const id of mru) assert.ok(!idsAfterDivider.includes(id), id);
+});
+
+test("paletteRows: MRU is capped at 5 shown even with more entries", () => {
+  const mru = ["cursor.down", "cursor.up", "cursor.top", "cursor.bottom", "torrent.toggle", "torrent.move"];
+  const rows = V.paletteRows("", Registry.commands, mru, paletteState());
+  const dividerIndex = rows.findIndex((r) => r.kind === "divider");
+  assert.equal(dividerIndex, 5);
+  assert.deepEqual(rows.slice(0, 5).map((r) => r.id), mru.slice(0, 5));
+});
+
+test("paletteRows: drops MRU ids that no longer exist as commands", () => {
+  const mru = ["torrent.move", "no.such.command", "sort.next"];
+  const rows = V.paletteRows("", Registry.commands, mru, paletteState());
+  const dividerIndex = rows.findIndex((r) => r.kind === "divider");
+  assert.deepEqual(rows.slice(0, dividerIndex).map((r) => r.id), ["torrent.move", "sort.next"]);
+});
+
+test("paletteRows: the reserved row and palette.* commands never appear", () => {
+  const rows = V.paletteRows("", Registry.commands, [], paletteState());
+  assert.ok(!rows.some((r) => r.id === null && r.kind === "command"));
+  assert.ok(!rows.some((r) => typeof r.id === "string" && r.id.indexOf("palette.") === 0));
+});
+
+test("paletteRows: groups the remaining commands Torrent, View, Library, App, sorted by title within each group", () => {
+  const rows = V.paletteRows("", Registry.commands, [], paletteState());
+  const order = ["Torrent", "View", "Library", "App"];
+  let lastGroupIdx = -1;
+  let lastTitle = "";
+  for (const row of rows) {
+    const gi = order.indexOf(row.group);
+    assert.ok(gi !== -1, row.group);
+    if (gi !== lastGroupIdx) {
+      assert.ok(gi > lastGroupIdx, "groups appear in Torrent/View/Library/App order: " + row.group);
+      lastGroupIdx = gi;
+      lastTitle = "";
+    } else {
+      assert.ok(row.title.toLowerCase() >= lastTitle, row.title + " should sort after " + lastTitle);
+    }
+    lastTitle = row.title.toLowerCase();
+  }
+});
+
+test("paletteRows: a torrent.* row is disabled with 'needs a selected torrent' when there is no cursor torrent", () => {
+  const rows = V.paletteRows("", Registry.commands, [], paletteState({ hasTorrent: false }));
+  const openFolder = rows.find((r) => r.id === "torrent.openFolder");
+  assert.equal(openFolder.enabled, false);
+  assert.equal(openFolder.reason, "needs a selected torrent");
+  const move = rows.find((r) => r.id === "torrent.move");
+  assert.equal(move.enabled, false);
+  assert.equal(move.reason, "needs a selected torrent");
+});
+
+test("paletteRows: a torrent.* row is enabled when there is a cursor torrent", () => {
+  const rows = V.paletteRows("", Registry.commands, [], paletteState({ hasTorrent: true }));
+  const openFolder = rows.find((r) => r.id === "torrent.openFolder");
+  assert.equal(openFolder.enabled, true);
+  assert.equal(openFolder.reason, "");
+});
+
+test("paletteRows: file.* rows (Files-tab-only) are disabled with 'focus the inspector', even with a torrent selected", () => {
+  const rows = V.paletteRows("", Registry.commands, [], paletteState({ hasTorrent: true }));
+  const fileDown = rows.find((r) => r.id === "file.down");
+  assert.equal(fileDown.enabled, false);
+  assert.equal(fileDown.reason, "focus the inspector");
+});
+
+test("paletteRows: a command runnable from the table (any-pane or table+inspector) is enabled", () => {
+  const rows = V.paletteRows("", Registry.commands, [], paletteState({ hasTorrent: true }));
+  const help = rows.find((r) => r.id === "help.toggle");
+  assert.equal(help.enabled, true);
+  const copyMagnet = rows.find((r) => r.id === "torrent.copyMagnet"); // table + inspector
+  assert.equal(copyMagnet.enabled, true);
+});
+
+test("paletteRows: keys is the merged display string from every row sharing that id", () => {
+  const rows = V.paletteRows("", Registry.commands, [], paletteState());
+  const cursorDown = rows.find((r) => r.id === "cursor.down");
+  assert.equal(cursorDown.keys, "j / Down");
+  const inspectorFiles = rows.find((r) => r.id === "inspector.files");
+  assert.equal(inspectorFiles.keys, "Enter / 4");
+});
+
+test("paletteRows: a non-empty query ranks by score descending, tie-broken by title, with no divider", () => {
+  const rows = V.paletteRows("stp", Registry.commands, [], paletteState());
+  assert.equal(rows.some((r) => r.kind === "divider"), false);
+  const ids = rows.map((r) => r.id);
+  assert.ok(ids.includes("all.toggle"), "sanity: 'Start/stop all' contains s-t-p as a subsequence");
+  // Every returned row's title must actually fuzzy-match "stp".
+  for (const row of rows) {
+    assert.ok(V.fuzzyMatch("stp", row.title), row.title);
+  }
+  // Scores are non-increasing down the list.
+  const scores = rows.map((r) => V.fuzzyMatch("stp", r.title).score);
+  for (let i = 1; i < scores.length; i++) assert.ok(scores[i] <= scores[i - 1], "row " + i + " out of score order");
+});
+
+test("paletteRows: a non-empty query excludes commands whose title doesn't match at all", () => {
+  const rows = V.paletteRows("zzzzz", Registry.commands, [], paletteState());
+  assert.deepEqual(rows, []);
+});
+
+test("paletteRows: an empty query's MRU rows still carry indices, enabled and reason", () => {
+  const rows = V.paletteRows("", Registry.commands, ["torrent.move"], paletteState({ hasTorrent: false }));
+  const first = rows[0];
+  assert.equal(first.id, "torrent.move");
+  assert.deepEqual(first.indices, []);
+  assert.equal(first.enabled, false);
+  assert.equal(first.reason, "needs a selected torrent");
 });

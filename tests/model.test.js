@@ -1205,7 +1205,8 @@ const DEFAULT_VIEW_STATE = {
   sort: "added",
   desc: true,
   cursorHash: "",
-  pane: "table"
+  pane: "table",
+  paletteMru: []
 };
 
 test("parseViewState of null/undefined/missing input returns full defaults", () => {
@@ -1222,7 +1223,7 @@ test("parseViewState of corrupt JSON returns defaults", () => {
 });
 
 test("parseViewState accepts a plain object as well as a JSON string", () => {
-  const state = { filter: { group: "tag", value: "linux" }, sort: "size", desc: false, cursorHash: "abc123", pane: "inspector" };
+  const state = { filter: { group: "tag", value: "linux" }, sort: "size", desc: false, cursorHash: "abc123", pane: "inspector", paletteMru: ["torrent.remove", "sort.next"] };
   assert.deepEqual(Model.parseViewState(state), state);
   assert.deepEqual(Model.parseViewState(JSON.stringify(state)), state);
 });
@@ -1304,7 +1305,7 @@ test("parseViewState treats a non-object filter as missing", () => {
 });
 
 test("serializeViewState round-trips through parseViewState", () => {
-  const state = { filter: { group: "category", value: "movies" }, sort: "ratio", desc: false, cursorHash: "deadbeef", pane: "filters" };
+  const state = { filter: { group: "category", value: "movies" }, sort: "ratio", desc: false, cursorHash: "deadbeef", pane: "filters", paletteMru: ["torrent.move"] };
   const text = Model.serializeViewState(state);
   assert.equal(typeof text, "string");
   assert.deepEqual(JSON.parse(text), state);
@@ -1314,6 +1315,38 @@ test("serializeViewState round-trips through parseViewState", () => {
 test("serializeViewState normalizes garbage input the same way parseViewState does", () => {
   const text = Model.serializeViewState({ sort: "bogus", pane: "nope" });
   assert.deepEqual(JSON.parse(text), DEFAULT_VIEW_STATE);
+});
+
+// --- parseViewState: paletteMru ---------------------------------------------
+
+test("parseViewState defaults paletteMru to an empty array", () => {
+  assert.deepEqual(Model.parseViewState({}).paletteMru, []);
+  assert.deepEqual(Model.parseViewState({ paletteMru: null }).paletteMru, []);
+  assert.deepEqual(Model.parseViewState({ paletteMru: "not an array" }).paletteMru, []);
+  assert.deepEqual(Model.parseViewState({ paletteMru: 42 }).paletteMru, []);
+});
+
+test("parseViewState keeps a valid array of strings, in order", () => {
+  const mru = ["torrent.remove", "sort.next", "torrent.move"];
+  assert.deepEqual(Model.parseViewState({ paletteMru: mru }).paletteMru, mru);
+});
+
+test("parseViewState drops non-string entries from paletteMru", () => {
+  const result = Model.parseViewState({ paletteMru: ["a", 1, null, undefined, {}, [], "b", true] });
+  assert.deepEqual(result.paletteMru, ["a", "b"]);
+});
+
+test("parseViewState removes duplicate ids from paletteMru, keeping the first occurrence", () => {
+  const result = Model.parseViewState({ paletteMru: ["a", "b", "a", "c", "b"] });
+  assert.deepEqual(result.paletteMru, ["a", "b", "c"]);
+});
+
+test("parseViewState caps paletteMru at 20 entries", () => {
+  const long = [];
+  for (let i = 0; i < 30; i++) long.push("cmd" + i);
+  const result = Model.parseViewState({ paletteMru: long });
+  assert.equal(result.paletteMru.length, 20);
+  assert.deepEqual(result.paletteMru, long.slice(0, 20));
 });
 
 // --- files load origin (Service's quiet map) --------------------------------

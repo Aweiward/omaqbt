@@ -56,6 +56,8 @@ test("KEY constants match Qt::Key values", () => {
   assert.equal(KEY.Space, 0x20);
   assert.equal(KEY.H, 0x48);
   assert.equal(KEY.L, 0x4c);
+  assert.equal(KEY.N, 0x4e);
+  assert.equal(KEY.P, 0x50);
 });
 
 // --- NORMAL, table pane: one test per table row -----------------------------
@@ -747,4 +749,99 @@ test("o, y, m and e in the inspector need a torrent", () => {
 test("helpFor(NORMAL, inspector) lists o, y, m and e", () => {
   const ids = helpFor("NORMAL", "inspector").map((r) => r.id);
   for (const id of ["torrent.openFolder", "torrent.copyMagnet", "torrent.move", "torrent.recheck"]) assert.ok(ids.includes(id), id);
+});
+
+// --- COMMAND mode (command palette) ----------------------------------------
+
+test(": opens the command palette from every pane, in NORMAL only", () => {
+  for (const pane of ["table", "filters", "inspector"]) {
+    const r = dispatch(state({ pane }), ev(":", 0x3a));
+    assert.equal(r.commandId, "palette.open", pane);
+    assert.equal(r.state.mode, "COMMAND", pane);
+    assert.equal(r.state.pane, pane, "pane is untouched");
+  }
+});
+
+test(": does nothing outside NORMAL", () => {
+  for (const mode of ["VISUAL", "INSERT"]) {
+    const r = dispatch(state({ mode }), ev(":", 0x3a));
+    assert.equal(r.commandId, null, mode);
+  }
+});
+
+test("Esc closes the palette back to NORMAL", () => {
+  const r = dispatch(state({ mode: "COMMAND" }), ev("\u001b", KEY.Escape));
+  assert.equal(r.commandId, "palette.close");
+  assert.equal(r.state.mode, "NORMAL");
+});
+
+test("Enter and Return run the highlighted palette row", () => {
+  for (const e of [ev("\r", KEY.Return), ev("\r", KEY.Enter)]) {
+    const r = dispatch(state({ mode: "COMMAND" }), e);
+    assert.equal(r.commandId, "palette.run", JSON.stringify(e));
+    assert.equal(r.state.mode, "NORMAL");
+  }
+});
+
+test("Up and Ctrl-p move the palette selection up", () => {
+  for (const e of [ev("", KEY.Up), ev("", KEY.P, { ctrl: true })]) {
+    const r = dispatch(state({ mode: "COMMAND" }), e);
+    assert.equal(r.commandId, "palette.up", JSON.stringify(e));
+    assert.equal(r.state.mode, "COMMAND");
+  }
+});
+
+test("Down and Ctrl-n move the palette selection down", () => {
+  for (const e of [ev("", KEY.Down), ev("", KEY.N, { ctrl: true })]) {
+    const r = dispatch(state({ mode: "COMMAND" }), e);
+    assert.equal(r.commandId, "palette.down", JSON.stringify(e));
+    assert.equal(r.state.mode, "COMMAND");
+  }
+});
+
+test("Tab completes the palette query", () => {
+  const r = dispatch(state({ mode: "COMMAND" }), ev("\t", KEY.Tab));
+  assert.equal(r.commandId, "palette.complete");
+  assert.equal(r.state.mode, "COMMAND");
+});
+
+test("every other key in COMMAND is left to the TextField, including y/n/g/q/Space", () => {
+  const s = state({ mode: "COMMAND" });
+  for (const e of [
+    ev("y", keyOf("y")), ev("n", keyOf("n")), ev("g", keyOf("g")),
+    ev("q", keyOf("q")), ev(" ", KEY.Space), ev(":", 0x3a)
+  ]) {
+    const r = dispatch(s, e);
+    assert.equal(r.commandId, null, JSON.stringify(e));
+    assert.equal(r.state.mode, "COMMAND", JSON.stringify(e));
+  }
+});
+
+test("helpFor(COMMAND, pane) lists exactly the palette keys, in every pane", () => {
+  for (const pane of ["table", "filters", "inspector"]) {
+    const ids = helpFor("COMMAND", pane).map((r) => r.id);
+    assert.deepEqual(
+      ids.slice().sort(),
+      ["palette.close", "palette.complete", "palette.down", "palette.run", "palette.up"].sort(),
+      pane
+    );
+  }
+});
+
+// --- exported precondition/pane helpers (reused by ClientView.paletteRows) --
+
+test("preconditionMet is exported and matches dispatch's own precondition logic", () => {
+  assert.equal(Registry.preconditionMet("none", state()), true);
+  assert.equal(Registry.preconditionMet("torrent", state({ hasTorrent: false })), false);
+  assert.equal(Registry.preconditionMet("torrent", state({ hasTorrent: true })), true);
+  assert.equal(Registry.preconditionMet("selection", state({ hasTorrent: false, selectionCount: 0 })), false);
+  assert.equal(Registry.preconditionMet("selection", state({ hasTorrent: false, mode: "VISUAL", selectionCount: 2 })), true);
+});
+
+test("paneMatches is exported and matches dispatch's own pane logic", () => {
+  const tableRow = commands.find((c) => c.id === "cursor.down");
+  const fileRow = commands.find((c) => c.id === "file.down");
+  assert.equal(Registry.paneMatches(tableRow, "table"), true);
+  assert.equal(Registry.paneMatches(fileRow, "table"), false);
+  assert.equal(Registry.paneMatches(fileRow, "inspector"), true);
 });

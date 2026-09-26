@@ -1,4 +1,5 @@
 .import "Model.js" as Model
+.import "CommandRegistry.js" as Registry
 
 // Pure view helpers for the OmaqBT window (Client.qml, TorrentTable.qml,
 // StatusLine.qml). No I/O, no Date, no Qt objects: everything comes in
@@ -1024,6 +1025,227 @@ function helpRows(rows) {
   return out;
 }
 
+// --- Command palette --------------------------------------------------------
+
+// fuzzyMatch(query, title) -> {score, indices} | null. Case-insensitive
+// subsequence match: every character of `query`, in order, must appear
+// somewhere in `title` (not necessarily contiguous). The match picked is
+// the leftmost-greedy one (each query character takes the earliest
+// available occurrence in `title`), which is deterministic and, if any
+// subsequence match exists, always finds one.
+//
+// Scoring rewards, per matched character: a consecutive run (this match
+// immediately follows the previous one), the start of a word (preceded by
+// a non-alphanumeric character, or the very first character), and the
+// start of the title specifically (index 0, on top of the word-start
+// bonus). An empty query matches everything with score 0 and no indices.
+var FUZZY_CONSECUTIVE_BONUS = 15;
+var FUZZY_WORD_START_BONUS = 10;
+var FUZZY_TITLE_START_BONUS = 5;
+
+function isWordBoundaryBefore(title, index) {
+  if (index <= 0) return true;
+  var c = title.charAt(index - 1);
+  return !/[a-z0-9]/i.test(c);
+}
+
+function fuzzyMatch(query, title) {
+  var q = String(query || "");
+  var t = String(title || "");
+  if (q === "") return { score: 0, indices: [] };
+  var lowerQ = q.toLowerCase();
+  var lowerT = t.toLowerCase();
+  var indices = [];
+  var searchFrom = 0;
+  for (var i = 0; i < lowerQ.length; i++) {
+    var pos = lowerT.indexOf(lowerQ.charAt(i), searchFrom);
+    if (pos === -1) return null;
+    indices.push(pos);
+    searchFrom = pos + 1;
+  }
+  var score = 0;
+  for (var j = 0; j < indices.length; j++) {
+    var idx = indices[j];
+    score += 1;
+    if (j > 0 && idx === indices[j - 1] + 1) score += FUZZY_CONSECUTIVE_BONUS;
+    if (isWordBoundaryBefore(t, idx)) score += FUZZY_WORD_START_BONUS;
+    if (idx === 0) score += FUZZY_TITLE_START_BONUS;
+  }
+  return { score: score, indices: indices };
+}
+
+// mruPush(mru, id) -> mru with `id` moved (or inserted) at the front,
+// deduped, capped at 20. Pure: never mutates `mru`.
+var PALETTE_MRU_CAP = 20;
+
+function mruPush(mru, id) {
+  var pushed = String(id);
+  var out = [pushed];
+  var list = mru || [];
+  for (var i = 0; i < list.length; i++) {
+    if (String(list[i]) !== pushed) out.push(list[i]);
+  }
+  return out.slice(0, PALETTE_MRU_CAP);
+}
+
+// The groups (and their order) a palette row can belong to -- the same
+// four HELP_GROUPS the `?` overlay uses.
+var PALETTE_GROUPS = HELP_GROUPS;
+var PALETTE_MRU_SHOWN = 5;
+
+// A row that "runs from the table": at least one of its commands-table
+// rows has panes covering "table" (directly, or via the any-pane wildcard).
+// Evaluating this way (rather than through dispatch/findMatch) is
+// deliberate: the palette always evaluates a command as if the table pane
+// were focused, regardless of the pane the window was actually in when ":"
+// was pressed.
+function paletteRunsFromTable(rows) {
+  for (var i = 0; i < rows.length; i++) {
+    if (Registry.paneMatches(rows[i], "table")) return true;
+  }
+  return false;
+}
+
+// Every raw commands-table row for one command id, merged: keys collected
+// (in first-seen order, deduped) across every row sharing the id, exactly
+// as helpRows merges them for the `?` overlay. `needs` is taken from the
+// first row (every duplicate-id row in the table shares the same `needs`).
+function paletteCommandEntries(commandsTable) {
+  var order = [];
+  var byId = {};
+  var list = commandsTable || [];
+  for (var i = 0; i < list.length; i++) {
+    var row = list[i];
+    if (!row || row.id === null || row.id === undefined) continue;
+    if (String(row.id).indexOf("palette.") === 0) continue;
+    if (!row.modes || row.modes.indexOf("NORMAL") === -1) continue;
+    if (!byId[row.id]) {
+      byId[row.id] = { id: row.id, title: row.title, group: row.group, needs: row.needs, rows: [] };
+      order.push(row.id);
+    }
+    byId[row.id].rows.push(row);
+  }
+  var out = [];
+  for (var j = 0; j < order.length; j++) out.push(byId[order[j]]);
+  return out;
+}
+
+function paletteKeysText(rows) {
+  var seen = [];
+  for (var i = 0; i < rows.length; i++) {
+    var keys = rows[i].keys || [];
+    for (var k = 0; k < keys.length; k++) {
+      var label = helpKeyLabel(keys[k]);
+      if (seen.indexOf(label) === -1) seen.push(label);
+    }
+  }
+  return seen.join(" / ");
+}
+
+// paletteRowFrom(entry, state, indices) -> one {kind:"command", ...} row.
+// enabled/reason follow the table's own precondition function (reused from
+// CommandRegistry, never copied): a command whose rows never cover the
+// table pane is disabled with "focus the inspector" (e.g. the Files tab's
+// file.* rows); otherwise a failed `needs` precondition disables it with
+// "needs a selected torrent".
+function paletteRowFrom(entry, state, indices) {
+  var enabled = true;
+  var reason = "";
+  if (!paletteRunsFromTable(entry.rows)) {
+    enabled = false;
+    reason = "focus the inspector";
+  } else if (!Registry.preconditionMet(entry.needs, state)) {
+    enabled = false;
+    reason = "needs a selected torrent";
+  }
+  return {
+    kind: "command",
+    id: entry.id,
+    title: entry.title,
+    group: entry.group,
+    keys: paletteKeysText(entry.rows),
+    indices: indices || [],
+    enabled: enabled,
+    reason: reason
+  };
+}
+
+function paletteDividerRow() {
+  return { kind: "divider", id: null, title: "", group: "", keys: "", indices: [], enabled: false, reason: "" };
+}
+
+function paletteTitleAsc(a, b) {
+  var ta = String(a.title).toLowerCase();
+  var tb = String(b.title).toLowerCase();
+  if (ta === tb) return 0;
+  return ta < tb ? -1 : 1;
+}
+
+// paletteRows(query, commands, mru, state) -> the rows the palette shows.
+//
+// Empty query: up to 5 MRU commands (in MRU order, dropping ids that
+// aren't real commands) that still exist, then a divider (omitted when
+// there are no MRU rows to divide from -- a fresh install has no recents,
+// and a lone divider above an otherwise-full list reads as a rendering
+// glitch), then every other eligible command grouped Torrent/View/
+// Library/App and sorted by title within each group.
+//
+// Non-empty query: every command whose title fuzzy-matches `query`,
+// ordered by score descending, ties broken by title; no divider.
+//
+// A command is eligible when its id isn't null or "palette.*" and its
+// `modes` include "NORMAL" -- the same table `commands` (as passed in)
+// that helpFor/dispatch read.
+function paletteRows(query, commands, mru, state) {
+  var entries = paletteCommandEntries(commands);
+  var byId = {};
+  var i;
+  for (i = 0; i < entries.length; i++) byId[entries[i].id] = entries[i];
+
+  var q = String(query || "");
+
+  if (q === "") {
+    var mruIds = [];
+    var mlist = mru || [];
+    for (i = 0; i < mlist.length && mruIds.length < PALETTE_MRU_SHOWN; i++) {
+      var id = mlist[i];
+      if (byId[id] && mruIds.indexOf(id) === -1) mruIds.push(id);
+    }
+
+    var rowsOut = [];
+    for (i = 0; i < mruIds.length; i++) rowsOut.push(paletteRowFrom(byId[mruIds[i]], state, []));
+    if (mruIds.length > 0) rowsOut.push(paletteDividerRow());
+
+    var shown = {};
+    for (i = 0; i < mruIds.length; i++) shown[mruIds[i]] = true;
+    var remaining = [];
+    for (i = 0; i < entries.length; i++) {
+      if (!shown[entries[i].id]) remaining.push(entries[i]);
+    }
+    remaining.sort(function(a, b) {
+      var ga = PALETTE_GROUPS.indexOf(a.group);
+      var gb = PALETTE_GROUPS.indexOf(b.group);
+      if (ga !== gb) return ga - gb;
+      return paletteTitleAsc(a, b);
+    });
+    for (i = 0; i < remaining.length; i++) rowsOut.push(paletteRowFrom(remaining[i], state, []));
+    return rowsOut;
+  }
+
+  var scored = [];
+  for (i = 0; i < entries.length; i++) {
+    var m = fuzzyMatch(q, entries[i].title);
+    if (m) scored.push({ entry: entries[i], score: m.score, indices: m.indices });
+  }
+  scored.sort(function(a, b) {
+    if (a.score !== b.score) return b.score - a.score;
+    return paletteTitleAsc(a.entry, b.entry);
+  });
+  var out = [];
+  for (i = 0; i < scored.length; i++) out.push(paletteRowFrom(scored[i].entry, state, scored[i].indices));
+  return out;
+}
+
 // The VPN part of the status line. tone "fg" when bound, "urgent" when a
 // VPN interface exists but the daemon isn't bound to it; null when there
 // is no VPN at all.
@@ -1105,6 +1327,9 @@ if (typeof module !== "undefined" && module.exports) {
     filesView: filesView,
     withPriority: withPriority,
     moveIndex: moveIndex,
-    helpRows: helpRows
+    helpRows: helpRows,
+    fuzzyMatch: fuzzyMatch,
+    mruPush: mruPush,
+    paletteRows: paletteRows
   };
 }

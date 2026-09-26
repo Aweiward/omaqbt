@@ -788,7 +788,7 @@ function ratioLimitLabel(ratio) {
 // --- View state: parseViewState / serializeViewState -----------------------
 //
 // The shape the window consumes: {filter:{group,value}, sort, desc,
-// cursorHash, pane}. Every field falls back to its own default
+// cursorHash, pane, paletteMru}. Every field falls back to its own default
 // independently of the others -- one bad field never invalidates the rest.
 //
 // Filter groups are exactly "status", "category", "tag" and "tracker"
@@ -801,8 +801,37 @@ function ratioLimitLabel(ratio) {
 // widget-only compatibility modes) are not part of this contract and are
 // treated as unknown here. desc is absolute (see fieldSortComparator) and
 // must be a real boolean. Pane is one of "table", "filters", "inspector".
+// paletteMru is the command palette's recently-used list: any array of
+// strings, with non-strings dropped, duplicates removed and the list capped
+// at 20 (see sanitizeMruList); the default is []. A stale id (a command
+// removed from the table) is not caught here -- Model.js does not import
+// CommandRegistry -- so that filtering happens later, in
+// ClientView.paletteRows.
 var VIEW_STATE_FILTER_GROUPS = { status: true, category: true, tag: true, tracker: true };
 var VIEW_STATE_PANES = { table: true, filters: true, inspector: true };
+var PALETTE_MRU_CAP = 20;
+
+// sanitizeMruList(raw) -> raw filtered down to a plain array of strings:
+// non-strings dropped, duplicates removed (first occurrence kept, order
+// otherwise preserved), capped at PALETTE_MRU_CAP. A non-array input (or
+// none) becomes []. This is structural validation only -- it has no idea
+// which ids are real commands (Model.js does not import CommandRegistry),
+// so an id that no longer exists in the command table is filtered later,
+// by ClientView.paletteRows.
+function sanitizeMruList(raw) {
+  var list = Array.isArray(raw) ? raw : [];
+  var seen = {};
+  var out = [];
+  for (var i = 0; i < list.length; i++) {
+    var v = list[i];
+    if (typeof v !== "string") continue;
+    if (Object.prototype.hasOwnProperty.call(seen, v)) continue;
+    seen[v] = true;
+    out.push(v);
+    if (out.length >= PALETTE_MRU_CAP) break;
+  }
+  return out;
+}
 
 // parseViewState(raw): raw is either a JSON string (as read from view.json)
 // or an already-parsed object (e.g. re-validating a state the window built
@@ -831,8 +860,9 @@ function parseViewState(raw) {
   var desc = typeof parsed.desc === "boolean" ? parsed.desc : true;
   var cursorHash = typeof parsed.cursorHash === "string" ? parsed.cursorHash : "";
   var pane = VIEW_STATE_PANES[parsed.pane] === true ? parsed.pane : "table";
+  var paletteMru = sanitizeMruList(parsed.paletteMru);
 
-  return { filter: { group: group, value: value }, sort: sort, desc: desc, cursorHash: cursorHash, pane: pane };
+  return { filter: { group: group, value: value }, sort: sort, desc: desc, cursorHash: cursorHash, pane: pane, paletteMru: paletteMru };
 }
 
 // serializeViewState(state) -> JSON text for view.json. Runs the input
