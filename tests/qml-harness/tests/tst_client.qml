@@ -54,7 +54,8 @@ TestCase {
       function toggleAll(o) { return rec("toggleAll", [o]) }
       function toggleTurtle(o) { return rec("turtle", [o]) }
       function addTarget(t, s, p, o) { return rec("add", [t, o]) }
-      function copyMagnet(r, o) { return rec("copy", [r, o]) }
+      property bool busy: false
+      function copyMagnet(r, o) { var t = rec("copy", [r, o]); return busy ? 0 : t }
       function openPath(p, o) { rec("open", [p, o]) }
       function refresh() { rec("refresh", []) }
       function startDaemon(o) { return rec("startDaemon", [o]) }
@@ -675,6 +676,73 @@ TestCase {
     wait(100)
     verify(o.c.filesState === state, "filesState is not recomputed on a tick")
     compare(lv.contentY, before, "the files list keeps its scroll across ticks")
+  }
+
+  function findPane(c, prop) {
+    return (function find(obj) {
+      if (!obj) return null
+      if (obj[prop] !== undefined) return obj
+      for (var i = 0; i < (obj.children || []).length; i++) { var r = find(obj.children[i]); if (r) return r }
+      return null
+    })(winOf(c).contentItem)
+  }
+
+  function test_click_to_another_pane_ends_visual() {
+    var o = make()
+    o.svc.torrents = list3()
+    key(o.c, "V", 0x56, 0x02000000); key(o.c, "j")
+    compare(o.c.mode, "VISUAL")
+    findPane(o.c, "cursorFilter").itemClicked("status", "Active")
+    compare(o.c.pane, "filters")
+    compare(o.c.mode, "NORMAL", "a pane change leaves VISUAL")
+    compare(o.c.anchorHash, "")
+    compare(o.c.regState.selectionCount, 0)
+    compare(Object.keys(o.c.rangeHashes).length, 0)
+    compare(findWith(winOf(o.c).contentItem, "setInput").selectedCount, 0)
+    key(o.c, "j")
+    compare(o.c.filterCursor.value, "Downloading", "j works in the filters pane")
+    key(o.c, "\u001b", 0x01000000)
+    compare(o.c.regState.prefix, "Esc", "Esc dispatches (filter.clearText)")
+    // the same through a file click in the inspector
+    key(o.c, "\t", 0x01000001)     // filters -> table
+    compare(o.c.pane, "table")
+    key(o.c, "4")
+    o.svc.setFilesFor(o.c.cursorHash, [{ index: 0, name: "x", progress: 0, priority: 1 }])
+    o.svc.setFilesStatus(o.c.cursorHash, "ok", "")
+    key(o.c, "V", 0x56, 0x02000000)
+    compare(o.c.mode, "VISUAL")
+    findPane(o.c, "fileIndex").fileClicked(0)
+    compare(o.c.pane, "inspector")
+    compare(o.c.mode, "NORMAL")
+    key(o.c, "1")
+    compare(o.c.inspectorTab, "info", "keys work in the inspector")
+  }
+
+  function test_inspector_pane_runs_o_y_m_e_on_the_cursor() {
+    var o = make()
+    o.svc.torrents = list3()
+    key(o.c, "\t", 0x01000001)
+    compare(o.c.pane, "inspector")
+    key(o.c, "e")
+    compare(lastCall(o.svc, "recheck").args[0], hh("c"))
+    key(o.c, "o")
+    compare(lastCall(o.svc, "open").args[0], "/dl")
+    key(o.c, "y")
+    compare(lastCall(o.svc, "copy").args[1].hashes[0], hh("c"))
+    key(o.c, "m")
+    compare(o.c.mode, "INSERT")
+    key(o.c, "\u001b", 0x01000000)
+    compare(o.c.mode, "NORMAL")
+  }
+
+  function test_busy_copy_notes() {
+    var o = make()
+    o.svc.torrents = list3()
+    o.svc.busy = true
+    key(o.c, "y")
+    compare(o.c.messageLine.text, "Busy, try again.")
+    key(o.c, "j")
+    compare(o.c.messageLine.text, "")
   }
 }
 

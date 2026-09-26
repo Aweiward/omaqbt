@@ -409,9 +409,12 @@ test("dispatchPane makes Enter and y reach their commands from any restored pane
     const y = Registry.dispatch(Object.assign({}, base, { pane: V.dispatchPane(pane, "empty") }), V.keyEvent(0x59, "y", 0, 0));
     assert.equal(y.commandId, null);
     assert.equal(y.blocked, "needs a selected torrent", "empty/" + pane);
-    // and without the fix the same keys do nothing from that pane
-    const raw = Registry.dispatch(Object.assign({}, base, { pane: pane }), V.keyEvent(0x59, "y", 0, 0));
-    assert.equal(raw.blocked, undefined);
+    // and without the fix the same key does nothing from the filters pane
+    // (y is also an inspector-pane key since the Info tab lists it)
+    if (pane === "filters") {
+      const raw = Registry.dispatch(Object.assign({}, base, { pane: pane }), V.keyEvent(0x59, "y", 0, 0));
+      assert.equal(raw.blocked, undefined);
+    }
   }
 });
 
@@ -515,9 +518,12 @@ test("hashSet builds a lookup", () => {
 
 // --- Task 8: messages --------------------------------------------------------
 
-test("msgTrack shows progress for a real ticket and ignores a refused one", () => {
+test("msgTrack shows progress for a real ticket and notes busy for a refused one", () => {
   const m0 = V.emptyMessages();
-  assert.equal(V.msgTrack(m0, 0, "start", 1, []), m0);
+  const busy = V.msgTrack(m0, 0, "copy", 1, []);
+  assert.deepEqual(V.messageLine(busy), { text: "Busy, try again.", tone: "muted" });
+  assert.deepEqual(busy.tickets, {}, "a refused call records no ticket");
+  assert.deepEqual(V.messageLine(V.msgKey(busy)), { text: "", tone: "muted" }, "one key long");
   const m1 = V.msgTrack(m0, 7, "start", 2, [H("a"), H("b")]);
   assert.deepEqual(V.messageLine(m1), { text: "Starting 2 torrents…", tone: "muted" });
   assert.equal(V.ownsTicket(m1, 7), true);
@@ -712,4 +718,17 @@ test("modeHints: VISUAL and per-pane NORMAL hints", () => {
   assert.ok(V.modeHints("NORMAL", { pane: "filters" }).some((h) => h.key === "Enter" && h.label === "apply"));
   assert.ok(V.modeHints("NORMAL", { pane: "inspector", filesTab: true }).some((h) => h.label === "priority"));
   assert.ok(V.modeHints("NORMAL", { pane: "table" }).some((h) => h.key === "?"));
+});
+
+test("leaveVisualState returns to NORMAL with no range and leaves the input alone", () => {
+  const vis = { mode: "VISUAL", pane: "table", prefix: "g", prefixAt: 5, hasTorrent: true, selectionCount: 3, pending: null };
+  const st = V.leaveVisualState(vis);
+  assert.equal(st.mode, "NORMAL");
+  assert.equal(st.selectionCount, 0);
+  assert.equal(st.prefix, null);
+  assert.equal(vis.mode, "VISUAL");
+  // Esc and j then dispatch again from the filters pane
+  const esc = Registry.dispatch(Object.assign({}, st, { pane: "filters" }), V.keyEvent(KEY.Escape, "\u001b", 0, 0));
+  assert.equal(esc.commandId, "filter.clearText");
+  assert.equal(Registry.dispatch(Object.assign({}, st, { pane: "filters" }), V.keyEvent(0x4a, "j", 0, 0)).commandId, "filter.down");
 });

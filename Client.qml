@@ -324,10 +324,20 @@ Item {
 
   function setPane(next) {
     if (next === pane) return
+    // Every VISUAL row is table-only, so a pane change (a click on a filter
+    // or a file) that stayed in VISUAL would leave no key working, Esc
+    // included. Any pane change ends VISUAL first.
+    leaveVisual()
     pane = next
     // Entering the filter pane puts its cursor on the active filter.
     if (next === "filters") setFilterCursor(View.filterIndex(filterEntries, filter) >= 0 ? filter : View.moveFilterCursor(filterEntries, null, 1))
     saveView()
+  }
+
+  function leaveVisual() {
+    if (regState.mode !== "VISUAL") return
+    regState = View.leaveVisualState(regState)
+    anchorHash = ""
   }
 
   function setFilterCursor(f) {

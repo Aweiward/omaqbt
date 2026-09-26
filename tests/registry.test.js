@@ -629,6 +629,7 @@ test("helpFor(NORMAL, filters) excludes table-only rows", () => {
   const rows = helpFor("NORMAL", "filters");
   const ids = rows.map((r) => r.id);
   assert.ok(!ids.includes("cursor.down"));
+  for (const id of ["torrent.openFolder", "torrent.copyMagnet", "torrent.move", "torrent.recheck"]) assert.ok(!ids.includes(id), id);
   assert.ok(ids.includes("filter.down"));
   assert.ok(ids.includes("help.toggle"));
 });
@@ -697,4 +698,34 @@ test("helpFor(NORMAL, inspector) lists the file rows and not the table's", () =>
   assert.ok(ids.includes("file.cycle"));
   assert.ok(!ids.includes("cursor.down"));
   assert.ok(!ids.includes("torrent.toggle"));
+});
+
+// --- o, y, m, e from the inspector pane ------------------------------------
+
+test("o, y, m and e work in the table and inspector panes, not in filters", () => {
+  const cases = [["o", "torrent.openFolder"], ["y", "torrent.copyMagnet"], ["m", "torrent.move"], ["e", "torrent.recheck"]];
+  for (const pane of ["table", "inspector"]) {
+    for (const [k, id] of cases) {
+      const r = dispatch(state({ pane, hasTorrent: true }), ev(k, keyOf(k)));
+      assert.equal(r.commandId, id, pane + "/" + k);
+      assert.equal(r.args.count, 1, pane + "/" + k + " acts on the cursor torrent");
+    }
+  }
+  for (const [k] of cases) {
+    const r = dispatch(state({ pane: "filters", hasTorrent: true }), ev(k, keyOf(k)));
+    assert.equal(r.commandId, null, "filters/" + k);
+  }
+});
+
+test("o, y, m and e in the inspector need a torrent", () => {
+  for (const k of ["o", "y", "m", "e"]) {
+    const r = dispatch(state({ pane: "inspector", hasTorrent: false }), ev(k, keyOf(k)));
+    assert.equal(r.commandId, null, k);
+    assert.ok(r.blocked, k);
+  }
+});
+
+test("helpFor(NORMAL, inspector) lists o, y, m and e", () => {
+  const ids = helpFor("NORMAL", "inspector").map((r) => r.id);
+  for (const id of ["torrent.openFolder", "torrent.copyMagnet", "torrent.move", "torrent.recheck"]) assert.ok(ids.includes(id), id);
 });

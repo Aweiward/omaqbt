@@ -595,6 +595,22 @@ function nextAnchor(nextMode, commandId, anchorHash, cursorHash) {
   return String(anchorHash || "");
 }
 
+// leaveVisualState(regState) -> regState back in NORMAL with no range
+// (selectionCount 0, no prefix), for a VISUAL session ended outside
+// dispatch, e.g. by a click that moves focus to another pane.
+function leaveVisualState(regState) {
+  var st = {};
+  var r = regState || {};
+  for (var k in r) {
+    if (Object.prototype.hasOwnProperty.call(r, k)) st[k] = r[k];
+  }
+  if (st.mode === "VISUAL") st.mode = "NORMAL";
+  st.selectionCount = 0;
+  st.prefix = null;
+  st.prefixAt = 0;
+  return st;
+}
+
 // hashSet(list) -> {hash: true}, for per-row lookups in delegates.
 function hashSet(list) {
   var out = {};
@@ -650,12 +666,16 @@ function failureText(kind, count) {
   return "The action failed";
 }
 
+var BUSY_NOTE = "Busy, try again.";
+
 // msgTrack(m, ticket, kind, count, hashes) -> m with this window's ticket
 // recorded and its progress text showing. A ticket <= 0 (Service refused
-// the call) records nothing.
+// the call because it is busy) records nothing and notes BUSY_NOTE.
 function msgTrack(m, ticket, kind, count, hashes) {
   var t = Number(ticket) || 0;
-  if (t <= 0) return m || emptyMessages();
+  // Service refuses a window call with 0 only when the process that would
+  // run it is already busy (the window validates its own input first).
+  if (t <= 0) return msgNote(m, BUSY_NOTE, "muted");
   var next = copyMessages(m);
   var text = progressText(kind, count);
   next.tickets[String(t)] = { kind: kind, count: Number(count) || 0, hashes: (hashes || []).slice(), text: text };
@@ -1024,6 +1044,8 @@ if (typeof module !== "undefined" && module.exports) {
     targetHashes: targetHashes,
     dispatchState: dispatchState,
     nextAnchor: nextAnchor,
+    leaveVisualState: leaveVisualState,
+    BUSY_NOTE: BUSY_NOTE,
     hashSet: hashSet,
     emptyMessages: emptyMessages,
     failureText: failureText,

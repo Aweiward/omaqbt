@@ -43,19 +43,20 @@ var PANE_ANY = "*";
 // ("g g", "Esc Esc") are display-only; dispatch() implements those
 // sequences directly rather than through the generic per-key matcher.
 var commands = [
-  // NORMAL, table
+  // NORMAL, table (o, y, m and e also work from the inspector, whose Info
+  // tab lists them; they act on the cursor torrent)
   { id: "cursor.down", title: "Down", group: "View", keys: ["j", "Down"], modes: ["NORMAL", "VISUAL"], panes: ["table"], needs: "none" },
   { id: "cursor.up", title: "Up", group: "View", keys: ["k", "Up"], modes: ["NORMAL", "VISUAL"], panes: ["table"], needs: "none" },
   { id: "cursor.top", title: "Top", group: "View", keys: ["g g"], modes: ["NORMAL"], panes: ["table"], needs: "none" },
   { id: "cursor.bottom", title: "Bottom", group: "View", keys: ["G"], modes: ["NORMAL"], panes: ["table"], needs: "none" },
   { id: "torrent.toggle", title: "Pause/resume", group: "Torrent", keys: ["Space"], modes: ["NORMAL", "VISUAL"], panes: ["table"], needs: "selection" },
   { id: "inspector.files", title: "Files", group: "View", keys: ["Enter"], modes: ["NORMAL"], panes: ["table"], needs: "none" },
-  { id: "torrent.openFolder", title: "Open folder", group: "Torrent", keys: ["o"], modes: ["NORMAL"], panes: ["table"], needs: "torrent" },
+  { id: "torrent.openFolder", title: "Open folder", group: "Torrent", keys: ["o"], modes: ["NORMAL"], panes: ["table", "inspector"], needs: "torrent" },
   { id: "torrent.remove", title: "Remove", group: "Torrent", keys: ["x"], modes: ["NORMAL", "VISUAL"], panes: ["table"], needs: "selection" },
   { id: "torrent.delete", title: "Delete with files", group: "Torrent", keys: ["X"], modes: ["NORMAL", "VISUAL"], panes: ["table"], needs: "selection" },
-  { id: "torrent.copyMagnet", title: "Copy magnet", group: "Torrent", keys: ["y"], modes: ["NORMAL"], panes: ["table"], needs: "torrent" },
-  { id: "torrent.move", title: "Move", group: "Torrent", keys: ["m"], modes: ["NORMAL"], panes: ["table"], needs: "torrent" },
-  { id: "torrent.recheck", title: "Recheck", group: "Torrent", keys: ["e"], modes: ["NORMAL", "VISUAL"], panes: ["table"], needs: "selection" },
+  { id: "torrent.copyMagnet", title: "Copy magnet", group: "Torrent", keys: ["y"], modes: ["NORMAL"], panes: ["table", "inspector"], needs: "torrent" },
+  { id: "torrent.move", title: "Move", group: "Torrent", keys: ["m"], modes: ["NORMAL"], panes: ["table", "inspector"], needs: "torrent" },
+  { id: "torrent.recheck", title: "Recheck", group: "Torrent", keys: ["e"], modes: ["NORMAL", "VISUAL"], panes: ["table", "inspector"], needs: "selection" },
   { id: "visual.enter", title: "Visual select", group: "View", keys: ["V"], modes: ["NORMAL"], panes: ["table"], needs: "torrent" },
 
   // NORMAL, any pane
