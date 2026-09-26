@@ -57,6 +57,10 @@ On a torrent’s detail view, size, ratio, seeds/peers, the added date, and the 
 
 The only plugin setting is `refreshIntervalSec` (default 5) on the widget entry in `~/.config/omarchy/shell.json`.
 
+OmaqBT polls through `qbt-serve`, a small long-lived Python helper (standard library only, no build step) that the shell starts once and shares across every bar, including one bar per monitor. It keeps one WebUI session and asks qBittorrent only for changes. If it can't run, the widget falls back to polling with `qbt status`. `refreshIntervalSec` sets its poll rate, and it polls every 250 ms while a browser magnet is waiting.
+
+The polling runs as a plugin service, so while the plugin is enabled it keeps polling, handling browser magnets, and sending finish notifications even if the widget isn't placed on the bar. Disable the plugin to stop it.
+
 Starting the daemon writes these keys under `[Preferences]` in `~/.config/qBittorrent/qBittorrent.conf` if you click **Install** or **Start daemon**:
 
 ```
