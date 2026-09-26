@@ -23,7 +23,8 @@ Scope {
     root.attemptOpen = true
     proc.command = [root.path]
     proc.running = true
-    // A failed exec may never reach running; catch that too.
+    // A failed exec may never reach running; catch that too. If this runs
+    // before a slow start reaches running, onRunningChanged re-opens it.
     Qt.callLater(root.checkLost)
   }
 
@@ -58,9 +59,19 @@ Scope {
     stdout: SplitParser {
       onRead: function(data) { root.line(String(data)) }
     }
-    // Kept only for debugging; the fatal line on stdout carries the reason.
-    stderr: StdioCollector { id: errOut; waitForEnd: true }
+    // Drained line by line and dropped, so a chatty child never grows a
+    // buffer for the shell's lifetime; the fatal line on stdout carries
+    // the reason.
+    stderr: SplitParser {
+      onRead: function(data) { console.debug("OmaqBT qbt-serve stderr: " + data) }
+    }
     onExited: function(exitCode) { root.finishAttempt(exitCode) }
-    onRunningChanged: if (!proc.running) Qt.callLater(root.checkLost)
+    // A process that comes up re-opens its attempt, so a checkLost that ran
+    // before `running` went true can't leave a live child whose exit is
+    // never reported.
+    onRunningChanged: {
+      if (proc.running) root.attemptOpen = true
+      else Qt.callLater(root.checkLost)
+    }
   }
 }
