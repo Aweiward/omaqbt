@@ -218,7 +218,11 @@ Scope {
     var ticket = actionTicketSeq + 1
     actionTicketSeq = ticket
     var item = Model.makeActionItem(ticket, cmd, statusText, opts)
-    if (actionProcess.running) {
+    // currentAction also counts: after a failed start the process is no
+    // longer running, but its action stays current until the deferred
+    // start check below finishes it, and starting another here would
+    // orphan that ticket.
+    if (actionProcess.running || currentAction !== null) {
       actionQueue = Model.enqueueAction(actionQueue, item)
       return ticket
     }
@@ -239,6 +243,42 @@ Scope {
     }
     actionProcess.command = item.cmd
     actionProcess.running = true
+  }
+
+  // Ends the current action: the one path for a command that exited and
+  // for one that never started. ok false reports err (already sanitized)
+  // to the widget's lastError unless the action came from the window.
+  function finishAction(ok, err) {
+    var done = currentAction
+    currentAction = null
+    var fromWindow = !!done && done.origin === "window"
+    var cmd = (done && done.cmd) || []
+    var kind = cmd.length > 1 ? String(cmd[1]) : ""
+    if (kind === "magnet-drain") magnetDrainQueued = false
+    if (!fromWindow) actionStatus = ""
+    if (!ok) {
+      if (!fromWindow) lastError = err
+      if (kind === "magnet-drain") magnetBackoffUntil = Date.now() + 2000
+      pumpActionQueue()
+      // Emitted last so a handler that queues another action sees a
+      // consistent actionProcess.
+      if (done) actionFinished(done.ticket, false, err, done.origin, done.hashes)
+      return
+    }
+    refresh()
+    loadMagnetSnapshot()
+    pumpActionQueue()
+    if (done) actionFinished(done.ticket, true, "", done.origin, done.hashes)
+  }
+
+  // Deferred from actionProcess's running going false: by then a command
+  // that ran has had its exited handled (Quickshell emits exited before
+  // runningChanged) and moved currentAction on. The same ticket still
+  // current with nothing running means the program never started.
+  function checkActionStarted(ticket) {
+    var cur = currentAction
+    if (!cur || cur.ticket !== ticket || actionProcess.running) return
+    finishAction(false, Model.sanitizeError("Could not run the qbt helper"))
   }
 
   function pumpActionQueue() {
@@ -853,28 +893,19 @@ Scope {
     command: []
     stdout: StdioCollector { id: actionOut; waitForEnd: true }
     stderr: StdioCollector { id: actionErr; waitForEnd: true }
+    // A program that can't start (qbt missing, not executable) emits no
+    // exited, only running going false -- the viewStateMkdirProcess case.
+    // The check is deferred because a harness (or any emitter) may flip
+    // running before exited; checkActionStarted only fails a ticket that is
+    // still current once the event loop has run.
+    onRunningChanged: {
+      if (running || root.currentAction === null) return
+      var ticket = root.currentAction.ticket
+      Qt.callLater(function() { root.checkActionStarted(ticket) })
+    }
     onExited: function(exitCode) {
-      var done = root.currentAction
-      root.currentAction = null
-      var fromWindow = !!done && done.origin === "window"
-      var kind = ""
-      try { kind = String((command && command.length > 1) ? command[1] : "") } catch (e) { kind = "" }
-      if (kind === "magnet-drain") root.magnetDrainQueued = false
-      if (!fromWindow) root.actionStatus = ""
-      if (exitCode !== 0) {
-        var err = Model.sanitizeError(actionErr.text || actionOut.text || "qBittorrent command failed")
-        if (!fromWindow) root.lastError = err
-        if (kind === "magnet-drain") root.magnetBackoffUntil = Date.now() + 2000
-        root.pumpActionQueue()
-        // Emitted last so a handler that queues another action sees a
-        // consistent actionProcess.
-        if (done) root.actionFinished(done.ticket, false, err, done.origin, done.hashes)
-        return
-      }
-      root.refresh()
-      root.loadMagnetSnapshot()
-      root.pumpActionQueue()
-      if (done) root.actionFinished(done.ticket, true, "", done.origin, done.hashes)
+      if (exitCode !== 0) root.finishAction(false, Model.sanitizeError(actionErr.text || actionOut.text || "qBittorrent command failed"))
+      else root.finishAction(true, "")
     }
   }
 
