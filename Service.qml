@@ -43,6 +43,7 @@ Scope {
   property string sidecarState: "starting"
   property int sidecarFailures: 0
   property double sidecarLastBeat: 0
+  property double sidecarUpSince: 0
   property int filesRequestSeq: 0
   property var filesRequests: ({})
 
@@ -152,6 +153,9 @@ Scope {
       sidecar.send({ cmd: "refresh" })
       return
     }
+    // Bash polls status only after the sidecar gave up; while it starts or
+    // backs off, status stays stale so two pollers never overlap.
+    if (sidecarState !== "down") return
     if (statusProcess.running) return
     statusProcess.command = [helperPath, "status"]
     statusProcess.running = true
@@ -405,6 +409,7 @@ Scope {
     startDelayTimer.stop()
     sidecarRestartTimer.stop()
     started = false
+    sidecarUpSince = 0
     if (sidecarState !== "down") {
       sidecarState = "starting"
       sidecarFailures = 0
@@ -433,9 +438,11 @@ Scope {
       var wasUp = sidecarState === "up"
       applyStatus(msg.raw)
       sidecarState = "up"
-      sidecarFailures = 0
       sidecarLastBeat = Date.now()
-      if (!wasUp) sendCadence()
+      if (!wasUp) {
+        sidecarUpSince = Date.now()
+        sendCadence()
+      }
     } else if (msg.type === "heartbeat") {
       sidecarLastBeat = Date.now()
     } else if (msg.type === "files") {
@@ -461,6 +468,10 @@ Scope {
     sidecarState = "starting"
     var orphans = filesRequests
     filesRequests = ({})
+    // Only a sidecar that stayed up for a minute earns a clean slate, so one
+    // that dies right after its first tick still reaches sidecarGaveUp.
+    if (sidecarUpSince > 0 && Date.now() - sidecarUpSince >= 60000) sidecarFailures = 0
+    sidecarUpSince = 0
     sidecarFailures = sidecarFailures + 1
     if (Model.sidecarGaveUp(sidecarFailures)) {
       sidecarState = "down"
@@ -519,13 +530,13 @@ Scope {
   }
 
   // While the sidecar is up it ticks on its own cadence, so these timers only
-  // poll through bash when it is not.
+  // poll through bash once it has given up.
   Timer {
     interval: root.refreshIntervalSec * 1000
     repeat: true
     running: !root.magnetWatching && root.active && root.started
     onTriggered: {
-      if (root.sidecarState !== "up") root.refresh()
+      if (root.sidecarState === "down") root.refresh()
       root.loadMagnetSnapshot()
     }
   }
@@ -535,7 +546,7 @@ Scope {
     repeat: true
     running: root.magnetWatching && root.active && root.started
     onTriggered: {
-      if (root.sidecarState !== "up") root.refresh()
+      if (root.sidecarState === "down") root.refresh()
       root.tickMagnet()
     }
   }
