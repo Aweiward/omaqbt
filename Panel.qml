@@ -116,8 +116,9 @@ Panel {
   readonly property bool magnetConfirmOpen: magnetHasQueue && view === "list"
 
   function selectedFile() {
-    if (!qbt.files || qbt.files.length === 0) return null
-    return qbt.files[Math.max(0, Math.min(fileIndex, qbt.files.length - 1))]
+    var files = qbt.filesFor(detailHash)
+    if (files.length === 0) return null
+    return files[Math.max(0, Math.min(fileIndex, files.length - 1))]
   }
 
   function ensureCursor() {
@@ -132,7 +133,8 @@ Panel {
       if (!allowed[focusSection])
         focusSection = detailHasFolder ? "openFolder" : "copyMagnet"
       if (focusSection === "openFolder" && !detailHasFolder) focusSection = "copyMagnet"
-      if (fileIndex >= qbt.files.length) fileIndex = Math.max(0, qbt.files.length - 1)
+      var files = qbt.filesFor(detailHash)
+      if (fileIndex >= files.length) fileIndex = Math.max(0, files.length - 1)
       return
     }
     if (focusSection === "install" || focusSection === "daemon" || focusSection === "lock") focusSection = "header"
@@ -258,7 +260,7 @@ Panel {
       var order = []
       if (detailHasFolder) order.push("openFolder")
       order.push("copyMagnet", "moveTo", "recheck", "remove", "deleteFiles")
-      if (qbt.files.length > 0) order.push("files")
+      if (qbt.filesFor(detailHash).length > 0) order.push("files")
       var idx = order.indexOf(focusSection)
       if (idx < 0) {
         focusSection = order[0]
@@ -270,7 +272,7 @@ Panel {
           return
         }
         if (dy < 0 || dy > 0) {
-          fileIndex = Math.max(0, Math.min(qbt.files.length - 1, fileIndex + dy))
+          fileIndex = Math.max(0, Math.min(qbt.filesFor(detailHash).length - 1, fileIndex + dy))
         }
         return
       }
@@ -323,32 +325,34 @@ Panel {
     if (!file || !detailHash) return
     var next = Model.cyclePriority(file.priority)
     qbt.setPrio(detailHash, file.index, next)
+    var files = qbt.filesFor(detailHash)
     var copy = []
-    for (var i = 0; i < qbt.files.length; i++) {
-      var row = qbt.files[i]
+    for (var i = 0; i < files.length; i++) {
+      var row = files[i]
       if (row.index === file.index) {
         copy.push({ index: row.index, name: row.name, progress: row.progress, priority: next })
       } else {
         copy.push(row)
       }
     }
-    qbt.files = copy
+    qbt.setFilesFor(detailHash, copy)
   }
 
   function skipSelectedFile() {
     var file = selectedFile()
     if (!file || !detailHash) return
     qbt.setPrio(detailHash, file.index, 0)
+    var files = qbt.filesFor(detailHash)
     var copy = []
-    for (var i = 0; i < qbt.files.length; i++) {
-      var row = qbt.files[i]
+    for (var i = 0; i < files.length; i++) {
+      var row = files[i]
       if (row.index === file.index) {
         copy.push({ index: row.index, name: row.name, progress: row.progress, priority: 0 })
       } else {
         copy.push(row)
       }
     }
-    qbt.files = copy
+    qbt.setFilesFor(detailHash, copy)
   }
 
   function handleTextKey(t) {
@@ -428,9 +432,24 @@ Panel {
     Qt.callLater(syncFocus)
   }
 
+  // Third-party widgets get the shell facade as bar.shell (Bar.qml
+  // pluginBarApiFor -> PluginShellApi.serviceFor). `bar` is injected after
+  // creation, so the local fallback stays off until it lands.
+  readonly property var sharedService: (root.bar && root.bar.shell && typeof root.bar.shell.serviceFor === "function") ? root.bar.shell.serviceFor("aweiward.omaqbt") : null
+  readonly property var qbt: sharedService || localService
+
   Service {
-    id: qbt
+    id: localService
     settings: root.settings
+    active: root.bar !== null && root.sharedService === null
+    startDelayMs: 1500
+  }
+
+  Binding {
+    target: root.sharedService
+    property: "settings"
+    value: root.settings
+    when: root.sharedService !== null
   }
 
   onMagnetHasQueueChanged: if (magnetHasQueue) view = "list"
@@ -442,7 +461,7 @@ Panel {
     function show(): void { root.open() }
     function hide(): void { root.close() }
     function toggle(): void { root.toggle() }
-    function refresh(): string { qbt.refresh(); return "ok" }
+    function refresh(): string { root.qbt.refresh(); return "ok" }
   }
 
   BarIconButton {
@@ -459,7 +478,7 @@ Panel {
           iconSize: Style.space(11)
           color: root.barIconColor
           badgeColor: root.urgent
-          warning: qbt.warning
+          warning: root.qbt.warning
         }
       }
     }
@@ -476,7 +495,7 @@ Panel {
     text: root.barSpeeds
     fontSize: Style.font.bodySmall
     horizontalMargin: 3
-    tooltipText: Model.formatRate(qbt.dlSpeed) + " down · " + Model.formatRate(qbt.upSpeed) + " up"
+    tooltipText: Model.formatRate(root.qbt.dlSpeed) + " down · " + Model.formatRate(root.qbt.upSpeed) + " up"
     onPressed: function(buttonCode) { root.barPressed(buttonCode) }
   }
 
@@ -518,7 +537,7 @@ Panel {
       DropArea {
         anchors.fill: parent
         onDropped: function(drop) {
-          if (!qbt.ready) return
+          if (!root.qbt.ready) return
           var target = ""
           if (drop.hasUrls && drop.urls.length > 0) {
             for (var i = 0; i < drop.urls.length; i++) {
@@ -527,7 +546,7 @@ Panel {
           }
           if (target === "" && drop.hasText && Model.isAddableTarget(drop.text)) target = drop.text
           if (target === "") return
-          qbt.addTarget(target, false, "")
+          root.qbt.addTarget(target, false, "")
           drop.accept()
         }
       }
@@ -583,25 +602,25 @@ Panel {
               meta: root.heroMeta
               foreground: root.foreground
               fontFamily: root.fontFamily
-              iconOpacity: qbt.transferring ? 1.0 : 0.5
+              iconOpacity: root.qbt.transferring ? 1.0 : 0.5
               iconComponent: Component {
                 QbittorrentIcon {
                   iconSize: Style.font.display
-                  color: qbt.transferring ? root.foreground : root.dim
+                  color: root.qbt.transferring ? root.foreground : root.dim
                   badgeColor: root.urgent
-                  warning: qbt.warning
+                  warning: root.qbt.warning
                 }
               }
               trailingControl: Component {
                 ToggleSwitch {
                   id: powerSwitch
-                  visible: qbt.ready && root.view === "list"
-                  checked: qbt.transferring
-                  busy: qbt.busy
+                  visible: root.qbt.ready && root.view === "list"
+                  checked: root.qbt.transferring
+                  busy: root.qbt.busy
                   hasCursor: header.ringVisible
                   foreground: hero.foreground
                   onHovered: function(on) { if (on) header.focusHero() }
-                  onToggled: qbt.toggleAll()
+                  onToggled: root.qbt.toggleAll()
                   PanelToolTip {
                     visible: powerSwitch.containsMouse
                     text: root.toggleHint
@@ -613,7 +632,7 @@ Panel {
           }
 
           Column {
-            visible: qbt.ready && root.view === "detail"
+            visible: root.qbt.ready && root.view === "detail"
             width: parent.width
             spacing: Style.space(6)
 
@@ -697,8 +716,8 @@ Panel {
               MouseArea {
                 anchors.fill: parent
                 hoverEnabled: true
-                cursorShape: qbt.busy ? Qt.ArrowCursor : Qt.PointingHandCursor
-                enabled: !qbt.busy && root.detailHash !== ""
+                cursorShape: root.qbt.busy ? Qt.ArrowCursor : Qt.PointingHandCursor
+                enabled: !root.qbt.busy && root.detailHash !== ""
                 onEntered: { root.cursorActive = true; root.focusSection = "moveTo" }
                 onClicked: root.openMoveField()
               }
@@ -735,8 +754,8 @@ Panel {
               MouseArea {
                 anchors.fill: parent
                 hoverEnabled: true
-                cursorShape: qbt.busy ? Qt.ArrowCursor : Qt.PointingHandCursor
-                enabled: !qbt.busy && root.detailHash !== ""
+                cursorShape: root.qbt.busy ? Qt.ArrowCursor : Qt.PointingHandCursor
+                enabled: !root.qbt.busy && root.detailHash !== ""
                 onEntered: { root.cursorActive = true; root.focusSection = "recheck" }
                 onClicked: root.recheckDetail()
               }
@@ -761,8 +780,8 @@ Panel {
               MouseArea {
                 anchors.fill: parent
                 hoverEnabled: true
-                cursorShape: qbt.busy ? Qt.ArrowCursor : Qt.PointingHandCursor
-                enabled: !qbt.busy && root.detailHash !== ""
+                cursorShape: root.qbt.busy ? Qt.ArrowCursor : Qt.PointingHandCursor
+                enabled: !root.qbt.busy && root.detailHash !== ""
                 onEntered: { root.cursorActive = true; root.focusSection = "remove" }
                 onClicked: root.removeKeepFiles(root.detailHash)
               }
@@ -787,8 +806,8 @@ Panel {
               MouseArea {
                 anchors.fill: parent
                 hoverEnabled: true
-                cursorShape: qbt.busy ? Qt.ArrowCursor : Qt.PointingHandCursor
-                enabled: !qbt.busy && root.detailHash !== ""
+                cursorShape: root.qbt.busy ? Qt.ArrowCursor : Qt.PointingHandCursor
+                enabled: !root.qbt.busy && root.detailHash !== ""
                 onEntered: { root.cursorActive = true; root.focusSection = "deleteFiles" }
                 onClicked: root.askDeleteFiles(root.detailHash)
               }
@@ -833,15 +852,15 @@ Panel {
                 MouseArea {
                   anchors.fill: parent
                   hoverEnabled: true
-                  cursorShape: qbt.busy ? Qt.ArrowCursor : Qt.PointingHandCursor
-                  enabled: !qbt.busy && root.detailTorrent !== null
+                  cursorShape: root.qbt.busy ? Qt.ArrowCursor : Qt.PointingHandCursor
+                  enabled: !root.qbt.busy && root.detailTorrent !== null
                   onClicked: {
                     var t = root.detailTorrent
                     if (!t) return
-                    if (modelData.action === "dlLimit") qbt.setLimit(t.hash, "dl", Model.cycleLimit(t.dlLimit))
-                    else if (modelData.action === "upLimit") qbt.setLimit(t.hash, "up", Model.cycleLimit(t.upLimit))
-                    else if (modelData.action === "sequential") qbt.toggleSequential(t.hash)
-                    else if (modelData.action === "shareRatio") qbt.setShareRatio(t.hash, Model.cycleRatioLimit(t.ratioLimit))
+                    if (modelData.action === "dlLimit") root.qbt.setLimit(t.hash, "dl", Model.cycleLimit(t.dlLimit))
+                    else if (modelData.action === "upLimit") root.qbt.setLimit(t.hash, "up", Model.cycleLimit(t.upLimit))
+                    else if (modelData.action === "sequential") root.qbt.toggleSequential(t.hash)
+                    else if (modelData.action === "shareRatio") root.qbt.setShareRatio(t.hash, Model.cycleRatioLimit(t.ratioLimit))
                   }
                 }
                 Text {
@@ -858,17 +877,17 @@ Panel {
           }
 
           Text {
-            visible: qbt.actionStatus !== "" || qbt.lastError !== ""
+            visible: root.qbt.actionStatus !== "" || root.qbt.lastError !== ""
             width: parent.width
-            text: qbt.actionStatus !== "" ? qbt.actionStatus : qbt.lastError
-            color: qbt.lastError !== "" && qbt.actionStatus === "" ? root.urgent : root.dim
+            text: root.qbt.actionStatus !== "" ? root.qbt.actionStatus : root.qbt.lastError
+            color: root.qbt.lastError !== "" && root.qbt.actionStatus === "" ? root.urgent : root.dim
             font.family: root.fontFamily
             font.pixelSize: Style.font.bodySmall
             wrapMode: Text.WordWrap
           }
 
           CursorSurface {
-            visible: !qbt.installed
+            visible: !root.qbt.installed
             width: parent.width
             implicitHeight: installCol.implicitHeight + Style.spacing.rowPaddingX
             hasCursor: root.cursorActive && root.focusSection === "install"
@@ -877,10 +896,10 @@ Panel {
             MouseArea {
               anchors.fill: parent
               hoverEnabled: true
-              cursorShape: qbt.busy ? Qt.ArrowCursor : Qt.PointingHandCursor
-              enabled: !qbt.busy
+              cursorShape: root.qbt.busy ? Qt.ArrowCursor : Qt.PointingHandCursor
+              enabled: !root.qbt.busy
               onEntered: { root.cursorActive = true; root.focusSection = "install" }
-              onClicked: qbt.installDaemon()
+              onClicked: root.qbt.installDaemon()
             }
             Column {
               id: installCol
@@ -898,7 +917,7 @@ Panel {
                 font.pixelSize: Style.font.body
               }
               Text {
-                text: qbt.busy ? "Installing…" : "Install qBittorrent-nox"
+                text: root.qbt.busy ? "Installing…" : "Install qBittorrent-nox"
                 color: root.foreground
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.body
@@ -907,7 +926,7 @@ Panel {
           }
 
           CursorSurface {
-            visible: qbt.installed && qbt.lockHolder === "gui"
+            visible: root.qbt.installed && root.qbt.lockHolder === "gui"
             width: parent.width
             implicitHeight: lockCol.implicitHeight + Style.spacing.rowPaddingX
             hasCursor: root.cursorActive && root.focusSection === "lock"
@@ -937,7 +956,7 @@ Panel {
           }
 
           CursorSurface {
-            visible: qbt.installed && !qbt.daemon && qbt.lockHolder !== "gui"
+            visible: root.qbt.installed && !root.qbt.daemon && root.qbt.lockHolder !== "gui"
             width: parent.width
             implicitHeight: daemonCol.implicitHeight + Style.spacing.rowPaddingX
             hasCursor: root.cursorActive && root.focusSection === "daemon"
@@ -946,10 +965,10 @@ Panel {
             MouseArea {
               anchors.fill: parent
               hoverEnabled: true
-              cursorShape: qbt.busy ? Qt.ArrowCursor : Qt.PointingHandCursor
-              enabled: !qbt.busy
+              cursorShape: root.qbt.busy ? Qt.ArrowCursor : Qt.PointingHandCursor
+              enabled: !root.qbt.busy
               onEntered: { root.cursorActive = true; root.focusSection = "daemon" }
-              onClicked: qbt.startDaemon()
+              onClicked: root.qbt.startDaemon()
             }
             Column {
               id: daemonCol
@@ -967,7 +986,7 @@ Panel {
                 font.pixelSize: Style.font.body
               }
               Text {
-                text: qbt.busy ? "Starting…" : "Start daemon"
+                text: root.qbt.busy ? "Starting…" : "Start daemon"
                 color: root.foreground
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.body
@@ -976,7 +995,7 @@ Panel {
           }
 
           CursorSurface {
-            visible: qbt.vpnUnbound
+            visible: root.qbt.vpnUnbound
             width: parent.width
             implicitHeight: vpnCol.implicitHeight + Style.spacing.rowPaddingX
             hasCursor: false
@@ -985,9 +1004,9 @@ Panel {
             MouseArea {
               anchors.fill: parent
               hoverEnabled: true
-              cursorShape: qbt.busy ? Qt.ArrowCursor : Qt.PointingHandCursor
-              enabled: !qbt.busy
-              onClicked: qbt.startDaemon()
+              cursorShape: root.qbt.busy ? Qt.ArrowCursor : Qt.PointingHandCursor
+              enabled: !root.qbt.busy
+              onClicked: root.qbt.startDaemon()
             }
             Column {
               id: vpnCol
@@ -998,14 +1017,14 @@ Panel {
               rightPadding: Style.space(10)
               Text {
                 width: parent.width - vpnCol.leftPadding - vpnCol.rightPadding
-                text: "VPN is up but qBittorrent is not bound to " + qbt.vpnIface + ". If the VPN drops, transfers keep going outside it."
+                text: "VPN is up but qBittorrent is not bound to " + root.qbt.vpnIface + ". If the VPN drops, transfers keep going outside it."
                 color: root.dim
                 wrapMode: Text.WordWrap
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.body
               }
               Text {
-                text: qbt.busy ? "Restarting…" : "Restart daemon to bind"
+                text: root.qbt.busy ? "Restarting…" : "Restart daemon to bind"
                 color: root.urgent
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.body
@@ -1014,7 +1033,7 @@ Panel {
           }
 
           Column {
-            visible: qbt.ready && root.view === "list"
+            visible: root.qbt.ready && root.view === "list"
             width: parent.width
             spacing: Style.space(8)
 
@@ -1194,7 +1213,7 @@ Panel {
                 hoverEnabled: true
                 cursorShape: Qt.PointingHandCursor
                 onEntered: { root.cursorActive = true; root.focusSection = "clipboard" }
-                onClicked: qbt.addTarget(qbt.clipboardText, false, "")
+                onClicked: root.qbt.addTarget(root.qbt.clipboardText, false, "")
               }
               Text {
                 anchors.verticalCenter: parent.verticalCenter
@@ -1216,16 +1235,16 @@ Panel {
               MouseArea {
                 anchors.fill: parent
                 hoverEnabled: true
-                cursorShape: qbt.busy ? Qt.ArrowCursor : Qt.PointingHandCursor
-                enabled: !qbt.busy
-                onClicked: qbt.toggleTurtle()
+                cursorShape: root.qbt.busy ? Qt.ArrowCursor : Qt.PointingHandCursor
+                enabled: !root.qbt.busy
+                onClicked: root.qbt.toggleTurtle()
               }
               Text {
                 anchors.verticalCenter: parent.verticalCenter
                 anchors.left: parent.left
                 anchors.leftMargin: Style.space(10)
-                text: "Turtle mode: " + (qbt.altSpeed ? "on" : "off")
-                color: qbt.altSpeed ? root.foreground : root.dim
+                text: "Turtle mode: " + (root.qbt.altSpeed ? "on" : "off")
+                color: root.qbt.altSpeed ? root.foreground : root.dim
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.body
               }
@@ -1300,12 +1319,12 @@ Panel {
           }
 
           Column {
-            visible: qbt.ready && root.view === "detail"
+            visible: root.qbt.ready && root.view === "detail"
             width: parent.width
             spacing: Style.space(6)
 
             Text {
-              visible: !qbt.files || qbt.files.length === 0
+              visible: root.qbt.filesFor(root.detailHash).length === 0
               width: parent.width
               text: "No files yet."
               color: root.dim
@@ -1315,7 +1334,7 @@ Panel {
             }
 
             Repeater {
-              model: qbt.files
+              model: root.qbt.filesFor(root.detailHash)
               delegate: CursorSurface {
                 required property var modelData
                 required property int index
@@ -1382,7 +1401,7 @@ Panel {
         }
         onConfirmed: {
           root.confirmOpen = false
-          if (root.pendingDeleteHash !== "") qbt.deleteHash(root.pendingDeleteHash, true)
+          if (root.pendingDeleteHash !== "") root.qbt.deleteHash(root.pendingDeleteHash, true)
           root.pendingDeleteHash = ""
           root.closeDetail()
           Qt.callLater(root.syncFocus)
@@ -1403,10 +1422,10 @@ Panel {
 
   Shortcut {
     sequences: ["Space"]
-    enabled: root.opened && qbt.ready && !root.fieldFocused && !root.confirmOpen && !(root.magnetConfirmOpen && root.focusSection === "magnetConfirm")
+    enabled: root.opened && root.qbt.ready && !root.fieldFocused && !root.confirmOpen && !(root.magnetConfirmOpen && root.focusSection === "magnetConfirm")
     onActivated: {
-      if (root.view === "detail" && root.detailHash) qbt.toggleHash(root.detailHash)
-      else if (root.selectedTorrent) qbt.toggleHash(root.selectedTorrent.hash)
+      if (root.view === "detail" && root.detailHash) root.qbt.toggleHash(root.detailHash)
+      else if (root.selectedTorrent) root.qbt.toggleHash(root.selectedTorrent.hash)
     }
   }
 

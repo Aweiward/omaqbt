@@ -3,9 +3,17 @@ import Quickshell
 import Quickshell.Io
 import "Model.js" as Model
 
-Item {
+// Created once by the shell as the plugin's shared service (null parent), and
+// once per bar widget as a local fallback that stays inactive while the shared
+// one exists. An inactive Service starts no Process at all.
+Scope {
   id: root
   property var settings: ({})
+  property bool active: true
+  // A local fallback waits this long after becoming active before it starts,
+  // so a hot reload (service torn down before its widgets) never overlaps.
+  property int startDelayMs: 0
+  property bool started: false
 
   property bool installed: false
   property bool daemon: false
@@ -17,7 +25,7 @@ Item {
   property string vpnIface: ""
   property string bindIface: ""
   property var torrents: []
-  property var files: []
+  property var filesByHash: ({})
   property string lastError: ""
   property string actionStatus: ""
   property string clipboardText: ""
@@ -30,6 +38,14 @@ Item {
   property bool magnetDrainQueued: false
   property bool magnetNotReadyNotified: false
 
+  // One of starting|up|down. "down" means the sidecar gave up and this
+  // Service stays on bash polling for the rest of its lifetime.
+  property string sidecarState: "starting"
+  property int sidecarFailures: 0
+  property double sidecarLastBeat: 0
+  property int filesRequestSeq: 0
+  property var filesRequests: ({})
+
   readonly property int refreshIntervalSec: {
     var n = parseInt(String(settings && settings.refreshIntervalSec != null ? settings.refreshIntervalSec : 5), 10)
     if (!isFinite(n)) n = 5
@@ -39,6 +55,11 @@ Item {
   }
   readonly property string helperPath: {
     var s = Qt.resolvedUrl("qbt").toString()
+    if (s.indexOf("file://") === 0) return decodeURIComponent(s.substring(7))
+    return s
+  }
+  readonly property string sidecarPath: {
+    var s = Qt.resolvedUrl("qbt-serve").toString()
     if (s.indexOf("file://") === 0) return decodeURIComponent(s.substring(7))
     return s
   }
@@ -53,6 +74,7 @@ Item {
     return out
   }
   readonly property bool magnetWatching: (magnetInbox && magnetInbox.length > 0) || (magnetPending && magnetPending.length > 0)
+  readonly property int sidecarCadenceMs: Model.cadenceMs(magnetWatching, refreshIntervalSec)
   readonly property bool busy: statusProcess.running || actionProcess.running || filesProcess.running || installProcess.running || daemonProcess.running || clipProcess.running || actionQueue.length > 0
   readonly property bool ready: installed && daemon && lockHolder !== "gui" && api
   readonly property bool transferring: Model.anyActive(torrents, magnetPendingHashes)
@@ -125,6 +147,11 @@ Item {
   }
 
   function refresh() {
+    if (!started) return
+    if (sidecarState === "up") {
+      sidecar.send({ cmd: "refresh" })
+      return
+    }
     if (statusProcess.running) return
     statusProcess.command = [helperPath, "status"]
     statusProcess.running = true
@@ -187,11 +214,49 @@ Item {
     runAction(cmd, withFiles ? "Deleting torrent and files…" : "Removing torrent…")
   }
 
+  function filesFor(hash) {
+    var rows = (filesByHash || {})[String(hash || "")]
+    return rows || []
+  }
+
+  function setFilesFor(hash, rows) {
+    var key = String(hash || "")
+    if (key === "") return
+    var next = ({})
+    for (var k in filesByHash) next[k] = filesByHash[k]
+    next[key] = Array.isArray(rows) ? rows : []
+    filesByHash = next
+  }
+
   function loadFiles(hash) {
-    files = []
-    if (filesProcess.running) return
+    if (!started || !hash) return
+    setFilesFor(hash, [])
+    if (sidecarState === "up") {
+      var id = filesRequestSeq + 1
+      filesRequestSeq = id
+      var pending = ({})
+      for (var k in filesRequests) pending[k] = filesRequests[k]
+      pending[id] = String(hash)
+      filesRequests = pending
+      sidecar.send({ id: id, cmd: "files", hash: String(hash) })
+      return
+    }
+    if (filesProcess.running) {
+      filesProcess.nextHash = String(hash)
+      return
+    }
+    filesProcess.hash = String(hash)
     filesProcess.command = [helperPath, "files", hash]
     filesProcess.running = true
+  }
+
+  function takeFilesRequest(id) {
+    var hash = filesRequests[id]
+    if (hash === undefined) return ""
+    var rest = ({})
+    for (var k in filesRequests) if (String(k) !== String(id)) rest[k] = filesRequests[k]
+    filesRequests = rest
+    return String(hash)
   }
 
   function setPrio(hash, index, prio) {
@@ -242,13 +307,13 @@ Item {
   }
 
   function installMagnetHandler() {
-    if (magnetHandlerInstalled) return
+    if (!started || magnetHandlerInstalled) return
     magnetHandlerInstalled = true
     runAction([helperPath, "magnet-install-handler"], "")
   }
 
   function loadMagnetSnapshot() {
-    if (magnetSnapProcess.running) return
+    if (!started || magnetSnapProcess.running) return
     magnetSnapProcess.command = [helperPath, "magnet-snapshot"]
     magnetSnapProcess.running = true
   }
@@ -327,18 +392,140 @@ Item {
     daemonProcess.running = true
   }
 
-  Component.onCompleted: {
+  function start() {
+    if (!active || started) return
+    started = true
     installMagnetHandler()
     refresh()
     loadMagnetSnapshot()
+    startSidecar()
+  }
+
+  function stop() {
+    startDelayTimer.stop()
+    sidecarRestartTimer.stop()
+    started = false
+    if (sidecarState !== "down") {
+      sidecarState = "starting"
+      sidecarFailures = 0
+    }
+    filesRequests = ({})
+    sidecar.stop()
+  }
+
+  function activate() {
+    if (startDelayMs > 0) startDelayTimer.restart()
+    else start()
+  }
+
+  function startSidecar() {
+    if (!started || sidecarState === "down") return
+    sidecar.start()
+  }
+
+  function sendCadence() {
+    sidecar.send({ cmd: "cadence", ms: sidecarCadenceMs })
+  }
+
+  function handleSidecarLine(text) {
+    var msg = Model.parseServeLine(text)
+    if (msg.type === "status") {
+      var wasUp = sidecarState === "up"
+      applyStatus(msg.raw)
+      sidecarState = "up"
+      sidecarFailures = 0
+      sidecarLastBeat = Date.now()
+      if (!wasUp) sendCadence()
+    } else if (msg.type === "heartbeat") {
+      sidecarLastBeat = Date.now()
+    } else if (msg.type === "files") {
+      var hash = takeFilesRequest(msg.data.id)
+      if (hash === "") return
+      if (msg.data.error !== undefined && msg.data.error !== null) {
+        lastError = Model.sanitizeError(msg.data.error || "Could not read files")
+        setFilesFor(hash, [])
+        return
+      }
+      setFilesFor(hash, Array.isArray(msg.data.files) ? msg.data.files : [])
+    } else if (msg.type === "error") {
+      console.warn("OmaqBT qbt-serve: " + Model.sanitizeError(msg.data.error || "error"))
+    } else if (msg.type === "fatal") {
+      // The exit that follows counts the failure; this only records why.
+      console.warn("OmaqBT qbt-serve fatal: " + Model.sanitizeError(msg.data.error || "fatal"))
+    }
+  }
+
+  function handleSidecarExit(code) {
+    // A deliberate stop (active went false) is not a failure.
+    if (!active || !started) return
+    sidecarState = "starting"
+    var orphans = filesRequests
+    filesRequests = ({})
+    sidecarFailures = sidecarFailures + 1
+    if (Model.sidecarGaveUp(sidecarFailures)) {
+      sidecarState = "down"
+      console.warn("OmaqBT qbt-serve gave up after " + sidecarFailures + " failures; using bash polling")
+    } else {
+      sidecarRestartTimer.interval = Math.max(1, Model.nextBackoffMs(sidecarFailures))
+      sidecarRestartTimer.restart()
+    }
+    // A files request the sidecar never answered retries through bash.
+    var lastHash = ""
+    for (var k in orphans) lastHash = orphans[k]
+    if (lastHash !== "") loadFiles(lastHash)
+  }
+
+  onActiveChanged: {
+    if (active) activate()
+    else stop()
+  }
+
+  onSidecarCadenceMsChanged: if (sidecarState === "up") sendCadence()
+
+  Component.onCompleted: if (active) activate()
+
+  Sidecar {
+    id: sidecar
+    path: root.sidecarPath
+    onLine: function(text) { root.handleSidecarLine(text) }
+    onExited: function(code) { root.handleSidecarExit(code) }
   }
 
   Timer {
+    id: startDelayTimer
+    interval: Math.max(1, root.startDelayMs)
+    repeat: false
+    onTriggered: root.start()
+  }
+
+  Timer {
+    id: sidecarRestartTimer
+    repeat: false
+    onTriggered: root.startSidecar()
+  }
+
+  // The sidecar heartbeats every 5 s from its own thread; a silent child is
+  // hung, so kill it and let its exit take the failure path.
+  Timer {
+    interval: 1000
+    repeat: true
+    running: root.active && root.sidecarState === "up"
+    onTriggered: {
+      if (!Model.heartbeatExpired(root.sidecarLastBeat, Date.now(), 5000)) return
+      console.warn("OmaqBT qbt-serve missed its heartbeat; restarting")
+      root.sidecarState = "starting"
+      sidecar.stop()
+    }
+  }
+
+  // While the sidecar is up it ticks on its own cadence, so these timers only
+  // poll through bash when it is not.
+  Timer {
     interval: root.refreshIntervalSec * 1000
     repeat: true
-    running: !root.magnetWatching
+    running: !root.magnetWatching && root.active && root.started
     onTriggered: {
-      root.refresh()
+      if (root.sidecarState !== "up") root.refresh()
       root.loadMagnetSnapshot()
     }
   }
@@ -346,9 +533,9 @@ Item {
   Timer {
     interval: 250
     repeat: true
-    running: root.magnetWatching
+    running: root.magnetWatching && root.active && root.started
     onTriggered: {
-      root.refresh()
+      if (root.sidecarState !== "up") root.refresh()
       root.tickMagnet()
     }
   }
@@ -446,18 +633,26 @@ Item {
 
   Process {
     id: filesProcess
+    property string hash: ""
+    property string nextHash: ""
     running: false
     command: []
     stdout: StdioCollector { id: filesOut; waitForEnd: true }
     stderr: StdioCollector { id: filesErr; waitForEnd: true }
     onExited: function(exitCode) {
+      var done = filesProcess.hash
+      var next = filesProcess.nextHash
+      filesProcess.nextHash = ""
       if (exitCode !== 0) {
         root.lastError = Model.sanitizeError(filesErr.text || "Could not read files")
-        root.files = []
-        return
+        root.setFilesFor(done, [])
+      } else {
+        var rows = []
+        try { rows = JSON.parse(String(filesOut.text || "[]")) }
+        catch (e) { rows = [] }
+        root.setFilesFor(done, rows)
       }
-      try { root.files = JSON.parse(String(filesOut.text || "[]")) }
-      catch (e) { root.files = [] }
+      if (next !== "" && next !== done) root.loadFiles(next)
     }
   }
 
