@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Ensure jq and curl are present
+        run: sudo apt-get update && sudo apt-get install -y jq curl
+
+      - name: Python unit tests
+        run: python3 -m unittest discover -s tests -p 'test_*.py'
+
+      - name: API contract tests
+        run: bash tests/api-contract.sh
+
+      # magnet-handler.sh is hermetic on its own: it shims notify-send,
+      # xdg-mime, and update-desktop-database into a throwaway PATH dir and
+      # points HOME/XDG_STATE_HOME/XDG_RUNTIME_DIR at a tmp tree, so it
+      # never touches real desktop files or MIME registrations. No extra
+      # packages or env needed beyond jq/curl/python3 above.
+      - name: Magnet handler tests
+        run: bash tests/magnet-handler.sh
+
+      - name: Serve parity tests
+        run: bash tests/serve-parity.sh
+
+      - name: Node tests
+        run: npm test
+
+      # qmllint is deliberately not run in CI (Deviation 3): the runners
+      # can't resolve the Quickshell / qs.* imports it needs. Run
+      # `npm run lint:qml` locally instead.
