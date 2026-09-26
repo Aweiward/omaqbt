@@ -28,6 +28,11 @@ Item {
   // The loading line appears only after a short grace, so a fast first
   // status never flashes it.
   property bool showLoadingText: false
+  // View.hashSet(...) of the VISUAL range (Style.selectionFill), and of
+  // the torrents the window's last failed action named (their glyph
+  // turns into an urgent `!` until the next key).
+  property var rangeHashes: ({})
+  property var errorHashes: ({})
 
   signal rowClicked(string hash)
 
@@ -51,10 +56,7 @@ Item {
   readonly property bool showRows: tableState === "rows"
 
   function toneColor(tone) {
-    if (tone === "accent") return Color.accent
-    if (tone === "muted") return Color.muted
-    if (tone === "urgent") return Color.urgent
-    return Color.foreground
+    return View.toneColor(tone, Color)
   }
 
   function valueColor(text) {
@@ -191,13 +193,15 @@ Item {
       required property string etaText
       required property string ratioText
       readonly property bool isCursor: hash === table.cursorHash
+      readonly property bool inRange: table.rangeHashes[hash] === true
+      readonly property bool hasError: table.errorHashes[hash] === true
 
       width: list.width
       height: table.rowHeight
 
       Rectangle {
         anchors.fill: parent
-        color: rowItem.isCursor ? Style.selectedAccentFill : "transparent"
+        color: rowItem.inRange ? Style.selectionFill : (rowItem.isCursor ? Style.selectedAccentFill : "transparent")
       }
 
       Rectangle {
@@ -215,8 +219,8 @@ Item {
           width: table.glyphWidth
           rightPadding: 0
           horizontalAlignment: Text.AlignLeft
-          text: rowItem.glyph
-          color: table.toneColor(rowItem.glyphTone)
+          text: rowItem.hasError ? "!" : rowItem.glyph
+          color: table.toneColor(rowItem.hasError ? "urgent" : rowItem.glyphTone)
         }
         Cell {
           width: table.nameWidth

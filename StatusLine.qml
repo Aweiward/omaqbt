@@ -3,6 +3,7 @@ pragma ComponentBehavior: Bound
 import QtQuick
 import qs.Commons
 import qs.Ui
+import "ClientView.js" as View
 
 // The window's 30 px status line: the mode badge, then either the stats
 // (count · speeds · turtle · VPN bind), a progress message, the CONFIRM
@@ -18,6 +19,8 @@ Rectangle {
   // View.confirmLine(...) while mode is CONFIRM, else null.
   property var confirmParts: null
   property string countText: ""
+  // The VISUAL range's size ("K selected", in accent); 0 hides it.
+  property int selectedCount: 0
   property string speedText: ""
   property bool turtle: false
   // View.vpnPart(...) or null.
@@ -54,10 +57,7 @@ Rectangle {
   }
 
   function toneColor(tone) {
-    if (tone === "accent") return Color.accent
-    if (tone === "muted") return Color.muted
-    if (tone === "urgent") return Color.urgent
-    return Color.foreground
+    return View.toneColor(tone, Color)
   }
 
   // No bg-dark token exists; Panel.qml already derives shades with
@@ -176,6 +176,8 @@ Rectangle {
         visible: line.message === "" && !line.loading
         spacing: line.gap
         Part { text: line.countText }
+        Part { visible: line.selectedCount > 0; text: "·"; color: Color.muted }
+        Part { visible: line.selectedCount > 0; text: line.selectedCount + " selected"; color: Color.accent }
         Part { text: "·"; color: Color.muted }
         Part { text: line.speedText }
         Part { text: "·"; color: Color.muted }
