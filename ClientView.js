@@ -626,16 +626,25 @@ function hashSet(list) {
 // the next key) > note > progress (muted, while this window's own tickets
 // run) > nothing (the stats show).
 
+// tickets: ticket -> {kind, count, hashes, text, group}. groups: group id
+// -> {left, failed, error}: the tickets of one user action (a bulk action
+// split into several qbt calls) share a group and report as one.
 function emptyMessages() {
-  return { tickets: {}, progress: "", error: "", errorHashes: [], note: "", noteTone: "muted" };
+  return { tickets: {}, groups: {}, progress: "", error: "", errorHashes: [], note: "", noteTone: "muted" };
 }
 
 function copyMessages(m) {
   var s = m || emptyMessages();
   var tickets = {};
   for (var k in s.tickets || {}) tickets[k] = s.tickets[k];
+  var groups = {};
+  for (var g in s.groups || {}) {
+    var src = s.groups[g];
+    groups[g] = { left: src.left, failed: src.failed, error: src.error };
+  }
   return {
     tickets: tickets,
+    groups: groups,
     progress: String(s.progress || ""),
     error: String(s.error || ""),
     errorHashes: (s.errorHashes || []).slice(),
@@ -669,16 +678,30 @@ function failureText(kind, count) {
 var BUSY_NOTE = "Busy, try again.";
 
 // msgTrack(m, ticket, kind, count, hashes) -> m with this window's ticket
-// recorded and its progress text showing. A ticket <= 0 (Service refused
-// the call because it is busy) records nothing and notes BUSY_NOTE.
+// recorded and its progress text showing. ticket may be an array: the
+// tickets of one user action split into several qbt calls, which then
+// show progress until every one has finished and report one message
+// (see msgFinish). A ticket <= 0 (Service refused the call because it is
+// busy), or an array with no ticket > 0, records nothing and notes
+// BUSY_NOTE.
 function msgTrack(m, ticket, kind, count, hashes) {
-  var t = Number(ticket) || 0;
+  var list = Array.isArray(ticket) ? ticket : [ticket];
+  var ids = [];
+  for (var i = 0; i < list.length; i++) {
+    var t = Number(list[i]) || 0;
+    if (t > 0) ids.push(String(t));
+  }
   // Service refuses a window call with 0 only when the process that would
   // run it is already busy (the window validates its own input first).
-  if (t <= 0) return msgNote(m, BUSY_NOTE, "muted");
+  if (ids.length === 0) return msgNote(m, BUSY_NOTE, "muted");
   var next = copyMessages(m);
   var text = progressText(kind, count);
-  next.tickets[String(t)] = { kind: kind, count: Number(count) || 0, hashes: (hashes || []).slice(), text: text };
+  var group = ids[0];
+  var own = (hashes || []).slice();
+  for (var j = 0; j < ids.length; j++) {
+    next.tickets[ids[j]] = { kind: kind, count: Number(count) || 0, hashes: own, text: text, group: group };
+  }
+  next.groups[group] = { left: ids.length, failed: false, error: "" };
   next.progress = text;
   return next;
 }
@@ -696,7 +719,10 @@ function ownsTicket(m, ticket) {
 // pending-magnet drop emits with our hashes -- never touch the window. On
 // failure the error line and the affected hashes (for the row `!`) are
 // set; bulk actions report one error for all their torrents, since qbt
-// can't say which one failed.
+// can't say which one failed. A ticket of a group (see msgTrack) only
+// counts down while others of its group still run -- the progress stays --
+// and the group's last ticket reports once: the first failure's error if
+// any ticket failed, else success.
 function msgFinish(m, ticket, ok, error) {
   if (!ownsTicket(m, ticket)) return m;
   var next = copyMessages(m);
@@ -705,12 +731,24 @@ function msgFinish(m, ticket, ok, error) {
   var last = "";
   for (var k in next.tickets) last = next.tickets[k].text;
   next.progress = last;
-  if (ok === true && DONE_NOTES[entry.kind]) {
+  var gid = entry.group !== undefined ? String(entry.group) : String(ticket);
+  var group = next.groups[gid] || { left: 1, failed: false, error: "" };
+  group.left = group.left - 1;
+  if (ok !== true && !group.failed) {
+    group.failed = true;
+    group.error = String(error || "").trim();
+  }
+  if (group.left > 0) {
+    next.groups[gid] = group;
+    return next;
+  }
+  delete next.groups[gid];
+  if (!group.failed && DONE_NOTES[entry.kind]) {
     next.note = DONE_NOTES[entry.kind];
     next.noteTone = "muted";
   }
-  if (ok !== true) {
-    var err = String(error || "").trim();
+  if (group.failed) {
+    var err = group.error;
     next.error = failureText(entry.kind, entry.count) + (err !== "" ? ": " + err : ".");
     next.errorHashes = entry.hashes.slice();
   }

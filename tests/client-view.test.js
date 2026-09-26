@@ -530,6 +530,56 @@ test("msgTrack shows progress for a real ticket and notes busy for a refused one
   assert.deepEqual(m0.tickets, {}, "immutable");
 });
 
+test("msgTrack with an array records one group; an array without a real ticket notes busy", () => {
+  const m0 = V.emptyMessages();
+  const m1 = V.msgTrack(m0, [3, 4, 5], "stop", 2500, [H("a")]);
+  assert.deepEqual(V.messageLine(m1), { text: "Stopping 2500 torrents…", tone: "muted" });
+  assert.equal(V.ownsTicket(m1, 3), true);
+  assert.equal(V.ownsTicket(m1, 5), true);
+  assert.deepEqual(m0.groups, {}, "immutable");
+  const busy = V.msgTrack(m0, [], "stop", 1, []);
+  assert.deepEqual(V.messageLine(busy), { text: "Busy, try again.", tone: "muted" });
+  assert.deepEqual(V.msgTrack(m0, [0, 0], "stop", 1, []).tickets, {});
+});
+
+test("a grouped action shows progress until every chunk ends, then succeeds once", () => {
+  let m = V.msgTrack(V.emptyMessages(), [1, 2, 3], "start", 3000, [H("a"), H("b")]);
+  m = V.msgFinish(m, 1, true, "");
+  assert.deepEqual(V.messageLine(m), { text: "Starting 3000 torrents…", tone: "muted" });
+  m = V.msgFinish(m, 3, true, "");
+  assert.deepEqual(V.messageLine(m), { text: "Starting 3000 torrents…", tone: "muted" });
+  m = V.msgFinish(m, 2, true, "");
+  assert.deepEqual(V.messageLine(m), { text: "", tone: "muted" });
+  assert.deepEqual(m.tickets, {});
+  assert.deepEqual(m.groups, {});
+});
+
+test("a grouped action reports one error, after its last chunk, if any chunk failed", () => {
+  let m = V.msgTrack(V.emptyMessages(), [1, 2, 3], "delete", 2500, [H("a"), H("b")]);
+  const before = m;
+  m = V.msgFinish(m, 1, false, "HTTP 409");
+  assert.deepEqual(V.messageLine(m), { text: "Deleting 2500 torrents and their files…", tone: "muted" }, "no error while chunks run");
+  assert.equal(before.groups["1"].failed, false, "immutable");
+  m = V.msgFinish(m, 2, false, "HTTP 500");
+  assert.equal(m.error, "");
+  m = V.msgFinish(m, 3, true, "");
+  assert.deepEqual(V.messageLine(m), { text: "Couldn't delete 2500 torrents: HTTP 409", tone: "urgent" }, "one error, the first failure's");
+  assert.deepEqual(m.errorHashes, [H("a"), H("b")]);
+  assert.deepEqual(m.groups, {});
+});
+
+test("groups finish independently of each other and of single tickets", () => {
+  let m = V.msgTrack(V.emptyMessages(), [1, 2], "stop", 2000, [H("a")]);
+  m = V.msgTrack(m, 3, "recheck", 1, [H("c")]);
+  m = V.msgFinish(m, 3, false, "nope");
+  assert.equal(m.error, "Couldn't recheck 1 torrent: nope", "a single ticket still reports at once");
+  m = V.msgKey(m);
+  assert.deepEqual(V.messageLine(m), { text: "Stopping 2000 torrents…", tone: "muted" });
+  m = V.msgFinish(m, 2, true, "");
+  m = V.msgFinish(m, 1, true, "");
+  assert.deepEqual(V.messageLine(m), { text: "", tone: "muted" });
+});
+
 test("msgFinish ignores foreign tickets (returns the same object)", () => {
   const m1 = V.msgTrack(V.emptyMessages(), 7, "start", 1, [H("a")]);
   assert.equal(V.msgFinish(m1, 8, false, "boom"), m1);
