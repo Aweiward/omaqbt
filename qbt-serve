@@ -1,0 +1,274 @@
+#!/usr/bin/env python3
+"""`qbt-serve`: a long-lived sidecar for OmaqBT's QML bar widget.
+
+It runs `qbt probe` once at startup (and again every 10s of ticking), holds
+a single in-memory WebUI session, and polls `lib/qbtsync.build_status` on
+a cadence a QML `Process` controls over stdin. Every stdout line is one
+JSON object (`{"type":...}` first) with a trailing newline; diagnostics
+(sanitized) go to stderr only. Commands come in one per stdin line as
+JSON; a reader thread parses them onto a queue so only the main thread
+ever writes to stdout, and closing stdin (EOF) wakes the main loop and
+exits it within about a second.
+"""
+import fcntl
+import http.cookiejar
+import json
+import os
+import queue
+import re
+import subprocess
+import sys
+import threading
+import time
+
+REPO_DIR = os.path.dirname(os.path.realpath(__file__))
+sys.path.insert(0, os.path.join(REPO_DIR, "lib"))
+import qbtsync  # noqa: E402
+
+HEARTBEAT_INTERVAL = 5.0
+PROBE_INTERVAL = 10.0
+DEFAULT_CADENCE_MS = 5000
+MIN_CADENCE_MS = 100
+MAX_CADENCE_MS = 3600000
+PROBE_TIMEOUT = 10
+
+_HASH_RE = re.compile(r"[0-9a-fA-F]{40}|[0-9a-fA-F]{64}")
+
+
+def emit(obj):
+    """Write one JSON line to stdout. A dead reader on the other end
+    (BrokenPipeError) means the consumer is gone: exit 0 immediately via
+    os._exit, skipping interpreter finalization. Regular shutdown would
+    re-flush stdout (which would raise again) and, worse, the daemon
+    stdin-reader thread may be blocked inside the buffered reader's lock,
+    which can abort finalization outright."""
+    try:
+        sys.stdout.write(json.dumps(obj, separators=(",", ":")) + "\n")
+        sys.stdout.flush()
+    except BrokenPipeError:
+        try:
+            sys.stderr.flush()
+        except Exception:
+            pass
+        os._exit(0)
+
+
+def run_probe(helper):
+    """Run `<helper> probe` and parse its JSON. Returns (probe, error);
+    exactly one of them is not None. `error` is unsanitized -- callers
+    sanitize before printing it anywhere."""
+    try:
+        result = subprocess.run(
+            [helper, "probe"], capture_output=True, text=True, timeout=PROBE_TIMEOUT
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return None, str(exc) or type(exc).__name__
+    if result.returncode != 0:
+        msg = (result.stderr or "").strip() or f"probe exited {result.returncode}"
+        return None, msg
+    try:
+        probe = json.loads(result.stdout)
+    except ValueError:
+        return None, "invalid probe output"
+    if not isinstance(probe, dict):
+        return None, "invalid probe output"
+    return probe, None
+
+
+def _reader_thread(cmd_queue):
+    """Reads stdin lines, puts (\"cmd\", dict-or-None) for each one, and a
+    final (\"eof\", None) sentinel once stdin closes. Never touches
+    stdout: only the main thread writes there."""
+    try:
+        for line in sys.stdin:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                obj = json.loads(line)
+            except ValueError:
+                obj = None
+            if not isinstance(obj, dict):
+                obj = None
+            cmd_queue.put(("cmd", obj))
+    except Exception:
+        pass
+    finally:
+        cmd_queue.put(("eof", None))
+
+
+def do_tick(state):
+    """Re-probes if stale, then assembles and prints one status line."""
+    now_mono = time.monotonic()
+    if now_mono - state["last_probe_at"] >= PROBE_INTERVAL:
+        new_probe, err = run_probe(state["helper"])
+        state["last_probe_at"] = now_mono
+        if new_probe is not None:
+            state["probe"] = new_probe
+        elif err:
+            print(qbtsync.sanitize(err), file=sys.stderr)
+
+    status, errors = qbtsync.build_status(
+        state["probe"], state["client"], state["sync"], state["slow"], time.time()
+    )
+    for message in errors:
+        print(qbtsync.sanitize(message), file=sys.stderr)
+
+    out = {"type": "status"}
+    out.update(status)
+    emit(out)
+
+
+def handle_command(cmd, state):
+    name = cmd.get("cmd")
+    cid = cmd.get("id")
+
+    if name == "cadence":
+        ms = cmd.get("ms")
+        if isinstance(ms, bool) or not isinstance(ms, (int, float)):
+            emit({"type": "error", "id": cid, "error": "bad command"})
+            return
+        clamped = max(MIN_CADENCE_MS, min(MAX_CADENCE_MS, ms))
+        state["cadence_ms"] = clamped
+        # Takes effect from the next wait: reschedule right away rather
+        # than waiting out whatever interval was already in flight.
+        state["next_tick"] = time.monotonic() + clamped / 1000.0
+        return
+
+    if name == "refresh":
+        do_tick(state)
+        state["next_tick"] = time.monotonic() + state["cadence_ms"] / 1000.0
+        return
+
+    if name == "files":
+        h = cmd.get("hash")
+        if not isinstance(h, str) or not _HASH_RE.fullmatch(h):
+            emit({"type": "error", "id": cid, "error": "bad command"})
+            return
+        try:
+            body = state["client"].get(f"/api/v2/torrents/files?hash={h}")
+        except qbtsync.ApiError as exc:
+            emit({"type": "files", "id": cid, "hash": h, "error": qbtsync.sanitize(exc.message)})
+            return
+        try:
+            parsed = json.loads(body)
+        except ValueError:
+            parsed = None
+        files = parsed if isinstance(parsed, list) else []
+        emit({"type": "files", "id": cid, "hash": h, "files": files})
+        return
+
+    emit({"type": "error", "id": cid, "error": "bad command"})
+
+
+def process_item(item, state):
+    """Handles one queue item. Returns True if the main loop should stop."""
+    kind, payload = item
+    if kind == "eof":
+        return True
+    if kind == "cmd":
+        if payload is None:
+            emit({"type": "error", "id": None, "error": "bad command"})
+        else:
+            handle_command(payload, state)
+    return False
+
+
+def main():
+    helper = os.environ.get("QBT_HELPER") or os.path.join(REPO_DIR, "qbt")
+
+    probe, err = run_probe(helper)
+    if probe is None:
+        emit({"type": "fatal", "error": qbtsync.sanitize(err or "probe failed")})
+        return 2
+
+    try:
+        qbtsync.assert_local(probe.get("base") or "")
+    except ValueError as exc:
+        emit({"type": "fatal", "error": qbtsync.sanitize(str(exc))})
+        return 2
+
+    state_dir = probe.get("stateDir") or "."
+    lock_path = os.path.join(state_dir, "serve.lock")
+    try:
+        lock_fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+    except OSError as exc:
+        emit({"type": "fatal", "error": qbtsync.sanitize(str(exc))})
+        return 2
+
+    deadline = time.monotonic() + 3.0
+    acquired = False
+    while True:
+        try:
+            fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            acquired = True
+            break
+        except OSError:
+            if time.monotonic() >= deadline:
+                break
+            time.sleep(0.1)
+    if not acquired:
+        emit({"type": "fatal", "error": "locked"})
+        os.close(lock_fd)
+        return 3
+
+    cmd_queue = queue.Queue()
+    reader = threading.Thread(target=_reader_thread, args=(cmd_queue,), daemon=True)
+    reader.start()
+
+    jar = http.cookiejar.CookieJar()
+    client = qbtsync.Client(probe["base"], jar)
+    state = {
+        "helper": helper,
+        "probe": probe,
+        "client": client,
+        "sync": qbtsync.SyncState(),
+        "slow": qbtsync.SlowCache(interval=10),
+        "cadence_ms": DEFAULT_CADENCE_MS,
+        "last_probe_at": time.monotonic(),
+    }
+
+    # The first tick runs immediately after the lock is acquired.
+    do_tick(state)
+    now = time.monotonic()
+    state["next_tick"] = now + state["cadence_ms"] / 1000.0
+    state["next_heartbeat"] = now + HEARTBEAT_INTERVAL
+
+    stop = False
+    while not stop:
+        now = time.monotonic()
+        timeout = max(0.0, min(state["next_tick"], state["next_heartbeat"]) - now)
+        try:
+            item = cmd_queue.get(timeout=timeout)
+        except queue.Empty:
+            item = None
+        if item is not None:
+            stop = process_item(item, state)
+            # Drain anything else already queued before recomputing waits.
+            while not stop:
+                try:
+                    item = cmd_queue.get_nowait()
+                except queue.Empty:
+                    break
+                stop = process_item(item, state)
+        if stop:
+            break
+
+        now = time.monotonic()
+        if now >= state["next_heartbeat"]:
+            emit({"type": "heartbeat"})
+            state["next_heartbeat"] = now + HEARTBEAT_INTERVAL
+        if now >= state["next_tick"]:
+            do_tick(state)
+            state["next_tick"] = now + state["cadence_ms"] / 1000.0
+
+    try:
+        fcntl.flock(lock_fd, fcntl.LOCK_UN)
+    except OSError:
+        pass
+    os.close(lock_fd)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
