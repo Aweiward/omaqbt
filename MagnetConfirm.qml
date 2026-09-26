@@ -24,6 +24,9 @@ Item {
   property var seenKeys: []
   property string handledKey: ""
   property bool focusDue: false
+  // The Service ticket of the last start/cancel/drop this row ran (0 for
+  // none). If it fails, the item is offered again.
+  property int ticket: 0
 
   readonly property var ms: client.magnetState
   readonly property bool shown: View.magnetShown(ms, handledKey)
@@ -55,13 +58,32 @@ Item {
     if (a.note !== "") c.note(a.note, "muted")
     if (a.call === "") return
     var hashes = s.hash !== "" ? [s.hash] : []
-    var ticket
-    if (a.call === "start") ticket = c.service.startPending(s.hash, c.opts(hashes))
-    else if (a.call === "cancel") ticket = c.service.cancelPending(s.hash, c.opts(hashes))
-    else ticket = c.service.dropInboxCurrent(c.opts(hashes))
-    c.track(ticket, a.kind, hashes)
+    var t
+    if (a.call === "start") t = c.service.startPending(s.hash, c.opts(hashes))
+    else if (a.call === "cancel") t = c.service.cancelPending(s.hash, c.opts(hashes))
+    else t = c.service.dropInboxCurrent(c.opts(hashes))
+    // A busy refusal (0) queued nothing: track() notes "Busy, try again."
+    // and the item stays offered.
+    c.track(t, a.kind, hashes)
+    if (!(t > 0)) return
+    ticket = t
     handledKey = View.magnetItemKey(s.pending || s.inbox)
     sync()
+  }
+
+  // A failed start/cancel/drop leaves the item queued: offer it again.
+  // Filtered by this row's ticket only; the pending-drop bookkeeping emits
+  // extra window-origin signals carrying the same hashes.
+  Connections {
+    target: magnetRow.client.service
+    ignoreUnknownSignals: true
+    function onActionFinished(t, ok, error, origin, hashes) {
+      if (magnetRow.ticket <= 0 || t !== magnetRow.ticket) return
+      magnetRow.ticket = 0
+      if (ok) return
+      magnetRow.handledKey = ""
+      magnetRow.sync()
+    }
   }
 
   Rectangle {

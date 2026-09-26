@@ -61,7 +61,8 @@ TestCase {
       function readClipboard() { rec("readClipboard", []) }
       function filesFor(h) { return [] }
       function loadFiles(h, o) { rec("loadFiles", [h, o]) }
-      function startPending(h, o) { return rec("startPending", [h, o]) }
+      property bool busy: false
+      function startPending(h, o) { var t = rec("startPending", [h, o]); return busy ? 0 : t }
       function cancelPending(h, o) { return rec("cancelPending", [h, o]) }
       function dropInboxCurrent(o) { return rec("dropInboxCurrent", [o]) }
       function loadMagnetSnapshot() { rec("loadMagnetSnapshot", []) }
@@ -337,6 +338,65 @@ TestCase {
     compare(o.c.pane, "table")
     compare(magnetCalls(o.svc).length, 0)
     tryCompare(o.c, "mode", "CONFIRM")
+  }
+
+  function ticketOf(svc, name) {
+    for (var i = svc.calls.length - 1; i >= 0; i--) if (svc.calls[i].name === name) return i + 1
+    return 0
+  }
+
+  function test_a_failed_start_offers_the_magnet_again() {
+    var o = make()
+    addPending(o, "d", true)
+    enter(o.c)
+    compare(o.c.mode, "NORMAL")
+    var t = ticketOf(o.svc, "startPending")
+    verify(t > 0)
+    o.svc.actionFinished(t + 99, false, "boom", "window", [hh("d")])
+    compare(o.c.mode, "NORMAL", "another ticket with the same hash is ignored")
+    o.svc.actionFinished(t, false, "boom", "window", [hh("d")])
+    compare(o.c.mode, "CONFIRM")
+    compare(o.c.regState.pending.kind, "magnet")
+    compare(row(o.c).visible, true)
+    enter(o.c)
+    compare(calls(o.svc, "startPending").length, 2)
+  }
+
+  function test_a_failed_cancel_offers_the_magnet_again() {
+    var o = make()
+    addPending(o, "d", false)
+    esc(o.c)
+    compare(o.c.mode, "NORMAL")
+    var t = ticketOf(o.svc, "cancelPending")
+    o.svc.actionFinished(t, true, "", "window", [hh("d")])
+    compare(o.c.mode, "NORMAL", "success keeps it handled")
+    o.svc.actionFinished(t, false, "boom", "window", [hh("d")])
+    compare(o.c.mode, "NORMAL", "only this row's ticket, once")
+    var o2 = make()
+    addPending(o2, "d", false)
+    esc(o2.c)
+    o2.svc.actionFinished(ticketOf(o2.svc, "cancelPending"), false, "boom", "window", [hh("d")])
+    compare(o2.c.mode, "CONFIRM")
+    compare(o2.c.regState.pending.kind, "magnet")
+    compare(row(o2.c).visible, true)
+    esc(o2.c)
+    compare(calls(o2.svc, "cancelPending").length, 2)
+  }
+
+  function test_a_busy_start_leaves_the_magnet_offered() {
+    var o = make()
+    o.svc.busy = true
+    addPending(o, "d", true)
+    enter(o.c)
+    compare(calls(o.svc, "startPending").length, 1)
+    compare(o.c.mode, "CONFIRM")
+    compare(o.c.regState.pending.kind, "magnet")
+    compare(row(o.c).visible, true)
+    compare(o.c.messageLine.text, "Busy, try again.")
+    o.svc.busy = false
+    enter(o.c)
+    compare(calls(o.svc, "startPending").length, 2)
+    compare(o.c.mode, "NORMAL")
   }
 
   function test_help_overlay_waits_and_its_closing_key_never_cancels() {
