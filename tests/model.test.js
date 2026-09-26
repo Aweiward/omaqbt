@@ -977,11 +977,12 @@ function fuzzPair(rng, n) {
   const oldRows = hashes.map((h) => ({ hash: h, name: h, dlSpeed: 1, upSpeed: 1, progress: 0, tags: ["x"] }));
 
   let next = oldRows.map((r) => Object.assign({}, r, { tags: r.tags.slice() }));
-  // removes
-  next = next.filter(() => rng() > 0.1);
+  // removes (light: diffRows' reset threshold is max(8, n/2), so heavy churn
+  // on a small n mostly just proves the reset fallback, not the ops path)
+  next = next.filter(() => rng() > 0.05);
   // field mutations
   next = next.map((r) => {
-    if (rng() > 0.7) {
+    if (rng() > 0.8) {
       return Object.assign({}, r, { dlSpeed: r.dlSpeed + 1, tags: rng() > 0.5 ? ["y"] : r.tags.slice() });
     }
     return r;
@@ -989,15 +990,15 @@ function fuzzPair(rng, n) {
   // inserts
   const maxHash = n;
   let nextHashSeed = maxHash;
-  const insertCount = Math.floor(rng() * 5);
+  const insertCount = Math.floor(rng() * 3);
   for (let i = 0; i < insertCount; i++) {
     const h = "new" + (nextHashSeed++);
     const pos = Math.floor(rng() * (next.length + 1));
     next.splice(pos, 0, { hash: h, name: h, dlSpeed: 0, upSpeed: 0, progress: 0, tags: [] });
   }
-  // shuffle (reorder)
+  // shuffle (reorder), a light touch per position
   for (let i = next.length - 1; i > 0; i--) {
-    if (rng() > 0.5) {
+    if (rng() > 0.93) {
       const j = Math.floor(rng() * (i + 1));
       const tmp = next[i];
       next[i] = next[j];
@@ -1023,9 +1024,10 @@ test("fuzz: applyOps(old, diffRows(old,new)) reproduces new, or diffRows says re
     const got = Model.applyOps(oldRows, ops);
     assert.deepEqual(got, newRows, `mismatch on iteration ${i} (seed run): ops=${JSON.stringify(ops)}`);
   }
-  // The fuzz must exercise the real ops path, not just prove the reset fallback.
-  assert.ok(checked > 0, "no fuzz case exercised the ops path");
-  assert.ok(resets < 500, "every fuzz case reset; the ops path was never tested");
+  // The fuzz must exercise the real ops path on most cases, not just prove
+  // the reset fallback (churn is tuned low enough that resets stay a
+  // minority -- this run: checked=442, resets=58 out of 500).
+  assert.ok(checked >= 200, `expected most fuzz cases to exercise the ops path; checked=${checked} resets=${resets}`);
 });
 
 // --- Task 5: filterGroups / matchFilter / statusGroup -----------------------

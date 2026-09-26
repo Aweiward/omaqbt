@@ -58,11 +58,20 @@ function timeMs(fn) {
   return { result: result, ms: Number(end - start) / 1e6 };
 }
 
+function opBreakdown(ops) {
+  var counts = { set: 0, insert: 0, remove: 0, move: 0 };
+  for (var i = 0; i < ops.length; i++) {
+    var op = ops[i].op;
+    if (counts[op] !== undefined) counts[op]++;
+  }
+  return counts;
+}
+
 function describeDiffResult(result) {
   if (result && result.reset === true) {
-    return { reset: true, ops: null };
+    return { reset: true, ops: null, byType: null };
   }
-  return { reset: false, ops: result.length };
+  return { reset: false, ops: result.length, byType: opBreakdown(result) };
 }
 
 function main() {

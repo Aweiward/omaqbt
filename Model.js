@@ -498,8 +498,11 @@ function diffRows(oldRows, newRows, fields) {
     ops.push({ op: "move", from: from, to: to });
     if (overBudget()) return { reset: true };
   }
-  // cur now equals `next` by hash order, but survivor rows still carry their
-  // OLD field values.
+  // cur now holds only the survivors, in `next`'s relative order (with
+  // stale field values) -- `cur` isn't touched again; phases 3 and 4 work
+  // directly off `next`'s indices, which is safe because inserting only the
+  // missing (new-only) hashes at their exact target index, left to right,
+  // is enough to turn a correctly-ordered subsequence into the full list.
 
   // Phase 3: insert new-only rows at their final index, walking `next` left
   // to right (a correctly-ordered subsequence only needs the gaps filled).
