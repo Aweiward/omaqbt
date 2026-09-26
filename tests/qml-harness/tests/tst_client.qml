@@ -51,7 +51,7 @@ TestCase {
       function deleteHash(h, f, o) { return rec("delete", [h, f, o]) }
       function recheckHash(h, o) { return rec("recheck", [h, o]) }
       function setLocation(h, p, o) { return rec("move", [h, p, o]) }
-      function toggleAll(o) { return rec("toggleAll", [o]) }
+      function toggleAll(o) { return [rec("toggleAll", [o])] }
       function toggleTurtle(o) { return rec("turtle", [o]) }
       function addTarget(t, s, p, o) { return rec("add", [t, o]) }
       property bool busy: false
@@ -429,6 +429,16 @@ TestCase {
     compare(o.c.regState.selectionCount, 0)
     compare(o.c.messageLine.text, "Stopping 2 torrents…")
     compare(sl.selectedCount, 0)
+  }
+
+  function test_t_tracks_every_toggle_all_ticket() {
+    var o = make()
+    o.svc.torrents = list3()
+    key(o.c, "t")
+    compare(lastCall(o.svc, "toggleAll").args[0].origin, "window")
+    compare(o.c.messageLine.text, "Stopping all torrents…")
+    o.svc.actionFinished(o.svc.seq, true, "", "window", [])
+    compare(o.c.messageLine.text, "")
   }
 
   function test_visual_x_over_two_confirms_then_deletes_both() {

@@ -300,18 +300,18 @@ Scope {
     return stopHash(hash, opts)
   }
 
+  // Returns the tickets of the qbt calls it queued ([] when nothing is
+  // live). One call with "all" when no pending magnet is in torrents;
+  // otherwise the live hashes in chunks of Model.HASH_CHUNK, since one argv
+  // string can't hold every hash of a large library.
   function toggleAll(opts) {
     var live = Model.excludePending(torrents, magnetPendingHashes)
-    if (live.length === 0) return 0
-    var start = !Model.anyActive(live)
-    var hashes = []
-    for (var i = 0; i < live.length; i++) {
-      var h = Model.torrentId(live[i])
-      if (h) hashes.push(h)
-    }
-    if (hashes.length === 0) return 0
-    if (start) return runAction([helperPath, "start", hashes.join("|")], "", opts)
-    return runAction([helperPath, "stop", hashes.join("|")], "", opts)
+    if (live.length === 0) return []
+    var verb = Model.anyActive(live) ? "stop" : "start"
+    var targets = Model.toggleAllTargets(torrents, magnetPendingHashes)
+    var tickets = []
+    for (var i = 0; i < targets.length; i++) tickets.push(runAction([helperPath, verb, targets[i]], "", opts))
+    return tickets
   }
 
   function deleteHash(hash, withFiles, opts) {
