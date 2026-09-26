@@ -650,8 +650,12 @@ PY
   local raised=0
   local raise_cmd
   raise_cmd=${QBT_RAISE_CMD:-omarchy-shell}
+  # `magnet` lets an open window show the confirm without the popup. A
+  # shell without that IPC function exits non-zero, so fall back to `open`.
   if command -v "$raise_cmd" >/dev/null 2>&1; then
-    if "$raise_cmd" aweiward.omaqbt open >/dev/null 2>&1; then
+    if "$raise_cmd" aweiward.omaqbt magnet >/dev/null 2>&1; then
+      raised=1
+    elif "$raise_cmd" aweiward.omaqbt open >/dev/null 2>&1; then
       raised=1
     fi
   fi

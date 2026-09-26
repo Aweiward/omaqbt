@@ -15,8 +15,12 @@ cat >"$tmp/bin/notify-send" <<'EOF'
 #!/bin/sh
 printf '%s\n' "$*" >>"${NOTIFY_LOG:?}"
 EOF
+# Logs each raise call; RAISE_OK names the one IPC function that exists
+# (the live shell exits 1 for an unknown function, 0 for a known one).
 cat >"$tmp/bin/omarchy-shell" <<'EOF'
 #!/bin/sh
+printf '%s\n' "$*" >>"${RAISE_LOG:?}"
+[ -n "${RAISE_OK:-}" ] && [ "$2" = "$RAISE_OK" ] && exit 0
 exit 1
 EOF
 cat >"$tmp/bin/xdg-mime" <<'EOF'
@@ -38,6 +42,8 @@ export QBT_RAISE_CMD="$tmp/bin/omarchy-shell"
 export QBT_NOTIFY_CMD="$tmp/bin/notify-send"
 export NOTIFY_LOG="$tmp/notify.log"
 export XDG_LOG="$tmp/xdg.log"
+export RAISE_LOG="$tmp/raise.log"
+: >"$RAISE_LOG"
 : >"$NOTIFY_LOG"
 : >"$XDG_LOG"
 
@@ -68,6 +74,26 @@ lines=$(wc -l <"$inbox" | tr -d ' ')
 [[ $lines == 1 ]] || fail "expected 1 inbox line, got $lines"
 jq -e --arg u "$magnet" '.url == $u' <<<"$(head -1 "$inbox")" >/dev/null || fail "inbox url"
 grep -q "Click the mark" "$NOTIFY_LOG" || fail "raise fail should notify"
+[[ $(cat "$RAISE_LOG") == $'aweiward.omaqbt magnet\naweiward.omaqbt open' ]] \
+  || fail "raise should try magnet, then open; got: $(cat "$RAISE_LOG")"
+
+# Raise order. The same magnet again is a duplicate: the inbox keeps one
+# line, and the raise still runs.
+raise_case() {
+  : >"$RAISE_LOG"
+  : >"$NOTIFY_LOG"
+  RAISE_OK=$1 $QBT magnet-inbox "$magnet" || fail "raise case ${1:-none}"
+}
+raise_case magnet
+[[ $(cat "$RAISE_LOG") == "aweiward.omaqbt magnet" ]] || fail "magnet ok must not fall back: $(cat "$RAISE_LOG")"
+[[ ! -s $NOTIFY_LOG ]] || fail "magnet ok must not notify"
+raise_case open
+[[ $(cat "$RAISE_LOG") == $'aweiward.omaqbt magnet\naweiward.omaqbt open' ]] || fail "old shell falls back to open: $(cat "$RAISE_LOG")"
+[[ ! -s $NOTIFY_LOG ]] || fail "open ok must not notify"
+raise_case ""
+[[ $(cat "$RAISE_LOG") == $'aweiward.omaqbt magnet\naweiward.omaqbt open' ]] || fail "no shell tries both: $(cat "$RAISE_LOG")"
+grep -q "Click the mark" "$NOTIFY_LOG" || fail "both raises failing must notify"
+[[ $(wc -l <"$inbox" | tr -d ' ') == 1 ]] || fail "raise cases must not add inbox lines"
 
 $QBT magnet-inbox "$magnet" || fail "duplicate should succeed"
 lines=$(wc -l <"$inbox" | tr -d ' ')

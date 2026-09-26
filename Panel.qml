@@ -432,6 +432,12 @@ Panel {
   IpcHandler {
     target: root.ipcTarget
     function open(): void { root.open() }
+    // The browser-magnet raise (`qbt magnet-inbox`). While the window is
+    // open it shows the confirm itself, so the popup stays shut.
+    function magnet(): void {
+      root.qbt.loadMagnetSnapshot()
+      if (!root.qbt.windowOpen) root.open()
+    }
     function close(): void { root.close() }
     function show(): void { root.open() }
     function hide(): void { root.close() }
