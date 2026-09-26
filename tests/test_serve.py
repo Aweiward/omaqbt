@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import json
 import queue
+import socket
 import subprocess
 import sys
 import threading
@@ -332,6 +333,83 @@ class NoPreferencesCallTests(unittest.TestCase):
                 entries = json.loads(log_path.read_text() or "[]")
                 paths = {e["path"] for e in entries}
                 self.assertNotIn("/api/v2/app/preferences", paths)
+
+
+def _stalling_socket():
+    """A TCP listener that accepts a connection and then never writes a
+    byte or closes it -- simulating a qBittorrent daemon that accepted
+    the socket but is stuck. Returns (port, cleanup)."""
+    srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    srv.bind(("127.0.0.1", 0))
+    srv.listen(5)
+    port = srv.getsockname()[1]
+    stop = threading.Event()
+    held = []
+
+    def run():
+        srv.settimeout(0.2)
+        while not stop.is_set():
+            try:
+                conn, _ = srv.accept()
+            except socket.timeout:
+                continue
+            except OSError:
+                break
+            held.append(conn)  # accept and hold forever; never respond
+
+    thread = threading.Thread(target=run, daemon=True)
+    thread.start()
+
+    def cleanup():
+        stop.set()
+        thread.join(timeout=2)
+        for conn in held:
+            try:
+                conn.close()
+            except Exception:
+                pass
+        try:
+            srv.close()
+        except Exception:
+            pass
+
+    return port, cleanup
+
+
+class StalledDaemonTests(unittest.TestCase):
+    """Regression test: a daemon that accepts a connection and then never
+    answers must not starve the heartbeat, and stdin EOF must still exit
+    the process quickly even while the main thread is blocked in that
+    HTTP call (or a `qbt probe` reprobe)."""
+
+    def test_heartbeat_and_shutdown_survive_a_stalled_daemon(self):
+        port, stalling_cleanup = _stalling_socket()
+        try:
+            with harness.fixture_server(extra_env={"QBT_BASE": f"http://127.0.0.1:{port}"}) as (_, env):
+                start = time.monotonic()
+                sp = ServeProcess(env)
+                try:
+                    hb = sp.read_until(lambda o: o.get("type") == "heartbeat", timeout=6)
+                    self.assertEqual(hb, {"type": "heartbeat"})
+                    self.assertLess(time.monotonic() - start, 6.0)
+
+                    # Start a fresh blocking call and give it time to
+                    # actually land inside client.get() against the
+                    # stalling socket, so closing stdin next is provably
+                    # racing a main thread stuck in HTTP, not an idle one.
+                    sp.send({"cmd": "refresh"})
+                    time.sleep(0.3)
+
+                    eof_start = time.monotonic()
+                    sp.close_stdin()
+                    sp.proc.wait(timeout=2)
+                    elapsed = time.monotonic() - eof_start
+                    self.assertEqual(sp.proc.returncode, 0)
+                    self.assertLess(elapsed, 1.0)
+                finally:
+                    sp.cleanup()
+        finally:
+            stalling_cleanup()
 
 
 if __name__ == "__main__":

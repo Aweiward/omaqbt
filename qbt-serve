@@ -5,10 +5,23 @@ It runs `qbt probe` once at startup (and again every 10s of ticking), holds
 a single in-memory WebUI session, and polls `lib/qbtsync.build_status` on
 a cadence a QML `Process` controls over stdin. Every stdout line is one
 JSON object (`{"type":...}` first) with a trailing newline; diagnostics
-(sanitized) go to stderr only. Commands come in one per stdin line as
-JSON; a reader thread parses them onto a queue so only the main thread
-ever writes to stdout, and closing stdin (EOF) wakes the main loop and
-exits it within about a second.
+(sanitized) go to stderr only.
+
+Three threads touch stdout/stdin, and none of them may be stalled by a
+qBittorrent daemon that accepts a connection and then never answers
+(`build_status` can block for one `Client` timeout per call, and a
+reprobe blocks on a `qbt probe` subprocess):
+
+  - the main thread: reads commands off a queue and ticks.
+  - a reader thread: parses stdin lines onto that queue, and -- this is
+    the part that must not wait on the main thread -- exits the whole
+    process the instant stdin hits EOF, however busy the main thread is.
+  - a heartbeat thread: prints a heartbeat every 5s on its own clock,
+    independent of whatever the main thread is doing.
+
+The main and heartbeat threads write to stdout, and the reader thread
+flushes it on its way out, so `emit()` serializes every write with a
+lock rather than restricting writers to one thread.
 """
 import fcntl
 import http.cookiejar
@@ -33,24 +46,29 @@ MAX_CADENCE_MS = 3600000
 PROBE_TIMEOUT = 10
 
 _HASH_RE = re.compile(r"[0-9a-fA-F]{40}|[0-9a-fA-F]{64}")
+_STDOUT_LOCK = threading.Lock()
 
 
 def emit(obj):
-    """Write one JSON line to stdout. A dead reader on the other end
-    (BrokenPipeError) means the consumer is gone: exit 0 immediately via
-    os._exit, skipping interpreter finalization. Regular shutdown would
-    re-flush stdout (which would raise again) and, worse, the daemon
-    stdin-reader thread may be blocked inside the buffered reader's lock,
-    which can abort finalization outright."""
-    try:
-        sys.stdout.write(json.dumps(obj, separators=(",", ":")) + "\n")
-        sys.stdout.flush()
-    except BrokenPipeError:
+    """Write one JSON line to stdout under `_STDOUT_LOCK`, the one rule
+    that keeps the main, heartbeat, and reader threads from interleaving
+    partial lines. A dead reader on the other end (BrokenPipeError) means
+    the consumer is gone: exit 0 immediately via os._exit, skipping
+    interpreter finalization. Regular shutdown would re-flush stdout
+    (which would raise again) and, worse, the stdin-reader thread may be
+    blocked inside the buffered reader's lock, which can abort
+    finalization outright."""
+    line = json.dumps(obj, separators=(",", ":")) + "\n"
+    with _STDOUT_LOCK:
         try:
-            sys.stderr.flush()
-        except Exception:
-            pass
-        os._exit(0)
+            sys.stdout.write(line)
+            sys.stdout.flush()
+        except BrokenPipeError:
+            try:
+                sys.stderr.flush()
+            except Exception:
+                pass
+            os._exit(0)
 
 
 def run_probe(helper):
@@ -76,9 +94,14 @@ def run_probe(helper):
 
 
 def _reader_thread(cmd_queue):
-    """Reads stdin lines, puts (\"cmd\", dict-or-None) for each one, and a
-    final (\"eof\", None) sentinel once stdin closes. Never touches
-    stdout: only the main thread writes there."""
+    """Reads stdin lines and puts (\"cmd\", dict-or-None) for each one.
+
+    On EOF (or any read error) it does NOT hand off to the main thread:
+    the main thread can be blocked for seconds inside an HTTP call or a
+    `qbt probe` subprocess against a stalled daemon, and "exit within 1s
+    of stdin EOF" has to hold regardless. So this thread flushes stdout
+    itself, under the same lock `emit()` uses, and exits the whole
+    process directly. The OS reclaims the flock and every fd on exit."""
     try:
         for line in sys.stdin:
             line = line.strip()
@@ -93,8 +116,27 @@ def _reader_thread(cmd_queue):
             cmd_queue.put(("cmd", obj))
     except Exception:
         pass
-    finally:
-        cmd_queue.put(("eof", None))
+    with _STDOUT_LOCK:
+        try:
+            sys.stdout.flush()
+        except Exception:
+            pass
+    os._exit(0)
+
+
+def _heartbeat_thread():
+    """Prints a heartbeat every 5s by its own monotonic clock, forever,
+    on a daemon thread -- so a main thread stuck in an HTTP call or a
+    reprobe never delays it. Scheduled off a fixed anchor rather than
+    `time.sleep(HEARTBEAT_INTERVAL)` in a loop so it doesn't drift by
+    however long each `emit()` call took."""
+    next_at = time.monotonic() + HEARTBEAT_INTERVAL
+    while True:
+        delay = next_at - time.monotonic()
+        if delay > 0:
+            time.sleep(delay)
+        emit({"type": "heartbeat"})
+        next_at += HEARTBEAT_INTERVAL
 
 
 def do_tick(state):
@@ -120,6 +162,9 @@ def do_tick(state):
 
 
 def handle_command(cmd, state):
+    """Dispatches one non-`refresh` command. `refresh` is handled by the
+    caller instead, so that several queued refreshes collapse into one
+    tick rather than one blocking HTTP round-trip apiece."""
     name = cmd.get("cmd")
     cid = cmd.get("id")
 
@@ -133,11 +178,6 @@ def handle_command(cmd, state):
         # Takes effect from the next wait: reschedule right away rather
         # than waiting out whatever interval was already in flight.
         state["next_tick"] = time.monotonic() + clamped / 1000.0
-        return
-
-    if name == "refresh":
-        do_tick(state)
-        state["next_tick"] = time.monotonic() + state["cadence_ms"] / 1000.0
         return
 
     if name == "files":
@@ -161,17 +201,32 @@ def handle_command(cmd, state):
     emit({"type": "error", "id": cid, "error": "bad command"})
 
 
-def process_item(item, state):
-    """Handles one queue item. Returns True if the main loop should stop."""
+def _is_refresh(item):
     kind, payload = item
-    if kind == "eof":
-        return True
-    if kind == "cmd":
-        if payload is None:
-            emit({"type": "error", "id": None, "error": "bad command"})
-        else:
-            handle_command(payload, state)
-    return False
+    return kind == "cmd" and payload is not None and payload.get("cmd") == "refresh"
+
+
+def drain_and_dispatch(cmd_queue, first_item, state):
+    """Handles `first_item` plus everything already queued behind it,
+    without blocking for more. Any number of queued `refresh` commands
+    collapse into a single tick at the end, instead of one `do_tick` (and
+    its HTTP round-trip) per queued refresh."""
+    pending_refresh = False
+    item = first_item
+    while item is not None:
+        kind, payload = item
+        if _is_refresh(item):
+            pending_refresh = True
+        elif kind == "cmd":
+            if payload is None:
+                emit({"type": "error", "id": None, "error": "bad command"})
+            else:
+                handle_command(payload, state)
+        try:
+            item = cmd_queue.get_nowait()
+        except queue.Empty:
+            item = None
+    return pending_refresh
 
 
 def main():
@@ -213,8 +268,8 @@ def main():
         return 3
 
     cmd_queue = queue.Queue()
-    reader = threading.Thread(target=_reader_thread, args=(cmd_queue,), daemon=True)
-    reader.start()
+    threading.Thread(target=_reader_thread, args=(cmd_queue,), daemon=True).start()
+    threading.Thread(target=_heartbeat_thread, daemon=True).start()
 
     jar = http.cookiejar.CookieJar()
     client = qbtsync.Client(probe["base"], jar)
@@ -230,44 +285,26 @@ def main():
 
     # The first tick runs immediately after the lock is acquired.
     do_tick(state)
-    now = time.monotonic()
-    state["next_tick"] = now + state["cadence_ms"] / 1000.0
-    state["next_heartbeat"] = now + HEARTBEAT_INTERVAL
+    state["next_tick"] = time.monotonic() + state["cadence_ms"] / 1000.0
 
-    stop = False
-    while not stop:
+    # Runs forever: the reader thread exits the whole process on stdin
+    # EOF (or a dead stdout, via emit()'s BrokenPipeError handler), so
+    # there is no in-band condition for this loop itself to break on.
+    while True:
         now = time.monotonic()
-        timeout = max(0.0, min(state["next_tick"], state["next_heartbeat"]) - now)
+        timeout = max(0.0, state["next_tick"] - now)
         try:
             item = cmd_queue.get(timeout=timeout)
         except queue.Empty:
             item = None
-        if item is not None:
-            stop = process_item(item, state)
-            # Drain anything else already queued before recomputing waits.
-            while not stop:
-                try:
-                    item = cmd_queue.get_nowait()
-                except queue.Empty:
-                    break
-                stop = process_item(item, state)
-        if stop:
-            break
+        if item is not None and drain_and_dispatch(cmd_queue, item, state):
+            do_tick(state)
+            state["next_tick"] = time.monotonic() + state["cadence_ms"] / 1000.0
 
         now = time.monotonic()
-        if now >= state["next_heartbeat"]:
-            emit({"type": "heartbeat"})
-            state["next_heartbeat"] = now + HEARTBEAT_INTERVAL
         if now >= state["next_tick"]:
             do_tick(state)
             state["next_tick"] = now + state["cadence_ms"] / 1000.0
-
-    try:
-        fcntl.flock(lock_fd, fcntl.LOCK_UN)
-    except OSError:
-        pass
-    os.close(lock_fd)
-    return 0
 
 
 if __name__ == "__main__":
