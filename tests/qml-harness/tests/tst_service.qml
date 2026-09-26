@@ -428,6 +428,48 @@ TestCase {
     compare(watchWrites(wire).length, 1, "an identical watch is not re-sent")
   }
 
+  // A real sidecar restart (handleSidecarExit, not just flipping
+  // sidecarState by hand): the exited sidecar's watch is gone with it, so
+  // the same {hash, tab} must be resent once the replacement's first
+  // status line arrives (F11), across every sidecar tab.
+  function test_watch_is_resent_after_a_real_sidecar_restart() {
+    var tabs = ["info", "trackers", "peers"]
+    for (var i = 0; i < tabs.length; i++) {
+      var svc = createTemporaryObject(serviceComp, tc)
+      var wire = sidecarWire(svc)
+      var h = hh("a")
+      svc.handleSidecarLine(statusLine([h]))     // sidecar up
+      svc.watch(h, tabs[i])
+      compare(watchWrites(wire).length, 1, "one watch while up, tab " + tabs[i])
+      // The real exit path: both active and started are true in the
+      // harness (Component.onCompleted already called start()), so the
+      // guard at the top of handleSidecarExit lets it run for real.
+      svc.handleSidecarExit(1)
+      compare(svc.sidecarState, "starting", "a first failure keeps retrying rather than giving up, tab " + tabs[i])
+      svc.handleSidecarLine(statusLine([h]))     // the restarted sidecar's first status line
+      var sent = watchWrites(wire)
+      compare(sent.length, 2, "the watch is resent once the restarted sidecar comes back up, tab " + tabs[i])
+      compare(sent[1].hash, h, "tab " + tabs[i])
+      compare(sent[1].tab, tabs[i], "tab " + tabs[i])
+    }
+  }
+
+  // The minor fix: the resend gate looks at the *effective* watch (whose
+  // hash is null for a Files-tab watch), not the raw watchedHash, so a
+  // restart while the Files tab is showing doesn't re-clear a watch that
+  // was already clear.
+  function test_watch_files_tab_is_not_resent_after_a_restart() {
+    var svc = createTemporaryObject(serviceComp, tc)
+    var wire = sidecarWire(svc)
+    var h = hh("a")
+    svc.handleSidecarLine(statusLine([h]))
+    svc.watch(h, "files")
+    compare(watchWrites(wire).length, 1, "the initial files-tab watch still clears once")
+    svc.handleSidecarExit(1)
+    svc.handleSidecarLine(statusLine([h]))
+    compare(watchWrites(wire).length, 1, "no pointless resend for a Files-tab watch after a restart")
+  }
+
   function test_window_open_false_clears_the_watch_with_no_client() {
     var svc = createTemporaryObject(serviceComp, tc)
     var wire = sidecarWire(svc)

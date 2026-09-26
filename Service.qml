@@ -86,9 +86,16 @@ Scope {
   property var filesRequests: ({})
 
   // hash+"|"+tab -> {props, pieces, trackers, peers, points, error, at}
-  // (only the fields that tab uses; at is Date.now() when stored). Pruned
-  // of any hash that has left torrents on every applyStatus, so a cursor
-  // that visited a torrent that later disappeared doesn't leak forever.
+  // (only the fields that tab uses; at is Date.now() at the last update of
+  // any kind, success or error). Ruling G: an error entry keeps whatever
+  // data fields it already had rather than wiping them, so a transient
+  // sidecar failure never blanks a tab that already had something to
+  // show; a consumer decides purely from `.error` (truthy means show the
+  // error state, regardless of what data is still sitting alongside it) --
+  // InspectorView.tabState returns "error" whenever entry.error is set,
+  // never by inspecting the data fields themselves. Pruned of any hash
+  // that has left torrents on every applyStatus, so a cursor that visited
+  // a torrent that later disappeared doesn't leak forever.
   property var inspectByKey: ({})
   // The inspector's current cursor: the hash and tab the sidecar should be
   // reading. "files" is not a sidecar tab -- watch(hash, "files") is a
@@ -802,10 +809,12 @@ Scope {
         sidecarUpSince = Date.now()
         sendCadence()
         // A fresh (or restarted) sidecar knows nothing of any watch; resend
-        // it (F11) unless nothing is actually being watched, so a bar-only
-        // session never sends a pointless clearing watch on every start.
+        // it (F11) unless the effective watch has no hash (nothing is
+        // actually being watched, or the current tab is "files"), so a
+        // bar-only session -- or a Files-tab watch -- never sends a
+        // pointless clearing watch on every start.
         lastSentWatch = null
-        if (watchedHash !== "") sendWatchIfChanged()
+        if (effectiveWatch(watchedHash, watchedTab).hash !== null) sendWatchIfChanged()
       }
     } else if (msg.type === "heartbeat") {
       sidecarLastBeat = Date.now()
