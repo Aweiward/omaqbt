@@ -625,6 +625,15 @@ test("helpFor(NORMAL, table) lists the table-pane and any-pane rows", () => {
   assert.ok(!ids.includes(null), "reserved rows are not commands");
 });
 
+test("helpFor titles t (all.toggle) Start/stop all", () => {
+  for (const pane of ["table", "filters", "inspector"]) {
+    const row = helpFor("NORMAL", pane).find((r) => r.id === "all.toggle");
+    assert.ok(row, pane);
+    assert.equal(row.title, "Start/stop all", pane);
+  }
+  assert.equal(commands.find((c) => c.id === "all.toggle").title, "Start/stop all");
+});
+
 test("helpFor(NORMAL, filters) excludes table-only rows", () => {
   const rows = helpFor("NORMAL", "filters");
   const ids = rows.map((r) => r.id);

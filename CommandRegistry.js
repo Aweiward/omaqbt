@@ -60,7 +60,7 @@ var commands = [
   { id: "visual.enter", title: "Visual select", group: "View", keys: ["V"], modes: ["NORMAL"], panes: ["table"], needs: "torrent" },
 
   // NORMAL, any pane
-  { id: "all.toggle", title: "Show all", group: "Library", keys: ["t"], modes: ["NORMAL"], panes: [PANE_ANY], needs: "none" },
+  { id: "all.toggle", title: "Start/stop all", group: "Library", keys: ["t"], modes: ["NORMAL"], panes: [PANE_ANY], needs: "none" },
   { id: "sort.next", title: "Sort", group: "View", keys: ["s"], modes: ["NORMAL"], panes: [PANE_ANY], needs: "none" },
   { id: "sort.reverse", title: "Reverse sort", group: "View", keys: ["S"], modes: ["NORMAL"], panes: [PANE_ANY], needs: "none" },
   { id: "turtle.toggle", title: "Alt speed", group: "Library", keys: ["z"], modes: ["NORMAL"], panes: [PANE_ANY], needs: "none" },
