@@ -424,6 +424,56 @@ function installCommand(stdinIsTty) {
   return ["pkexec", "omarchy", "pkg", "add", "qbittorrent-nox"];
 }
 
+function parseServeLine(line) {
+  var raw = String(line || "");
+  var data = null;
+  var type = "invalid";
+
+  try {
+    var parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return { type: "invalid", raw: raw, data: null };
+    }
+
+    var t = String(parsed.type || "");
+    if (t === "status" || t === "files" || t === "heartbeat" || t === "fatal" || t === "error") {
+      type = t;
+      data = parsed;
+    }
+    // else type stays "invalid" and data stays null
+  } catch (e) {
+    // JSON parse failed, type stays "invalid"
+  }
+
+  return { type: type, raw: raw, data: data };
+}
+
+function cadenceMs(magnetWatching, refreshIntervalSec) {
+  if (magnetWatching) return 250;
+
+  var n = parseInt(String(refreshIntervalSec), 10);
+  if (!isFinite(n)) n = 5;
+  if (n < 5) n = 5;
+  if (n > 3600) n = 3600;
+
+  return n * 1000;
+}
+
+function heartbeatExpired(lastBeatMs, nowMs, intervalMs) {
+  var interval = intervalMs || 5000;
+  return nowMs - lastBeatMs > 2 * interval;
+}
+
+function nextBackoffMs(failures) {
+  var f = Number(failures);
+  if (!isFinite(f) || f <= 0) return 0;
+  return Math.min(1000 * Math.pow(2, f - 1), 30000);
+}
+
+function sidecarGaveUp(failures) {
+  return Number(failures) >= 5;
+}
+
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     classifyState: classifyState,
@@ -465,7 +515,12 @@ if (typeof module !== "undefined" && module.exports) {
     parseStatusJson: parseStatusJson,
     sanitizeError: sanitizeError,
     nextStatusError: nextStatusError,
-    installCommand: installCommand
+    installCommand: installCommand,
+    parseServeLine: parseServeLine,
+    cadenceMs: cadenceMs,
+    heartbeatExpired: heartbeatExpired,
+    nextBackoffMs: nextBackoffMs,
+    sidecarGaveUp: sidecarGaveUp
   };
 }
 

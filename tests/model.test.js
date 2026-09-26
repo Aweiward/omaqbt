@@ -568,3 +568,144 @@ test("enqueueAction keeps FIFO order", () => {
   assert.deepEqual(second.item.cmd, ["start", "b"]);
   assert.equal(second.rest.length, 0);
 });
+
+// Tests for parseServeLine
+test("parseServeLine parses a valid status line", () => {
+  const result = Model.parseServeLine('{"type":"status","foo":"bar"}');
+  assert.equal(result.type, "status");
+  assert.equal(result.raw, '{"type":"status","foo":"bar"}');
+  assert.deepEqual(result.data, { type: "status", foo: "bar" });
+});
+
+test("parseServeLine parses a valid files line", () => {
+  const result = Model.parseServeLine('{"type":"files"}');
+  assert.equal(result.type, "files");
+  assert.deepEqual(result.data, { type: "files" });
+});
+
+test("parseServeLine parses a valid heartbeat line", () => {
+  const result = Model.parseServeLine('{"type":"heartbeat"}');
+  assert.equal(result.type, "heartbeat");
+});
+
+test("parseServeLine parses a valid fatal line", () => {
+  const result = Model.parseServeLine('{"type":"fatal"}');
+  assert.equal(result.type, "fatal");
+});
+
+test("parseServeLine parses a valid error line", () => {
+  const result = Model.parseServeLine('{"type":"error"}');
+  assert.equal(result.type, "error");
+});
+
+test("parseServeLine sets type to invalid for unknown type", () => {
+  const result = Model.parseServeLine('{"type":"nope"}');
+  assert.equal(result.type, "invalid");
+  assert.equal(result.data, null);
+});
+
+test("parseServeLine sets type to invalid for empty string", () => {
+  const result = Model.parseServeLine("");
+  assert.equal(result.type, "invalid");
+  assert.equal(result.data, null);
+  assert.equal(result.raw, "");
+});
+
+test("parseServeLine sets type to invalid for null string", () => {
+  const result = Model.parseServeLine("null");
+  assert.equal(result.type, "invalid");
+  assert.equal(result.data, null);
+});
+
+test("parseServeLine sets type to invalid for array", () => {
+  const result = Model.parseServeLine("[]");
+  assert.equal(result.type, "invalid");
+  assert.equal(result.data, null);
+});
+
+test("parseServeLine sets type to invalid for invalid JSON", () => {
+  const result = Model.parseServeLine("{bad json}");
+  assert.equal(result.type, "invalid");
+  assert.equal(result.data, null);
+  assert.equal(result.raw, "{bad json}");
+});
+
+// Tests for cadenceMs
+test("cadenceMs returns 250 when magnetWatching is truthy", () => {
+  assert.equal(Model.cadenceMs(true, 5), 250);
+  assert.equal(Model.cadenceMs(1, 10), 250);
+  assert.equal(Model.cadenceMs("yes", 3600), 250);
+});
+
+test("cadenceMs clamps below 5 to 5000", () => {
+  assert.equal(Model.cadenceMs(false, 1), 5000);
+  assert.equal(Model.cadenceMs(false, 4), 5000);
+  assert.equal(Model.cadenceMs(false, 0), 5000);
+});
+
+test("cadenceMs converts valid refreshIntervalSec to milliseconds", () => {
+  assert.equal(Model.cadenceMs(false, 5), 5000);
+  assert.equal(Model.cadenceMs(false, "10"), 10000);
+  assert.equal(Model.cadenceMs(false, 30), 30000);
+});
+
+test("cadenceMs clamps above 3600 to 3600000", () => {
+  assert.equal(Model.cadenceMs(false, 3601), 3600000);
+  assert.equal(Model.cadenceMs(false, 99999), 3600000);
+});
+
+test("cadenceMs defaults undefined to 5000", () => {
+  assert.equal(Model.cadenceMs(false, undefined), 5000);
+});
+
+// Tests for heartbeatExpired
+test("heartbeatExpired returns false for exactly 2*interval", () => {
+  const lastBeat = 0;
+  const now = 10000;
+  const interval = 5000;
+  assert.equal(Model.heartbeatExpired(lastBeat, now, interval), false);
+});
+
+test("heartbeatExpired returns true for more than 2*interval", () => {
+  const lastBeat = 0;
+  const now = 10001;
+  const interval = 5000;
+  assert.equal(Model.heartbeatExpired(lastBeat, now, interval), true);
+});
+
+test("heartbeatExpired defaults interval to 5000", () => {
+  const lastBeat = 0;
+  const now = 10000;
+  assert.equal(Model.heartbeatExpired(lastBeat, now), false);
+  assert.equal(Model.heartbeatExpired(lastBeat, now + 1), true);
+});
+
+// Tests for nextBackoffMs
+test("nextBackoffMs returns 0 for failures <= 0", () => {
+  assert.equal(Model.nextBackoffMs(0), 0);
+  assert.equal(Model.nextBackoffMs(-1), 0);
+});
+
+test("nextBackoffMs calculates exponential backoff", () => {
+  assert.equal(Model.nextBackoffMs(1), 1000);
+  assert.equal(Model.nextBackoffMs(2), 2000);
+  assert.equal(Model.nextBackoffMs(3), 4000);
+  assert.equal(Model.nextBackoffMs(4), 8000);
+  assert.equal(Model.nextBackoffMs(5), 16000);
+});
+
+test("nextBackoffMs caps at 30000", () => {
+  assert.equal(Model.nextBackoffMs(6), 30000);
+  assert.equal(Model.nextBackoffMs(20), 30000);
+});
+
+// Tests for sidecarGaveUp
+test("sidecarGaveUp returns false for failures < 5", () => {
+  assert.equal(Model.sidecarGaveUp(4), false);
+  assert.equal(Model.sidecarGaveUp(0), false);
+});
+
+test("sidecarGaveUp returns true for failures >= 5", () => {
+  assert.equal(Model.sidecarGaveUp(5), true);
+  assert.equal(Model.sidecarGaveUp(6), true);
+});
