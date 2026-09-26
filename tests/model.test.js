@@ -1317,3 +1317,50 @@ test("filesReplayOpts keeps a replayed load's origin", () => {
   assert.equal(Model.filesFailureWritesLastError(q, a), false);
   assert.equal(Model.filesFailureWritesLastError({}, a), true);
 });
+
+// --- chunkHashes / toggleAllTargets ------------------------------------------
+
+function hx(i) {
+  return i.toString(16).padStart(40, "0");
+}
+
+test("chunkHashes splits in order into chunks of at most size", () => {
+  const list = Array.from({ length: 5000 }, (_, i) => hx(i));
+  const chunks = Model.chunkHashes(list, 1000);
+  assert.equal(chunks.length, 5);
+  for (const c of chunks) assert.equal(c.length, 1000);
+  assert.deepEqual([].concat(...chunks), list);
+  assert.deepEqual(Model.chunkHashes(["a", "b", "c"], 2), [["a", "b"], ["c"]]);
+  assert.deepEqual(Model.chunkHashes(Array.from({ length: 1001 }, (_, i) => hx(i)), 1000).map((c) => c.length), [1000, 1]);
+});
+
+test("chunkHashes handles empty input, drops empty entries and defaults the size", () => {
+  assert.deepEqual(Model.chunkHashes([], 1000), []);
+  assert.deepEqual(Model.chunkHashes(null, 1000), []);
+  assert.deepEqual(Model.chunkHashes(["a", "", null, "b"], 5), [["a", "b"]]);
+  assert.equal(Model.HASH_CHUNK, 1000);
+  assert.equal(Model.chunkHashes(Array.from({ length: 2500 }, (_, i) => hx(i))).length, 3, "default size is HASH_CHUNK");
+  assert.equal(Model.chunkHashes(["a", "b"], 0).length, 1);
+});
+
+test("a chunk of 1000 v2 hashes stays under Linux's 131072-byte argv limit", () => {
+  const v2 = Array.from({ length: 1000 }, (_, i) => i.toString(16).padStart(64, "0"));
+  const arg = Model.chunkHashes(v2, Model.HASH_CHUNK)[0].join("|");
+  assert.ok(Buffer.byteLength("hashes=" + arg) < 131072);
+});
+
+test("toggleAllTargets sends all when no pending magnet is in torrents", () => {
+  const rows = Array.from({ length: 5000 }, (_, i) => ({ hash: hx(i) }));
+  assert.deepEqual(Model.toggleAllTargets(rows, [], 1000), ["all"]);
+  assert.deepEqual(Model.toggleAllTargets(rows, [hx(99999)], 1000), ["all"], "a pending hash not in torrents");
+  assert.deepEqual(Model.toggleAllTargets([], [], 1000), []);
+});
+
+test("toggleAllTargets chunks the live hashes when a pending magnet is in torrents", () => {
+  const rows = Array.from({ length: 5001 }, (_, i) => ({ hash: hx(i) }));
+  const args = Model.toggleAllTargets(rows, [hx(5000).toUpperCase()], 1000);
+  assert.equal(args.length, 5, "5000 live hashes make 5 calls");
+  for (const a of args) assert.equal(a.split("|").length, 1000);
+  assert.ok(!args.join("|").includes(hx(5000)), "the pending hash is left out");
+  assert.deepEqual(Model.toggleAllTargets([{ hash: hx(1) }], [hx(1)], 1000), [], "nothing live");
+});

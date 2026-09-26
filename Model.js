@@ -99,6 +99,46 @@ function excludePending(list, pending) {
   return out;
 }
 
+// The most hashes one qbt call carries. Linux caps a single argv string at
+// 131,072 bytes (MAX_ARG_STRLEN); 1000 v2 hashes joined by "|" are 64,999
+// bytes, so a chunk stays well under it even with the form-body prefix.
+var HASH_CHUNK = 1000;
+
+// chunkHashes(list, size) -> list split, in order, into arrays of at most
+// size items (HASH_CHUNK when size isn't a positive number). Empty and
+// falsy entries are dropped; an empty list gives [].
+function chunkHashes(list, size) {
+  var n = Math.floor(Number(size));
+  if (!isFinite(n) || n < 1) n = HASH_CHUNK;
+  var items = [];
+  var src = list || [];
+  for (var i = 0; i < src.length; i++) if (src[i]) items.push(String(src[i]));
+  var out = [];
+  for (var j = 0; j < items.length; j += n) out.push(items.slice(j, j + n));
+  return out;
+}
+
+// toggleAllTargets(torrents, pending, size) -> the hash arguments for the
+// qbt start/stop calls that toggle every live torrent: ["all"] when no
+// pending magnet is in torrents (qBittorrent's own "all" then touches
+// exactly the live rows), otherwise the live hashes joined by "|" in
+// chunks of at most size. [] when nothing is live.
+function toggleAllTargets(torrents, pending, size) {
+  var rows = torrents || [];
+  var live = excludePending(rows, pending);
+  if (live.length === 0) return [];
+  if (live.length === rows.length) return ["all"];
+  var hashes = [];
+  for (var i = 0; i < live.length; i++) {
+    var h = torrentId(live[i]);
+    if (h) hashes.push(h);
+  }
+  var chunks = chunkHashes(hashes, size);
+  var out = [];
+  for (var j = 0; j < chunks.length; j++) out.push(chunks[j].join("|"));
+  return out;
+}
+
 function pendingNeedsStop(state) {
   var bucket = classifyState(state, 0);
   return bucket === "downloading" || bucket === "seeding";
@@ -1095,6 +1135,9 @@ if (typeof module !== "undefined" && module.exports) {
     parseServeLine: parseServeLine,
     defaultViewState: defaultViewState,
     parseViewState: parseViewState,
+    HASH_CHUNK: HASH_CHUNK,
+    chunkHashes: chunkHashes,
+    toggleAllTargets: toggleAllTargets,
     serializeViewState: serializeViewState,
     cadenceMs: cadenceMs,
     heartbeatExpired: heartbeatExpired,
