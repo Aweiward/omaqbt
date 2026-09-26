@@ -14,10 +14,89 @@ QtObject {
   required property var client
   // The InspectorPane, for scrolling the Files cursor into view.
   required property var inspectorPane
+  // The StatusLine whose input INSERT edits, and the item that takes the
+  // keys again when INSERT ends.
+  required property var inputLine
+  required property Item keyItem
 
   function isEnterKey(ev) {
     return ev.key === Registry.KEY.Return || ev.key === Registry.KEY.Enter
   }
+
+  // A key whose command needs a torrent, pressed with none under the
+  // cursor. In the empty library, `y` means "add from clipboard" (the
+  // empty state's copy), since there is no torrent to copy a magnet from.
+  function handleBlocked(ev) {
+    var c = client
+    if (!c.service) return
+    if (c.tableState === "empty" && ev.text === "y" && !ev.modifiers.ctrl) {
+      c.clipboardAskedAt = ev.now
+      c.service.readClipboard()
+    }
+  }
+
+  // ---- INSERT ------------------------------------------------------------------
+
+  function startInput(purpose, initial) {
+    var c = client
+    c.inputPurpose = purpose
+    c.queryBeforeEdit = c.textQuery
+    inputLine.setInput(initial)
+    var st = ({})
+    for (var k in c.regState) st[k] = c.regState[k]
+    st.mode = "INSERT"
+    c.regState = st
+    inputLine.focusInput()
+  }
+
+  function endInput() {
+    client.inputPurpose = ""
+    keyItem.forceActiveFocus()
+  }
+
+  function stayInInsert() {
+    var c = client
+    var st = ({})
+    for (var k in c.regState) st[k] = c.regState[k]
+    st.mode = "INSERT"
+    c.regState = st
+    inputLine.focusInput()
+  }
+
+  function commitInput() {
+    var c = client
+    var text = inputLine.inputValue().trim()
+    if (c.inputPurpose === "move") {
+      if (!View.isAbsolutePath(text)) {
+        c.note("Enter an absolute path to move to.", "urgent")
+        stayInInsert()
+        return
+      }
+      c.track(c.service.setLocation(c.moveHashes.join("|"), text, c.opts(c.moveHashes)), "move", c.moveHashes)
+      c.moveHashes = []
+    } else if (Model.isAddableTarget(text)) {
+      c.track(c.service.addTarget(text, false, "", c.opts([])), "add", [])
+      c.textQuery = ""
+      c.rebuildRows(true)
+    } else {
+      c.textQuery = Model.listQuery(text)
+      c.rebuildRows(true)
+    }
+    endInput()
+  }
+
+  // Client.leaveInsert (a click during INSERT) ends INSERT through here too.
+  function cancelInput() {
+    var c = client
+    if (c.inputPurpose === "filter") {
+      c.textQuery = c.queryBeforeEdit
+      c.rebuildRows(true)
+    }
+    c.moveHashes = []
+    endInput()
+  }
+
+  // ---- commands ------------------------------------------------------------------
 
   // targets: View.targetHashes as it stood before dispatch (the VISUAL
   // range, or the cursor row).
@@ -94,7 +173,7 @@ QtObject {
       rows = c.rawFor(hashes)
       if (rows.length === 0) return
       c.moveHashes = hashes
-      c.startInput("move", String(rows[0].savePath || ""))
+      startInput("move", String(rows[0].savePath || ""))
       return
 
     case "inspector.files":
@@ -146,7 +225,7 @@ QtObject {
       return
 
     case "filter.text":
-      c.startInput("filter", c.textQuery)
+      startInput("filter", c.textQuery)
       return
 
     case "filter.clearText":
@@ -186,11 +265,11 @@ QtObject {
       return
 
     case "insert.commit":
-      c.commitInput()
+      commitInput()
       return
 
     case "insert.cancel":
-      c.cancelInput()
+      cancelInput()
       return
 
     case "refresh":

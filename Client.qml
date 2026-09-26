@@ -367,66 +367,10 @@ Item {
     }
     if (res.state.mode !== "CONFIRM") confirm = null
     if (res.blocked) {
-      handleBlocked(ev)
+      commands.handleBlocked(ev)
       return
     }
     if (res.commandId) run(res.commandId, res.args || ({}), ev, targets)
-  }
-
-  // A key whose command needs a torrent, pressed with none under the
-  // cursor. In the empty library, `y` means "add from clipboard" (the
-  // empty state's copy), since there is no torrent to copy a magnet from.
-  function handleBlocked(ev) {
-    if (!service) return
-    if (tableState === "empty" && ev.text === "y" && !ev.modifiers.ctrl) {
-      clipboardAskedAt = ev.now
-      service.readClipboard()
-    }
-  }
-
-  function startInput(purpose, initial) {
-    inputPurpose = purpose
-    queryBeforeEdit = textQuery
-    statusLine.setInput(initial)
-    var st = ({})
-    for (var k in regState) st[k] = regState[k]
-    st.mode = "INSERT"
-    regState = st
-    statusLine.focusInput()
-  }
-
-  function endInput() {
-    inputPurpose = ""
-    keyRoot.forceActiveFocus()
-  }
-
-  function stayInInsert() {
-    var st = ({})
-    for (var k in regState) st[k] = regState[k]
-    st.mode = "INSERT"
-    regState = st
-    statusLine.focusInput()
-  }
-
-  function commitInput() {
-    var text = statusLine.inputValue().trim()
-    if (inputPurpose === "move") {
-      if (!View.isAbsolutePath(text)) {
-        note("Enter an absolute path to move to.", "urgent")
-        stayInInsert()
-        return
-      }
-      track(service.setLocation(moveHashes.join("|"), text, opts(moveHashes)), "move", moveHashes)
-      moveHashes = []
-    } else if (Model.isAddableTarget(text)) {
-      track(service.addTarget(text, false, "", opts([])), "add", [])
-      textQuery = ""
-      rebuildRows(true)
-    } else {
-      textQuery = Model.listQuery(text)
-      rebuildRows(true)
-    }
-    endInput()
   }
 
   // Ends INSERT the way Esc does (insert.cancel: the filter query goes
@@ -437,16 +381,7 @@ Item {
     for (var k in regState) st[k] = regState[k]
     st.mode = "NORMAL"
     regState = st
-    cancelInput()
-  }
-
-  function cancelInput() {
-    if (inputPurpose === "filter") {
-      textQuery = queryBeforeEdit
-      rebuildRows(true)
-    }
-    moveHashes = []
-    endInput()
+    commands.cancelInput()
   }
 
   // Maps a command id from CommandRegistry to Service calls and view
@@ -500,6 +435,8 @@ Item {
     id: commands
     client: root
     inspectorPane: inspector
+    inputLine: statusLine
+    keyItem: keyRoot
   }
 
   WmFocus {
