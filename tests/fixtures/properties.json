@@ -1,0 +1,19 @@
+{
+  "addition_date": 1755300000,
+  "comment": "Debian testing ISO, see https://www.debian.org for details.",
+  "hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "has_metadata": true,
+  "is_private": false,
+  "nb_connections": 12,
+  "nb_connections_limit": 200,
+  "piece_size": 4194304,
+  "pieces_have": 612,
+  "pieces_num": 1776,
+  "time_elapsed": 5400,
+  "seeding_time": 0,
+  "total_downloaded": 987654321,
+  "total_downloaded_session": 123456,
+  "total_uploaded": 4321,
+  "total_wasted": 2048,
+  "total_size": 661651456
+}

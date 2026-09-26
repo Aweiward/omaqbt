@@ -55,6 +55,12 @@ def start_fixture_server(extra_env=None):
     # "no bound interface", same as a real unbound daemon.
     bind_path = tmp_root / "bind-iface"
 
+    # Left absent: the fixture server treats a missing (or unset) control
+    # file as "no per-route faults". A test that wants a route to sleep or
+    # 404 writes JSON here (e.g. {"trackers": "sleep3"}), and the server
+    # re-reads it on every request, so a test can flip it mid-run.
+    control_path = tmp_root / "control.json"
+
     env = os.environ.copy()
     env.pop("QBT_FIXTURE_FORBIDDEN", None)
     env.pop("QBT_BIND_IFACE", None)
@@ -70,6 +76,7 @@ def start_fixture_server(extra_env=None):
         "QBT_RID_FILE": str(state_dir / "rid.json"),
         "QBT_STATE_DIR": str(state_dir),
         "QBT_FIXTURE_BIND_FILE": str(bind_path),
+        "QBT_FIXTURE_CONTROL": str(control_path),
     })
     if extra_env:
         env.update(extra_env)

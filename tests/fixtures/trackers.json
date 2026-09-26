@@ -1,0 +1,52 @@
+[
+  {
+    "url": "** [DHT] **",
+    "status": 2,
+    "tier": -1,
+    "msg": "",
+    "num_seeds": -1,
+    "num_leeches": -1,
+    "num_peers": 6,
+    "num_downloaded": -1
+  },
+  {
+    "url": "** [PeX] **",
+    "status": 2,
+    "tier": -1,
+    "msg": "",
+    "num_seeds": -1,
+    "num_leeches": -1,
+    "num_peers": 3,
+    "num_downloaded": -1
+  },
+  {
+    "url": "** [LSD] **",
+    "status": 2,
+    "tier": -1,
+    "msg": "",
+    "num_seeds": -1,
+    "num_leeches": -1,
+    "num_peers": 0,
+    "num_downloaded": -1
+  },
+  {
+    "url": "https://tracker.example.com/announce.php?passkey=0123456789abcdef0123456789abcdef",
+    "status": 2,
+    "tier": 0,
+    "msg": "",
+    "num_seeds": 14,
+    "num_leeches": 3,
+    "num_peers": 17,
+    "num_downloaded": 120
+  },
+  {
+    "url": "udp://tracker2.example.net:6969/announce",
+    "status": 1,
+    "tier": 1,
+    "msg": "not working (timed out)",
+    "num_seeds": -1,
+    "num_leeches": -1,
+    "num_peers": -1,
+    "num_downloaded": -1
+  }
+]

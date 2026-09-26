@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 import json
+import os
 import queue
 import socket
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import unittest
@@ -115,6 +117,39 @@ class ServeProcess:
                 pass
         self._out_thread.join(timeout=2)
         self._err_thread.join(timeout=2)
+
+
+def _write_control(path, mapping):
+    """Write the fixture's per-route fault map atomically (write-then-
+    rename), so the fixture server -- which re-reads this file on every
+    request -- never observes a half-written file."""
+    tmp = str(path) + ".tmp"
+    with open(tmp, "w") as f:
+        f.write(json.dumps(mapping))
+    os.replace(tmp, str(path))
+
+
+def _read_log(path, tries=20, delay=0.05):
+    """Read the fixture's JSON request log, retrying briefly on a
+    malformed (or transiently truncated-empty) read: `record()`'s
+    read-modify-write isn't atomic on disk, so a reader landing between
+    its truncate and its write can see "" or a partial document. Every
+    caller here reads the log only after at least one request has already
+    landed, so an empty read is always that race, never a legitimate empty
+    log -- retry it instead of returning `[]` and masking a missed entry."""
+    last_exc = None
+    for _ in range(tries):
+        text = Path(path).read_text()
+        if not text:
+            last_exc = ValueError("empty read")
+            time.sleep(delay)
+            continue
+        try:
+            return json.loads(text)
+        except ValueError as exc:
+            last_exc = exc
+            time.sleep(delay)
+    raise AssertionError(f"could not read a well-formed, non-empty log at {path}: {last_exc}")
 
 
 class FirstStatusLineTests(unittest.TestCase):
@@ -467,6 +502,272 @@ class StalledDaemonTests(unittest.TestCase):
                     sp.cleanup()
         finally:
             stalling_cleanup()
+
+
+class WatchInfoTests(unittest.TestCase):
+    def test_watch_info_returns_props_and_pieces_then_pieces_null_next_tick(self):
+        with harness.fixture_server() as (port, env):
+            with ServeProcess(env) as sp:
+                sp.readline()  # first status
+                h = "a" * 40
+                sp.send({"cmd": "watch", "hash": h, "tab": "info"})
+                first = sp.read_until(lambda o: o.get("type") == "inspect", timeout=5)
+                self.assertEqual(first["hash"], h)
+                self.assertEqual(first["tab"], "info")
+                self.assertNotIn("error", first)
+                self.assertIsInstance(first["props"], dict)
+                self.assertTrue(first["props"])
+                self.assertIsInstance(first["pieces"], list)
+                self.assertTrue(first["pieces"])
+
+                # Speed up ticking so the *next* tick (well inside the 5s
+                # pieceStates interval) lands soon.
+                sp.send({"cmd": "cadence", "ms": 1000})
+                second = sp.read_until(lambda o: o.get("type") == "inspect", timeout=5)
+                self.assertEqual(second["tab"], "info")
+                self.assertNotIn("error", second)
+                self.assertIsInstance(second["props"], dict)
+                self.assertIsNone(second["pieces"])
+
+
+class WatchTrackersTests(unittest.TestCase):
+    def test_watch_trackers_returns_trackers_payload(self):
+        with harness.fixture_server() as (port, env):
+            with ServeProcess(env) as sp:
+                sp.readline()
+                h = "a" * 40
+                sp.send({"cmd": "watch", "hash": h, "tab": "trackers"})
+                resp = sp.read_until(lambda o: o.get("type") == "inspect", timeout=5)
+                self.assertEqual(resp["hash"], h)
+                self.assertEqual(resp["tab"], "trackers")
+                self.assertNotIn("error", resp)
+                self.assertIsInstance(resp["trackers"], list)
+                self.assertEqual(resp["trackers"][0]["url"], "** [DHT] **")
+                self.assertEqual(resp["trackers"][1]["url"], "** [PeX] **")
+                self.assertEqual(resp["trackers"][2]["url"], "** [LSD] **")
+
+                entries = _read_log(env["QBT_FIXTURE_LOG"])
+                paths = [e["path"] for e in entries]
+                self.assertIn("/api/v2/torrents/trackers", paths)
+
+
+class WatchPeersTests(unittest.TestCase):
+    def test_watch_peers_returns_peers_object_with_rid0(self):
+        with harness.fixture_server() as (port, env):
+            with ServeProcess(env) as sp:
+                sp.readline()
+                h = "a" * 40
+                sp.send({"cmd": "watch", "hash": h, "tab": "peers"})
+                resp = sp.read_until(lambda o: o.get("type") == "inspect", timeout=5)
+                self.assertEqual(resp["hash"], h)
+                self.assertEqual(resp["tab"], "peers")
+                self.assertNotIn("error", resp)
+                self.assertIsInstance(resp["peers"], dict)
+                self.assertIn("203.0.113.5:51413", resp["peers"])
+
+                entries = _read_log(env["QBT_FIXTURE_LOG"])
+                peer_reqs = [e for e in entries if e["path"] == "/api/v2/sync/torrentPeers"]
+                self.assertTrue(peer_reqs)
+                self.assertEqual(peer_reqs[-1]["query"].get("rid"), ["0"])
+                self.assertEqual(peer_reqs[-1]["query"].get("hash"), [h])
+
+
+class WatchChartTests(unittest.TestCase):
+    """Task 2 always answers the chart tab with an empty series (Task 8
+    fills it in) and makes no HTTP call at all to do it."""
+
+    def test_watch_chart_returns_empty_points_with_no_http_call(self):
+        with harness.fixture_server() as (port, env):
+            with ServeProcess(env) as sp:
+                sp.readline()
+                h = "a" * 40
+                sp.send({"cmd": "watch", "hash": h, "tab": "chart"})
+                resp = sp.read_until(lambda o: o.get("type") == "inspect", timeout=5)
+                self.assertEqual(
+                    resp, {"type": "inspect", "hash": h, "tab": "chart", "points": []}
+                )
+
+                entries = _read_log(env["QBT_FIXTURE_LOG"])
+                paths = {e["path"] for e in entries}
+                self.assertNotIn("/api/v2/torrents/properties", paths)
+                self.assertNotIn("/api/v2/torrents/pieceStates", paths)
+                self.assertNotIn("/api/v2/torrents/trackers", paths)
+                self.assertNotIn("/api/v2/sync/torrentPeers", paths)
+
+
+class WatchCollapseTests(unittest.TestCase):
+    def test_five_queued_watches_collapse_to_the_last(self):
+        with harness.fixture_server() as (port, env):
+            with ServeProcess(env) as sp:
+                hashes = [c * 40 for c in "abcde"]
+                # Written and flushed in one shot, before reading anything,
+                # so the reader thread has queued all five before the main
+                # thread (busy with the first tick) gets to drain them --
+                # the same race the batch collapse has to survive live.
+                payload = "".join(
+                    json.dumps({"cmd": "watch", "hash": h, "tab": "trackers"}) + "\n"
+                    for h in hashes
+                )
+                sp.proc.stdin.write(payload)
+                sp.proc.stdin.flush()
+
+                sp.readline()  # first status
+                resp = sp.read_until(lambda o: o.get("type") == "inspect", timeout=5)
+                self.assertEqual(resp["hash"], hashes[-1])
+
+                # No other inspect line should follow for the dropped watches.
+                extra_inspects = []
+                deadline = time.monotonic() + 1.0
+                while True:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        break
+                    try:
+                        obj = sp.readline(timeout=remaining)
+                    except AssertionError:
+                        break
+                    if obj.get("type") == "inspect":
+                        extra_inspects.append(obj)
+                self.assertEqual(extra_inspects, [])
+
+                entries = _read_log(env["QBT_FIXTURE_LOG"])
+                seen_hashes = {
+                    e["query"].get("hash", [None])[0]
+                    for e in entries
+                    if e["path"] == "/api/v2/torrents/trackers"
+                }
+                self.assertEqual(seen_hashes, {hashes[-1]})
+
+
+class WatchClearTests(unittest.TestCase):
+    def test_hash_null_stops_inspect_lines(self):
+        with harness.fixture_server() as (port, env):
+            with ServeProcess(env) as sp:
+                sp.readline()
+                h = "a" * 40
+                sp.send({"cmd": "watch", "hash": h, "tab": "info"})
+                sp.read_until(lambda o: o.get("type") == "inspect", timeout=5)
+
+                sp.send({"cmd": "watch", "hash": None, "tab": "info"})
+                sp.send({"cmd": "cadence", "ms": 300})
+
+                deadline = time.monotonic() + 2.0
+                while True:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        break
+                    try:
+                        obj = sp.readline(timeout=remaining)
+                    except AssertionError:
+                        break
+                    self.assertNotEqual(obj.get("type"), "inspect")
+
+
+class WatchBadCommandTests(unittest.TestCase):
+    def test_bad_hash_is_bad_command(self):
+        with harness.fixture_server() as (port, env):
+            with ServeProcess(env) as sp:
+                sp.readline()
+                sp.send({"id": 21, "cmd": "watch", "hash": "not-a-hash", "tab": "info"})
+                resp = sp.read_until(lambda o: o.get("type") == "error", timeout=5)
+                self.assertEqual(resp["id"], 21)
+                self.assertEqual(resp["error"], "bad command")
+
+    def test_bad_tab_is_bad_command(self):
+        with harness.fixture_server() as (port, env):
+            with ServeProcess(env) as sp:
+                sp.readline()
+                sp.send({"id": 22, "cmd": "watch", "hash": "a" * 40, "tab": "bogus"})
+                resp = sp.read_until(lambda o: o.get("type") == "error", timeout=5)
+                self.assertEqual(resp["id"], 22)
+                self.assertEqual(resp["error"], "bad command")
+
+
+class StatusFirstTests(unittest.TestCase):
+    """A stalled inspect route (trackers, sleeping 3s -- longer than the
+    fixture's HTTP handling of any other route, in particular
+    sync/maindata) must never delay the status stream: the inspect read
+    uses its own 1s-timeout client, and status keeps arriving on (roughly)
+    its cadence regardless. This is also the regression test for Ruling E
+    (ThreadingHTTPServer): with the old single-threaded HTTPServer, the
+    sleeping trackers handler would hold the whole fixture process, and
+    maindata (hence every status line) would stall behind it too."""
+
+    def test_status_keeps_cadence_while_trackers_stall(self):
+        with harness.fixture_server() as (port, env):
+            _write_control(env["QBT_FIXTURE_CONTROL"], {"trackers": "sleep3"})
+            with ServeProcess(env) as sp:
+                sp.readline()
+                sp.send({"cmd": "cadence", "ms": 1000})
+                h = "a" * 40
+                start = time.monotonic()
+                sp.send({"cmd": "watch", "hash": h, "tab": "trackers"})
+                err = sp.read_until(lambda o: o.get("type") == "inspect", timeout=5)
+                elapsed = time.monotonic() - start
+                self.assertIn("error", err)
+                # The inspect client's own timeout is ~1s: tight enough to
+                # tell "timed out at 1s" apart from "the fixture answered
+                # after its 3s sleep", without pinning an exact number.
+                self.assertGreater(elapsed, 0.5)
+                self.assertLess(elapsed, 2.5)
+
+                # Status keeps arriving with no gap anywhere near the 3s
+                # stall: measure the time between consecutive status
+                # lines over several seconds, not just their count (a
+                # single-threaded fixture can fall behind and then emit a
+                # burst of status lines back-to-back once it catches up,
+                # which would pass a bare count check).
+                timestamps = []
+                deadline = time.monotonic() + 9.0
+                while len(timestamps) < 7 and time.monotonic() < deadline:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        break
+                    obj = sp.readline(timeout=remaining)
+                    if obj.get("type") == "status":
+                        timestamps.append(time.monotonic())
+                self.assertGreaterEqual(len(timestamps), 5)
+                gaps = [b - a for a, b in zip(timestamps, timestamps[1:])]
+                self.assertLess(max(gaps), 2.5, gaps)
+
+
+class WatchBackoffTests(unittest.TestCase):
+    def test_errors_are_rate_limited_and_recover(self):
+        with harness.fixture_server() as (port, env):
+            _write_control(env["QBT_FIXTURE_CONTROL"], {"trackers": "404"})
+            with ServeProcess(env) as sp:
+                sp.readline()
+                h = "a" * 40
+                sp.send({"cmd": "watch", "hash": h, "tab": "trackers"})
+                first_err = sp.read_until(lambda o: o.get("type") == "inspect", timeout=5)
+                self.assertIn("error", first_err)
+
+                sp.send({"cmd": "cadence", "ms": 200})
+                # Well inside the 5s back-off window: no further inspect
+                # line should appear at all, even though ticks now fire
+                # every 200ms.
+                extra = []
+                deadline = time.monotonic() + 3.0
+                while time.monotonic() < deadline:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        break
+                    try:
+                        obj = sp.readline(timeout=remaining)
+                    except AssertionError:
+                        break
+                    if obj.get("type") == "inspect":
+                        extra.append(obj)
+                self.assertEqual(extra, [])
+
+                # Recover the route; once the back-off window elapses the
+                # next read succeeds.
+                _write_control(env["QBT_FIXTURE_CONTROL"], {"trackers": "ok"})
+                recovered = sp.read_until(
+                    lambda o: o.get("type") == "inspect" and "trackers" in o, timeout=10
+                )
+                self.assertNotIn("error", recovered)
+                self.assertIsInstance(recovered["trackers"], list)
 
 
 if __name__ == "__main__":

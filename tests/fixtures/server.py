@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 import json
 import os
-from http.server import BaseHTTPRequestHandler, HTTPServer
+import sys
+import threading
+import time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, unquote_plus, urlparse
 
@@ -11,18 +14,50 @@ COOKIE = "SID=leaked-secret-value"
 FULL = json.loads((ROOT / "maindata-full.json").read_text())
 DELTA = json.loads((ROOT / "maindata-delta.json").read_text())
 FILES = json.loads((ROOT / "files.json").read_text())
+PROPERTIES = json.loads((ROOT / "properties.json").read_text())
+PIECESTATES = json.loads((ROOT / "piecestates.json").read_text())
+TRACKERS = json.loads((ROOT / "trackers.json").read_text())
+PEERS = json.loads((ROOT / "peers.json").read_text())
 ADDED = []
 # Real qBittorrent keeps sync rid state per WebUI session: a request without a
 # known SID cookie opens a new session and always gets a full update.
 SESSIONS = set()
 
+# Serving each request on its own thread (ThreadingHTTPServer, below) means
+# more than one handler can be inside record() at once, and a naive
+# read-modify-write of LOG would drop entries under that race. This lock
+# makes the whole read-modify-write atomic.
+_LOG_LOCK = threading.Lock()
+
 
 def record(method, path, body, query, cookie=""):
-    entries = []
-    if LOG.exists():
-        entries = json.loads(LOG.read_text() or "[]")
-    entries.append({"method": method, "path": path, "body": body, "query": query, "cookie": cookie})
-    LOG.write_text(json.dumps(entries))
+    entry = {"method": method, "path": path, "body": body, "query": query, "cookie": cookie}
+    with _LOG_LOCK:
+        entries = []
+        if LOG.exists():
+            entries = json.loads(LOG.read_text() or "[]")
+        entries.append(entry)
+        LOG.write_text(json.dumps(entries))
+
+
+def _control():
+    """The per-route fault map from QBT_FIXTURE_CONTROL, re-read on every
+    call so a test can flip it mid-run. Absent env, missing file, or
+    unparsable/non-object JSON all mean "no faults"."""
+    path = os.environ.get("QBT_FIXTURE_CONTROL")
+    if not path:
+        return {}
+    try:
+        data = json.loads(Path(path).read_text())
+    except Exception:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _fault(route_key):
+    """"sleep3", "404", or None for `route_key` per the control file."""
+    value = _control().get(route_key)
+    return value if value in ("sleep3", "404") else None
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -90,6 +125,42 @@ class Handler(BaseHTTPRequestHandler):
                 bind = Path(bind_file).read_text().strip()
             self._send(200, json.dumps({"current_network_interface": bind}).encode())
             return
+        if parsed.path == "/api/v2/torrents/properties":
+            fault = _fault("properties")
+            if fault == "sleep3":
+                time.sleep(3)
+            elif fault == "404":
+                self._send(404, b"{}")
+                return
+            self._send(200, json.dumps(PROPERTIES).encode())
+            return
+        if parsed.path == "/api/v2/torrents/pieceStates":
+            fault = _fault("pieceStates")
+            if fault == "sleep3":
+                time.sleep(3)
+            elif fault == "404":
+                self._send(404, b"{}")
+                return
+            self._send(200, json.dumps(PIECESTATES).encode())
+            return
+        if parsed.path == "/api/v2/torrents/trackers":
+            fault = _fault("trackers")
+            if fault == "sleep3":
+                time.sleep(3)
+            elif fault == "404":
+                self._send(404, b"{}")
+                return
+            self._send(200, json.dumps(TRACKERS).encode())
+            return
+        if parsed.path == "/api/v2/sync/torrentPeers":
+            fault = _fault("peers")
+            if fault == "sleep3":
+                time.sleep(3)
+            elif fault == "404":
+                self._send(404, b"{}")
+                return
+            self._send(200, json.dumps(PEERS).encode())
+            return
         self._send(404, b"{}")
 
     def do_POST(self):
@@ -129,6 +200,22 @@ class Handler(BaseHTTPRequestHandler):
         self._send(404, b"{}")
 
 
+class _Server(ThreadingHTTPServer):
+    """A "sleep3"-faulted route's handler thread can find its client gone
+    (timed out and moved on) by the time it wakes up and tries to write --
+    a plain BrokenPipeError, not a real fixture bug. Swallow just that one
+    so test runs (which don't inspect this process's stderr) stay quiet;
+    anything else still gets the default traceback."""
+
+    def handle_error(self, request, client_address):
+        if isinstance(sys.exc_info()[1], BrokenPipeError):
+            return
+        super().handle_error(request, client_address)
+
+
 if __name__ == "__main__":
     port = int(os.environ["QBT_FIXTURE_PORT"])
-    HTTPServer(("127.0.0.1", port), Handler).serve_forever()
+    # ThreadingHTTPServer (not HTTPServer): a route stalled with "sleep3"
+    # must not block every other route (in particular sync/maindata) on
+    # the same fixture process -- see Ruling E.
+    _Server(("127.0.0.1", port), Handler).serve_forever()

@@ -45,6 +45,10 @@ DEFAULT_CADENCE_MS = 5000
 MIN_CADENCE_MS = 100
 MAX_CADENCE_MS = 3600000
 PROBE_TIMEOUT = 10
+INSPECT_TIMEOUT = 1
+WATCH_TABS = ("info", "trackers", "peers", "chart")
+WATCH_BACKOFF_SECONDS = 5.0
+WATCH_PIECES_INTERVAL = 5.0
 
 _HASH_RE = re.compile(r"[0-9a-fA-F]{40}|[0-9a-fA-F]{64}")
 _STDOUT_LOCK = threading.Lock()
@@ -142,7 +146,8 @@ def _heartbeat_thread():
 
 def do_tick(state, force_probe=False):
     """Re-probes if stale (or if `force_probe`), then assembles and prints
-    one status line."""
+    one status line, then reads whatever the current watch needs (F10:
+    status always goes out first)."""
     now_mono = time.monotonic()
     if force_probe or now_mono - state["last_probe_at"] >= PROBE_INTERVAL:
         new_probe, err = run_probe(state["helper"])
@@ -161,6 +166,100 @@ def do_tick(state, force_probe=False):
     out = {"type": "status"}
     out.update(status)
     emit(out)
+
+    read_inspect(state)
+
+
+def _parse_json_body(body, expected_type):
+    """Parse `body` as JSON, returning it only if it's `expected_type`
+    (list or dict); anything else (malformed body, wrong shape) comes back
+    as an empty instance of `expected_type`, the same "failed call" leniency
+    `files` already applies."""
+    try:
+        parsed = json.loads(body)
+    except ValueError:
+        parsed = None
+    if isinstance(parsed, expected_type):
+        return parsed
+    return expected_type()
+
+
+def read_inspect(state):
+    """Reads whatever `state["watch"]` currently needs and emits one
+    `inspect` line, unless a prior failure's back-off is still in effect
+    (at most one read attempt per `WATCH_BACKOFF_SECONDS` while failing,
+    F10/OV7). Always clears `watch_due`, since this call -- whether it
+    actually reads or is skipped by back-off -- is what a caller waits on
+    to answer a fresh watch (F3)."""
+    state["watch_due"] = False
+    watch = state.get("watch")
+    if not watch:
+        return
+
+    now = time.monotonic()
+    backoff_until = state.get("watch_backoff_until") or 0
+    if now < backoff_until:
+        return
+
+    h = watch["hash"]
+    tab = watch["tab"]
+    client = state["inspect_client"]
+
+    if tab == "chart":
+        # Task 8 fills the series; Task 2 always answers an empty one.
+        emit({"type": "inspect", "hash": h, "tab": tab, "points": []})
+        state["watch_backoff_until"] = 0
+        return
+
+    if tab == "trackers":
+        try:
+            body = client.get(f"/api/v2/torrents/trackers?hash={h}")
+        except qbtsync.ApiError as exc:
+            emit({"type": "inspect", "hash": h, "tab": tab, "error": qbtsync.sanitize(exc.message)})
+            state["watch_backoff_until"] = now + WATCH_BACKOFF_SECONDS
+            return
+        trackers = _parse_json_body(body, list)
+        emit({"type": "inspect", "hash": h, "tab": tab, "trackers": trackers})
+        state["watch_backoff_until"] = 0
+        return
+
+    if tab == "peers":
+        try:
+            body = client.get(f"/api/v2/sync/torrentPeers?hash={h}&rid=0")
+        except qbtsync.ApiError as exc:
+            emit({"type": "inspect", "hash": h, "tab": tab, "error": qbtsync.sanitize(exc.message)})
+            state["watch_backoff_until"] = now + WATCH_BACKOFF_SECONDS
+            return
+        parsed = _parse_json_body(body, dict)
+        peers = parsed.get("peers")
+        if not isinstance(peers, dict):
+            peers = {}
+        emit({"type": "inspect", "hash": h, "tab": tab, "peers": peers})
+        state["watch_backoff_until"] = 0
+        return
+
+    # tab == "info"
+    try:
+        body = client.get(f"/api/v2/torrents/properties?hash={h}")
+    except qbtsync.ApiError as exc:
+        emit({"type": "inspect", "hash": h, "tab": tab, "error": qbtsync.sanitize(exc.message)})
+        state["watch_backoff_until"] = now + WATCH_BACKOFF_SECONDS
+        return
+    props = _parse_json_body(body, dict)
+
+    pieces = None
+    if state.get("watch_pieces_next", 0) <= now:
+        try:
+            pbody = client.get(f"/api/v2/torrents/pieceStates?hash={h}")
+        except qbtsync.ApiError as exc:
+            emit({"type": "inspect", "hash": h, "tab": tab, "error": qbtsync.sanitize(exc.message)})
+            state["watch_backoff_until"] = now + WATCH_BACKOFF_SECONDS
+            return
+        pieces = _parse_json_body(pbody, list)
+        state["watch_pieces_next"] = now + WATCH_PIECES_INTERVAL
+
+    emit({"type": "inspect", "hash": h, "tab": tab, "props": props, "pieces": pieces})
+    state["watch_backoff_until"] = 0
 
 
 def handle_command(cmd, state):
@@ -200,6 +299,25 @@ def handle_command(cmd, state):
         emit({"type": "files", "id": cid, "hash": h, "files": files})
         return
 
+    if name == "watch":
+        h = cmd.get("hash")
+        tab = cmd.get("tab")
+        if tab not in WATCH_TABS:
+            emit({"type": "error", "id": cid, "error": "bad command"})
+            return
+        if h is not None and (not isinstance(h, str) or not _HASH_RE.fullmatch(h)):
+            emit({"type": "error", "id": cid, "error": "bad command"})
+            return
+        if h is None:
+            state["watch"] = None
+            state["watch_due"] = False
+            return
+        state["watch"] = {"hash": h, "tab": tab}
+        state["watch_pieces_next"] = 0
+        state["watch_backoff_until"] = 0
+        state["watch_due"] = True
+        return
+
     emit({"type": "error", "id": cid, "error": "bad command"})
 
 
@@ -208,17 +326,28 @@ def _is_refresh(item):
     return kind == "cmd" and payload is not None and payload.get("cmd") == "refresh"
 
 
+def _is_watch(item):
+    kind, payload = item
+    return kind == "cmd" and payload is not None and payload.get("cmd") == "watch"
+
+
 def drain_and_dispatch(cmd_queue, first_item, state):
     """Handles `first_item` plus everything already queued behind it,
     without blocking for more. Any number of queued `refresh` commands
     collapse into a single tick at the end, instead of one `do_tick` (and
-    its HTTP round-trip) per queued refresh."""
+    its HTTP round-trip) per queued refresh. Queued `watch` commands
+    collapse the same way: only the last one in the batch is applied (a
+    burst of cursor movement answers only where the cursor ended up, not
+    every torrent it passed over)."""
     pending_refresh = False
+    pending_watch = None
     item = first_item
     while item is not None:
         kind, payload = item
         if _is_refresh(item):
             pending_refresh = True
+        elif _is_watch(item):
+            pending_watch = payload
         elif kind == "cmd":
             if payload is None:
                 emit({"type": "error", "id": None, "error": "bad command"})
@@ -228,6 +357,8 @@ def drain_and_dispatch(cmd_queue, first_item, state):
             item = cmd_queue.get_nowait()
         except queue.Empty:
             item = None
+    if pending_watch is not None:
+        handle_command(pending_watch, state)
     return pending_refresh
 
 
@@ -275,14 +406,23 @@ def main():
 
     jar = http.cookiejar.CookieJar()
     client = qbtsync.Client(probe["base"], jar)
+    # Inspect reads share the status client's cookie jar (same session) but
+    # get their own short timeout, so a stalled inspect route can never
+    # hold up the status client's much longer 5s budget.
+    inspect_client = qbtsync.Client(probe["base"], jar, timeout=INSPECT_TIMEOUT)
     state = {
         "helper": helper,
         "probe": probe,
         "client": client,
+        "inspect_client": inspect_client,
         "sync": qbtsync.SyncState(),
         "slow": qbtsync.SlowCache(interval=10),
         "cadence_ms": DEFAULT_CADENCE_MS,
         "last_probe_at": time.monotonic(),
+        "watch": None,
+        "watch_due": False,
+        "watch_pieces_next": 0,
+        "watch_backoff_until": 0,
     }
 
     # The first tick runs immediately after the lock is acquired.
@@ -299,11 +439,20 @@ def main():
             item = cmd_queue.get(timeout=timeout)
         except queue.Empty:
             item = None
-        if item is not None and drain_and_dispatch(cmd_queue, item, state):
-            # An explicit refresh usually follows Start daemon / Install, so
-            # it reprobes now rather than waiting out PROBE_INTERVAL.
-            do_tick(state, force_probe=True)
-            state["next_tick"] = time.monotonic() + state["cadence_ms"] / 1000.0
+        if item is not None:
+            pending_refresh = drain_and_dispatch(cmd_queue, item, state)
+            if pending_refresh:
+                # An explicit refresh usually follows Start daemon /
+                # Install, so it reprobes now rather than waiting out
+                # PROBE_INTERVAL. do_tick's own read_inspect covers a
+                # freshly-applied watch too, so there is no separate read
+                # here in this branch.
+                do_tick(state, force_probe=True)
+                state["next_tick"] = time.monotonic() + state["cadence_ms"] / 1000.0
+            elif state["watch_due"]:
+                # A changed watch is answered at once (F3), rather than
+                # waiting out the cadence for the next tick.
+                read_inspect(state)
 
         now = time.monotonic()
         if now >= state["next_tick"]:

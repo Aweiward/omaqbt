@@ -1,0 +1,39 @@
+{
+  "full_update": true,
+  "peers": {
+    "203.0.113.5:51413": {
+      "client": "qBittorrent/4.6.0",
+      "connection": "BT",
+      "country": "Germany",
+      "country_code": "de",
+      "dl_speed": 358400,
+      "up_speed": 0,
+      "downloaded": 104857600,
+      "uploaded": 0,
+      "flags": "D",
+      "flags_desc": "D = interested(local) & unchoked(peer)",
+      "progress": 0.73,
+      "relevance": 0.9,
+      "peer_id_client": "qBittorrent",
+      "files": "debian.iso"
+    },
+    "198.51.100.7:6881": {
+      "client": "libtorrent/2.0.9",
+      "connection": "uTP",
+      "country": "United States",
+      "country_code": "us",
+      "dl_speed": 0,
+      "up_speed": 20480,
+      "downloaded": 0,
+      "uploaded": 5242880,
+      "flags": "U",
+      "flags_desc": "U = interested(peer) & unchoked(local)",
+      "progress": 0.15,
+      "relevance": 0.2,
+      "peer_id_client": "libtorrent",
+      "files": "debian.iso"
+    }
+  },
+  "rid": 1,
+  "show_flags": true
+}
