@@ -30,6 +30,8 @@ Item {
 
   readonly property var ms: client.magnetState
   readonly property bool shown: View.magnetShown(ms, handledKey)
+  // A shown magnet not yet in its CONFIRM: the status line says it waits.
+  readonly property bool deferred: View.magnetDeferred(shown, client.regState)
   // View.magnetLine(...) while the MAGNET CONFIRM is up, else null.
   readonly property var lineParts: View.isMagnetConfirm(client.regState) ? View.magnetLine(ms) : null
 
@@ -43,12 +45,18 @@ Item {
     var svc = c.service
     var r = View.magnetSync({ seen: seenKeys, handled: handledKey, focusDue: focusDue }, c.regState, c.magnetState,
       View.magnetKeys(svc ? svc.magnetPending : [], svc ? svc.magnetInbox : []),
-      { blocked: c.helpOpen || View.overlayPane(c.layout, c.pane) !== "", opened: c.opened })
+      { blocked: c.helpOpen || View.overlayPane(c.layout, c.pane) !== "", opened: c.opened,
+        now: Date.now(), lastKeyAt: c.lastKeyAt, active: c.windowActive() })
     seenKeys = r.mem.seen
     handledKey = r.mem.handled
     focusDue = r.mem.focusDue
     if (r.regState) c.regState = r.regState
-    if (r.focus) c.requestWmFocus()
+    if (r.focus) c.requestWmFocus(r.focusField ? c.typingField() : null)
+    // Still settling after a key: look again once it has.
+    if (r.wait > 0) {
+      settle.interval = r.wait
+      settle.restart()
+    }
   }
 
   function act(commandId) {
@@ -84,6 +92,12 @@ Item {
       magnetRow.handledKey = ""
       magnetRow.sync()
     }
+  }
+
+  Timer {
+    id: settle
+    repeat: false
+    onTriggered: magnetRow.sync()
   }
 
   Rectangle {

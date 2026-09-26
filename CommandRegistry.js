@@ -29,6 +29,11 @@ var KEY = {
 
 var PREFIX_TIMEOUT_MS = 600;
 
+// A magnet CONFIRM ignores Esc and n for this long after the window raised
+// it (pending.at), so a reflexive Esc meant for what came before never
+// cancels (deletes) the magnet. Enter and y are never ignored.
+var MAGNET_GRACE_MS = 600;
+
 // `panes` uses "*" for "any pane."
 var PANE_ANY = "*";
 
@@ -256,7 +261,9 @@ function buildArgs(row, s) {
 // not by a key): Enter or y asks to start it, Esc or n to cancel it, and
 // every other key does nothing. The state stays CONFIRM either way: the
 // window leaves it once the magnet is handled, and can refuse the start
-// while the name is still being fetched.
+// while the name is still being fetched. Within MAGNET_GRACE_MS of
+// pending.at (when the window raised it; 0 or absent for no grace), Esc
+// and n do nothing too.
 function dispatchMagnetConfirm(s, ev) {
   var ctrl = (ev.modifiers || {}).ctrl === true;
   var text = ev.text || "";
@@ -264,6 +271,8 @@ function dispatchMagnetConfirm(s, ev) {
     return { state: s, commandId: "magnet.start", args: {} };
   }
   if ((!ctrl && text === "n") || ev.key === KEY.Escape) {
+    var at = Number((s.pending || {}).at) || 0;
+    if (at > 0 && (Number(ev.now) || 0) - at < MAGNET_GRACE_MS) return { state: s, commandId: null };
     return { state: s, commandId: "magnet.cancel", args: {} };
   }
   return { state: s, commandId: null };
@@ -424,6 +433,7 @@ function helpFor(mode, pane) {
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     KEY: KEY,
+    MAGNET_GRACE_MS: MAGNET_GRACE_MS,
     commands: commands,
     dispatch: dispatch,
     dispatchCommand: dispatchCommand,

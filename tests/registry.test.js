@@ -924,6 +924,36 @@ test("magnet CONFIRM: every other key does nothing", () => {
   }
 });
 
+test("magnet CONFIRM grace: Esc and n do nothing for 600 ms after the raise (599 ignored, 600 cancels)", () => {
+  assert.equal(Registry.MAGNET_GRACE_MS, 600);
+  const at = 10000;
+  const s = state({ mode: "CONFIRM", pending: Object.assign({}, MAGNET_PENDING, { at }) });
+  for (const [text, key] of [["\u001b", KEY.Escape], ["n", keyOf("n")]]) {
+    for (const dt of [0, 1, 300, 599]) {
+      const r = dispatch(s, ev(text, key, undefined, at + dt));
+      assert.equal(r.commandId, null, text + " +" + dt);
+      assert.equal(r.state.mode, "CONFIRM");
+      assert.equal(r.state.pending.at, at);
+    }
+    for (const dt of [600, 601, 5000]) {
+      assert.equal(dispatch(s, ev(text, key, undefined, at + dt)).commandId, "magnet.cancel", text + " +" + dt);
+    }
+  }
+});
+
+test("magnet CONFIRM grace never holds Enter or y", () => {
+  const at = 10000;
+  const s = state({ mode: "CONFIRM", pending: Object.assign({}, MAGNET_PENDING, { at }) });
+  for (const e of [ev("\r", KEY.Return, undefined, at), ev("\u0003", KEY.Enter, undefined, at + 1), ev("y", keyOf("y"), undefined, at + 599)]) {
+    assert.equal(dispatch(s, e).commandId, "magnet.start");
+  }
+});
+
+test("magnet CONFIRM with no raise stamp has no grace", () => {
+  const s = state({ mode: "CONFIRM", pending: Object.assign({}, MAGNET_PENDING, { at: 0 }) });
+  assert.equal(dispatch(s, ev("\u001b", KEY.Escape, undefined, 5)).commandId, "magnet.cancel");
+});
+
 test("a delete CONFIRM still resolves y/n/Esc as before (Enter does nothing)", () => {
   const pending = { kind: "delete", commandId: "torrent.delete", args: {}, count: 1, withFiles: true };
   const s = state({ mode: "CONFIRM", pending });

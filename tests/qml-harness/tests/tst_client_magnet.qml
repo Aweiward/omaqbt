@@ -102,6 +102,9 @@ TestCase {
   function row(c) { return findWith(winOf(c).contentItem, "act") }
   function line(c) { return findWith(winOf(c).contentItem, "setInput") }
   function calls(svc, name) { return svc.calls.filter(function(x) { return x.name === name }) }
+  // Past the magnet CONFIRM's grace (Registry.MAGNET_GRACE_MS, 600 ms):
+  // Esc and n only cancel once it is over.
+  function pastGrace() { wait(620) }
   function magnetCalls(svc) {
     return svc.calls.filter(function(x) { return ["startPending", "cancelPending", "dropInboxCurrent", "delete"].indexOf(x.name) !== -1 })
   }
@@ -213,6 +216,7 @@ TestCase {
   function test_esc_cancels_the_pending_torrent() {
     var o = make()
     addPending(o, "d", false)
+    pastGrace()
     esc(o.c)
     var c = calls(o.svc, "cancelPending")
     compare(c.length, 1)
@@ -228,6 +232,7 @@ TestCase {
   function test_n_cancels_too() {
     var o = make()
     addPending(o, "d", false)
+    pastGrace()
     key(o.c, "n")
     compare(calls(o.svc, "cancelPending").length, 1)
   }
@@ -239,6 +244,7 @@ TestCase {
     verify(findText(row(o.c), "Fetching name…") !== null)
     enter(o.c)
     compare(o.c.messageLine.text, "Still fetching the name…")
+    pastGrace()
     esc(o.c)
     compare(calls(o.svc, "cancelPending").length, 0)
     var d = calls(o.svc, "dropInboxCurrent")
@@ -257,6 +263,7 @@ TestCase {
     verify(findText(sl, " dismiss") !== null)
     enter(o.c)
     compare(magnetCalls(o.svc).length, 0)
+    pastGrace()
     esc(o.c)
     compare(calls(o.svc, "dropInboxCurrent").length, 1)
   }
@@ -271,9 +278,9 @@ TestCase {
     compare(o.c.mode, "CONFIRM")
     enter(o.c)
     compare(o.c.mode, "NORMAL")
-    // the snapshot drops it; the next one is offered
+    // the snapshot drops it; the next one is offered once the Enter settles
     o.svc.magnetPending = []
-    compare(o.c.mode, "CONFIRM")
+    tryCompare(o.c, "mode", "CONFIRM")
     compare(o.c.regState.pending.kind, "magnet")
     compare(row(o.c).visible, true)
   }
@@ -355,7 +362,7 @@ TestCase {
     o.svc.actionFinished(t + 99, false, "boom", "window", [hh("d")])
     compare(o.c.mode, "NORMAL", "another ticket with the same hash is ignored")
     o.svc.actionFinished(t, false, "boom", "window", [hh("d")])
-    compare(o.c.mode, "CONFIRM")
+    tryCompare(o.c, "mode", "CONFIRM")
     compare(o.c.regState.pending.kind, "magnet")
     compare(row(o.c).visible, true)
     enter(o.c)
@@ -365,6 +372,7 @@ TestCase {
   function test_a_failed_cancel_offers_the_magnet_again() {
     var o = make()
     addPending(o, "d", false)
+    pastGrace()
     esc(o.c)
     compare(o.c.mode, "NORMAL")
     var t = ticketOf(o.svc, "cancelPending")
@@ -374,11 +382,13 @@ TestCase {
     compare(o.c.mode, "NORMAL", "only this row's ticket, once")
     var o2 = make()
     addPending(o2, "d", false)
+    pastGrace()
     esc(o2.c)
     o2.svc.actionFinished(ticketOf(o2.svc, "cancelPending"), false, "boom", "window", [hh("d")])
-    compare(o2.c.mode, "CONFIRM")
+    tryCompare(o2.c, "mode", "CONFIRM")
     compare(o2.c.regState.pending.kind, "magnet")
     compare(row(o2.c).visible, true)
+    pastGrace()
     esc(o2.c)
     compare(calls(o2.svc, "cancelPending").length, 2)
   }
@@ -435,5 +445,225 @@ TestCase {
     verify(!wm.retry.running, "the palette field keeps its focus")
     esc(o.c)
     tryVerify(function() { return wm.retry.running }, 1000)
+  }
+
+  // ---- final review: a double Esc never cancels (settle + grace) -----------
+
+  function wmOf(c) {
+    for (var i = 0; i < c.data.length; i++) if (c.data[i] && c.data[i].focusAttempts !== undefined) return c.data[i]
+    return null
+  }
+  function palette(c) { return findWith(winOf(c).contentItem, "focusField") }
+  readonly property string waitNote: "Magnet waiting \u2014 finish, then confirm"
+
+  // The key after the one that left a mode does its NORMAL job (Esc:
+  // filter.clearText, arming Esc Esc), the magnet CONFIRM comes only once
+  // the keys stop, and nothing is cancelled. The waits let the event loop
+  // run between keys, as a real reflexive double Esc does (~100 ms apart),
+  // so a raise deferred by one tick would land between them.
+  function doubleEscNeverCancels(o) {
+    wait(100)
+    esc(o.c)
+    compare(o.c.mode, "NORMAL")
+    compare(o.c.regState.prefix, "Esc", "the second Esc is filter.clearText")
+    compare(magnetCalls(o.svc).length, 0)
+    wait(100)
+    esc(o.c)   // Esc Esc: filter.reset
+    compare(o.c.mode, "NORMAL")
+    compare(magnetCalls(o.svc).length, 0)
+    tryCompare(o.c, "mode", "CONFIRM")
+    compare(o.c.regState.pending.kind, "magnet")
+    compare(magnetCalls(o.svc).length, 0)
+  }
+
+  function test_double_esc_from_insert_never_cancels() {
+    var o = make()
+    key(o.c, "/")
+    addPending(o, "d", false)
+    esc(o.c)
+    doubleEscNeverCancels(o)
+  }
+
+  function test_double_esc_from_the_palette_never_cancels() {
+    var o = make()
+    key(o.c, ":")
+    addPending(o, "d", false)
+    esc(o.c)
+    doubleEscNeverCancels(o)
+  }
+
+  function test_double_esc_from_visual_never_cancels() {
+    var o = make()
+    key(o.c, "V", 0x56, 0x02000000)
+    compare(o.c.mode, "VISUAL")
+    addPending(o, "d", false)
+    esc(o.c)
+    doubleEscNeverCancels(o)
+  }
+
+  function test_double_esc_from_an_overlay_never_cancels() {
+    var o = make()
+    var win = winOf(o.c)
+    win.width = 850
+    tryVerify(function() { return win.contentItem.width === 850 }, 2000)
+    key(o.c, "\b", 0x48, 0x04000000)   // Ctrl-h: the filters overlay
+    compare(o.c.pane, "filters")
+    addPending(o, "d", false)
+    esc(o.c)
+    compare(o.c.pane, "table")
+    doubleEscNeverCancels(o)
+  }
+
+  function test_double_esc_from_help_never_cancels() {
+    var o = make()
+    key(o.c, "?")
+    addPending(o, "d", false)
+    esc(o.c)
+    compare(o.c.helpOpen, false)
+    doubleEscNeverCancels(o)
+  }
+
+  function test_double_esc_after_n_on_a_delete_confirm_never_cancels() {
+    var o = make()
+    key(o.c, "x")
+    compare(o.c.regState.pending.kind, "remove")
+    addPending(o, "d", false)
+    key(o.c, "n")
+    compare(o.c.mode, "NORMAL")
+    doubleEscNeverCancels(o)
+    var o2 = make()
+    key(o2.c, "x")
+    addPending(o2, "d", false)
+    key(o2.c, "n")
+    wait(100)
+    key(o2.c, "n")
+    compare(magnetCalls(o2.svc).length, 0)
+    tryCompare(o2.c, "mode", "CONFIRM")
+    compare(magnetCalls(o2.svc).length, 0)
+  }
+
+  function test_esc_right_at_the_raise_is_ignored_and_a_deliberate_esc_cancels() {
+    var o = make()
+    key(o.c, ":")
+    addPending(o, "d", false)
+    esc(o.c)
+    tryCompare(o.c, "mode", "CONFIRM")
+    esc(o.c)
+    key(o.c, "n")
+    compare(magnetCalls(o.svc).length, 0, "within the grace")
+    compare(o.c.mode, "CONFIRM")
+    pastGrace()
+    esc(o.c)
+    var c = calls(o.svc, "cancelPending")
+    compare(c.length, 1, "a deliberate Esc after the grace cancels")
+    compare(c[0].args[0], hh("d"))
+  }
+
+  function test_keys_keep_the_magnet_waiting_until_they_stop() {
+    var o = make()
+    key(o.c, "j")
+    addPending(o, "d", false)
+    compare(o.c.mode, "NORMAL", "a key just now: it waits")
+    for (var i = 0; i < 4; i++) { wait(300); key(o.c, "j") }
+    compare(o.c.mode, "NORMAL", "each key restarts the settle")
+    tryCompare(o.c, "mode", "CONFIRM")
+  }
+
+  // ---- final review: a waiting magnet is never silent ----------------------
+
+  function test_the_wait_note_shows_in_insert_and_command_and_never_over_a_message() {
+    var o = make()
+    key(o.c, "/")
+    addPending(o, "d", false)
+    compare(o.c.mode, "INSERT")
+    var sl = line(o.c)
+    compare(sl.message, waitNote)
+    compare(sl.messageTone, "muted")
+    verify(findText(sl, waitNote) !== null)
+    compare(o.c.messageLine.text, "", "derived, not a note a key would clear")
+    o.c.note("Enter an absolute path to move to.", "urgent")
+    compare(sl.message, "Enter an absolute path to move to.", "a message wins")
+    esc(o.c)   // any key ends the note
+    compare(o.c.mode, "NORMAL")
+    compare(sl.message, waitNote, "still waiting while it settles")
+    tryCompare(o.c, "mode", "CONFIRM")
+    verify(findText(sl, waitNote) === null)
+    var o2 = make()
+    key(o2.c, ":")
+    addPending(o2, "d", false)
+    compare(o2.c.mode, "COMMAND")
+    var sl2 = line(o2.c)
+    compare(sl2.message, waitNote)
+    verify(findText(sl2, waitNote) !== null)
+  }
+
+  function inactive(c) {
+    var fake = { active: false, asks: 0, requestActivate: function() { this.asks++ } }
+    winOf(c)._backingWindow = fake
+    return fake
+  }
+
+  function test_an_inactive_window_is_asked_for_but_the_insert_field_keeps_the_keys() {
+    var o = make()
+    var wm = wmOf(o.c)
+    tryVerify(function() { return !wm.retry.running }, 3000)
+    key(o.c, "/")
+    var field = line(o.c).inputField
+    verify(field.activeFocus)
+    var fake = inactive(o.c)
+    addPending(o, "d", false)
+    verify(wm.retry.running, "activation requested in INSERT")
+    compare(wm.focusTarget, field)
+    verify(field.activeFocus, "typing is never stolen")
+    tryVerify(function() { return fake.asks > 0 }, 1000)
+    fake.active = true
+    tryVerify(function() { return !wm.retry.running }, 1000)
+    verify(field.activeFocus, "activation lands on the field, not keyRoot")
+    compare(o.c.mode, "INSERT")
+  }
+
+  function test_an_inactive_window_is_asked_for_but_the_palette_field_keeps_the_keys() {
+    var o = make()
+    var wm = wmOf(o.c)
+    tryVerify(function() { return !wm.retry.running }, 3000)
+    key(o.c, ":")
+    var field = palette(o.c).inputField
+    verify(field.activeFocus)
+    var fake = inactive(o.c)
+    addPending(o, "d", false)
+    verify(wm.retry.running, "activation requested in COMMAND")
+    compare(wm.focusTarget, field)
+    verify(field.activeFocus)
+    fake.active = true
+    tryVerify(function() { return !wm.retry.running }, 1000)
+    verify(field.activeFocus)
+    compare(o.c.mode, "COMMAND")
+  }
+
+  function test_an_active_window_in_insert_is_not_asked_again() {
+    var o = make()
+    var wm = wmOf(o.c)
+    tryVerify(function() { return !wm.retry.running }, 3000)
+    key(o.c, "/")
+    addPending(o, "d", false)
+    verify(!wm.retry.running)
+    verify(line(o.c).inputField.activeFocus)
+  }
+
+  function test_a_field_closed_before_activation_hands_the_keys_to_the_window() {
+    var o = make()
+    var wm = wmOf(o.c)
+    tryVerify(function() { return !wm.retry.running }, 3000)
+    key(o.c, "/")
+    var field = line(o.c).inputField
+    var fake = inactive(o.c)
+    addPending(o, "d", false)
+    compare(wm.focusTarget, field)
+    esc(o.c)
+    compare(o.c.mode, "NORMAL")
+    fake.active = true
+    tryVerify(function() { return !wm.retry.running }, 1000)
+    verify(!field.activeFocus)
+    verify(wm.keyItem.activeFocus, "a closed field never keeps the keys")
   }
 }

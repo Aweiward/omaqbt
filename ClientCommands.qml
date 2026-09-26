@@ -49,6 +49,12 @@ QtObject {
     c.regState = st
   }
 
+  // The text field that owns the keys in INSERT or COMMAND, else null.
+  function typingField() {
+    var m = client.mode
+    return m === "INSERT" ? inputLine.inputField : (m === "COMMAND" ? palette.inputField : null)
+  }
+
   // ---- INSERT ------------------------------------------------------------------
 
   function startInput(purpose, initial) {

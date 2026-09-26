@@ -48,6 +48,9 @@ Item {
     focusField()
   }
 
+  // The query field (WmFocus hands the keys back to it).
+  readonly property var inputField: field
+
   function focusField() {
     field.forceActiveFocus()
   }

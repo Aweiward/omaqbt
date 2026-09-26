@@ -572,17 +572,29 @@ function isMagnetConfirm(regState) {
   return r.mode === "CONFIRM" && !!r.pending && r.pending.kind === "magnet";
 }
 
-// magnetSync(mem, regState, ms, keys, ctx) -> {mem, regState, focus}, run
-// whenever the queue, the mode, the pane or the help overlay changes.
+// A waiting magnet takes the CONFIRM only once the window has had no key
+// for this long (so the Esc after the one that closed the palette, a
+// filter, VISUAL, help, an overlay or a delete CONFIRM does its own job).
+var MAGNET_SETTLE_MS = 800;
+var MAGNET_WAIT_NOTE = "Magnet waiting \u2014 finish, then confirm";
+
+// magnetSync(mem, regState, ms, keys, ctx) -> {mem, regState, focus,
+// focusField, wait}, run whenever the queue, the mode, the pane or the help
+// overlay changes, and again after `wait` ms.
 //   mem: {seen, handled, focusDue} from the last call (null at first).
-//   keys: magnetKeys of the whole queue; ctx: {blocked, opened}, where
-//   blocked is true while help or a pane overlay is up.
+//   keys: magnetKeys of the whole queue; ctx: {blocked, opened, now,
+//   lastKeyAt, active}, where blocked is true while help or a pane overlay
+//   is up, now/lastKeyAt are ms (lastKeyAt 0: no key yet) and active is
+//   false when the window is known not to be the active one.
 // regState is the next registry state, or null for no change: into a
-// magnet CONFIRM from NORMAL when an item is shown and nothing blocks, back
-// to NORMAL once no item is shown. focus asks for the window's attention
-// (requestWmFocus) when a new key appears while the window is open; while
-// INSERT or COMMAND owns a text field it waits (focusDue), since the focus
-// request would pull the keys out of that field.
+// magnet CONFIRM (pending.at = now) from NORMAL when an item is shown,
+// nothing blocks and no key came in the last MAGNET_SETTLE_MS; back to
+// NORMAL once no item is shown. wait is the ms left until that settle
+// (0: nothing to wait for). focus asks for the window's attention
+// (requestWmFocus) when a new key appears while the window is open. While
+// INSERT or COMMAND owns a text field, focusField says the request must
+// give the keys back to that field; if the window is already active it
+// waits instead (focusDue) and asks once the field is closed.
 function magnetSync(mem, regState, ms, keys, ctx) {
   var m = mem || { seen: [], handled: "", focusDue: false };
   var c = ctx || {};
@@ -596,18 +608,45 @@ function magnetSync(mem, regState, ms, keys, ctx) {
   var shown = magnetShown(ms, handled);
   var r = regState || {};
   var next = null;
+  var wait = 0;
+  var hasNow = typeof c.now === "number";
+  var lastKey = Number(c.lastKeyAt) || 0;
   if (shown && r.mode === "NORMAL" && c.blocked !== true) {
-    next = copyState(r, { mode: "CONFIRM", pending: { kind: "magnet", commandId: "magnet.start" }, prefix: null, prefixAt: 0, selectionCount: 0 });
+    if (hasNow && lastKey > 0 && c.now - lastKey < MAGNET_SETTLE_MS) {
+      wait = MAGNET_SETTLE_MS - (c.now - lastKey);
+    } else {
+      var pending = { kind: "magnet", commandId: "magnet.start" };
+      if (hasNow) pending.at = c.now;
+      next = copyState(r, { mode: "CONFIRM", pending: pending, prefix: null, prefixAt: 0, selectionCount: 0 });
+    }
   } else if (!shown && isMagnetConfirm(r)) {
     next = copyState(r, { mode: "NORMAL", pending: null });
   }
   var due = list.length > 0 && (m.focusDue === true || (arrived && c.opened === true));
   var typing = r.mode === "INSERT" || r.mode === "COMMAND";
+  var hold = typing && c.active !== false;
   return {
-    mem: { seen: list.slice(), handled: handled, focusDue: due && typing },
+    mem: { seen: list.slice(), handled: handled, focusDue: due && hold },
     regState: next,
-    focus: due && !typing
+    focus: due && !hold,
+    focusField: due && typing && !hold,
+    wait: wait
   };
+}
+
+// magnetDeferred(shown, regState) -> whether a shown magnet is waiting for
+// its CONFIRM (a mode, help, an overlay or the settle holds it).
+function magnetDeferred(shown, regState) {
+  return shown === true && !isMagnetConfirm(regState);
+}
+
+// withMagnetWait(line, deferred) -> the status line's {text, tone}: the
+// message line as it is, or, when it is empty and a magnet waits, the
+// muted MAGNET_WAIT_NOTE. It never replaces an error or a note.
+function withMagnetWait(line, deferred) {
+  var l = line || { text: "", tone: "muted" };
+  if (String(l.text || "") !== "" || deferred !== true) return l;
+  return { text: MAGNET_WAIT_NOTE, tone: "muted" };
 }
 
 function copyState(base, patch) {
@@ -1666,7 +1705,11 @@ if (typeof module !== "undefined" && module.exports) {
     magnetKeys: magnetKeys,
     magnetShown: magnetShown,
     isMagnetConfirm: isMagnetConfirm,
+    MAGNET_SETTLE_MS: MAGNET_SETTLE_MS,
+    MAGNET_WAIT_NOTE: MAGNET_WAIT_NOTE,
     magnetSync: magnetSync,
+    magnetDeferred: magnetDeferred,
+    withMagnetWait: withMagnetWait,
     magnetAction: magnetAction,
     magnetLine: magnetLine
   };

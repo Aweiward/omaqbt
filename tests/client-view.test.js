@@ -1274,6 +1274,85 @@ test("magnetSync holds the attention request while a text field owns the keys", 
   assert.equal(r.mem.focusDue, false);
 });
 
+test("magnetSync settle: the CONFIRM waits until 800 ms after the last key (799 waits, 800 raises)", () => {
+  assert.equal(V.MAGNET_SETTLE_MS, 800);
+  const ms = mstate([mpend("a")]);
+  const keys = [MURL("a")];
+  const k = 50000;
+  for (const [dt, left] of [[0, 800], [1, 799], [400, 400], [799, 1]]) {
+    const r = V.magnetSync(null, MREG, ms, keys, { opened: true, now: k + dt, lastKeyAt: k });
+    assert.equal(r.regState, null, "+" + dt);
+    assert.equal(r.wait, left, "+" + dt);
+  }
+  for (const dt of [800, 801, 9000]) {
+    const r = V.magnetSync(null, MREG, ms, keys, { opened: true, now: k + dt, lastKeyAt: k });
+    assert.equal(r.wait, 0, "+" + dt);
+    assert.equal(r.regState.mode, "CONFIRM");
+    assert.deepEqual(r.regState.pending, Object.assign({}, MAGNET_PENDING, { at: k + dt }), "the raise is stamped for the grace");
+  }
+  // no key yet: raised at once, stamped
+  let r = V.magnetSync(null, MREG, ms, keys, { opened: true, now: 7, lastKeyAt: 0 });
+  assert.equal(r.regState.mode, "CONFIRM");
+  assert.equal(r.regState.pending.at, 7);
+  assert.equal(r.wait, 0);
+  // nothing to wait for outside NORMAL, while blocked, or with nothing shown
+  for (const mode of ["INSERT", "COMMAND", "VISUAL"]) {
+    r = V.magnetSync(null, Object.assign({}, MREG, { mode }), ms, keys, { opened: true, now: k + 1, lastKeyAt: k });
+    assert.equal(r.wait, 0, mode);
+  }
+  assert.equal(V.magnetSync(null, MREG, ms, keys, { opened: true, blocked: true, now: k + 1, lastKeyAt: k }).wait, 0);
+  assert.equal(V.magnetSync(null, MREG, mstate(), [], { opened: true, now: k + 1, lastKeyAt: k }).wait, 0);
+  // leaving a handled magnet's CONFIRM never waits on a key
+  const confirm = Object.assign({}, MREG, { mode: "CONFIRM", pending: MAGNET_PENDING });
+  r = V.magnetSync({ seen: keys, handled: "", focusDue: false }, confirm, mstate(), [], { now: k + 1, lastKeyAt: k });
+  assert.equal(r.regState.mode, "NORMAL");
+});
+
+test("magnetSync in INSERT or COMMAND asks for attention for the text field when the window is inactive", () => {
+  const ms = mstate([mpend("a")]);
+  for (const mode of ["INSERT", "COMMAND"]) {
+    const typing = Object.assign({}, MREG, { mode });
+    let r = V.magnetSync(null, typing, ms, [MURL("a")], { opened: true, active: false });
+    assert.equal(r.focus, true, mode);
+    assert.equal(r.focusField, true, mode);
+    assert.equal(r.mem.focusDue, false, mode + ": asked once, not again on close");
+    assert.equal(r.regState, null);
+    r = V.magnetSync(r.mem, MREG, ms, [MURL("a")], { opened: true, active: true });
+    assert.equal(r.focus, false, mode + ": no second request");
+    // active: no request now, one once the field is closed (keyRoot)
+    r = V.magnetSync(null, typing, ms, [MURL("a")], { opened: true, active: true });
+    assert.equal(r.focus, false, mode);
+    assert.equal(r.focusField, false, mode);
+    assert.equal(r.mem.focusDue, true, mode);
+    r = V.magnetSync(r.mem, MREG, ms, [MURL("a")], { opened: true, active: true });
+    assert.equal(r.focus, true, mode);
+    assert.equal(r.focusField, false, mode);
+  }
+  // NORMAL never targets a field
+  const r = V.magnetSync(null, MREG, ms, [MURL("a")], { opened: true, active: false });
+  assert.equal(r.focus, true);
+  assert.equal(r.focusField, false);
+});
+
+test("the magnet wait note: shown while deferred, never over a message", () => {
+  const confirm = Object.assign({}, MREG, { mode: "CONFIRM", pending: MAGNET_PENDING });
+  const del = Object.assign({}, MREG, { mode: "CONFIRM", pending: { kind: "delete", commandId: "torrent.delete" } });
+  assert.equal(V.magnetDeferred(true, MREG), true);
+  assert.equal(V.magnetDeferred(true, Object.assign({}, MREG, { mode: "INSERT" })), true);
+  assert.equal(V.magnetDeferred(true, Object.assign({}, MREG, { mode: "COMMAND" })), true);
+  assert.equal(V.magnetDeferred(true, del), true);
+  assert.equal(V.magnetDeferred(true, confirm), false);
+  assert.equal(V.magnetDeferred(false, MREG), false);
+  assert.equal(V.MAGNET_WAIT_NOTE, "Magnet waiting \u2014 finish, then confirm");
+  const empty = { text: "", tone: "muted" };
+  assert.deepEqual(V.withMagnetWait(empty, true), { text: "Magnet waiting \u2014 finish, then confirm", tone: "muted" });
+  assert.deepEqual(V.withMagnetWait(empty, false), empty);
+  const err = { text: "Couldn't delete 1 torrent: boom", tone: "urgent" };
+  assert.deepEqual(V.withMagnetWait(err, true), err, "an error stays");
+  const busy = { text: "Starting…", tone: "muted" };
+  assert.deepEqual(V.withMagnetWait(busy, true), busy);
+});
+
 test("magnetAction: start needs canStart; cancel deletes, or drops an inbox line", () => {
   const fetching = mstate([mpend("a")], [], [torrent({ hash: H("a"), name: H("a"), state: "metaDL" })]);
   assert.deepEqual(V.magnetAction(fetching, "magnet.start"), { call: "", kind: "", note: "Still fetching the name…" });

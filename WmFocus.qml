@@ -23,15 +23,40 @@ QtObject {
   required property FloatingWindow targetWindow
   required property Item keyItem
 
+  // The item that gets the keys once the window is active: keyItem, or a
+  // text field passed to requestWmFocus (a magnet arriving while INSERT or
+  // the palette is typing must not pull the keys out of that field).
+  property Item focusTarget: null
+
   // ---- diagnostics ---------------------------------------------------------
   property int focusAttempts: 0
   property bool focusActivateAsked: false
 
-  function requestWmFocus() {
-    keyItem.forceActiveFocus()
+  function requestWmFocus(target) {
+    focusTarget = target ? target : keyItem
+    focusTarget.forceActiveFocus()
     focusAttempts = 0
     focusActivateAsked = false
     focusRetry.restart()
+  }
+
+  // _backingWindow is Quickshell's QQuickWindow behind the proxy; qmllint
+  // can't see it on FloatingWindow's declared type, hence the index form.
+  function backingWindow() {
+    return targetWindow["_backingWindow"]
+  }
+
+  // Whether the backing window is the active one (false before it exists).
+  function windowActive() {
+    var backing = backingWindow()
+    return !!backing && backing.active === true
+  }
+
+  // The field the request was for, unless it went away (INSERT or the
+  // palette closed before the WM answered): then keyItem.
+  function landingItem() {
+    var t = focusTarget
+    return t && t !== keyItem && t.visible ? t : keyItem
   }
 
   function ownHyprlandToplevel() {
@@ -60,12 +85,10 @@ QtObject {
       focusRetry.stop()
       return
     }
-    // _backingWindow is Quickshell's QQuickWindow behind the proxy; qmllint
-    // can't see it on FloatingWindow's declared type, hence the index form.
-    var backing = targetWindow["_backingWindow"]
+    var backing = backingWindow()
     if (backing && backing.active) {
       focusRetry.stop()
-      keyItem.forceActiveFocus()
+      landingItem().forceActiveFocus()
       console.info("OmaqBT window: keyboard focus after " + focusAttempts + " attempt(s)")
       return
     }

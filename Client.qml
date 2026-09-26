@@ -127,6 +127,9 @@ Item {
   onModeChanged: Qt.callLater(magnetRow.sync)
   onPaneChanged: Qt.callLater(magnetRow.sync)
   onHelpOpenChanged: Qt.callLater(magnetRow.sync)
+  // When handleKey last ran (ms): a waiting magnet settles after it.
+  property double lastKeyAt: 0
+  readonly property var statusMessage: View.withMagnetWait(messageLine, magnetRow.deferred)
 
   // ---- help ------------------------------------------------------------------------
   property bool helpOpen: false
@@ -188,9 +191,13 @@ Item {
 
   // Keyboard focus on open: WmFocus retries until the WM activates the
   // window. Kept here for open(), the window handlers and the harness.
-  function requestWmFocus() {
-    wmFocus.requestWmFocus()
+  // target: a text field to give the keys back to (default keyRoot).
+  function requestWmFocus(target) {
+    wmFocus.requestWmFocus(target)
   }
+
+  function windowActive() { return wmFocus.windowActive() }
+  function typingField() { return commands.typingField() }
 
   // ---- view state ----------------------------------------------------------
 
@@ -369,6 +376,7 @@ Item {
 
   function handleKey(event) {
     var ev = View.keyEvent(event.key, event.text, event.modifiers, Date.now())
+    lastKeyAt = ev.now
     // Any key ends an error (and its row marks) or a note.
     messages = View.msgKey(messages)
     if (helpOpen) {
@@ -641,8 +649,8 @@ Item {
         vpn: root.service ? View.vpnPart(root.service.vpnIface, root.service.bindIface, root.service.vpnUnbound) : null
         sidecarDown: !!root.service && root.service.sidecarState === "down"
         loading: root.loading
-        message: root.messageLine.text
-        messageTone: root.messageLine.tone
+        message: root.statusMessage.text
+        messageTone: root.statusMessage.tone
         inputPurpose: root.inputPurpose
         filterChip: View.filterChip(root.layout, root.filter)
         hints: View.modeHints(root.mode, {

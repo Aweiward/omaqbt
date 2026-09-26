@@ -49,6 +49,9 @@ Rectangle {
   readonly property int gap: Style.space(14)
   readonly property bool badgeFilled: mode !== "NORMAL"
 
+  // The INSERT field (WmFocus hands the keys back to it).
+  readonly property var inputField: input
+
   function setInput(text) {
     input.text = String(text || "")
   }
