@@ -9,6 +9,7 @@ prints the same JSON object `qbt status` has always printed. `qbt-serve`
 (a later task) reuses these same functions so there is exactly one
 implementation of this logic.
 """
+import http.client
 import http.cookiejar
 import json
 import os
@@ -92,10 +93,11 @@ class CurlCookieJar(http.cookiejar.MozillaCookieJar):
 class Client:
     """A tiny localhost-only HTTP GET client sharing a cookie jar with curl."""
 
-    def __init__(self, base, cookiejar):
+    def __init__(self, base, cookiejar, timeout=5):
         assert_local(base)
         self.base = base
         self.cookiejar = cookiejar
+        self.timeout = timeout
         self.opener = urllib.request.build_opener(
             urllib.request.HTTPCookieProcessor(cookiejar)
         )
@@ -104,7 +106,7 @@ class Client:
         url = self.base + path
         req = urllib.request.Request(url, method="GET")
         try:
-            with self.opener.open(req, timeout=5) as resp:
+            with self.opener.open(req, timeout=self.timeout) as resp:
                 code = resp.status
                 body = resp.read().decode("utf-8", "replace")
         except urllib.error.HTTPError as exc:
@@ -118,9 +120,33 @@ class Client:
             raise ApiError(code, sanitize(f"HTTP {code} {body}"))
         except urllib.error.URLError as exc:
             raise ApiError(None, sanitize(str(exc)))
+        except (OSError, http.client.HTTPException) as exc:
+            # urllib only wraps failures in h.request() (connect/send) as
+            # URLError. A connection that dies during h.getresponse()/
+            # resp.read() -- the peer closes early, or the socket times out
+            # waiting for a response -- raises the raw exception instead
+            # (http.client.RemoteDisconnected, TimeoutError, etc.). Treat
+            # those the same as any other transport failure.
+            raise ApiError(None, sanitize(str(exc) or type(exc).__name__))
         if code not in (200, 204):
             raise ApiError(code, sanitize(f"HTTP {code} {body}"))
         return body
+
+
+def _try_json_object(body):
+    """Parse `body` as JSON, returning the dict, or None if it isn't one.
+
+    A non-JSON body ("<html...") or a JSON value that isn't an object
+    ("[]", "null", "5") both come back as None rather than raising, so
+    callers can treat a malformed response as a failed call the same way
+    they treat an ApiError, instead of crashing on json.JSONDecodeError or
+    AttributeError from calling .get() on a list.
+    """
+    try:
+        data = json.loads(body or "{}")
+    except ValueError:
+        return None
+    return data if isinstance(data, dict) else None
 
 
 def merge_maindata(raw, cache):
@@ -238,18 +264,23 @@ def build_status(probe, client, sync, slow, now):
     if installed and daemon and lock_holder != "gui":
         try:
             body = client.get(f"/api/v2/sync/maindata?rid={sync.rid}")
-            raw = json.loads(body or "{}")
-            merged, rows = merge_maindata(raw, sync.torrents)
-            sync.torrents = merged
-            sync.rid = raw.get("rid") or 0
-            torrents = rows
-            server_state = raw.get("server_state") or {}
-            dl_speed = server_state.get("dl_info_speed") or 0
-            up_speed = server_state.get("up_info_speed") or 0
-            api = True
         except ApiError as exc:
             errors.append(exc.message)
-            api = False
+        else:
+            raw = _try_json_object(body)
+            if raw is None:
+                # A malformed response is a failed call, not a crash: leave
+                # api False and sync untouched, same as an ApiError.
+                errors.append("invalid maindata response")
+            else:
+                merged, rows = merge_maindata(raw, sync.torrents)
+                sync.torrents = merged
+                sync.rid = raw.get("rid") or 0
+                torrents = rows
+                server_state = raw.get("server_state") or {}
+                dl_speed = server_state.get("dl_info_speed") or 0
+                up_speed = server_state.get("up_info_speed") or 0
+                api = True
 
     if api and slow.due(now):
         try:
@@ -260,13 +291,20 @@ def build_status(probe, client, sync, slow, now):
             errors.append(exc.message)
         if vpn_iface:
             try:
-                prefs = json.loads(client.get("/api/v2/app/preferences") or "{}")
-                slow.bind_iface = prefs.get("current_network_interface") or ""
-                slow.vpn_iface_ok = True
+                body = client.get("/api/v2/app/preferences")
             except ApiError as exc:
                 slow.bind_iface = ""
                 slow.vpn_iface_ok = False
                 errors.append(exc.message)
+            else:
+                prefs = _try_json_object(body)
+                if prefs is None:
+                    slow.bind_iface = ""
+                    slow.vpn_iface_ok = False
+                    errors.append("invalid preferences response")
+                else:
+                    slow.bind_iface = prefs.get("current_network_interface") or ""
+                    slow.vpn_iface_ok = True
         slow.fetched_at = now
 
     if api:

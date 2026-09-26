@@ -2,8 +2,10 @@
 import http.cookiejar
 import json
 import os
+import socket
 import sys
 import tempfile
+import threading
 import time
 import unittest
 import urllib.request
@@ -280,6 +282,75 @@ class ClientTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             qbtsync.Client("http://example.com", jar)
 
+    @staticmethod
+    def _serve_once(handler):
+        """Accept exactly one connection on a free localhost port, run
+        `handler(conn)` against it, then close. Returns (srv_socket, port,
+        thread) so the caller can shut everything down afterward."""
+        srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        srv.bind(("127.0.0.1", 0))
+        srv.listen(1)
+        port = srv.getsockname()[1]
+
+        def run():
+            try:
+                conn, _ = srv.accept()
+            except OSError:
+                return
+            try:
+                handler(conn)
+            except OSError:
+                pass
+            finally:
+                conn.close()
+
+        thread = threading.Thread(target=run, daemon=True)
+        thread.start()
+        return srv, port, thread
+
+    def test_connection_closed_without_response_raises_api_error(self):
+        # The server reads the request, then closes without ever writing a
+        # status line: http.client raises RemoteDisconnected from
+        # getresponse(), not urllib.error.URLError.
+        def handler(conn):
+            conn.recv(65536)
+            conn.close()
+
+        srv, port, thread = self._serve_once(handler)
+        try:
+            jar = http.cookiejar.CookieJar()
+            client = qbtsync.Client(f"http://127.0.0.1:{port}", jar, timeout=2)
+            with self.assertRaises(qbtsync.ApiError) as ctx:
+                client.get("/api/v2/sync/maindata?rid=0")
+            self.assertIsNone(ctx.exception.code)
+            self.assertTrue(ctx.exception.message)
+        finally:
+            srv.close()
+            thread.join(timeout=2)
+
+    def test_connection_hang_past_timeout_raises_api_error(self):
+        # The server accepts and reads the request but never responds:
+        # resp.read()/getresponse() times out with a raw TimeoutError, not
+        # urllib.error.URLError.
+        release = threading.Event()
+
+        def handler(conn):
+            conn.recv(65536)
+            release.wait(2)
+
+        srv, port, thread = self._serve_once(handler)
+        try:
+            jar = http.cookiejar.CookieJar()
+            client = qbtsync.Client(f"http://127.0.0.1:{port}", jar, timeout=0.2)
+            with self.assertRaises(qbtsync.ApiError) as ctx:
+                client.get("/api/v2/sync/maindata?rid=0")
+            self.assertIsNone(ctx.exception.code)
+            self.assertTrue(ctx.exception.message)
+        finally:
+            release.set()
+            srv.close()
+            thread.join(timeout=2)
+
 
 class BuildStatusTests(unittest.TestCase):
     """Exercises build_status against a fake Client so no network is used."""
@@ -406,6 +477,69 @@ class BuildStatusTests(unittest.TestCase):
         self.assertEqual(status["vpnIface"], "")
         self.assertEqual(status["bindIface"], "")
         self.assertIn("connection refused", errors)
+
+    def test_maindata_non_json_body_is_treated_as_failed_call(self):
+        probe = self.base_probe()
+        client = self.FakeClient({
+            "/api/v2/sync/maindata?rid=0": "<html",
+        })
+        sync = qbtsync.SyncState(rid=3, torrents={"h": {"name": "x"}})
+        slow = qbtsync.SlowCache(interval=0)
+        status, errors = qbtsync.build_status(probe, client, sync, slow, 1000.0)
+        self.assertFalse(status["api"])
+        self.assertEqual(status["torrents"], [])
+        # sync must stay exactly as it was: never partially applied.
+        self.assertEqual(sync.rid, 3)
+        self.assertEqual(sync.torrents, {"h": {"name": "x"}})
+        self.assertTrue(errors)
+        # the slow-poll calls are gated on api being True, so a malformed
+        # maindata body must not trigger them either.
+        self.assertNotIn("/api/v2/transfer/speedLimitsMode", client.calls)
+
+    def test_maindata_non_object_json_is_treated_as_failed_call(self):
+        probe = self.base_probe()
+        client = self.FakeClient({
+            "/api/v2/sync/maindata?rid=0": "[]",
+        })
+        sync = qbtsync.SyncState(rid=3, torrents={"h": {"name": "x"}})
+        slow = qbtsync.SlowCache(interval=0)
+        status, errors = qbtsync.build_status(probe, client, sync, slow, 1000.0)
+        self.assertFalse(status["api"])
+        self.assertEqual(sync.rid, 3)
+        self.assertEqual(sync.torrents, {"h": {"name": "x"}})
+        self.assertTrue(errors)
+
+    def test_preferences_non_json_body_clears_vpn_iface(self):
+        full = json.loads((FIXTURES / "maindata-full.json").read_text())
+        probe = self.base_probe(vpnIface="wg0-mullvad")
+        client = self.FakeClient({
+            "/api/v2/sync/maindata?rid=0": json.dumps(full),
+            "/api/v2/transfer/speedLimitsMode": "1",
+            "/api/v2/app/preferences": "<html",
+        })
+        sync = qbtsync.SyncState()
+        slow = qbtsync.SlowCache(interval=0)
+        status, errors = qbtsync.build_status(probe, client, sync, slow, 1000.0)
+        self.assertTrue(status["api"])
+        self.assertEqual(status["vpnIface"], "")
+        self.assertEqual(status["bindIface"], "")
+        self.assertTrue(errors)
+
+    def test_preferences_non_object_json_clears_vpn_iface(self):
+        full = json.loads((FIXTURES / "maindata-full.json").read_text())
+        probe = self.base_probe(vpnIface="wg0-mullvad")
+        client = self.FakeClient({
+            "/api/v2/sync/maindata?rid=0": json.dumps(full),
+            "/api/v2/transfer/speedLimitsMode": "1",
+            "/api/v2/app/preferences": "[]",
+        })
+        sync = qbtsync.SyncState()
+        slow = qbtsync.SlowCache(interval=0)
+        status, errors = qbtsync.build_status(probe, client, sync, slow, 1000.0)
+        self.assertTrue(status["api"])
+        self.assertEqual(status["vpnIface"], "")
+        self.assertEqual(status["bindIface"], "")
+        self.assertTrue(errors)
 
     def test_key_order(self):
         probe = self.base_probe(installed=False)
