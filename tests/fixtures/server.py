@@ -60,6 +60,17 @@ def _fault(route_key):
     return value if value in ("sleep3", "404") else None
 
 
+# path -> (control-file key, canned payload). One shared handler below
+# applies whatever fault the control file names, and otherwise serves the
+# payload -- rather than four near-identical if-blocks.
+_INSPECT_ROUTES = {
+    "/api/v2/torrents/properties": ("properties", PROPERTIES),
+    "/api/v2/torrents/pieceStates": ("pieceStates", PIECESTATES),
+    "/api/v2/torrents/trackers": ("trackers", TRACKERS),
+    "/api/v2/sync/torrentPeers": ("peers", PEERS),
+}
+
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
         return
@@ -125,41 +136,15 @@ class Handler(BaseHTTPRequestHandler):
                 bind = Path(bind_file).read_text().strip()
             self._send(200, json.dumps({"current_network_interface": bind}).encode())
             return
-        if parsed.path == "/api/v2/torrents/properties":
-            fault = _fault("properties")
+        if parsed.path in _INSPECT_ROUTES:
+            control_key, payload = _INSPECT_ROUTES[parsed.path]
+            fault = _fault(control_key)
             if fault == "sleep3":
                 time.sleep(3)
             elif fault == "404":
                 self._send(404, b"{}")
                 return
-            self._send(200, json.dumps(PROPERTIES).encode())
-            return
-        if parsed.path == "/api/v2/torrents/pieceStates":
-            fault = _fault("pieceStates")
-            if fault == "sleep3":
-                time.sleep(3)
-            elif fault == "404":
-                self._send(404, b"{}")
-                return
-            self._send(200, json.dumps(PIECESTATES).encode())
-            return
-        if parsed.path == "/api/v2/torrents/trackers":
-            fault = _fault("trackers")
-            if fault == "sleep3":
-                time.sleep(3)
-            elif fault == "404":
-                self._send(404, b"{}")
-                return
-            self._send(200, json.dumps(TRACKERS).encode())
-            return
-        if parsed.path == "/api/v2/sync/torrentPeers":
-            fault = _fault("peers")
-            if fault == "sleep3":
-                time.sleep(3)
-            elif fault == "404":
-                self._send(404, b"{}")
-                return
-            self._send(200, json.dumps(PEERS).encode())
+            self._send(200, json.dumps(payload).encode())
             return
         self._send(404, b"{}")
 
@@ -203,12 +188,13 @@ class Handler(BaseHTTPRequestHandler):
 class _Server(ThreadingHTTPServer):
     """A "sleep3"-faulted route's handler thread can find its client gone
     (timed out and moved on) by the time it wakes up and tries to write --
-    a plain BrokenPipeError, not a real fixture bug. Swallow just that one
-    so test runs (which don't inspect this process's stderr) stay quiet;
-    anything else still gets the default traceback."""
+    a plain BrokenPipeError or ConnectionResetError, not a real fixture
+    bug. Swallow just those two so test runs (which don't inspect this
+    process's stderr) stay quiet; anything else still gets the default
+    traceback."""
 
     def handle_error(self, request, client_address):
-        if isinstance(sys.exc_info()[1], BrokenPipeError):
+        if isinstance(sys.exc_info()[1], (BrokenPipeError, ConnectionResetError)):
             return
         super().handle_error(request, client_address)
 

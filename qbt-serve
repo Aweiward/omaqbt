@@ -170,18 +170,35 @@ def do_tick(state, force_probe=False):
     read_inspect(state)
 
 
-def _parse_json_body(body, expected_type):
-    """Parse `body` as JSON, returning it only if it's `expected_type`
-    (list or dict); anything else (malformed body, wrong shape) comes back
-    as an empty instance of `expected_type`, the same "failed call" leniency
-    `files` already applies."""
+def _inspect_get_json(state, h, tab, path, now, expected_type):
+    """GET `path` on the inspect client and parse the body as
+    `expected_type` (list or dict).
+
+    On a transport failure this already emits the inspect error line
+    (sanitized, like `files`) and sets `watch_backoff_until`; callers just
+    check the result for `None` and return -- there is nothing left for
+    them to do. A malformed or wrong-shaped body (not a transport
+    failure) comes back as an empty instance of `expected_type`, the same
+    leniency `files` already applies, and is never confused with a `None`
+    failure since `expected_type()` is falsy-but-not-`None`."""
+    try:
+        body = state["inspect_client"].get(path)
+    except qbtsync.ApiError as exc:
+        emit({"type": "inspect", "hash": h, "tab": tab, "error": qbtsync.sanitize(exc.message)})
+        state["watch_backoff_until"] = now + WATCH_BACKOFF_SECONDS
+        return None
     try:
         parsed = json.loads(body)
     except ValueError:
         parsed = None
-    if isinstance(parsed, expected_type):
-        return parsed
-    return expected_type()
+    return parsed if isinstance(parsed, expected_type) else expected_type()
+
+
+def _inspect_ok(state, obj):
+    """Emits a successful inspect line and clears any back-off a prior
+    failure on this watch had set."""
+    emit(obj)
+    state["watch_backoff_until"] = 0
 
 
 def read_inspect(state):
@@ -197,69 +214,53 @@ def read_inspect(state):
         return
 
     now = time.monotonic()
-    backoff_until = state.get("watch_backoff_until") or 0
-    if now < backoff_until:
+    if now < (state.get("watch_backoff_until") or 0):
         return
 
     h = watch["hash"]
     tab = watch["tab"]
-    client = state["inspect_client"]
 
     if tab == "chart":
         # Task 8 fills the series; Task 2 always answers an empty one.
-        emit({"type": "inspect", "hash": h, "tab": tab, "points": []})
-        state["watch_backoff_until"] = 0
+        _inspect_ok(state, {"type": "inspect", "hash": h, "tab": tab, "points": []})
         return
 
     if tab == "trackers":
-        try:
-            body = client.get(f"/api/v2/torrents/trackers?hash={h}")
-        except qbtsync.ApiError as exc:
-            emit({"type": "inspect", "hash": h, "tab": tab, "error": qbtsync.sanitize(exc.message)})
-            state["watch_backoff_until"] = now + WATCH_BACKOFF_SECONDS
+        trackers = _inspect_get_json(
+            state, h, tab, f"/api/v2/torrents/trackers?hash={h}", now, list
+        )
+        if trackers is None:
             return
-        trackers = _parse_json_body(body, list)
-        emit({"type": "inspect", "hash": h, "tab": tab, "trackers": trackers})
-        state["watch_backoff_until"] = 0
+        _inspect_ok(state, {"type": "inspect", "hash": h, "tab": tab, "trackers": trackers})
         return
 
     if tab == "peers":
-        try:
-            body = client.get(f"/api/v2/sync/torrentPeers?hash={h}&rid=0")
-        except qbtsync.ApiError as exc:
-            emit({"type": "inspect", "hash": h, "tab": tab, "error": qbtsync.sanitize(exc.message)})
-            state["watch_backoff_until"] = now + WATCH_BACKOFF_SECONDS
+        parsed = _inspect_get_json(
+            state, h, tab, f"/api/v2/sync/torrentPeers?hash={h}&rid=0", now, dict
+        )
+        if parsed is None:
             return
-        parsed = _parse_json_body(body, dict)
         peers = parsed.get("peers")
         if not isinstance(peers, dict):
             peers = {}
-        emit({"type": "inspect", "hash": h, "tab": tab, "peers": peers})
-        state["watch_backoff_until"] = 0
+        _inspect_ok(state, {"type": "inspect", "hash": h, "tab": tab, "peers": peers})
         return
 
     # tab == "info"
-    try:
-        body = client.get(f"/api/v2/torrents/properties?hash={h}")
-    except qbtsync.ApiError as exc:
-        emit({"type": "inspect", "hash": h, "tab": tab, "error": qbtsync.sanitize(exc.message)})
-        state["watch_backoff_until"] = now + WATCH_BACKOFF_SECONDS
+    props = _inspect_get_json(state, h, tab, f"/api/v2/torrents/properties?hash={h}", now, dict)
+    if props is None:
         return
-    props = _parse_json_body(body, dict)
 
     pieces = None
     if state.get("watch_pieces_next", 0) <= now:
-        try:
-            pbody = client.get(f"/api/v2/torrents/pieceStates?hash={h}")
-        except qbtsync.ApiError as exc:
-            emit({"type": "inspect", "hash": h, "tab": tab, "error": qbtsync.sanitize(exc.message)})
-            state["watch_backoff_until"] = now + WATCH_BACKOFF_SECONDS
+        pieces = _inspect_get_json(
+            state, h, tab, f"/api/v2/torrents/pieceStates?hash={h}", now, list
+        )
+        if pieces is None:
             return
-        pieces = _parse_json_body(pbody, list)
         state["watch_pieces_next"] = now + WATCH_PIECES_INTERVAL
 
-    emit({"type": "inspect", "hash": h, "tab": tab, "props": props, "pieces": pieces})
-    state["watch_backoff_until"] = 0
+    _inspect_ok(state, {"type": "inspect", "hash": h, "tab": tab, "props": props, "pieces": pieces})
 
 
 def handle_command(cmd, state):

@@ -529,6 +529,39 @@ class WatchInfoTests(unittest.TestCase):
                 self.assertIsInstance(second["props"], dict)
                 self.assertIsNone(second["pieces"])
 
+    def test_pieces_are_reread_about_every_five_seconds(self):
+        with harness.fixture_server() as (port, env):
+            with ServeProcess(env) as sp:
+                sp.readline()  # first status
+                h = "a" * 40
+                start = time.monotonic()
+                sp.send({"cmd": "watch", "hash": h, "tab": "info"})
+                first = sp.read_until(lambda o: o.get("type") == "inspect", timeout=5)
+                self.assertIsInstance(first["pieces"], list)  # the immediate read always has it
+
+                # Tick fast enough that a null-pieces tick would show up
+                # well before a true 5s reread could, so its arrival time
+                # actually reflects the pieceStates interval, not the
+                # cadence.
+                sp.send({"cmd": "cadence", "ms": 1000})
+                elapsed_at_next_pieces = None
+                deadline = start + 9.0
+                while time.monotonic() < deadline:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        break
+                    obj = sp.readline(timeout=remaining)
+                    if (
+                        obj.get("type") == "inspect"
+                        and obj.get("tab") == "info"
+                        and obj.get("pieces") is not None
+                    ):
+                        elapsed_at_next_pieces = time.monotonic() - start
+                        break
+                self.assertIsNotNone(elapsed_at_next_pieces, "no reread within 9s")
+                self.assertGreater(elapsed_at_next_pieces, 3.5)
+                self.assertLess(elapsed_at_next_pieces, 7.5)
+
 
 class WatchTrackersTests(unittest.TestCase):
     def test_watch_trackers_returns_trackers_payload(self):
@@ -547,8 +580,9 @@ class WatchTrackersTests(unittest.TestCase):
                 self.assertEqual(resp["trackers"][2]["url"], "** [LSD] **")
 
                 entries = _read_log(env["QBT_FIXTURE_LOG"])
-                paths = [e["path"] for e in entries]
-                self.assertIn("/api/v2/torrents/trackers", paths)
+                tracker_reqs = [e for e in entries if e["path"] == "/api/v2/torrents/trackers"]
+                self.assertTrue(tracker_reqs)
+                self.assertEqual(tracker_reqs[-1]["query"].get("hash"), [h])
 
 
 class WatchPeersTests(unittest.TestCase):
