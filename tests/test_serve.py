@@ -705,6 +705,11 @@ class StatusFirstTests(unittest.TestCase):
                 err = sp.read_until(lambda o: o.get("type") == "inspect", timeout=5)
                 elapsed = time.monotonic() - start
                 self.assertIn("error", err)
+                # An error line still carries hash/tab: Task 3's Service
+                # keys replies by (hash, tab) to drop a stale one, and that
+                # guard needs these fields on an error line too.
+                self.assertEqual(err["hash"], h)
+                self.assertEqual(err["tab"], "trackers")
                 # The inspect client's own timeout is ~1s: tight enough to
                 # tell "timed out at 1s" apart from "the fixture answered
                 # after its 3s sleep", without pinning an exact number.
