@@ -107,10 +107,20 @@ test("o opens the containing folder", () => {
   assert.equal(r.commandId, "torrent.openFolder");
 });
 
-test("x removes the torrent (no confirm for a single target)", () => {
-  const r = dispatch(state({ hasTorrent: true }), ev("x", keyOf("x")));
-  assert.equal(r.commandId, "torrent.remove");
-  assert.equal(r.confirm, undefined);
+test("x always asks for confirmation, even for one torrent", () => {
+  const confirmStep = dispatch(state({ hasTorrent: true }), ev("x", keyOf("x")));
+  assert.equal(confirmStep.commandId, null);
+  assert.deepEqual(confirmStep.confirm, { commandId: "torrent.remove", count: 1, withFiles: false });
+  assert.equal(confirmStep.state.mode, "CONFIRM");
+
+  const accepted = dispatch(confirmStep.state, ev("y", keyOf("y")));
+  assert.equal(accepted.commandId, "torrent.remove");
+  assert.deepEqual(accepted.args, { count: 1, confirmed: true });
+  assert.equal(accepted.state.mode, "NORMAL");
+
+  const cancelStep = dispatch(confirmStep.state, ev("n", keyOf("n")));
+  assert.equal(cancelStep.commandId, "confirm.cancel");
+  assert.equal(cancelStep.state.mode, "NORMAL");
 });
 
 test("X always asks for confirmation, even for one torrent", () => {
@@ -504,10 +514,10 @@ test("unmatched is not the same as blocked", () => {
   assert.equal(r.blocked, undefined);
 });
 
-test("torrent.remove confirms only above one target", () => {
+test("torrent.remove always confirms, even for one target", () => {
   const single = dispatch(state({ mode: "VISUAL", selectionCount: 1 }), ev("x", keyOf("x")));
-  assert.equal(single.commandId, "torrent.remove");
-  assert.equal(single.confirm, undefined);
+  assert.equal(single.commandId, null);
+  assert.deepEqual(single.confirm, { commandId: "torrent.remove", count: 1, withFiles: false });
 
   const many = dispatch(state({ mode: "VISUAL", selectionCount: 2 }), ev("x", keyOf("x")));
   assert.equal(many.commandId, null);
@@ -537,9 +547,9 @@ function assertNoLeftoverRange(freshState) {
   assert.equal(recheck.args.range, undefined);
 
   const remove = dispatch(freshState, ev("x", keyOf("x")));
-  assert.equal(remove.commandId, "torrent.remove");
-  assert.equal(remove.args.count, 1);
-  assert.equal(remove.args.range, undefined);
+  assert.equal(remove.commandId, null);
+  assert.deepEqual(remove.confirm, { commandId: "torrent.remove", count: 1, withFiles: false });
+  assert.deepEqual(remove.state.pending.args, { count: 1 });
 }
 
 test("leaving VISUAL via visual.exit (Esc) clears the range for what follows", () => {

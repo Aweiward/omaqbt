@@ -494,13 +494,13 @@ test("VISUAL end to end: V, j, Space acts on both rows and the range ends", () =
   assert.equal(reg.selectionCount, 0);
 });
 
-test("VISUAL x over 2 rows and X over 1 row go through CONFIRM; x over 1 row does not", () => {
+test("VISUAL x and X always go through CONFIRM, even over 1 row", () => {
   const rows = R("a", "b");
   const vis = { mode: "VISUAL", pane: "table", prefix: null, prefixAt: 0, pending: null };
   const two = V.dispatchState(vis, "table", "rows", true, V.targetHashes("VISUAL", rows, H("b"), H("a")));
   assert.equal(Registry.dispatch(two, V.keyEvent(0x58, "x", 0, 0)).confirm.count, 2);
   const one = V.dispatchState(vis, "table", "rows", true, V.targetHashes("VISUAL", rows, H("a"), H("a")));
-  assert.equal(Registry.dispatch(one, V.keyEvent(0x58, "x", 0, 0)).confirm, undefined);
+  assert.equal(Registry.dispatch(one, V.keyEvent(0x58, "x", 0, 0)).confirm.count, 1);
   assert.equal(Registry.dispatch(one, V.keyEvent(0x58, "X", V.MOD.Shift, 0)).confirm.count, 1);
 });
 

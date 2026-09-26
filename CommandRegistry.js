@@ -218,7 +218,7 @@ function confirmCount(s) {
 
 function needsConfirm(id, s) {
   if (id === "torrent.delete") return true;
-  if (id === "torrent.remove") return confirmCount(s) > 1;
+  if (id === "torrent.remove") return true;
   return false;
 }
 

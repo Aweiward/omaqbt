@@ -198,10 +198,14 @@ TestCase {
     compare(o.c.messageLine.text, "")
   }
 
-  function test_x_single_no_confirm_and_space() {
+  function test_x_single_confirm_and_space() {
     var o = make()
     o.svc.torrents = list3()
     key(o.c, "x")
+    compare(o.c.mode, "CONFIRM")
+    verify(o.c.confirm !== null)
+    key(o.c, "y")
+    compare(o.c.mode, "NORMAL")
     compare(lastCall(o.svc, "delete").args[1], false)
     key(o.c, " ", 0x20)
     compare(lastCall(o.svc, "stop").args[0], hh("c"))
