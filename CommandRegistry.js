@@ -325,6 +325,14 @@ function dispatch(state, event) {
     return { state: clearPrefix(s), commandId: null };
   }
 
+  return resolveRow(s, row, now);
+}
+
+// resolveRow(s, row, now) -> the dispatch result for a matched command row:
+// the precondition check, args, CONFIRM for destructive commands, and the
+// mode it leaves behind. Shared by dispatch() (a key) and dispatchCommand()
+// (the palette), so the two can never resolve a command differently.
+function resolveRow(s, row, now) {
   if (!preconditionMet(row.needs, s)) {
     return { state: clearPrefix(s), commandId: null, blocked: "needs a selected torrent" };
   }
@@ -362,6 +370,21 @@ function dispatch(state, event) {
   return { state: nextState, commandId: row.id, args: args };
 }
 
+// dispatchCommand(state, commandId) -> the same result dispatch() gives
+// for a key bound to `commandId` in state's mode and pane (the command
+// palette runs a command by id, not by key). No row for that id in this
+// mode/pane resolves to no command, as an unbound key would.
+function dispatchCommand(state, commandId) {
+  var s = clearPrefix(normalizeState(state));
+  for (var i = 0; i < commands.length; i++) {
+    var row = commands[i];
+    if (row.id === null || row.id !== commandId) continue;
+    if (row.modes.indexOf(s.mode) === -1 || !paneMatches(row, s.pane)) continue;
+    return resolveRow(s, row, 0);
+  }
+  return { state: s, commandId: null };
+}
+
 // helpFor(mode, pane) -> rows from `commands` active for that mode/pane,
 // generated from the same table dispatch() reads. Reserved (id === null)
 // rows are not commands, so they are left out.
@@ -383,6 +406,7 @@ if (typeof module !== "undefined" && module.exports) {
     KEY: KEY,
     commands: commands,
     dispatch: dispatch,
+    dispatchCommand: dispatchCommand,
     helpFor: helpFor,
     preconditionMet: preconditionMet,
     paneMatches: paneMatches

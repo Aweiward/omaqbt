@@ -51,6 +51,8 @@ Item {
   // following service.viewState, whose FileView load is asynchronous and
   // can land after this item was built.
   property bool viewTouched: false
+  // The palette's recently used command ids, newest first (View.mruPush).
+  property var paletteMru: []
 
   // ---- per-view, not persisted --------------------------------------------
   property string textQuery: ""
@@ -177,6 +179,7 @@ Item {
     sortMode = View.validSort(v.sort)
     sortDesc = v.desc
     cursorHash = v.cursorHash
+    paletteMru = v.paletteMru
     // Not setPane: that saves, and a restore must not count as a user
     // change (viewTouched). VISUAL is table-only, so it ends here too.
     leaveVisual()
@@ -187,7 +190,7 @@ Item {
   function saveView() {
     viewTouched = true
     if (!service || typeof service.saveViewState !== "function") return
-    service.saveViewState({ filter: filter, sort: sortMode, desc: sortDesc, cursorHash: cursorHash, pane: pane })
+    service.saveViewState({ filter: filter, sort: sortMode, desc: sortDesc, cursorHash: cursorHash, pane: pane, paletteMru: paletteMru })
   }
 
   function adoptService() {
@@ -352,11 +355,17 @@ Item {
       helpOpen = false
       return
     }
+    dispatchWith(function(st) { return Registry.dispatch(st, ev) }, ev)
+  }
+
+  // Resolves a key (Registry.dispatch) or a palette command
+  // (Registry.dispatchCommand) against the current state and applies it.
+  function dispatchWith(resolve, ev) {
     // Targets are fixed before dispatch: Space/x/X/e from VISUAL come back
     // in NORMAL or CONFIRM, and must still act on the range as it stood.
     var targets = View.targetHashes(regState.mode, tableRows, cursorHash, anchorHash)
     var st = View.dispatchState(regState, pane, tableState, cursorIndex >= 0, targets)
-    var res = Registry.dispatch(st, ev)
+    var res = resolve(st)
 
     regState = res.state
     anchorHash = View.nextAnchor(res.state.mode, res.commandId, anchorHash, cursorHash)
@@ -377,10 +386,7 @@ Item {
   // back to what it was before `/`, a move is dropped), e.g. on a click.
   function leaveInsert() {
     if (regState.mode !== "INSERT") return
-    var st = ({})
-    for (var k in regState) st[k] = regState[k]
-    st.mode = "NORMAL"
-    regState = st
+    commands.setMode("NORMAL")
     commands.cancelInput()
   }
 
@@ -437,6 +443,7 @@ Item {
     inspectorPane: inspector
     inputLine: statusLine
     keyItem: keyRoot
+    palette: cmdPalette
   }
 
   WmFocus {
@@ -622,6 +629,17 @@ Item {
           root.helpOpen = false
           keyRoot.forceActiveFocus()
         }
+      }
+
+      CommandPalette {
+        id: cmdPalette
+        anchors.fill: parent
+        visible: root.mode === "COMMAND"
+        mru: root.paletteMru
+        evalState: View.paletteState(root.tableState, root.cursorIndex >= 0)
+        onKeyForwarded: function(event) { root.handleKey(event) }
+        onActivated: function(row) { commands.runPaletteRow(row) }
+        onDismissed: commands.closePalette()
       }
     }
   }

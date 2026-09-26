@@ -18,6 +18,8 @@ QtObject {
   // keys again when INSERT ends.
   required property var inputLine
   required property Item keyItem
+  // The CommandPalette the palette.* commands drive.
+  required property var palette
 
   function isEnterKey(ev) {
     return ev.key === Registry.KEY.Return || ev.key === Registry.KEY.Enter
@@ -35,6 +37,16 @@ QtObject {
     }
   }
 
+  // Sets the mode without a dispatch (a click, or a palette row that stays
+  // open), keeping the rest of the registry state.
+  function setMode(mode) {
+    var c = client
+    var st = ({})
+    for (var k in c.regState) st[k] = c.regState[k]
+    st.mode = mode
+    c.regState = st
+  }
+
   // ---- INSERT ------------------------------------------------------------------
 
   function startInput(purpose, initial) {
@@ -42,10 +54,7 @@ QtObject {
     c.inputPurpose = purpose
     c.queryBeforeEdit = c.textQuery
     inputLine.setInput(initial)
-    var st = ({})
-    for (var k in c.regState) st[k] = c.regState[k]
-    st.mode = "INSERT"
-    c.regState = st
+    setMode("INSERT")
     inputLine.focusInput()
   }
 
@@ -55,11 +64,7 @@ QtObject {
   }
 
   function stayInInsert() {
-    var c = client
-    var st = ({})
-    for (var k in c.regState) st[k] = c.regState[k]
-    st.mode = "INSERT"
-    c.regState = st
+    setMode("INSERT")
     inputLine.focusInput()
   }
 
@@ -94,6 +99,35 @@ QtObject {
     }
     c.moveHashes = []
     endInput()
+  }
+
+  // ---- COMMAND (the palette) ----------------------------------------------------
+
+  function closePalette() {
+    setMode("NORMAL")
+    keyItem.forceActiveFocus()
+  }
+
+  // Runs a palette row (Enter, or a click). A disabled row (or none) keeps
+  // the palette open and says why. An enabled one closes it, goes to the
+  // top of the MRU, and runs through the registry like its key would:
+  // the same targets, the same CONFIRM, the same mode change afterwards.
+  function runPaletteRow(row) {
+    var c = client
+    if (!row || row.kind !== "command" || !row.enabled) {
+      if (row && row.kind === "command") c.note(View.paletteReasonNote(row), "urgent")
+      setMode("COMMAND")
+      palette.focusField()
+      return
+    }
+    closePalette()
+    c.paletteMru = View.mruPush(c.paletteMru, row.id)
+    c.setPane(View.palettePane(Registry.commands, row.id, c.pane))
+    c.saveView()
+    // A neutral event: the Enter that ran the palette must not also count
+    // as Enter for the command (Files would start the daemon).
+    var ev = View.keyEvent(0, "", 0, Date.now())
+    c.dispatchWith(function(st) { return Registry.dispatchCommand(st, row.id) }, ev)
   }
 
   // ---- commands ------------------------------------------------------------------
@@ -287,6 +321,27 @@ QtObject {
 
     case "window.close":
       c.close()
+      return
+
+    case "palette.open":
+      palette.open()
+      return
+
+    case "palette.close":
+      closePalette()
+      return
+
+    case "palette.up":
+    case "palette.down":
+      palette.move(commandId === "palette.down" ? 1 : -1)
+      return
+
+    case "palette.complete":
+      palette.complete()
+      return
+
+    case "palette.run":
+      runPaletteRow(palette.currentRow())
       return
 
     case "confirm.cancel":

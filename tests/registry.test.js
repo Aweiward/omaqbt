@@ -845,3 +845,35 @@ test("paneMatches is exported and matches dispatch's own pane logic", () => {
   assert.equal(Registry.paneMatches(fileRow, "table"), false);
   assert.equal(Registry.paneMatches(fileRow, "inspector"), true);
 });
+
+// --- dispatchCommand (the palette runs a command by id) ---------------------
+
+test("dispatchCommand resolves an id exactly as its key would", () => {
+  const s = state({ hasTorrent: true });
+  assert.deepEqual(Registry.dispatchCommand(s, "sort.reverse"), dispatch(s, ev("S")));
+  assert.deepEqual(Registry.dispatchCommand(s, "torrent.recheck"), dispatch(s, ev("e")));
+  const v = Registry.dispatchCommand(s, "visual.enter");
+  assert.equal(v.commandId, "visual.enter");
+  assert.equal(v.state.mode, "VISUAL");
+  assert.equal(Registry.dispatchCommand(s, "filter.text").state.mode, "INSERT");
+});
+
+test("dispatchCommand still raises CONFIRM for x and X", () => {
+  const s = state({ hasTorrent: true });
+  const del = Registry.dispatchCommand(s, "torrent.delete");
+  assert.equal(del.commandId, null);
+  assert.equal(del.state.mode, "CONFIRM");
+  assert.deepEqual(del.confirm, { commandId: "torrent.delete", count: 1, withFiles: true });
+  assert.equal(Registry.dispatchCommand(s, "torrent.remove").state.mode, "CONFIRM");
+});
+
+test("dispatchCommand blocks an unmet precondition and ignores wrong-pane ids", () => {
+  const blocked = Registry.dispatchCommand(state({ hasTorrent: false }), "torrent.toggle");
+  assert.equal(blocked.commandId, null);
+  assert.equal(blocked.blocked, "needs a selected torrent");
+  const wrongPane = Registry.dispatchCommand(state({ pane: "filters", hasTorrent: true }), "torrent.toggle");
+  assert.equal(wrongPane.commandId, null);
+  assert.equal(wrongPane.blocked, undefined);
+  assert.equal(Registry.dispatchCommand(state(), "no.such").commandId, null);
+  assert.equal(Registry.dispatchCommand(state(), null).commandId, null);
+});

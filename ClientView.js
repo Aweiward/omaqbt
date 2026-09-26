@@ -485,6 +485,8 @@ function modeHints(mode, ctx) {
     if (c.purpose === "move") return [{ key: "Enter", label: "move" }, { key: "Esc", label: "cancel" }];
     return [{ key: "Enter", label: "keep filter" }, { key: "Esc", label: "cancel" }];
   }
+  // The palette shows its own key hints in its footer.
+  if (mode === "COMMAND") return [];
   if (mode === "VISUAL") {
     return [
       { key: "Space", label: "start/stop" },
@@ -1269,6 +1271,110 @@ function paletteRows(query, commands, mru, state) {
   return out;
 }
 
+// paletteState(tableState, hasCursorRow) -> the dispatch state paletteRows
+// evaluates commands against: NORMAL, table pane, whatever the window's
+// actual mode and pane (the palette always evaluates as the table would).
+function paletteState(tableState, hasCursorRow) {
+  return dispatchState({ mode: "NORMAL" }, "table", tableState, hasCursorRow, []);
+}
+
+// paletteSegments(title, indices) -> the title split into runs of
+// [{text, matched}], matched runs being the fuzzyMatch indices. The
+// palette paints each run as its own PlainText Text, so an untrusted
+// title is never parsed as markup.
+function paletteSegments(title, indices) {
+  var t = String(title || "");
+  var hit = {};
+  var list = indices || [];
+  for (var i = 0; i < list.length; i++) hit[list[i]] = true;
+  var out = [];
+  for (var j = 0; j < t.length; j++) {
+    var m = hit[j] === true;
+    if (out.length > 0 && out[out.length - 1].matched === m) out[out.length - 1].text += t.charAt(j);
+    else out.push({ text: t.charAt(j), matched: m });
+  }
+  return out;
+}
+
+function paletteSelectable(row) {
+  return !!row && row.kind === "command" && row.enabled === true;
+}
+
+// paletteFirst(rows) -> where the palette cursor starts: the first enabled
+// command row, else the first command row (so Enter can still report why
+// every match is disabled), else -1.
+function paletteFirst(rows) {
+  var list = rows || [];
+  for (var i = 0; i < list.length; i++) if (paletteSelectable(list[i])) return i;
+  for (var j = 0; j < list.length; j++) if (list[j] && list[j].kind === "command") return j;
+  return -1;
+}
+
+// paletteMove(rows, index, delta) -> the next enabled command row in the
+// direction of delta (+1 down, -1 up), skipping dividers and disabled rows.
+// No wrap: with nothing further that way, the cursor stays where it is.
+function paletteMove(rows, index, delta) {
+  var list = rows || [];
+  var step = delta < 0 ? -1 : 1;
+  for (var i = index + step; i >= 0 && i < list.length; i += step) {
+    if (paletteSelectable(list[i])) return i;
+  }
+  return index;
+}
+
+// paletteCursorFor(rows, id) -> the row of command `id` when it is still
+// there and enabled (the rows were rebuilt under the cursor, e.g. a status
+// tick), else where a fresh list starts (paletteFirst).
+function paletteCursorFor(rows, id) {
+  var list = rows || [];
+  for (var i = 0; i < list.length; i++) {
+    if (paletteSelectable(list[i]) && list[i].id === id) return i;
+  }
+  return paletteFirst(list);
+}
+
+// paletteCommandCount(rows) -> how many command rows (not dividers) there
+// are, for the palette's "N of M" count.
+function paletteCommandCount(rows) {
+  var n = 0;
+  var list = rows || [];
+  for (var i = 0; i < list.length; i++) if (list[i] && list[i].kind === "command") n++;
+  return n;
+}
+
+// palettePane(commands, id, pane) -> the pane a palette command runs in:
+// the current pane when one of the command's NORMAL rows works there (Sort
+// works anywhere, Open folder from the inspector), otherwise "table" (the
+// pane paletteRows evaluated it for; e.g. Pause/resume from the filters).
+function palettePane(commandsTable, id, pane) {
+  var list = commandsTable || [];
+  for (var i = 0; i < list.length; i++) {
+    var row = list[i];
+    if (!row || row.id !== id || row.modes.indexOf("NORMAL") === -1) continue;
+    if (Registry.paneMatches(row, pane)) return String(pane);
+  }
+  return "table";
+}
+
+// paletteOwnsKey(ev) -> whether the palette's text field hands this key to
+// the window instead of typing it: every key COMMAND mode resolves (Esc,
+// Enter, Up/Down, Ctrl-n/Ctrl-p, Tab), plus Shift-Tab, which would
+// otherwise move focus out of the field.
+function paletteOwnsKey(ev) {
+  if (ev && ev.key === Registry.KEY.Backtab) return true;
+  return Registry.dispatch({ mode: "COMMAND" }, ev).commandId !== null;
+}
+
+// The status-line note for Enter (or a click) on a disabled palette row.
+function paletteReasonNote(row) {
+  return String(row.title) + ": " + String(row.reason) + ".";
+}
+
+// The palette's empty result, quoted like the table's "Nothing matches".
+function paletteEmptyText(query) {
+  return "No command matches “" + String(query || "") + "”";
+}
+
 // The VPN part of the status line. tone "fg" when bound, "urgent" when a
 // VPN interface exists but the daemon isn't bound to it; null when there
 // is no VPN at all.
@@ -1353,6 +1459,16 @@ if (typeof module !== "undefined" && module.exports) {
     helpRows: helpRows,
     fuzzyMatch: fuzzyMatch,
     mruPush: mruPush,
-    paletteRows: paletteRows
+    paletteRows: paletteRows,
+    paletteState: paletteState,
+    paletteSegments: paletteSegments,
+    paletteFirst: paletteFirst,
+    paletteMove: paletteMove,
+    paletteCursorFor: paletteCursorFor,
+    paletteCommandCount: paletteCommandCount,
+    palettePane: palettePane,
+    paletteOwnsKey: paletteOwnsKey,
+    paletteReasonNote: paletteReasonNote,
+    paletteEmptyText: paletteEmptyText
   };
 }

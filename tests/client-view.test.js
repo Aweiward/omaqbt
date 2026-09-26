@@ -1007,3 +1007,93 @@ test("paletteRows: an empty query's MRU rows still carry indices, enabled and re
   assert.equal(first.enabled, false);
   assert.equal(first.reason, "needs a selected torrent");
 });
+
+// --- command palette window helpers (slice 1b, task 2) ----------------------
+
+const cmd = (id, enabled) => ({ kind: "command", id, title: id, group: "App", keys: "", indices: [], enabled, reason: enabled ? "" : "r" });
+const DIV = { kind: "divider", id: null, title: "", group: "", keys: "", indices: [], enabled: false, reason: "" };
+
+test("modeHints: COMMAND shows none (the palette footer has them)", () => {
+  assert.deepEqual(V.modeHints("COMMAND", { pane: "table" }), []);
+});
+
+test("paletteState evaluates as NORMAL in the table pane", () => {
+  const s = V.paletteState("rows", true);
+  assert.equal(s.mode, "NORMAL");
+  assert.equal(s.pane, "table");
+  assert.equal(s.hasTorrent, true);
+  assert.equal(V.paletteState("empty", true).hasTorrent, false);
+});
+
+test("paletteSegments splits a title into matched and plain runs", () => {
+  assert.deepEqual(V.paletteSegments("Start/stop all", [0, 1, 9]), [
+    { text: "St", matched: true },
+    { text: "art/sto", matched: false },
+    { text: "p", matched: true },
+    { text: " all", matched: false }
+  ]);
+  assert.deepEqual(V.paletteSegments("Sort", []), [{ text: "Sort", matched: false }]);
+  assert.deepEqual(V.paletteSegments("", [0]), []);
+  // markup in a title stays text
+  assert.deepEqual(V.paletteSegments("<b>x", [3]), [{ text: "<b>", matched: false }, { text: "x", matched: true }]);
+});
+
+test("paletteFirst: first enabled row, else first command row, else -1", () => {
+  assert.equal(V.paletteFirst([cmd("a", false), DIV, cmd("b", true)]), 2);
+  assert.equal(V.paletteFirst([DIV, cmd("a", false)]), 1);
+  assert.equal(V.paletteFirst([]), -1);
+  assert.equal(V.paletteFirst([DIV]), -1);
+});
+
+test("paletteMove skips dividers and disabled rows and doesn't wrap", () => {
+  const rows = [cmd("a", true), DIV, cmd("b", false), cmd("c", true), cmd("d", false)];
+  assert.equal(V.paletteMove(rows, 0, 1), 3);
+  assert.equal(V.paletteMove(rows, 3, 1), 3);
+  assert.equal(V.paletteMove(rows, 3, -1), 0);
+  assert.equal(V.paletteMove(rows, 0, -1), 0);
+  assert.equal(V.paletteMove([cmd("x", false)], 0, 1), 0);
+  assert.equal(V.paletteMove([], -1, 1), -1);
+});
+
+test("paletteCursorFor keeps the cursor on its command if it's still enabled", () => {
+  const rows = [cmd("a", true), cmd("b", true), cmd("c", false)];
+  assert.equal(V.paletteCursorFor(rows, "b"), 1);
+  assert.equal(V.paletteCursorFor(rows, "c"), 0, "now disabled: back to the first");
+  assert.equal(V.paletteCursorFor(rows, "gone"), 0);
+});
+
+test("paletteCommandCount counts commands, not dividers", () => {
+  assert.equal(V.paletteCommandCount([cmd("a", true), DIV, cmd("b", false)]), 2);
+  assert.equal(V.paletteCommandCount(null), 0);
+});
+
+test("palettePane: stay where the command works, else the table", () => {
+  const C = Registry.commands;
+  assert.equal(V.palettePane(C, "sort.next", "filters"), "filters");
+  assert.equal(V.palettePane(C, "torrent.openFolder", "inspector"), "inspector");
+  assert.equal(V.palettePane(C, "torrent.toggle", "filters"), "table");
+  assert.equal(V.palettePane(C, "torrent.delete", "inspector"), "table");
+  assert.equal(V.palettePane(C, "cursor.down", "table"), "table");
+});
+
+test("paletteOwnsKey: the COMMAND keys and Shift-Tab, never typing", () => {
+  const k = (key, text, mods) => V.keyEvent(key, text, mods || 0, 0);
+  assert.equal(V.paletteOwnsKey(k(KEY.Escape, "\u001b")), true);
+  assert.equal(V.paletteOwnsKey(k(KEY.Return, "\r")), true);
+  assert.equal(V.paletteOwnsKey(k(KEY.Enter, "\r")), true);
+  assert.equal(V.paletteOwnsKey(k(KEY.Up, "")), true);
+  assert.equal(V.paletteOwnsKey(k(KEY.Down, "")), true);
+  assert.equal(V.paletteOwnsKey(k(KEY.Tab, "\t")), true);
+  assert.equal(V.paletteOwnsKey(k(KEY.Backtab, "")), true);
+  assert.equal(V.paletteOwnsKey(k(KEY.N, "\u000e", V.MOD.Control)), true);
+  assert.equal(V.paletteOwnsKey(k(KEY.P, "\u0010", V.MOD.Control)), true);
+  assert.equal(V.paletteOwnsKey(k(KEY.N, "n")), false);
+  assert.equal(V.paletteOwnsKey(k(0x53, "s")), false);
+  assert.equal(V.paletteOwnsKey(k(0x3a, ":")), false);
+  assert.equal(V.paletteOwnsKey(k(0x20, " ")), false);
+});
+
+test("palette notes and empty copy", () => {
+  assert.equal(V.paletteReasonNote({ title: "Copy magnet", reason: "needs a selected torrent" }), "Copy magnet: needs a selected torrent.");
+  assert.equal(V.paletteEmptyText("q"), "No command matches “q”");
+});

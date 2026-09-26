@@ -822,5 +822,193 @@ TestCase {
     key(o.c, "j")
     compare(o.c.messageLine.text, "")
   }
-}
 
+  // ---- command palette (slice 1b) ----------------------------------------
+
+  function pal(c) { return findPane(c, "totalCount") }
+  function palKey(c, name) {
+    var codes = { esc: 0x01000000, enter: 0x01000004, down: 0x01000015, up: 0x01000013, tab: 0x01000001 }
+    key(c, "", codes[name])
+  }
+  function findText(obj, text) {
+    if (!obj) return null
+    if (obj.text === text && obj.visible) return obj
+    var kids = obj.children || []
+    for (var i = 0; i < kids.length; i++) { var r = findText(kids[i], text); if (r) return r }
+    if (obj.contentItem && kids.indexOf(obj.contentItem) === -1) return findText(obj.contentItem, text)
+    return null
+  }
+
+  function test_palette_colon_opens() {
+    var o = make()
+    o.svc.torrents = list3()
+    var p = pal(o.c)
+    verify(p !== null)
+    compare(p.visible, false)
+    key(o.c, ":")
+    compare(o.c.mode, "COMMAND")
+    compare(p.visible, true)
+    compare(p.query, "")
+    verify(p.rows.length > 1)
+    compare(p.cursor, 0)
+    compare(p.matchCount, p.totalCount)
+    compare(o.c.pane, "table")
+  }
+
+  function test_palette_typing_stp_filters() {
+    var o = make()
+    o.svc.torrents = list3()
+    key(o.c, ":")
+    var p = pal(o.c)
+    p.setQuery("stp")
+    compare(p.rows.length, 1)
+    compare(p.rows[0].id, "all.toggle")
+    compare(p.rows[0].indices, [0, 1, 9])
+    compare(p.matchCount, 1)
+    verify(p.totalCount > 1)
+    p.setQuery("zzzz")
+    compare(p.rows.length, 0)
+    compare(p.cursor, -1)
+    verify(findText(p, "No command matches “zzzz”") !== null)
+    palKey(o.c, "enter")
+    compare(o.c.mode, "COMMAND", "Enter with no match keeps the palette open")
+  }
+
+  function test_palette_down_enter_runs_the_second_row_and_saves_mru() {
+    var o = make()
+    o.svc.torrents = list3()
+    compare(o.c.sortDesc, true)
+    key(o.c, ":")
+    var p = pal(o.c)
+    p.setQuery("sort")
+    compare(p.rows.map(function(r) { return r.id }).join(","), "sort.next,sort.reverse")
+    palKey(o.c, "down")
+    compare(p.cursor, 1)
+    palKey(o.c, "down")
+    compare(p.cursor, 1, "no wrap past the last row")
+    palKey(o.c, "enter")
+    compare(o.c.mode, "NORMAL")
+    compare(p.visible, false)
+    compare(o.c.sortDesc, false, "Reverse sort ran")
+    compare(o.c.sortMode, "added")
+    var last = o.svc.saved[o.svc.saved.length - 1]
+    compare(last.paletteMru, ["sort.reverse"])
+    compare(o.svc.viewState.paletteMru, ["sort.reverse"])
+    // other saves keep the MRU (ascending now: alpha, beta, gamma)
+    key(o.c, "k")
+    last = o.svc.saved[o.svc.saved.length - 1]
+    compare(last.cursorHash, hh("b"))
+    compare(last.paletteMru, ["sort.reverse"])
+    // reopening lists it first, above a divider
+    key(o.c, ":")
+    compare(p.query, "", "the query starts empty")
+    compare(p.rows[0].id, "sort.reverse")
+    compare(p.rows[1].kind, "divider")
+    palKey(o.c, "down")
+    compare(p.cursor, 2, "the cursor skips the divider")
+    palKey(o.c, "up")
+    compare(p.cursor, 0)
+  }
+
+  function test_palette_esc_and_scrim_close() {
+    var o = make()
+    o.svc.torrents = list3()
+    key(o.c, ":")
+    var p = pal(o.c)
+    p.setQuery("sort")
+    palKey(o.c, "esc")
+    compare(o.c.mode, "NORMAL")
+    compare(p.visible, false)
+    compare(o.c.sortMode, "added", "Esc runs nothing")
+    compare(o.c.regState.prefix, null, "Esc in the palette is not the table's Esc")
+    key(o.c, "j")
+    compare(o.c.cursorHash, hh("b"), "keys go back to the table")
+    key(o.c, ":")
+    compare(o.c.mode, "COMMAND")
+    p.dismissed()
+    compare(o.c.mode, "NORMAL")
+    compare(p.visible, false)
+  }
+
+  function test_palette_tab_completes() {
+    var o = make()
+    o.svc.torrents = list3()
+    key(o.c, ":")
+    var p = pal(o.c)
+    p.setQuery("rev")
+    palKey(o.c, "tab")
+    compare(p.query, "Reverse sort")
+    compare(o.c.mode, "COMMAND")
+    compare(o.c.pane, "table", "Tab in the palette doesn't switch panes")
+  }
+
+  function test_palette_disabled_row_shows_its_reason() {
+    var o = make()
+    key(o.c, ":")
+    var p = pal(o.c)
+    p.setQuery("copy magnet")
+    compare(p.rows.length, 1)
+    compare(p.rows[0].enabled, false)
+    compare(p.rows[0].reason, "needs a selected torrent")
+    compare(p.cursor, 0)
+    verify(findText(p, "  · needs a selected torrent") !== null, "the row shows its reason")
+    palKey(o.c, "enter")
+    compare(o.c.mode, "COMMAND", "the palette stays open")
+    compare(p.visible, true)
+    compare(o.c.messageLine.text, "Copy magnet: needs a selected torrent.")
+    compare(lastCall(o.svc, "copy"), null)
+    compare(o.svc.saved.length, 0, "a disabled row isn't pushed to the MRU")
+    // a click on it does the same
+    p.activated(p.rows[0])
+    compare(o.c.mode, "COMMAND")
+  }
+
+  function test_palette_delete_still_confirms() {
+    var o = make()
+    o.svc.torrents = list3()
+    key(o.c, ":")
+    var p = pal(o.c)
+    p.setQuery("delete with")
+    compare(p.rows[0].id, "torrent.delete")
+    palKey(o.c, "enter")
+    compare(o.c.mode, "CONFIRM")
+    compare(p.visible, false)
+    verify(o.c.confirm !== null)
+    compare(o.c.confirm.withFiles, true)
+    compare(lastCall(o.svc, "delete"), null, "nothing deleted before y")
+    key(o.c, "y")
+    var d = lastCall(o.svc, "delete")
+    verify(d !== null)
+    compare(d.args[0], hh("c"))
+    compare(d.args[1], true)
+    compare(d.args[2].origin, "window")
+    compare(o.c.paletteMru[0], "torrent.delete")
+  }
+
+  function test_palette_table_command_from_filters_pane() {
+    var o = make()
+    o.svc.torrents = list3()
+    key(o.c, "", 0x01000002)    // Shift-Tab: table -> filters
+    compare(o.c.pane, "filters")
+    key(o.c, ":")
+    var p = pal(o.c)
+    p.setQuery("pause")
+    compare(p.rows[0].id, "torrent.toggle")
+    compare(p.rows[0].enabled, true)
+    p.activated(p.rows[0])      // a click runs it
+    compare(o.c.mode, "NORMAL")
+    compare(o.c.pane, "table")
+    var s = lastCall(o.svc, "stop")
+    verify(s !== null)
+    compare(s.args[0], hh("c"))
+    compare(s.args[1].hashes, [hh("c")])
+    // a command that works where the window is doesn't move the pane
+    key(o.c, "", 0x01000002)
+    compare(o.c.pane, "filters")
+    key(o.c, ":")
+    p.setQuery("sort")
+    palKey(o.c, "enter")
+    compare(o.c.pane, "filters")
+    compare(o.c.sortMode, "name")
+  }
+}
