@@ -147,126 +147,35 @@ api_form() {
   api_exec -sS -g --max-time 30 -X "$method" "$(base_url)$path" "$@"
 }
 
-cmd_status() {
-  local installed=false daemon=false api=false alt_speed=false
-  local vpn_if bind_if=""
-  vpn_if=$(vpn_iface)
+cmd_probe() {
+  assert_local_base
+  ensure_state_dir "$(dirname "$RID_FILE")"
+  ensure_state_dir "$(dirname "$COOKIE_FILE")"
+  local installed=false daemon=false
   if is_installed; then installed=true; fi
   if is_daemon; then daemon=true; fi
-  local lock
+  local lock vpn_if
   lock=$(lock_holder)
-  local torrents='[]' dl=0 up=0
-  if [[ $installed == true && $daemon == true && $lock != gui ]]; then
-    ensure_state_dir "$(dirname "$RID_FILE")"
-    local rid=0 cache='{}'
-    if [[ -f $RID_FILE ]]; then
-      rid=$(jq -r '.rid // 0' "$RID_FILE")
-      cache=$(jq -c '.torrents // {}' "$RID_FILE")
-    fi
-    local raw ok
-    set +e
-    raw=$(api GET "/api/v2/sync/maindata?rid=${rid}")
-    ok=$?
-    set -e
-    if [[ $ok -eq 0 ]]; then
-      api=true
-      local merged
-      merged=$(CACHE="$cache" python3 -c '
-import json, os, sys
-raw = json.loads(sys.stdin.read() or "{}")
-cache = json.loads(os.environ["CACHE"] or "{}")
-if raw.get("full_update"):
-    torrents = dict(raw.get("torrents") or {})
-else:
-    torrents = dict(cache)
-    for k, v in (raw.get("torrents") or {}).items():
-        cur = dict(torrents.get(k) or {})
-        cur.update(v or {})
-        torrents[k] = cur
-    for k in raw.get("torrents_removed") or []:
-        torrents.pop(k, None)
-
-normalized = {}
-for key, t in torrents.items():
-    t = dict(t or {})
-    hid = t.get("hash") or t.get("infohash_v1") or t.get("infohash_v2") or key
-    t["hash"] = hid
-    normalized[str(hid)] = t
-torrents = normalized
-
-rows = []
-for key, t in torrents.items():
-    rows.append({
-        "hash": key,
-        "name": t.get("name") or "",
-        "state": t.get("state") or "",
-        "progress": t.get("progress") or 0,
-        "dlSpeed": t.get("dlspeed") if t.get("dlspeed") is not None else t.get("dlSpeed") or 0,
-        "upSpeed": t.get("upspeed") if t.get("upspeed") is not None else t.get("upSpeed") or 0,
-        "eta": t.get("eta") or 0,
-        "ratio": t.get("ratio") or 0,
-        "size": t.get("size") or 0,
-        "savePath": t.get("save_path") or "",
-        "magnetUri": t.get("magnet_uri") or "",
-        "contentPath": t.get("content_path") or "",
-        "numSeeds": t.get("num_seeds") or 0,
-        "numLeechs": t.get("num_leechs") or 0,
-        "addedOn": t.get("added_on") or 0,
-        "dlLimit": t.get("dl_limit") or 0,
-        "upLimit": t.get("up_limit") or 0,
-        "seqDl": t.get("seq_dl") is True,
-        "ratioLimit": -2 if t.get("ratio_limit") is None else t.get("ratio_limit"),
-    })
-print(json.dumps({
-    "rid": raw.get("rid") or 0,
-    "torrents_map": torrents,
-    "torrents": rows,
-    "dlSpeed": (raw.get("server_state") or {}).get("dl_info_speed") or 0,
-    "upSpeed": (raw.get("server_state") or {}).get("up_info_speed") or 0,
-}))
-' <<<"$raw")
-      printf '%s' "$merged" | jq '{rid, torrents: .torrents_map}' >"$RID_FILE"
-      torrents=$(printf '%s' "$merged" | jq -c '.torrents')
-      dl=$(printf '%s' "$merged" | jq '.dlSpeed')
-      up=$(printf '%s' "$merged" | jq '.upSpeed')
-    fi
-  fi
-  if [[ $api == true ]]; then
-    local mode ok_mode
-    set +e
-    mode=$(api GET "/api/v2/transfer/speedLimitsMode")
-    ok_mode=$?
-    set -e
-    if [[ $ok_mode -eq 0 && $mode == 1 ]]; then
-      alt_speed=true
-    fi
-  fi
-  # Only ask where the session is bound when a VPN iface is expected; if the
-  # preferences call fails, report both as unknown rather than warn on no data.
-  if [[ $api == true && -n $vpn_if ]]; then
-    local prefs ok_prefs
-    set +e
-    prefs=$(api GET "/api/v2/app/preferences")
-    ok_prefs=$?
-    set -e
-    if [[ $ok_prefs -eq 0 ]]; then
-      bind_if=$(printf '%s' "$prefs" | jq -r '.current_network_interface // ""')
-    else
-      vpn_if=""
-    fi
-  fi
+  vpn_if=$(vpn_iface)
   jq -n \
     --argjson installed "$installed" \
     --argjson daemon "$daemon" \
     --arg lock "$lock" \
-    --argjson api "$api" \
-    --argjson altSpeed "$alt_speed" \
-    --argjson dl "$dl" \
-    --argjson up "$up" \
-    --argjson torrents "$torrents" \
     --arg vpnIface "$vpn_if" \
-    --arg bindIface "$bind_if" \
-    '{installed:$installed, daemon:$daemon, lockHolder:$lock, api:$api, altSpeed:$altSpeed, dlSpeed:$dl, upSpeed:$up, torrents:$torrents, vpnIface:$vpnIface, bindIface:$bindIface}'
+    --arg base "$(base_url)" \
+    --arg stateDir "$(dirname "$RID_FILE")" \
+    --arg ridFile "$RID_FILE" \
+    --arg cookieFile "$COOKIE_FILE" \
+    '{installed:$installed, daemon:$daemon, lockHolder:$lock, vpnIface:$vpnIface, base:$base, stateDir:$stateDir, ridFile:$ridFile, cookieFile:$cookieFile}'
+}
+
+cmd_status() {
+  local exec_path
+  exec_path=$(readlink -f "$0" 2>/dev/null || printf '%s' "$0")
+  [[ $exec_path == /* ]] || exec_path="$PWD/$0"
+  local lib_dir
+  lib_dir="$(dirname "$exec_path")/lib"
+  cmd_probe | python3 "$lib_dir/qbtsync.py" status
 }
 
 cmd_add() {
@@ -880,6 +789,7 @@ PY
 
 case ${1:-} in
   status) shift; cmd_status "$@" ;;
+  probe) shift; cmd_probe "$@" ;;
   add) shift; cmd_add "$@" ;;
   start) shift; cmd_start "$@" ;;
   stop) shift; cmd_stop "$@" ;;
@@ -904,5 +814,5 @@ case ${1:-} in
   magnet-pending-drop) shift; cmd_magnet_pending_drop "$@" ;;
   magnet-install-handler) shift; cmd_magnet_install_handler "$@" ;;
   magnet-uninstall-handler) shift; cmd_magnet_uninstall_handler "$@" ;;
-  *) die "usage: qbt status|add|start|stop|recheck|set-location|delete|files|prio|turtle|limit|sequential|sharelimit|install|start-daemon|stop-daemon|magnet-paths|magnet-inbox|magnet-drain|magnet-pending-list|magnet-pending-drop|magnet-install-handler|magnet-uninstall-handler" ;;
+  *) die "usage: qbt status|probe|add|start|stop|recheck|set-location|delete|files|prio|turtle|limit|sequential|sharelimit|install|start-daemon|stop-daemon|magnet-paths|magnet-inbox|magnet-drain|magnet-pending-list|magnet-pending-drop|magnet-install-handler|magnet-uninstall-handler" ;;
 esac
