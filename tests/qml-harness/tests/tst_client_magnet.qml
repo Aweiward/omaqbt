@@ -339,6 +339,19 @@ TestCase {
     tryCompare(o.c, "mode", "CONFIRM")
   }
 
+  function test_help_overlay_waits_and_its_closing_key_never_cancels() {
+    var o = make()
+    key(o.c, "?")
+    compare(o.c.helpOpen, true)
+    addPending(o, "d", false)
+    compare(o.c.mode, "NORMAL", "the help overlay waits")
+    esc(o.c)
+    compare(o.c.helpOpen, false)
+    compare(magnetCalls(o.svc).length, 0)
+    tryCompare(o.c, "mode", "CONFIRM")
+    compare(o.c.regState.pending.kind, "magnet")
+  }
+
   function test_a_new_magnet_asks_for_attention() {
     var o = make()
     var wm = null
