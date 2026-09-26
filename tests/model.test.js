@@ -1236,9 +1236,30 @@ test("parseViewState fills in missing keys with defaults, field by field", () =>
   );
 });
 
-test("parseViewState rejects an unknown filter group, falling back to status", () => {
+test("parseViewState rejects an unknown filter group, falling back to status/All", () => {
   const result = Model.parseViewState('{"filter":{"group":"bogus","value":"x"}}');
-  assert.deepEqual(result.filter, { group: "status", value: "x" });
+  assert.deepEqual(result.filter, { group: "status", value: "All" });
+});
+
+test("parseViewState rejects an unknown status value, falling back to the default filter", () => {
+  assert.deepEqual(Model.parseViewState('{"filter":{"group":"status","value":"Bogus"}}').filter, { group: "status", value: "All" });
+  assert.deepEqual(Model.parseViewState({ filter: { group: "status", value: "seeding" } }).filter, { group: "status", value: "All" }, "labels are case-sensitive");
+  assert.deepEqual(Model.parseViewState({ filter: { group: "status", value: "" } }).filter, { group: "status", value: "All" });
+  const kept = Model.parseViewState({ filter: { group: "status", value: "Bogus" }, sort: "size", pane: "filters" });
+  assert.equal(kept.sort, "size", "other fields keep their own values");
+  assert.equal(kept.pane, "filters");
+});
+
+test("parseViewState accepts every status label", () => {
+  for (const label of ["All", "Active", "Downloading", "Seeding", "Stopped", "Errored", "Checking"]) {
+    assert.deepEqual(Model.parseViewState({ filter: { group: "status", value: label } }).filter, { group: "status", value: label }, label);
+  }
+});
+
+test("parseViewState keeps any string value for category, tag and tracker", () => {
+  for (const group of ["category", "tag", "tracker"]) {
+    assert.deepEqual(Model.parseViewState({ filter: { group, value: "Bogus" } }).filter, { group, value: "Bogus" }, group);
+  }
 });
 
 test("parseViewState rejects a non-string filter value, falling back to All", () => {

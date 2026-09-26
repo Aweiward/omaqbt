@@ -786,9 +786,11 @@ function ratioLimitLabel(ratio) {
 // independently of the others -- one bad field never invalidates the rest.
 //
 // Filter groups are exactly "status", "category", "tag" and "tracker"
-// (matching matchFilter/filterGroups). Filter value is any string (category,
-// tag and tracker names are dynamic, so there is no enum to check it
-// against); a non-string value falls back to "All". Sort modes are exactly
+// (matching matchFilter/filterGroups). A status value must be one of
+// STATUS_ITEM_LABELS, else the filter falls back to status/All (this also
+// covers an unknown group, which becomes "status"). Category, tag and
+// tracker values are any string (their names are dynamic, so there is no
+// enum to check them against); a non-string value falls back to "All". Sort modes are exactly
 // SORT_FIELD_MODES's eight keys -- "default" and "speed" (sortTorrents'
 // widget-only compatibility modes) are not part of this contract and are
 // treated as unknown here. desc is absolute (see fieldSortComparator) and
@@ -815,6 +817,9 @@ function parseViewState(raw) {
   if (!rawFilter || typeof rawFilter !== "object" || Array.isArray(rawFilter)) rawFilter = {};
   var group = VIEW_STATE_FILTER_GROUPS[rawFilter.group] === true ? rawFilter.group : "status";
   var value = typeof rawFilter.value === "string" ? rawFilter.value : "All";
+  // Status values are a fixed set; an unknown one falls back to the whole
+  // default filter rather than showing an empty, unnamed status view.
+  if (group === "status" && STATUS_ITEM_LABELS.indexOf(value) === -1) value = "All";
 
   var sort = SORT_FIELD_MODES[parsed.sort] === true ? parsed.sort : "added";
   var desc = typeof parsed.desc === "boolean" ? parsed.desc : true;
