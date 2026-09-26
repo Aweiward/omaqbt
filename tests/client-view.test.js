@@ -727,7 +727,7 @@ test("filesView: loading, error, empty and rows", () => {
   const files = JSON.parse(fs.readFileSync(path.join(__dirname, "fixtures", "files.json"), "utf8"));
   const v = V.filesView(files, { state: "ok" });
   assert.equal(v.state, "rows");
-  assert.deepEqual(v.rows[0], { index: 0, name: "debian.iso", progressText: "42%", priorityText: "Low", skipped: false });
+  assert.deepEqual(v.rows[0], { key: 0, index: 0, name: "debian.iso", progressText: "42%", priorityText: "Low", skipped: false });
   assert.equal(v.rows[1].skipped, true);
   assert.equal(v.rows[1].priorityText, "Skip");
 });

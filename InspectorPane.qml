@@ -1,7 +1,6 @@
 pragma ComponentBehavior: Bound
 
 import QtQuick
-import QtQuick.Controls
 import qs.Commons
 import "ClientView.js" as View
 
@@ -28,16 +27,23 @@ Item {
 
   readonly property int padX: Style.space(12)
   readonly property color lineColor: Util.alpha(Color.foreground, Style.normalBorderAlpha)
-  readonly property color dimColor: Util.alpha(Color.foreground, Style.normalBorderAlpha)
 
   function toneColor(tone) {
     return View.toneColor(tone, Color)
   }
 
   function positionFile(index) {
-    if (index < 0 || index >= fileList.count) return
-    fileList.positionViewAtIndex(index, ListView.Contain)
+    fileList.positionAt(index)
   }
+
+  // Files' InspectorList columns: name is flexible and elides (dims when
+  // the file is skipped), progress stays muted, priority is a fixed 52px
+  // right-aligned column that mutes when skipped too (today's look).
+  readonly property var filesColumns: [
+    { role: "name", width: 0, tone: function(r) { return r.skipped ? "dim" : "fg" } },
+    { role: "progressText", width: Style.space(64), tone: "muted" },
+    { role: "priorityText", width: Style.space(52), align: "right", tone: function(r) { return r.skipped ? "muted" : "fg" } }
+  ]
 
   // ---- tabs ------------------------------------------------------------
   Item {
@@ -238,88 +244,16 @@ Item {
       color: pane.files.state === "error" ? Color.urgent : Color.muted
     }
 
-    ListView {
+    InspectorList {
       id: fileList
       visible: pane.info !== null && pane.tab === "files" && pane.files.state === "rows"
       anchors.fill: parent
       anchors.topMargin: Style.space(6)
-      clip: true
-      model: pane.files.rows
-      boundsBehavior: Flickable.StopAtBounds
-      keyNavigationEnabled: false
-      highlightFollowsCurrentItem: false
-      currentIndex: -1
-      ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
-
-      delegate: Item {
-        id: fileRow
-        required property var modelData
-        required property int index
-        readonly property bool isCursor: pane.focusedPane && index === pane.fileIndex
-
-        width: fileList.width
-        height: Style.spacing.popupRowHeight
-
-        Rectangle {
-          anchors.fill: parent
-          color: fileRow.isCursor ? Style.selectedAccentFill : "transparent"
-        }
-
-        Rectangle {
-          visible: fileRow.isCursor
-          anchors.left: parent.left
-          anchors.top: parent.top
-          anchors.bottom: parent.bottom
-          width: Style.space(3)
-          color: Color.accent
-        }
-
-        Text {
-          anchors.left: parent.left
-          anchors.leftMargin: pane.padX
-          anchors.right: pct.left
-          anchors.rightMargin: Style.space(8)
-          anchors.verticalCenter: parent.verticalCenter
-          elide: Text.ElideMiddle
-          text: fileRow.modelData.name
-          textFormat: Text.PlainText
-          font.family: Style.fontFamily
-          font.pixelSize: Style.font.body
-          color: fileRow.modelData.skipped ? pane.dimColor : Color.foreground
-        }
-
-        Text {
-          id: pct
-          anchors.right: prio.left
-          anchors.rightMargin: Style.space(10)
-          anchors.verticalCenter: parent.verticalCenter
-          text: fileRow.modelData.progressText
-          textFormat: Text.PlainText
-          font.family: Style.fontFamily
-          font.pixelSize: Style.font.body
-          color: Color.muted
-        }
-
-        Text {
-          id: prio
-          anchors.right: parent.right
-          anchors.rightMargin: pane.padX
-          anchors.verticalCenter: parent.verticalCenter
-          width: Style.space(52)
-          horizontalAlignment: Text.AlignRight
-          text: fileRow.modelData.priorityText
-          textFormat: Text.PlainText
-          font.family: Style.fontFamily
-          font.pixelSize: Style.font.body
-          color: fileRow.modelData.skipped ? Color.muted : Color.foreground
-        }
-
-        MouseArea {
-          anchors.fill: parent
-          acceptedButtons: Qt.LeftButton
-          onClicked: pane.fileClicked(fileRow.index)
-        }
-      }
+      rows: pane.files.rows
+      columns: pane.filesColumns
+      cursor: pane.fileIndex
+      focusedPane: pane.focusedPane
+      onRowClicked: function(index) { pane.fileClicked(index) }
     }
   }
 }

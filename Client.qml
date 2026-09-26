@@ -6,6 +6,7 @@ import qs.Commons
 import "Model.js" as Model
 import "CommandRegistry.js" as Registry
 import "ClientView.js" as View
+import "InspectorView.js" as InspectorView
 
 // The OmaqBT window (the manifest's `panel` entry point). The shell's panel
 // Loader creates this item when `shell toggle/summon aweiward.omaqbt` opens
@@ -104,10 +105,25 @@ Item {
     service && hasCursorRow ? (service.filesByHash || {})[cursorHash] : [],
     service && hasCursorRow ? (service.filesStatusByHash || {})[cursorHash] : undefined)
   property int fileIndex: 0
+  // The file `index` (InspectorView.keyedIndex's key, not a position)
+  // under the cursor, so a refresh that reorders or drops rows can carry
+  // fileIndex to the same file (or clamp) instead of a stale position.
+  property int fileCursorKey: -1
+  onFileIndexChanged: fileCursorKey = filesState.rows[fileIndex] ? filesState.rows[fileIndex].key : -1
   // The hash whose files this window last asked for, and whether a failed
   // answer for it still has to be reported on the status line.
   property string filesLoadedHash: ""
   property bool filesErrorPending: false
+  // A files refresh (same hash): keep the cursor on the same file by key;
+  // an empty refresh (a reload's brief `[]`) leaves it alone rather than
+  // clamping to a list that is only transiently empty.
+  onFilesStateChanged: {
+    var rows = filesState.rows
+    if (rows.length === 0) return
+    var next = InspectorView.keyedIndex(rows, fileCursorKey, fileIndex)
+    fileIndex = next
+    fileCursorKey = rows[next] ? rows[next].key : -1
+  }
 
   // ---- responsive layout (D5) ------------------------------------------------------
   // A collapsed pane with focus shows as an overlay; a resize that
@@ -345,7 +361,7 @@ Item {
   function syncFiles(force) {
     if (!service || inspectorTab !== "files" || cursorRow === null) return
     if (!force && filesLoadedHash === cursorHash) return
-    if (filesLoadedHash !== cursorHash) fileIndex = 0
+    if (filesLoadedHash !== cursorHash) { fileIndex = 0; fileCursorKey = -1 }
     filesLoadedHash = cursorHash
     filesErrorPending = true
     service.loadFiles(cursorHash, opts([cursorHash]))

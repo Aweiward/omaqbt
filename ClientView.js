@@ -1157,8 +1157,10 @@ function filesView(files, status) {
   for (var i = 0; i < list.length; i++) {
     var f = list[i] || {};
     var prio = parseInt(String(f.priority), 10);
+    var idx = Number(f.index);
     rows.push({
-      index: Number(f.index),
+      key: idx,
+      index: idx,
       name: Model.plainText(f.name),
       progressText: Model.formatPercent(clamp01(f.progress)),
       priorityText: Model.priorityLabel(f.priority),

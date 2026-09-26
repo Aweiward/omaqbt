@@ -1,5 +1,6 @@
 import QtQuick
 import QtTest
+import qs.Commons
 import "../../.."
 
 TestCase {
@@ -79,6 +80,17 @@ TestCase {
   }
 
   Component { id: clientComp; Client {} }
+  Component { id: inspectorListComp; InspectorList {} }
+  Component {
+    id: detailComp
+    Item {
+      id: detailRoot
+      property var row: null
+      width: parent ? parent.width : 0
+      height: 20
+      Text { objectName: "detailText"; anchors.fill: parent; text: detailRoot.row ? ("detail " + detailRoot.row.key) : "" }
+    }
+  }
 
   function key(c, text, code, mods) {
     c.handleKey({ key: code !== undefined ? code : text.toUpperCase().charCodeAt(0), text: text, modifiers: mods || 0 })
@@ -1184,5 +1196,80 @@ TestCase {
     compare(pal(o.c).visible, false, "reopening doesn't show a stale palette")
     key(o.c, "j")
     compare(o.c.cursorHash, hh("b"), "keys go to the table")
+  }
+
+  function test_files_cursor_sticks_by_index_on_refresh() {
+    function filesOf(nums) {
+      var out = []
+      for (var i = 0; i < nums.length; i++) out.push({ index: nums[i], name: "f" + nums[i], progress: 0, priority: 1 })
+      return out
+    }
+    function cursorAt3() {
+      var o = make()
+      o.svc.torrents = [tt(hh("a"), "alpha")]
+      key(o.c, "4")
+      o.svc.setFilesFor(hh("a"), filesOf([0, 1, 2, 3, 4]))
+      o.svc.setFilesStatus(hh("a"), "ok", "")
+      key(o.c, "\t", 0x01000001)
+      compare(o.c.pane, "inspector")
+      key(o.c, "j"); key(o.c, "j"); key(o.c, "j")
+      compare(o.c.fileIndex, 3)
+      return o
+    }
+
+    // a refresh that reorders nothing keeps the cursor on file 3
+    var o1 = cursorAt3()
+    o1.svc.setFilesFor(hh("a"), filesOf([0, 1, 2, 3, 4]))
+    compare(o1.c.fileIndex, 3, "no reorder keeps the cursor on file 3")
+
+    // the same file moves to another slot: the cursor follows it by index,
+    // not by its old position
+    var o2 = cursorAt3()
+    o2.svc.setFilesFor(hh("a"), filesOf([3, 0, 1, 2, 4]))
+    compare(o2.c.fileIndex, 0, "the cursor follows file 3 to its new slot")
+
+    // a refresh with 2 files clamps it to 1
+    var o3 = cursorAt3()
+    o3.svc.setFilesFor(hh("a"), filesOf([0, 1]))
+    compare(o3.c.fileIndex, 1, "a shrink clamps the cursor to the last row")
+  }
+
+  function test_inspector_list_detail_and_header() {
+    function findByObjectName(obj, name) {
+      if (!obj) return null
+      if (obj.objectName === name) return obj
+      var kids = obj.children || []
+      for (var i = 0; i < kids.length; i++) { var r = findByObjectName(kids[i], name); if (r) return r }
+      return null
+    }
+
+    var list = createTemporaryObject(inspectorListComp, tc, {
+      width: 300,
+      height: 200,
+      rows: [{ key: "a", name: "Alpha" }, { key: "b", name: "Beta" }],
+      columns: [{ role: "name", width: 0, tone: function(r) { return r.key === "b" ? "muted" : "fg" } }],
+      focusedPane: true,
+      cursor: 1,
+      detail: detailComp,
+      header: true
+    })
+    var lv = findWith(list, "itemAtIndex")
+    verify(lv !== null)
+    compare(lv.count, 2, "the header never counts toward the rows")
+    verify(lv.headerItem !== null, "header:true adds a row above the list")
+    verify(lv.headerItem.height > 0)
+
+    var cursorItem = lv.itemAtIndex(1)
+    var otherItem = lv.itemAtIndex(0)
+    verify(cursorItem !== null)
+    verify(otherItem !== null)
+    // a column's tone can be a function of the row: it survives being
+    // handed to a Repeater through `columns` and isn't dropped/coerced
+    compare(findByObjectName(cursorItem, "cell").color, Color.muted, "row b's tone function resolves to muted")
+    compare(findByObjectName(otherItem, "cell").color, Color.foreground, "row a's tone function resolves to fg")
+    compare(findByObjectName(otherItem, "detailText"), null, "no detail under a non-cursor row")
+    var detailText = findByObjectName(cursorItem, "detailText")
+    verify(detailText !== null, "the detail shows under the cursor row")
+    compare(detailText.text, "detail b", "the detail component receives the cursor row")
   }
 }
