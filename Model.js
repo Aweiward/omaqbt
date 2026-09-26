@@ -739,6 +739,66 @@ function ratioLimitLabel(ratio) {
   return n.toFixed(1);
 }
 
+// --- View state: parseViewState / serializeViewState -----------------------
+//
+// The shape the window consumes: {filter:{group,value}, sort, desc,
+// cursorHash, pane}. Every field falls back to its own default
+// independently of the others -- one bad field never invalidates the rest.
+//
+// Filter groups are exactly "status", "category", "tag" and "tracker"
+// (matching matchFilter/filterGroups). Filter value is any string (category,
+// tag and tracker names are dynamic, so there is no enum to check it
+// against); a non-string value falls back to "All". Sort modes are exactly
+// SORT_FIELD_MODES's eight keys -- "default" and "speed" (sortTorrents'
+// widget-only compatibility modes) are not part of this contract and are
+// treated as unknown here. desc is absolute (see fieldSortComparator) and
+// must be a real boolean. Pane is one of "table", "filters", "inspector".
+var VIEW_STATE_FILTER_GROUPS = { status: true, category: true, tag: true, tracker: true };
+var VIEW_STATE_PANES = { table: true, filters: true, inspector: true };
+
+// parseViewState(raw): raw is either a JSON string (as read from view.json)
+// or an already-parsed object (e.g. re-validating a state the window built
+// in memory). Corrupt JSON, a non-object document, or a missing/unknown
+// field all fall back to defaults -- per field, not as an all-or-nothing.
+function parseViewState(raw) {
+  var parsed = raw;
+  if (typeof raw === "string") {
+    try {
+      parsed = JSON.parse(raw);
+    } catch (e) {
+      parsed = null;
+    }
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) parsed = {};
+
+  var rawFilter = parsed.filter;
+  if (!rawFilter || typeof rawFilter !== "object" || Array.isArray(rawFilter)) rawFilter = {};
+  var group = VIEW_STATE_FILTER_GROUPS[rawFilter.group] === true ? rawFilter.group : "status";
+  var value = typeof rawFilter.value === "string" ? rawFilter.value : "All";
+
+  var sort = SORT_FIELD_MODES[parsed.sort] === true ? parsed.sort : "added";
+  var desc = typeof parsed.desc === "boolean" ? parsed.desc : true;
+  var cursorHash = typeof parsed.cursorHash === "string" ? parsed.cursorHash : "";
+  var pane = VIEW_STATE_PANES[parsed.pane] === true ? parsed.pane : "table";
+
+  return { filter: { group: group, value: value }, sort: sort, desc: desc, cursorHash: cursorHash, pane: pane };
+}
+
+// serializeViewState(state) -> JSON text for view.json. Runs the input
+// through parseViewState first, so a caller can hand it whatever it has in
+// memory (even garbage) and get back exactly the canonical five fields,
+// each valid.
+function serializeViewState(state) {
+  return JSON.stringify(parseViewState(state));
+}
+
+// The canonical default shape, e.g. for a Service's initial `viewState`
+// before view.json has loaded. Defined in terms of parseViewState so the
+// defaults can never drift from what an empty/missing document parses to.
+function defaultViewState() {
+  return parseViewState(null);
+}
+
 function vpnUnbound(status) {
   var s = status || {};
   if (s.daemon !== true || s.api !== true) return false;
@@ -999,6 +1059,9 @@ if (typeof module !== "undefined" && module.exports) {
     nextStatusError: nextStatusError,
     installCommand: installCommand,
     parseServeLine: parseServeLine,
+    defaultViewState: defaultViewState,
+    parseViewState: parseViewState,
+    serializeViewState: serializeViewState,
     cadenceMs: cadenceMs,
     heartbeatExpired: heartbeatExpired,
     nextBackoffMs: nextBackoffMs,

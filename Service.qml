@@ -41,6 +41,26 @@ Scope {
   property bool magnetDrainQueued: false
   property bool magnetNotReadyNotified: false
 
+  // The window's persisted view: {filter:{group,value}, sort, desc,
+  // cursorHash, pane} (see Model.parseViewState). Loaded once from
+  // view.json on the FileView below; windowOpen is set by the window
+  // itself and feeds the sidecar cadence rule below.
+  property var viewState: Model.defaultViewState()
+  property bool windowOpen: false
+  // The state most recently asked to be saved but not yet written, because
+  // a write already landed within the last second; null once flushed.
+  property var pendingViewState: null
+  // The exact text of the most recent write attempt, kept so a failed write
+  // (missing directory) can be retried once mkdir -p finishes.
+  property string lastViewStateWriteText: ""
+  property bool viewStateMkdirRetried: false
+  readonly property string viewStateDir: {
+    var base = Quickshell.env("XDG_STATE_HOME")
+    if (!base || base.length === 0) base = Quickshell.env("HOME") + "/.local/state"
+    return base + "/omaqbt"
+  }
+  readonly property string viewStatePath: viewStateDir + "/view.json"
+
   // One of starting|up|down. "down" means the sidecar gave up and this
   // Service stays on bash polling for the rest of its lifetime.
   property string sidecarState: "starting"
@@ -78,7 +98,15 @@ Scope {
     return out
   }
   readonly property bool magnetWatching: (magnetInbox && magnetInbox.length > 0) || (magnetPending && magnetPending.length > 0)
-  readonly property int sidecarCadenceMs: Model.cadenceMs(magnetWatching, refreshIntervalSec)
+  // While the window is open and the sidecar is up, poll at least once a
+  // second so the table doesn't lag the window's own cadence; the bash
+  // fallback timer below never reads windowOpen, so it keeps polling at
+  // refreshIntervalSec regardless.
+  readonly property int sidecarCadenceMs: {
+    var base = Model.cadenceMs(magnetWatching, refreshIntervalSec)
+    if (windowOpen && sidecarState === "up") return Math.min(1000, base)
+    return base
+  }
   readonly property bool busy: statusProcess.running || actionProcess.running || filesProcess.running || installProcess.running || daemonProcess.running || clipProcess.running || actionQueue.length > 0
   readonly property bool ready: installed && daemon && lockHolder !== "gui" && api
   readonly property bool transferring: Model.anyActive(torrents, magnetPendingHashes)
@@ -90,6 +118,29 @@ Scope {
   signal actionFinished(int ticket, bool ok, string error, string origin, var hashes)
 
   function clearError() { lastError = "" }
+
+  // Debounced to at most one write per second: a call while a write from
+  // the last second is still cooling down only updates viewState (so
+  // readers see it immediately) and queues the write for when the cooldown
+  // timer fires; a call once the cooldown has elapsed writes right away and
+  // starts a fresh cooldown.
+  function saveViewState(state) {
+    var normalized = Model.parseViewState(state)
+    viewState = normalized
+    pendingViewState = normalized
+    if (viewStateCooldown.running) return
+    flushViewState()
+  }
+
+  function flushViewState() {
+    var state = pendingViewState
+    pendingViewState = null
+    viewStateCooldown.restart()
+    var text = Model.serializeViewState(state)
+    lastViewStateWriteText = text
+    viewStateMkdirRetried = false
+    viewStateFile.setText(text)
+  }
 
   function applyStatus(raw) {
     var parsed = Model.parseStatusJson(raw)
@@ -528,6 +579,37 @@ Scope {
     onExited: function(code) { root.handleSidecarExit(code) }
   }
 
+  // Read once at start, asynchronously (no blockLoading) so the plugin's
+  // first frame never waits on disk. A missing file is a first run and says
+  // nothing, so printErrors stays off and viewState just keeps its default.
+  FileView {
+    id: viewStateFile
+    path: root.viewStatePath
+    printErrors: false
+    atomicWrites: true
+    onLoaded: root.viewState = Model.parseViewState(text())
+    onLoadFailed: function(error) {
+      // FileNotFound is a first run and leaves viewState at its default;
+      // anything else (e.g. permission denied) is worth a log line, since
+      // it silently keeps the window on defaults too.
+      if (error === FileViewError.FileNotFound) return
+      console.warn("OmaqBT view.json load failed: " + FileViewError.toString(error))
+    }
+    onSaveFailed: function(error) {
+      if (root.viewStateMkdirRetried) return
+      root.viewStateMkdirRetried = true
+      viewStateMkdirProcess.command = ["mkdir", "-p", "-m", "700", root.viewStateDir]
+      viewStateMkdirProcess.running = true
+    }
+  }
+
+  Timer {
+    id: viewStateCooldown
+    interval: 1000
+    repeat: false
+    onTriggered: if (root.pendingViewState !== null) root.flushViewState()
+  }
+
   Timer {
     id: startDelayTimer
     interval: Math.max(1, root.startDelayMs)
@@ -587,6 +669,22 @@ Scope {
       if (exitCode === 0) root.applyStatus(statusOut.text)
       else root.lastError = Model.sanitizeError(statusErr.text || "qBittorrent is not reachable")
     }
+  }
+
+  // One-shot: view.json's directory doesn't exist yet (first run). Retried
+  // exactly once per write attempt -- viewStateMkdirRetried guards against a
+  // loop if the directory still can't be created (e.g. permission denied).
+  // onRunningChanged rather than onExited: a Process whose program can't
+  // even start (e.g. "mkdir" missing from PATH) emits no exited at all,
+  // only running going false, and this must still retry the write once to
+  // find that out. It also sidesteps this file's one qmllint warning (the
+  // QProcess::ExitStatus parameter type on onExited isn't resolvable here)
+  // without adding another instance of it.
+  Process {
+    id: viewStateMkdirProcess
+    running: false
+    command: []
+    onRunningChanged: if (!running) viewStateFile.setText(root.lastViewStateWriteText)
   }
 
   Process {

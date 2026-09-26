@@ -1197,3 +1197,100 @@ test("matchFilter fails closed: an unrecognized status value matches nothing", (
   assert.equal(Model.matchFilter(filterRows[0], { group: "status", value: "Bogus" }), false);
   assert.equal(Model.matchFilter(filterRows[0], { group: "status", value: undefined }), false);
 });
+
+// --- parseViewState / serializeViewState ------------------------------------
+
+const DEFAULT_VIEW_STATE = {
+  filter: { group: "status", value: "All" },
+  sort: "added",
+  desc: true,
+  cursorHash: "",
+  pane: "table"
+};
+
+test("parseViewState of null/undefined/missing input returns full defaults", () => {
+  assert.deepEqual(Model.parseViewState(null), DEFAULT_VIEW_STATE);
+  assert.deepEqual(Model.parseViewState(undefined), DEFAULT_VIEW_STATE);
+  assert.deepEqual(Model.parseViewState(""), DEFAULT_VIEW_STATE);
+});
+
+test("parseViewState of corrupt JSON returns defaults", () => {
+  assert.deepEqual(Model.parseViewState("{not json"), DEFAULT_VIEW_STATE);
+  assert.deepEqual(Model.parseViewState("[1,2,3]"), DEFAULT_VIEW_STATE);
+  assert.deepEqual(Model.parseViewState("42"), DEFAULT_VIEW_STATE);
+  assert.deepEqual(Model.parseViewState('"just a string"'), DEFAULT_VIEW_STATE);
+});
+
+test("parseViewState accepts a plain object as well as a JSON string", () => {
+  const state = { filter: { group: "tag", value: "linux" }, sort: "size", desc: false, cursorHash: "abc123", pane: "inspector" };
+  assert.deepEqual(Model.parseViewState(state), state);
+  assert.deepEqual(Model.parseViewState(JSON.stringify(state)), state);
+});
+
+test("parseViewState fills in missing keys with defaults, field by field", () => {
+  assert.deepEqual(Model.parseViewState("{}"), DEFAULT_VIEW_STATE);
+  assert.deepEqual(Model.parseViewState('{"sort":"size"}'), Object.assign({}, DEFAULT_VIEW_STATE, { sort: "size" }));
+  assert.deepEqual(
+    Model.parseViewState('{"filter":{"group":"category"}}'),
+    Object.assign({}, DEFAULT_VIEW_STATE, { filter: { group: "category", value: "All" } })
+  );
+});
+
+test("parseViewState rejects an unknown filter group, falling back to status", () => {
+  const result = Model.parseViewState('{"filter":{"group":"bogus","value":"x"}}');
+  assert.deepEqual(result.filter, { group: "status", value: "x" });
+});
+
+test("parseViewState rejects a non-string filter value, falling back to All", () => {
+  const result = Model.parseViewState('{"filter":{"group":"tracker","value":42}}');
+  assert.deepEqual(result.filter, { group: "tracker", value: "All" });
+});
+
+test("parseViewState rejects an unknown sort mode, falling back to added", () => {
+  assert.equal(Model.parseViewState('{"sort":"bogus"}').sort, "added");
+  assert.equal(Model.parseViewState('{"sort":"speed"}').sort, "added");
+  assert.equal(Model.parseViewState('{"sort":null}').sort, "added");
+});
+
+test("parseViewState accepts every documented sort mode", () => {
+  for (const mode of ["added", "name", "size", "progress", "dl", "ul", "eta", "ratio"]) {
+    assert.equal(Model.parseViewState({ sort: mode }).sort, mode, mode);
+  }
+});
+
+test("parseViewState rejects a non-boolean desc, falling back to true", () => {
+  assert.equal(Model.parseViewState('{"desc":"no"}').desc, true);
+  assert.equal(Model.parseViewState('{"desc":0}').desc, true);
+  assert.equal(Model.parseViewState({ desc: false }).desc, false);
+});
+
+test("parseViewState rejects a non-string cursorHash, falling back to empty", () => {
+  assert.equal(Model.parseViewState('{"cursorHash":123}').cursorHash, "");
+  assert.equal(Model.parseViewState('{"cursorHash":null}').cursorHash, "");
+  assert.equal(Model.parseViewState({ cursorHash: "deadbeef" }).cursorHash, "deadbeef");
+});
+
+test("parseViewState rejects an unknown pane, falling back to table", () => {
+  assert.equal(Model.parseViewState('{"pane":"bogus"}').pane, "table");
+  assert.equal(Model.parseViewState('{"pane":"filters"}').pane, "filters");
+  assert.equal(Model.parseViewState('{"pane":"inspector"}').pane, "inspector");
+});
+
+test("parseViewState treats a non-object filter as missing", () => {
+  assert.deepEqual(Model.parseViewState('{"filter":"bogus"}').filter, { group: "status", value: "All" });
+  assert.deepEqual(Model.parseViewState('{"filter":null}').filter, { group: "status", value: "All" });
+  assert.deepEqual(Model.parseViewState('{"filter":[1,2]}').filter, { group: "status", value: "All" });
+});
+
+test("serializeViewState round-trips through parseViewState", () => {
+  const state = { filter: { group: "category", value: "movies" }, sort: "ratio", desc: false, cursorHash: "deadbeef", pane: "filters" };
+  const text = Model.serializeViewState(state);
+  assert.equal(typeof text, "string");
+  assert.deepEqual(JSON.parse(text), state);
+  assert.deepEqual(Model.parseViewState(text), state);
+});
+
+test("serializeViewState normalizes garbage input the same way parseViewState does", () => {
+  const text = Model.serializeViewState({ sort: "bogus", pane: "nope" });
+  assert.deepEqual(JSON.parse(text), DEFAULT_VIEW_STATE);
+});
