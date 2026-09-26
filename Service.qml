@@ -25,7 +25,17 @@ Scope {
   property string vpnIface: ""
   property string bindIface: ""
   property var torrents: []
+  // Status's top-level category and tag names (zero-count ones included),
+  // for the window's filter pane.
+  property var categories: []
+  property var tags: []
   property var filesByHash: ({})
+  // hash -> {state: "loading"|"ok"|"error", error}: lets a view tell a
+  // files load in flight, an empty list and a failed read apart.
+  property var filesStatusByHash: ({})
+  // hash -> true while that hash's latest files load came from the window
+  // (origin "window"): its failure then stays out of the widget's lastError.
+  property var filesQuietHashes: ({})
   property string lastError: ""
   property string actionStatus: ""
   property string clipboardText: ""
@@ -116,8 +126,25 @@ Scope {
   // Emitted after every queued action ends, once the queue has moved on.
   // error is sanitized and empty on success.
   signal actionFinished(int ticket, bool ok, string error, string origin, var hashes)
+  // Emitted every time a readClipboard() answer arrives, even when it is
+  // empty (an empty answer leaves clipboardText unchanged, so its change
+  // signal can't tell a view that the read finished).
+  signal clipboardRead(string text)
 
   function clearError() { lastError = "" }
+
+  // A ticket for a window-origin call that doesn't go through runAction
+  // (copy, install, start daemon); its end is reported the same way,
+  // through actionFinished.
+  function mintTicket() {
+    var ticket = actionTicketSeq + 1
+    actionTicketSeq = ticket
+    return ticket
+  }
+
+  function windowDone(opts) {
+    return { ticket: mintTicket(), origin: "window", hashes: (opts && opts.hashes) ? opts.hashes : [] }
+  }
 
   // Debounced to at most one write per second: a call while a write from
   // the last second is still cooling down only updates viewState (so
@@ -162,6 +189,8 @@ Scope {
     vpnIface = parsed.vpnIface
     bindIface = parsed.bindIface
     torrents = parsed.torrents
+    categories = Array.isArray(parsed.categories) ? parsed.categories : []
+    tags = Array.isArray(parsed.tags) ? parsed.tags : []
     lastError = Model.nextStatusError(parsed, lastError)
     if (finished.length > 0) notify(Model.completionText(finished))
   }
@@ -305,9 +334,33 @@ Scope {
     filesByHash = next
   }
 
-  function loadFiles(hash) {
+  function setFilesStatus(hash, state, error) {
+    var key = String(hash || "")
+    if (key === "") return
+    var next = ({})
+    for (var k in filesStatusByHash) next[k] = filesStatusByHash[k]
+    next[key] = { state: state, error: String(error || "") }
+    filesStatusByHash = next
+  }
+
+  // A failed files read: the widget's lastError unless the window asked.
+  function filesFailed(hash, error) {
+    var key = String(hash || "")
+    if (!filesQuietHashes[key]) lastError = error
+    setFilesFor(key, [])
+    setFilesStatus(key, "error", error)
+  }
+
+  // opts: {origin: "window"} keeps a failure out of lastError (the window
+  // reads filesStatusByHash instead). The widget calls it without opts.
+  function loadFiles(hash, opts) {
     if (!started || !hash) return
+    var quiet = ({})
+    for (var q in filesQuietHashes) if (q !== String(hash)) quiet[q] = true
+    if (isWindowOrigin(opts)) quiet[String(hash)] = true
+    filesQuietHashes = quiet
     setFilesFor(hash, [])
+    setFilesStatus(hash, "loading", "")
     if (sidecarState === "up") {
       var id = filesRequestSeq + 1
       filesRequestSeq = id
@@ -356,17 +409,28 @@ Scope {
     return runAction([helperPath, "sharelimit", hash, String(ratio)], "", opts)
   }
 
-  function copyMagnet(row) {
+  // opts: {origin: "window", hashes} returns a ticket and reports the copy
+  // through actionFinished, leaving actionStatus and lastError alone. The
+  // widget calls it without opts and gets today's behavior (returns 0).
+  function copyMagnet(row, opts) {
+    var fromWindow = isWindowOrigin(opts)
     var uri = Model.magnetUriFor(row)
     if (!uri) {
-      lastError = "No magnet for this torrent."
-      return
+      if (!fromWindow) lastError = "No magnet for this torrent."
+      return 0
     }
-    if (copyProcess.running) return
-    clearError()
-    actionStatus = "Copied magnet."
+    if (copyProcess.running) return 0
+    var done = null
+    if (fromWindow) {
+      done = windowDone(opts)
+    } else {
+      clearError()
+      actionStatus = "Copied magnet."
+    }
+    copyProcess.done = done
     copyProcess.command = ["wl-copy", "--", uri]
     copyProcess.running = true
+    return done ? done.ticket : 0
   }
 
   function recheckHash(hash, opts) {
@@ -452,23 +516,53 @@ Scope {
     return ticket
   }
 
-  function openPath(path) {
+  // opts is accepted for the same call shape as the other actions; opening
+  // a folder writes no shared state for any origin (the file manager owns
+  // its own failure UI).
+  function openPath(path, opts) {
     var p = String(path || "")
     if (p === "" || openProcess.running) return
     openProcess.command = ["xdg-open", p]
     openProcess.running = true
   }
 
-  function installDaemon() {
-    clearError()
-    actionStatus = "Installing qbittorrent-nox…"
+  // opts: {origin: "window"} returns a ticket that covers the install and
+  // the daemon start that follows it, reported through actionFinished; the
+  // widget's actionStatus and lastError are left alone. Without opts (the
+  // widget) the behavior is unchanged and 0 is returned.
+  function installDaemon(opts) {
+    var fromWindow = isWindowOrigin(opts)
+    if (fromWindow && installProcess.running) return 0
+    var done = null
+    if (fromWindow) {
+      done = windowDone(opts)
+    } else {
+      clearError()
+      actionStatus = "Installing qbittorrent-nox…"
+    }
+    if (!installProcess.running) installProcess.done = done
     installProcess.command = [helperPath, "install"]
     installProcess.running = true
+    return done ? done.ticket : 0
   }
 
-  function startDaemon() {
-    clearError()
-    actionStatus = "Starting qBittorrent daemon…"
+  function startDaemon(opts) {
+    var fromWindow = isWindowOrigin(opts)
+    if (fromWindow && daemonProcess.running) return 0
+    var done = fromWindow ? windowDone(opts) : null
+    runDaemonStart(done)
+    return done ? done.ticket : 0
+  }
+
+  // done: the window's ticket record, or null for the widget.
+  function runDaemonStart(done) {
+    if (!done) {
+      clearError()
+      actionStatus = "Starting qBittorrent daemon…"
+    }
+    // A start already in flight keeps its window ticket record: a widget
+    // call meanwhile must not orphan it.
+    if (!daemonProcess.running) daemonProcess.done = done
     daemonProcess.command = [helperPath, "start-daemon"]
     daemonProcess.running = true
   }
@@ -526,11 +620,11 @@ Scope {
       var hash = takeFilesRequest(msg.data.id)
       if (hash === "") return
       if (msg.data.error !== undefined && msg.data.error !== null) {
-        lastError = Model.sanitizeError(msg.data.error || "Could not read files")
-        setFilesFor(hash, [])
+        filesFailed(hash, Model.sanitizeError(msg.data.error || "Could not read files"))
         return
       }
       setFilesFor(hash, Array.isArray(msg.data.files) ? msg.data.files : [])
+      setFilesStatus(hash, "ok", "")
     } else if (msg.type === "error") {
       console.warn("OmaqBT qbt-serve: " + Model.sanitizeError(msg.data.error || "error"))
     } else if (msg.type === "fatal") {
@@ -557,10 +651,11 @@ Scope {
       sidecarRestartTimer.interval = Math.max(1, Model.nextBackoffMs(sidecarFailures))
       sidecarRestartTimer.restart()
     }
-    // A files request the sidecar never answered retries through bash.
+    // A files request the sidecar never answered retries through bash,
+    // keeping the origin of the load it replaces.
     var lastHash = ""
     for (var k in orphans) lastHash = orphans[k]
-    if (lastHash !== "") loadFiles(lastHash)
+    if (lastHash !== "") loadFiles(lastHash, filesQuietHashes[lastHash] ? { origin: "window" } : undefined)
   }
 
   onActiveChanged: {
@@ -726,15 +821,27 @@ Scope {
     running: false
     command: []
     stdout: StdioCollector { id: clipOut; waitForEnd: true }
-    onExited: function() { root.clipboardText = String(clipOut.text || "") }
+    onExited: function() {
+      root.clipboardText = String(clipOut.text || "")
+      root.clipboardRead(root.clipboardText)
+    }
   }
 
   Process {
     id: copyProcess
+    // The window's ticket record for this copy, or null (the widget).
+    property var done: null
     running: false
     command: []
     stderr: StdioCollector { id: copyErr; waitForEnd: true }
     onExited: function(exitCode) {
+      var done = copyProcess.done
+      copyProcess.done = null
+      if (done) {
+        var err = exitCode !== 0 ? Model.sanitizeError(copyErr.text || "Could not copy magnet") : ""
+        root.actionFinished(done.ticket, exitCode === 0, err, done.origin, done.hashes)
+        return
+      }
       if (exitCode !== 0) {
         root.actionStatus = ""
         root.lastError = Model.sanitizeError(copyErr.text || "Could not copy magnet")
@@ -787,13 +894,13 @@ Scope {
       var next = filesProcess.nextHash
       filesProcess.nextHash = ""
       if (exitCode !== 0) {
-        root.lastError = Model.sanitizeError(filesErr.text || "Could not read files")
-        root.setFilesFor(done, [])
+        root.filesFailed(done, Model.sanitizeError(filesErr.text || "Could not read files"))
       } else {
         var rows = []
         try { rows = JSON.parse(String(filesOut.text || "[]")) }
         catch (e) { rows = [] }
         root.setFilesFor(done, rows)
+        root.setFilesStatus(done, "ok", "")
       }
       if (next !== "" && next !== done) root.loadFiles(next)
     }
@@ -801,11 +908,23 @@ Scope {
 
   Process {
     id: installProcess
+    // The window's ticket record for this install, or null (the widget).
+    property var done: null
     running: false
     command: []
     stdout: StdioCollector { id: installOut; waitForEnd: true }
     stderr: StdioCollector { id: installErr; waitForEnd: true }
     onExited: function(exitCode) {
+      var done = installProcess.done
+      installProcess.done = null
+      if (done) {
+        // The window's ticket covers the daemon start that follows, so a
+        // success hands it on instead of reporting it here.
+        if (exitCode !== 0) root.actionFinished(done.ticket, false, Model.sanitizeError(installErr.text || "Install failed"), done.origin, done.hashes)
+        else if (daemonProcess.running) root.actionFinished(done.ticket, true, "", done.origin, done.hashes)
+        else root.runDaemonStart(done)
+        return
+      }
       root.actionStatus = ""
       if (exitCode !== 0) {
         root.lastError = Model.sanitizeError(installErr.text || "Install failed")
@@ -817,11 +936,21 @@ Scope {
 
   Process {
     id: daemonProcess
+    // The window's ticket record for this start, or null (the widget).
+    property var done: null
     running: false
     command: []
     stdout: StdioCollector { id: daemonOut; waitForEnd: true }
     stderr: StdioCollector { id: daemonErr; waitForEnd: true }
     onExited: function(exitCode) {
+      var done = daemonProcess.done
+      daemonProcess.done = null
+      if (done) {
+        var err = exitCode !== 0 ? Model.sanitizeError(daemonErr.text || "Could not start qbittorrent-nox") : ""
+        root.refresh()
+        root.actionFinished(done.ticket, exitCode === 0, err, done.origin, done.hashes)
+        return
+      }
       root.actionStatus = ""
       if (exitCode !== 0)
         root.lastError = Model.sanitizeError(daemonErr.text || "Could not start qbittorrent-nox")
