@@ -767,3 +767,363 @@ test("sidecarGaveUp returns true for failures >= 5", () => {
   assert.equal(Model.sidecarGaveUp(5), true);
   assert.equal(Model.sidecarGaveUp(6), true);
 });
+
+// --- Task 5: sortTorrents(list, mode, desc) --------------------------------
+
+const hashedSortSample = [
+  { hash: "h-slow", name: "slow", dlSpeed: 10, upSpeed: 0, eta: 8640000, addedOn: 300, size: 500, progress: 0.1, ratio: 0.1 },
+  { hash: "h-fast", name: "fast", dlSpeed: 500, upSpeed: 100, eta: 60, addedOn: 100, size: 900, progress: 0.9, ratio: 2.5 },
+  { hash: "h-mid", name: "mid", dlSpeed: 100, upSpeed: 0, eta: 600, addedOn: 200, size: 200, progress: 0.5, ratio: 1.0 }
+];
+
+test("sortTorrents default ignores hash and keeps original order (exempt from tie-break)", () => {
+  const got = Model.sortTorrents(hashedSortSample, "default");
+  assert.deepEqual(got.map((t) => t.hash), ["h-slow", "h-fast", "h-mid"]);
+});
+
+test("sortTorrents speed/eta/added still match today's widget orders with hashes present", () => {
+  assert.deepEqual(Model.sortTorrents(hashedSortSample, "speed").map((t) => t.name), ["fast", "mid", "slow"]);
+  assert.deepEqual(Model.sortTorrents(hashedSortSample, "eta").map((t) => t.name), ["fast", "mid", "slow"]);
+  assert.deepEqual(Model.sortTorrents(hashedSortSample, "added").map((t) => t.name), ["slow", "mid", "fast"]);
+});
+
+test("sortTorrents ties break on hash ascending", () => {
+  const rows = [
+    { hash: "zzz", name: "a", dlSpeed: 10, upSpeed: 0 },
+    { hash: "aaa", name: "b", dlSpeed: 10, upSpeed: 0 },
+    { hash: "mmm", name: "c", dlSpeed: 10, upSpeed: 0 }
+  ];
+  const got = Model.sortTorrents(rows, "dl").map((t) => t.hash);
+  assert.deepEqual(got, ["aaa", "mmm", "zzz"]);
+});
+
+test("sortTorrents tie-break stays hash-ascending under desc", () => {
+  const rows = [
+    { hash: "zzz", name: "a", dlSpeed: 10, upSpeed: 0 },
+    { hash: "aaa", name: "b", dlSpeed: 10, upSpeed: 0 }
+  ];
+  const got = Model.sortTorrents(rows, "dl", true).map((t) => t.hash);
+  assert.deepEqual(got, ["aaa", "zzz"]);
+});
+
+test("sortTorrents new field modes use documented natural directions", () => {
+  // name: ascending A-Z
+  assert.deepEqual(Model.sortTorrents(hashedSortSample, "name").map((t) => t.name), ["fast", "mid", "slow"]);
+  // size: descending (largest first)
+  assert.deepEqual(Model.sortTorrents(hashedSortSample, "size").map((t) => t.name), ["fast", "slow", "mid"]);
+  // progress: ascending (least complete first)
+  assert.deepEqual(Model.sortTorrents(hashedSortSample, "progress").map((t) => t.name), ["slow", "mid", "fast"]);
+  // dl: descending (fastest first)
+  assert.deepEqual(Model.sortTorrents(hashedSortSample, "dl").map((t) => t.name), ["fast", "mid", "slow"]);
+  // ul: descending (ties -- slow and mid both have upSpeed 0 -- break on hash ascending)
+  assert.deepEqual(Model.sortTorrents(hashedSortSample, "ul").map((t) => t.name), ["fast", "mid", "slow"]);
+  // ratio: descending (highest first)
+  assert.deepEqual(Model.sortTorrents(hashedSortSample, "ratio").map((t) => t.name), ["fast", "mid", "slow"]);
+});
+
+test("sortTorrents desc flips a mode's natural direction", () => {
+  assert.deepEqual(Model.sortTorrents(hashedSortSample, "name", true).map((t) => t.name), ["slow", "mid", "fast"]);
+  assert.deepEqual(Model.sortTorrents(hashedSortSample, "added", true).map((t) => t.name), ["fast", "mid", "slow"]);
+  assert.deepEqual(Model.sortTorrents(hashedSortSample, "eta", true).map((t) => t.name), ["slow", "mid", "fast"]);
+});
+
+test("sortTorrents name compares case-insensitively without locale surprises", () => {
+  const rows = [{ hash: "1", name: "Bravo" }, { hash: "2", name: "alpha" }, { hash: "3", name: "Charlie" }];
+  assert.deepEqual(Model.sortTorrents(rows, "name").map((t) => t.name), ["alpha", "Bravo", "Charlie"]);
+});
+
+test("sortTorrents falls back to no-sort for an unrecognized mode string", () => {
+  assert.deepEqual(Model.sortTorrents(hashedSortSample, "junk").map((t) => t.hash), ["h-slow", "h-fast", "h-mid"]);
+});
+
+test("sortTorrents with no mode defaults to added (newest first)", () => {
+  assert.deepEqual(Model.sortTorrents(hashedSortSample).map((t) => t.name), ["slow", "mid", "fast"]);
+});
+
+// --- Task 5: applyOps --------------------------------------------------------
+
+test("applyOps set replaces a row at an index", () => {
+  const rows = [{ hash: "a" }, { hash: "b" }];
+  const got = Model.applyOps(rows, [{ op: "set", index: 1, row: { hash: "b", name: "B" } }]);
+  assert.deepEqual(got, [{ hash: "a" }, { hash: "b", name: "B" }]);
+});
+
+test("applyOps insert adds a row at an index", () => {
+  const rows = [{ hash: "a" }, { hash: "c" }];
+  const got = Model.applyOps(rows, [{ op: "insert", index: 1, row: { hash: "b" } }]);
+  assert.deepEqual(got.map((r) => r.hash), ["a", "b", "c"]);
+});
+
+test("applyOps remove drops a row at an index", () => {
+  const rows = [{ hash: "a" }, { hash: "b" }, { hash: "c" }];
+  const got = Model.applyOps(rows, [{ op: "remove", index: 1 }]);
+  assert.deepEqual(got.map((r) => r.hash), ["a", "c"]);
+});
+
+test("applyOps move matches ListModel.move(from,to,1) splice semantics", () => {
+  const rows = [{ hash: "a" }, { hash: "b" }, { hash: "c" }, { hash: "d" }, { hash: "e" }];
+  const got = Model.applyOps(rows, [{ op: "move", from: 0, to: 4 }]);
+  assert.deepEqual(got.map((r) => r.hash), ["b", "c", "d", "e", "a"]);
+});
+
+test("applyOps applies a sequence of ops in order", () => {
+  const rows = [{ hash: "a" }, { hash: "b" }, { hash: "c" }];
+  const got = Model.applyOps(rows, [
+    { op: "remove", index: 0 },
+    { op: "insert", index: 0, row: { hash: "z" } },
+    { op: "move", from: 0, to: 2 }
+  ]);
+  assert.deepEqual(got.map((r) => r.hash), ["b", "c", "z"]);
+});
+
+test("applyOps does not mutate its input array", () => {
+  const rows = [{ hash: "a" }, { hash: "b" }];
+  Model.applyOps(rows, [{ op: "remove", index: 0 }]);
+  assert.deepEqual(rows.map((r) => r.hash), ["a", "b"]);
+});
+
+// --- Task 5: diffRows ---------------------------------------------------
+
+const DIFF_FIELDS = ["name", "dlSpeed", "upSpeed", "progress", "tags"];
+
+test("diffRows on identical lists produces no ops", () => {
+  const rows = [{ hash: "a", name: "A" }, { hash: "b", name: "B" }];
+  const ops = Model.diffRows(rows, rows.map((r) => Object.assign({}, r)), DIFF_FIELDS);
+  assert.deepEqual(ops, []);
+});
+
+test("diffRows detects an insert", () => {
+  const oldRows = [{ hash: "a" }, { hash: "c" }];
+  const newRows = [{ hash: "a" }, { hash: "b" }, { hash: "c" }];
+  const ops = Model.diffRows(oldRows, newRows, DIFF_FIELDS);
+  assert.deepEqual(Model.applyOps(oldRows, ops).map((r) => r.hash), ["a", "b", "c"]);
+  assert.ok(ops.some((op) => op.op === "insert"));
+});
+
+test("diffRows detects a remove", () => {
+  const oldRows = [{ hash: "a" }, { hash: "b" }, { hash: "c" }];
+  const newRows = [{ hash: "a" }, { hash: "c" }];
+  const ops = Model.diffRows(oldRows, newRows, DIFF_FIELDS);
+  assert.deepEqual(Model.applyOps(oldRows, ops).map((r) => r.hash), ["a", "c"]);
+  assert.ok(ops.some((op) => op.op === "remove"));
+});
+
+test("diffRows detects a field change as a single set", () => {
+  const oldRows = [{ hash: "a", name: "A", dlSpeed: 1 }, { hash: "b", name: "B", dlSpeed: 1 }];
+  const newRows = [{ hash: "a", name: "A", dlSpeed: 9 }, { hash: "b", name: "B", dlSpeed: 1 }];
+  const ops = Model.diffRows(oldRows, newRows, DIFF_FIELDS);
+  assert.deepEqual(ops, [{ op: "set", index: 0, row: newRows[0] }]);
+});
+
+test("diffRows moving one row to the back emits one move, not a cascade", () => {
+  const oldRows = ["a", "b", "c", "d", "e"].map((h) => ({ hash: h }));
+  const newRows = ["b", "c", "d", "e", "a"].map((h) => ({ hash: h }));
+  const ops = Model.diffRows(oldRows, newRows, DIFF_FIELDS);
+  const moves = ops.filter((op) => op.op === "move");
+  assert.equal(moves.length, 1, `expected exactly one move, got ${JSON.stringify(ops)}`);
+  assert.deepEqual(Model.applyOps(oldRows, ops).map((r) => r.hash), ["b", "c", "d", "e", "a"]);
+});
+
+test("diffRows a full reset returns {reset:true}", () => {
+  const oldRows = [];
+  const newRows = [];
+  for (let i = 0; i < 40; i++) oldRows.push({ hash: "old-" + i, name: "n" + i });
+  for (let i = 0; i < 40; i++) newRows.push({ hash: "new-" + i, name: "n" + i });
+  const ops = Model.diffRows(oldRows, newRows, DIFF_FIELDS);
+  assert.deepEqual(ops, { reset: true });
+});
+
+test("diffRows treats duplicate hashes as unsafe and resets", () => {
+  const oldRows = [{ hash: "a" }, { hash: "a" }];
+  const newRows = [{ hash: "a" }];
+  assert.deepEqual(Model.diffRows(oldRows, newRows, DIFF_FIELDS), { reset: true });
+});
+
+test("diffRows compares array fields (tags) element-wise, not by reference", () => {
+  const oldRows = [{ hash: "a", name: "A", tags: ["x", "y"] }];
+  const newRows = [{ hash: "a", name: "A", tags: ["x", "y"] }];
+  assert.deepEqual(Model.diffRows(oldRows, newRows, DIFF_FIELDS), []);
+  const changed = [{ hash: "a", name: "A", tags: ["x"] }];
+  const ops = Model.diffRows(oldRows, changed, DIFF_FIELDS);
+  assert.deepEqual(ops, [{ op: "set", index: 0, row: changed[0] }]);
+});
+
+test("diffRows does not mutate its inputs", () => {
+  const oldRows = [{ hash: "a" }, { hash: "b" }];
+  const newRows = [{ hash: "b" }, { hash: "a" }];
+  const oldCopy = oldRows.map((r) => Object.assign({}, r));
+  const newCopy = newRows.map((r) => Object.assign({}, r));
+  Model.diffRows(oldRows, newRows, DIFF_FIELDS);
+  assert.deepEqual(oldRows, oldCopy);
+  assert.deepEqual(newRows, newCopy);
+});
+
+// --- Task 5: diffRows fuzz (applyOps is the executable contract) -----------
+
+function mulberry32(seed) {
+  return function () {
+    seed |= 0;
+    seed = (seed + 0x6D2B79F5) | 0;
+    let t = seed;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function fuzzPair(rng, n) {
+  const hashes = [];
+  for (let i = 0; i < n; i++) hashes.push("t" + i);
+  const oldRows = hashes.map((h) => ({ hash: h, name: h, dlSpeed: 1, upSpeed: 1, progress: 0, tags: ["x"] }));
+
+  let next = oldRows.map((r) => Object.assign({}, r, { tags: r.tags.slice() }));
+  // removes
+  next = next.filter(() => rng() > 0.1);
+  // field mutations
+  next = next.map((r) => {
+    if (rng() > 0.7) {
+      return Object.assign({}, r, { dlSpeed: r.dlSpeed + 1, tags: rng() > 0.5 ? ["y"] : r.tags.slice() });
+    }
+    return r;
+  });
+  // inserts
+  const maxHash = n;
+  let nextHashSeed = maxHash;
+  const insertCount = Math.floor(rng() * 5);
+  for (let i = 0; i < insertCount; i++) {
+    const h = "new" + (nextHashSeed++);
+    const pos = Math.floor(rng() * (next.length + 1));
+    next.splice(pos, 0, { hash: h, name: h, dlSpeed: 0, upSpeed: 0, progress: 0, tags: [] });
+  }
+  // shuffle (reorder)
+  for (let i = next.length - 1; i > 0; i--) {
+    if (rng() > 0.5) {
+      const j = Math.floor(rng() * (i + 1));
+      const tmp = next[i];
+      next[i] = next[j];
+      next[j] = tmp;
+    }
+  }
+  return { oldRows, newRows: next };
+}
+
+test("fuzz: applyOps(old, diffRows(old,new)) reproduces new, or diffRows says reset", () => {
+  const rng = mulberry32(1234567);
+  let resets = 0;
+  let checked = 0;
+  for (let i = 0; i < 500; i++) {
+    const n = 5 + Math.floor(rng() * 45);
+    const { oldRows, newRows } = fuzzPair(rng, n);
+    const ops = Model.diffRows(oldRows, newRows, DIFF_FIELDS);
+    if (ops && ops.reset === true) {
+      resets++;
+      continue;
+    }
+    checked++;
+    const got = Model.applyOps(oldRows, ops);
+    assert.deepEqual(got, newRows, `mismatch on iteration ${i} (seed run): ops=${JSON.stringify(ops)}`);
+  }
+  // The fuzz must exercise the real ops path, not just prove the reset fallback.
+  assert.ok(checked > 0, "no fuzz case exercised the ops path");
+  assert.ok(resets < 500, "every fuzz case reset; the ops path was never tested");
+});
+
+// --- Task 5: filterGroups / matchFilter / statusGroup -----------------------
+
+const filterRows = [
+  { hash: "1", state: "downloading", progress: 0.2, category: "movies", tags: ["a", "b"], tracker: "tracker1.example" },
+  { hash: "2", state: "uploading", progress: 1, category: "movies", tags: ["a"], tracker: "tracker2.example" },
+  { hash: "3", state: "stoppedDL", progress: 0.3, category: "", tags: [], tracker: "" },
+  { hash: "4", state: "checkingDL", progress: 0.4, category: "tv", tags: ["b"], tracker: "tracker1.example" },
+  { hash: "5", state: "missingFiles", progress: 0, category: "", tags: [], tracker: "tracker2.example" },
+  { hash: "6", state: "moving", progress: 0.6, category: "tv", tags: [], tracker: "" }
+];
+
+test("statusGroup carves checking/moving out of downloading/seeding", () => {
+  assert.equal(Model.statusGroup({ state: "downloading", progress: 0.2 }), "downloading");
+  assert.equal(Model.statusGroup({ state: "uploading", progress: 1 }), "seeding");
+  assert.equal(Model.statusGroup({ state: "checkingDL", progress: 0.2 }), "checking");
+  assert.equal(Model.statusGroup({ state: "checkingUP", progress: 1 }), "checking");
+  assert.equal(Model.statusGroup({ state: "checkingResumeData", progress: 0.5 }), "checking");
+  assert.equal(Model.statusGroup({ state: "moving", progress: 0.9 }), "checking");
+  assert.equal(Model.statusGroup({ state: "stoppedDL", progress: 0.3 }), "stopped");
+  assert.equal(Model.statusGroup({ state: "stoppedUP", progress: 1 }), "stopped");
+  assert.equal(Model.statusGroup({ state: "missingFiles", progress: 0 }), "errored");
+  assert.equal(Model.statusGroup({ state: "error", progress: 0 }), "errored");
+});
+
+test("filterGroups Status counts partition all rows and All equals the total", () => {
+  const groups = Model.filterGroups(filterRows, [], []);
+  const status = groups.find((g) => g.group === "status");
+  const byLabel = {};
+  status.items.forEach((item) => { byLabel[item.label] = item.count; });
+  assert.equal(byLabel.All, filterRows.length);
+  assert.equal(byLabel.Downloading + byLabel.Seeding + byLabel.Stopped + byLabel.Errored + byLabel.Checking, filterRows.length);
+  assert.equal(byLabel.Active, byLabel.Downloading + byLabel.Seeding);
+  assert.equal(byLabel.Downloading, 1);
+  assert.equal(byLabel.Seeding, 1);
+  assert.equal(byLabel.Stopped, 1);
+  assert.equal(byLabel.Errored, 1);
+  assert.equal(byLabel.Checking, 2);
+});
+
+test("filterGroups Categories includes Uncategorized and zero-count known categories", () => {
+  const groups = Model.filterGroups(filterRows, ["movies", "tv", "books"], []);
+  const categories = groups.find((g) => g.group === "categories");
+  const byLabel = {};
+  categories.items.forEach((item) => { byLabel[item.label] = item; });
+  assert.equal(byLabel.Uncategorized.count, 2);
+  assert.equal(byLabel.Uncategorized.value, "");
+  assert.equal(byLabel.movies.count, 2);
+  assert.equal(byLabel.tv.count, 2);
+  assert.equal(byLabel.books.count, 0);
+  assert.equal(byLabel.books.zero, true);
+});
+
+test("filterGroups Tags includes Untagged and counts multi-valued tags", () => {
+  const groups = Model.filterGroups(filterRows, [], ["a", "b", "c"]);
+  const tags = groups.find((g) => g.group === "tags");
+  const byLabel = {};
+  tags.items.forEach((item) => { byLabel[item.label] = item; });
+  assert.equal(byLabel.Untagged.count, 3);
+  assert.equal(byLabel.a.count, 2);
+  assert.equal(byLabel.b.count, 2);
+  assert.equal(byLabel.c.count, 0);
+  assert.equal(byLabel.c.zero, true);
+});
+
+test("filterGroups Trackers includes Trackerless and hosts from rows", () => {
+  const groups = Model.filterGroups(filterRows, [], []);
+  const trackers = groups.find((g) => g.group === "trackers");
+  const byLabel = {};
+  trackers.items.forEach((item) => { byLabel[item.label] = item; });
+  assert.equal(byLabel.Trackerless.count, 2);
+  assert.equal(byLabel["tracker1.example"].count, 2);
+  assert.equal(byLabel["tracker2.example"].count, 2);
+});
+
+test("matchFilter status All matches every row", () => {
+  filterRows.forEach((row) => assert.equal(Model.matchFilter(row, { group: "status", value: "All" }), true));
+});
+
+test("matchFilter status matches statusGroup buckets", () => {
+  assert.equal(Model.matchFilter(filterRows[3], { group: "status", value: "Checking" }), true);
+  assert.equal(Model.matchFilter(filterRows[3], { group: "status", value: "Downloading" }), false);
+  assert.equal(Model.matchFilter(filterRows[0], { group: "status", value: "Active" }), true);
+});
+
+test("matchFilter categories/tags/trackers use value:'' as the sentinel, not the label", () => {
+  assert.equal(Model.matchFilter(filterRows[2], { group: "categories", value: "" }), true);
+  assert.equal(Model.matchFilter(filterRows[0], { group: "categories", value: "" }), false);
+  assert.equal(Model.matchFilter(filterRows[0], { group: "categories", value: "movies" }), true);
+  assert.equal(Model.matchFilter(filterRows[2], { group: "tags", value: "" }), true);
+  assert.equal(Model.matchFilter(filterRows[0], { group: "tags", value: "b" }), true);
+  assert.equal(Model.matchFilter(filterRows[0], { group: "tags", value: "z" }), false);
+  assert.equal(Model.matchFilter(filterRows[2], { group: "trackers", value: "" }), true);
+  assert.equal(Model.matchFilter(filterRows[0], { group: "trackers", value: "tracker1.example" }), true);
+});
+
+test("matchFilter is permissive for a missing/unknown filter (fails open to All)", () => {
+  assert.equal(Model.matchFilter(filterRows[0], null), true);
+  assert.equal(Model.matchFilter(filterRows[0], {}), true);
+});

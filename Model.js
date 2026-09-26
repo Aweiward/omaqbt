@@ -200,25 +200,112 @@ function completionText(names) {
 var SORT_ORDER = ["default", "speed", "eta", "added"];
 var SORT_LABELS = { default: "", speed: "by speed", eta: "by eta", added: "by added" };
 
-function sortTorrents(list, mode) {
+// Every field mode's natural (desc=false) direction. true means the mode's
+// default order is largest/newest-first; false means smallest/soonest-first.
+// T7 draws the sorted column's ▾/▴ from this plus the caller's `desc`.
+var SORT_FIELD_DESC_DEFAULT = {
+  added: true,
+  name: false,
+  size: true,
+  progress: false,
+  dl: true,
+  ul: true,
+  eta: false,
+  ratio: true
+};
+
+var SORT_FIELD_MODES = {
+  added: true, name: true, size: true, progress: true,
+  dl: true, ul: true, eta: true, ratio: true
+};
+
+// Every mode tie-breaks on hash ascending (never flipped by desc), so the
+// result is deterministic even when rows share a value.
+function hashAsc(a, b) {
+  var ha = String((a && a.hash) || "");
+  var hb = String((b && b.hash) || "");
+  if (ha === hb) return 0;
+  return ha < hb ? -1 : 1;
+}
+
+function etaSortValue(row) {
+  var e = Number((row && row.eta) || 0);
+  if (!isFinite(e) || e <= 0 || e >= 8640000) return Infinity;
+  return e;
+}
+
+function sortFieldValue(mode, row) {
+  var r = row || {};
+  if (mode === "added") return Number(r.addedOn || 0);
+  if (mode === "size") return Number(r.size || 0);
+  if (mode === "progress") {
+    var p = Number(r.progress);
+    return isFinite(p) ? p : 0;
+  }
+  if (mode === "dl") return Number(r.dlSpeed || 0);
+  if (mode === "ul") return Number(r.upSpeed || 0);
+  if (mode === "ratio") return Number(r.ratio || 0);
+  if (mode === "eta") return etaSortValue(r);
+  return 0;
+}
+
+function nameAsc(a, b) {
+  var na = String((a && a.name) || "").toLowerCase();
+  var nb = String((b && b.name) || "").toLowerCase();
+  // Codepoint compare, not localeCompare: Node's ICU and QML's V4 can order
+  // the same strings differently, and this must be deterministic everywhere.
+  if (na === nb) return 0;
+  return na < nb ? -1 : 1;
+}
+
+function fieldSortComparator(mode, desc) {
+  var naturalDesc = SORT_FIELD_DESC_DEFAULT[mode] === true;
+  return function(a, b) {
+    var diff;
+    if (mode === "name") {
+      diff = nameAsc(a, b);
+    } else {
+      var va = sortFieldValue(mode, a);
+      var vb = sortFieldValue(mode, b);
+      diff = va === vb ? 0 : (va < vb ? -1 : 1);
+    }
+    if (naturalDesc) diff = -diff;
+    if (desc) diff = -diff;
+    if (diff === 0) return hashAsc(a, b);
+    return diff;
+  };
+}
+
+// sortTorrents(list, mode, desc).
+//
+// Modes: "added" (newest first; also the default when mode is falsy), "name",
+// "size", "progress", "dl", "ul", "eta" and "ratio". `desc` flips whichever
+// direction is natural for that mode. Every mode tie-breaks on hash ascending.
+//
+// "default" and "speed" are kept only so the widget's existing
+// sortTorrents(list, "default"|"speed"|"eta"|"added") call sites keep
+// producing exactly today's orders: "default" returns the list untouched
+// (exempt from the hash tie-break -- it must stay a plain unsorted copy),
+// and "speed" sorts on the dl+ul sum, same as before. Any other unrecognized
+// mode string also falls back to an untouched copy, matching the old
+// if/else chain's behavior for a mode it didn't know.
+function sortTorrents(list, mode, desc) {
   var rows = (list || []).slice();
-  if (mode === "speed") {
+  var m = mode;
+  if (!m) m = "added";
+  if (m === "default") return rows;
+  if (m === "speed") {
     rows.sort(function(a, b) {
-      return (Number(b.dlSpeed || 0) + Number(b.upSpeed || 0)) - (Number(a.dlSpeed || 0) + Number(a.upSpeed || 0));
+      var diff = (Number(b.dlSpeed || 0) + Number(b.upSpeed || 0)) - (Number(a.dlSpeed || 0) + Number(a.upSpeed || 0));
+      if (desc) diff = -diff;
+      if (diff === 0) return hashAsc(a, b);
+      return diff;
     });
-  } else if (mode === "eta") {
-    rows.sort(function(a, b) {
-      var ea = Number(a.eta || 0);
-      var eb = Number(b.eta || 0);
-      if (ea <= 0 || ea >= 8640000) ea = Infinity;
-      if (eb <= 0 || eb >= 8640000) eb = Infinity;
-      if (ea === eb) return 0;
-      return ea < eb ? -1 : 1;
-    });
-  } else if (mode === "added") {
-    rows.sort(function(a, b) {
-      return Number(b.addedOn || 0) - Number(a.addedOn || 0);
-    });
+    return rows;
+  }
+  if (SORT_FIELD_MODES[m] === true) {
+    rows.sort(fieldSortComparator(m, desc));
+    return rows;
   }
   return rows;
 }
@@ -232,6 +319,356 @@ function cycleSort(mode) {
 function sortLabel(mode) {
   var label = SORT_LABELS[String(mode)];
   return label == null ? "" : label;
+}
+
+// --- Table diffing: diffRows / applyOps -------------------------------------
+//
+// applyOps(rows, ops) is the executable contract T7 follows against a QML
+// ListModel: {op:"set",index,row} -> list.set(index,row), {op:"insert"} ->
+// list.insert(index,row), {op:"remove"} -> list.remove(index), and
+// {op:"move",from,to} -> list.move(from,to,1). Every index means "the array
+// state at the moment this op is applied", in the order the ops appear.
+
+function rowHash(row) {
+  return String((row && row.hash) || "");
+}
+
+function applyOps(rows, ops) {
+  var working = (rows || []).slice();
+  var list = ops || [];
+  for (var i = 0; i < list.length; i++) {
+    var op = list[i] || {};
+    if (op.op === "set") {
+      if (op.index < 0 || op.index >= working.length) {
+        throw new Error("applyOps: set index " + op.index + " out of range");
+      }
+      working[op.index] = op.row;
+    } else if (op.op === "insert") {
+      if (op.index < 0 || op.index > working.length) {
+        throw new Error("applyOps: insert index " + op.index + " out of range");
+      }
+      working.splice(op.index, 0, op.row);
+    } else if (op.op === "remove") {
+      if (op.index < 0 || op.index >= working.length) {
+        throw new Error("applyOps: remove index " + op.index + " out of range");
+      }
+      working.splice(op.index, 1);
+    } else if (op.op === "move") {
+      if (op.from < 0 || op.from >= working.length) {
+        throw new Error("applyOps: move from " + op.from + " out of range");
+      }
+      var item = working.splice(op.from, 1)[0];
+      if (op.to < 0 || op.to > working.length) {
+        throw new Error("applyOps: move to " + op.to + " out of range");
+      }
+      working.splice(op.to, 0, item);
+    } else {
+      throw new Error("applyOps: unknown op " + JSON.stringify(op));
+    }
+  }
+  return working;
+}
+
+function fieldsChanged(oldRow, newRow, fields) {
+  var flds = fields || [];
+  for (var i = 0; i < flds.length; i++) {
+    var f = flds[i];
+    var ov = oldRow ? oldRow[f] : undefined;
+    var nv = newRow ? newRow[f] : undefined;
+    if (Array.isArray(ov) || Array.isArray(nv)) {
+      var oa = Array.isArray(ov) ? ov : [];
+      var na = Array.isArray(nv) ? nv : [];
+      if (oa.length !== na.length) return true;
+      for (var j = 0; j < oa.length; j++) {
+        if (oa[j] !== na[j]) return true;
+      }
+    } else if (ov !== nv) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// One longest increasing subsequence of `seq` (any valid LIS; not
+// necessarily unique), returned as the sorted array of indices into `seq`
+// that belong to it. O(n log n).
+function longestIncreasingSubsequenceIndices(seq) {
+  var n = seq.length;
+  var predecessors = new Array(n);
+  var tailsIndices = [];
+  for (var i = 0; i < n; i++) {
+    var v = seq[i];
+    var lo = 0, hi = tailsIndices.length;
+    while (lo < hi) {
+      var mid = (lo + hi) >> 1;
+      if (seq[tailsIndices[mid]] < v) lo = mid + 1;
+      else hi = mid;
+    }
+    predecessors[i] = lo > 0 ? tailsIndices[lo - 1] : -1;
+    tailsIndices[lo] = i;
+  }
+  var result = [];
+  var k = tailsIndices.length ? tailsIndices[tailsIndices.length - 1] : -1;
+  while (k !== -1) {
+    result.push(k);
+    k = predecessors[k];
+  }
+  result.reverse();
+  return result;
+}
+
+// diffRows(oldRows, newRows, fields) -> ops | {reset:true}.
+//
+// Rows are keyed by `hash`; `fields` are the displayed fields to compare
+// (arrays, e.g. `tags`, compare element-wise). A duplicate hash in either
+// list makes a keyed diff undefined, so it resets.
+//
+// Emits, in this order: removes (old array, back to front), moves (only the
+// survivors NOT on a longest-increasing-subsequence anchor set, so a row
+// that travels far doesn't drag a "move" out of every row it passes),
+// inserts (new-only rows, walked left to right), then sets (changed
+// fields, left to right). Bails to {reset:true} the instant the op count
+// would exceed max(8, newRows.length/2).
+function diffRows(oldRows, newRows, fields) {
+  var old = oldRows || [];
+  var next = newRows || [];
+  var threshold = Math.max(8, next.length / 2);
+  var ops = [];
+
+  function overBudget() {
+    return ops.length > threshold;
+  }
+
+  var oldIndexByHash = {};
+  for (var i = 0; i < old.length; i++) {
+    var oh = rowHash(old[i]);
+    if (Object.prototype.hasOwnProperty.call(oldIndexByHash, oh)) return { reset: true };
+    oldIndexByHash[oh] = i;
+  }
+  var newIndexByHash = {};
+  for (var i = 0; i < next.length; i++) {
+    var nh = rowHash(next[i]);
+    if (Object.prototype.hasOwnProperty.call(newIndexByHash, nh)) return { reset: true };
+    newIndexByHash[nh] = i;
+  }
+
+  // Phase 1: remove old rows that don't survive into `next`, back to front
+  // against a live copy so every index is valid at the moment it's used.
+  var cur = old.slice();
+  for (var i = cur.length - 1; i >= 0; i--) {
+    if (!Object.prototype.hasOwnProperty.call(newIndexByHash, rowHash(cur[i]))) {
+      ops.push({ op: "remove", index: i });
+      cur.splice(i, 1);
+      if (overBudget()) return { reset: true };
+    }
+  }
+  // cur == survivors, in old relative order.
+
+  // Phase 2: reorder survivors to match their relative order in `next`.
+  var survivorsByNewOrder = cur.slice().sort(function(a, b) {
+    return newIndexByHash[rowHash(a)] - newIndexByHash[rowHash(b)];
+  });
+  var oldPosByHash = {};
+  for (var i = 0; i < cur.length; i++) oldPosByHash[rowHash(cur[i])] = i;
+  var seq = survivorsByNewOrder.map(function(row) { return oldPosByHash[rowHash(row)]; });
+  var anchorIdx = longestIncreasingSubsequenceIndices(seq);
+  var isAnchor = {};
+  for (var i = 0; i < anchorIdx.length; i++) isAnchor[anchorIdx[i]] = true;
+
+  for (var i = survivorsByNewOrder.length - 1; i >= 0; i--) {
+    if (isAnchor[i]) continue;
+    var row = survivorsByNewOrder[i];
+    var h = rowHash(row);
+    var from = -1;
+    for (var j = 0; j < cur.length; j++) {
+      if (rowHash(cur[j]) === h) { from = j; break; }
+    }
+    cur.splice(from, 1);
+    var to;
+    if (i === survivorsByNewOrder.length - 1) {
+      to = cur.length;
+    } else {
+      var nextHash = rowHash(survivorsByNewOrder[i + 1]);
+      to = -1;
+      for (var k = 0; k < cur.length; k++) {
+        if (rowHash(cur[k]) === nextHash) { to = k; break; }
+      }
+    }
+    cur.splice(to, 0, row);
+    ops.push({ op: "move", from: from, to: to });
+    if (overBudget()) return { reset: true };
+  }
+  // cur now equals `next` by hash order, but survivor rows still carry their
+  // OLD field values.
+
+  // Phase 3: insert new-only rows at their final index, walking `next` left
+  // to right (a correctly-ordered subsequence only needs the gaps filled).
+  for (var i = 0; i < next.length; i++) {
+    var h2 = rowHash(next[i]);
+    if (!Object.prototype.hasOwnProperty.call(oldIndexByHash, h2)) {
+      ops.push({ op: "insert", index: i, row: next[i] });
+      if (overBudget()) return { reset: true };
+    }
+  }
+
+  // Phase 4: set changed fields on survivors.
+  for (var i = 0; i < next.length; i++) {
+    var h3 = rowHash(next[i]);
+    if (Object.prototype.hasOwnProperty.call(oldIndexByHash, h3)) {
+      var oldRow = old[oldIndexByHash[h3]];
+      if (fieldsChanged(oldRow, next[i], fields)) {
+        ops.push({ op: "set", index: i, row: next[i] });
+        if (overBudget()) return { reset: true };
+      }
+    }
+  }
+
+  return ops;
+}
+
+// --- Filter sidebar: filterGroups / matchFilter / statusGroup ---------------
+//
+// statusGroup buckets a row the same way the table's state glyph does:
+// downloading, seeding, stopped, errored, checking. It layers a
+// checking-or-moving carve-out on top of classifyState (whose buckets fold
+// checkingDL/checkingUP into downloading/seeding and checkingResumeData into
+// "other") because the design's glyph table gives checking/moving states
+// their own glyph, distinct from downloading/seeding.
+function statusGroup(row) {
+  var r = row || {};
+  var s = normalizeState(r.state);
+  if (s.indexOf("checking") === 0 || s === "moving") return "checking";
+  var bucket = classifyState(r.state, r.progress);
+  if (bucket === "error") return "errored";
+  if (bucket === "downloading") return "downloading";
+  if (bucket === "seeding") return "seeding";
+  return "stopped"; // paused, completed, and any other unclassified state
+}
+
+var STATUS_ITEM_LABELS = ["All", "Active", "Downloading", "Seeding", "Stopped", "Errored", "Checking"];
+
+function statusItemMatches(label, row) {
+  if (label === "All") return true;
+  var g = statusGroup(row);
+  if (label === "Active") return g === "downloading" || g === "seeding";
+  if (label === "Downloading") return g === "downloading";
+  if (label === "Seeding") return g === "seeding";
+  if (label === "Stopped") return g === "stopped";
+  if (label === "Errored") return g === "errored";
+  if (label === "Checking") return g === "checking";
+  return false;
+}
+
+function makeFilterItem(group, value, label, count) {
+  return { group: group, value: value, label: label, count: count, zero: count === 0 };
+}
+
+function countRows(rows, predicate) {
+  var n = 0;
+  for (var i = 0; i < rows.length; i++) {
+    if (predicate(rows[i])) n++;
+  }
+  return n;
+}
+
+function caseInsensitiveAsc(a, b) {
+  var la = String(a).toLowerCase();
+  var lb = String(b).toLowerCase();
+  if (la === lb) return 0;
+  return la < lb ? -1 : 1;
+}
+
+// filterGroups(rows, categories, tags) -> [{group, items:[{group,value,label,count,zero}]}].
+//
+// `categories` and `tags` are the top-level lists from Status
+// (parseStatusJson's `categories`/`tags`, both arrays of name strings) --
+// the authoritative source for zero-count entries, unioned with whatever
+// rows carry. Sentinel entries (Uncategorized/Untagged/Trackerless) use
+// value:"" -- never the label string -- so a real category/tag/tracker
+// named e.g. "Uncategorized" can't collide with the sentinel, and
+// matchFilter needs no special case: value:"" already equals what an
+// unset row.category/tracker/[] tags compares as.
+function filterGroups(rows, categories, tags) {
+  var list = rows || [];
+  var i;
+
+  var statusItems = [];
+  for (i = 0; i < STATUS_ITEM_LABELS.length; i++) {
+    var label = STATUS_ITEM_LABELS[i];
+    var count = countRows(list, function(row) { return statusItemMatches(label, row); });
+    statusItems.push(makeFilterItem("status", label, label, count));
+  }
+
+  var categoryNames = {};
+  for (i = 0; i < (categories || []).length; i++) categoryNames[String(categories[i])] = true;
+  for (i = 0; i < list.length; i++) {
+    var c = String(list[i].category || "");
+    if (c !== "") categoryNames[c] = true;
+  }
+  var sortedCategoryNames = Object.keys(categoryNames).sort(caseInsensitiveAsc);
+  var categoryItems = [
+    makeFilterItem("categories", "", "Uncategorized", countRows(list, function(row) { return String(row.category || "") === ""; }))
+  ];
+  for (i = 0; i < sortedCategoryNames.length; i++) {
+    var catName = sortedCategoryNames[i];
+    categoryItems.push(makeFilterItem("categories", catName, catName, countRows(list, function(row) { return String(row.category || "") === catName; })));
+  }
+
+  var tagNames = {};
+  for (i = 0; i < (tags || []).length; i++) tagNames[String(tags[i])] = true;
+  for (i = 0; i < list.length; i++) {
+    var rowTags = Array.isArray(list[i].tags) ? list[i].tags : [];
+    for (var j = 0; j < rowTags.length; j++) tagNames[String(rowTags[j])] = true;
+  }
+  var sortedTagNames = Object.keys(tagNames).sort(caseInsensitiveAsc);
+  var tagItems = [
+    makeFilterItem("tags", "", "Untagged", countRows(list, function(row) { return !Array.isArray(row.tags) || row.tags.length === 0; }))
+  ];
+  for (i = 0; i < sortedTagNames.length; i++) {
+    var tagName = sortedTagNames[i];
+    tagItems.push(makeFilterItem("tags", tagName, tagName, countRows(list, function(row) {
+      return Array.isArray(row.tags) && row.tags.indexOf(tagName) !== -1;
+    })));
+  }
+
+  var trackerNames = {};
+  for (i = 0; i < list.length; i++) {
+    var t = String(list[i].tracker || "");
+    if (t !== "") trackerNames[t] = true;
+  }
+  var sortedTrackerNames = Object.keys(trackerNames).sort(caseInsensitiveAsc);
+  var trackerItems = [
+    makeFilterItem("trackers", "", "Trackerless", countRows(list, function(row) { return String(row.tracker || "") === ""; }))
+  ];
+  for (i = 0; i < sortedTrackerNames.length; i++) {
+    var host = sortedTrackerNames[i];
+    trackerItems.push(makeFilterItem("trackers", host, host, countRows(list, function(row) { return String(row.tracker || "") === host; })));
+  }
+
+  return [
+    { group: "status", items: statusItems },
+    { group: "categories", items: categoryItems },
+    { group: "tags", items: tagItems },
+    { group: "trackers", items: trackerItems }
+  ];
+}
+
+// matchFilter(row, filter) where filter is {group, value}. A missing or
+// unrecognized group fails open (matches everything), the same as the
+// default "All" filter.
+function matchFilter(row, filter) {
+  var f = filter || {};
+  var group = f.group;
+  var value = f.value;
+  if (group === "status") return statusItemMatches(String(value), row);
+  if (group === "categories") return String((row && row.category) || "") === String(value || "");
+  if (group === "tags") {
+    var rowTags = Array.isArray(row && row.tags) ? row.tags : [];
+    if (!value) return rowTags.length === 0;
+    return rowTags.indexOf(String(value)) !== -1;
+  }
+  if (group === "trackers") return String((row && row.tracker) || "") === String(value || "");
+  return true;
 }
 
 function filterByQuery(list, query) {
@@ -522,6 +959,12 @@ if (typeof module !== "undefined" && module.exports) {
     sortTorrents: sortTorrents,
     cycleSort: cycleSort,
     sortLabel: sortLabel,
+    SORT_FIELD_DESC_DEFAULT: SORT_FIELD_DESC_DEFAULT,
+    applyOps: applyOps,
+    diffRows: diffRows,
+    statusGroup: statusGroup,
+    filterGroups: filterGroups,
+    matchFilter: matchFilter,
     filterByQuery: filterByQuery,
     listQuery: listQuery,
     formatDate: formatDate,
