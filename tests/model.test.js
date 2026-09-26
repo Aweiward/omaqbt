@@ -1437,3 +1437,234 @@ test("toggleAllTargets chunks the live hashes when a pending magnet is in torren
   assert.ok(!args.join("|").includes(hx(5000)), "the pending hash is left out");
   assert.deepEqual(Model.toggleAllTargets([{ hash: hx(1) }], [hx(1)], 1000), [], "nothing live");
 });
+
+// --- magnetConfirmState (Panel.qml's magnet confirm, slice 1b Task 4) ------
+//
+// panelMagnet is Panel.qml's magnet derivation block (magnetCurrentPending
+// .. magnetMore) as it stood before Task 4, transcribed line for line with
+// `qbt.X` as arguments and `Date.now() / 1000` as nowSec. It pins today's
+// widget output: magnetConfirmState must agree with it on every input.
+function panelMagnet(qbtMagnetPending, qbtMagnetInbox, qbtTorrents, nowSec) {
+  const qbt = { magnetPending: qbtMagnetPending, magnetInbox: qbtMagnetInbox, torrents: qbtTorrents };
+  const magnetCurrentPending = (qbt.magnetPending && qbt.magnetPending.length > 0) ? qbt.magnetPending[0] : null;
+  const magnetCurrentInbox = (qbt.magnetInbox && qbt.magnetInbox.length > 0) ? qbt.magnetInbox[0] : null;
+  const magnetCurrentRow = (() => {
+    var p = magnetCurrentPending;
+    if (!p || !p.hash) return null;
+    for (var i = 0; i < qbt.torrents.length; i++) {
+      if (qbt.torrents[i].hash === p.hash || Model.torrentId(qbt.torrents[i]) === p.hash) return qbt.torrents[i];
+    }
+    return null;
+  })();
+  const magnetHasQueue = ((qbt.magnetPending && qbt.magnetPending.length > 0) || (qbt.magnetInbox && qbt.magnetInbox.length > 0));
+  const magnetIsError = (() => {
+    if (magnetCurrentPending) return false;
+    var line = magnetCurrentInbox;
+    return !!(line && line.error);
+  })();
+  const magnetCanStart = (() => {
+    var p = magnetCurrentPending;
+    var row = magnetCurrentRow;
+    if (!p || !row) return false;
+    if (Model.isRealName(row.name, p.hash) && !Model.pendingNeedsStop(row.state)) return true;
+    var age = nowSec - Number(p.addedAt || 0);
+    return age >= 15 && !Model.pendingNeedsStop(row.state);
+  })();
+  const magnetTitle = (() => {
+    var row = magnetCurrentRow;
+    var p = magnetCurrentPending;
+    if (row && p && Model.isRealName(row.name, p.hash)) return Model.plainText(row.name);
+    if (magnetCanStart && p && (p.dn || (row && row.name))) return Model.plainText(p.dn || row.name);
+    if (magnetCurrentPending || magnetCurrentInbox) return "Fetching name…";
+    return "";
+  })();
+  const magnetSizeText = (() => {
+    var row = magnetCurrentRow;
+    if (row && Number(row.size) > 0) return Model.formatSize(row.size);
+    return "";
+  })();
+  const magnetMore = Model.magnetMoreWaiting((qbt.magnetPending || []).length, (qbt.magnetInbox || []).length);
+  return {
+    magnetCurrentPending, magnetCurrentInbox, magnetCurrentRow, magnetHasQueue,
+    magnetIsError, magnetCanStart, magnetTitle, magnetSizeText, magnetMore
+  };
+}
+
+// The Panel property each magnetConfirmState field aliases.
+function asPanel(ms) {
+  return {
+    magnetCurrentPending: ms.pending, magnetCurrentInbox: ms.inbox, magnetCurrentRow: ms.row,
+    magnetHasQueue: ms.active, magnetIsError: ms.isError, magnetCanStart: ms.canStart,
+    magnetTitle: ms.title, magnetSizeText: ms.sizeText, magnetMore: ms.more
+  };
+}
+
+const MH = "d".repeat(40);
+const MNOW = 1000000;
+function mPending(extra) {
+  return Object.assign({ hash: MH, url: "magnet:?xt=urn:btih:" + MH, hashes: [MH], dn: "", addedAt: MNOW - 2 }, extra || {});
+}
+function mRow(extra) {
+  return Object.assign({ hash: MH, name: MH, state: "metaDL", progress: 0, size: 0 }, extra || {});
+}
+
+test("magnetConfirmState: nothing waiting", () => {
+  const ms = Model.magnetConfirmState([], [], [], MNOW);
+  assert.equal(ms.active, false);
+  assert.equal(ms.hash, "");
+  assert.equal(ms.inboxOnly, false);
+  assert.equal(ms.isError, false);
+  assert.equal(ms.canStart, false);
+  assert.equal(ms.title, "");
+  assert.equal(ms.sizeText, "");
+  assert.equal(ms.more, 0);
+  assert.equal(ms.error, "");
+  assert.deepEqual(asPanel(ms), panelMagnet([], [], [], MNOW));
+});
+
+test("magnetConfirmState: undefined inputs (a service without magnets) are inactive", () => {
+  const ms = Model.magnetConfirmState(undefined, undefined, undefined, undefined);
+  assert.equal(ms.active, false);
+  assert.equal(ms.pending, null);
+  assert.equal(ms.inbox, null);
+  assert.equal(ms.row, null);
+  assert.equal(ms.title, "");
+  assert.equal(ms.more, 0);
+});
+
+test("magnetConfirmState: fetching name (metadata not in, row still named by its hash)", () => {
+  const args = [[mPending()], [], [mRow()], MNOW];
+  const ms = Model.magnetConfirmState(...args);
+  assert.equal(ms.active, true);
+  assert.equal(ms.hash, MH);
+  assert.equal(ms.inboxOnly, false);
+  assert.equal(ms.canStart, false);
+  assert.equal(ms.title, "Fetching name…");
+  assert.equal(ms.sizeText, "");
+  assert.deepEqual(asPanel(ms), panelMagnet(...args));
+});
+
+test("magnetConfirmState: fetching name before the row shows up in status", () => {
+  const args = [[mPending()], [], [], MNOW];
+  const ms = Model.magnetConfirmState(...args);
+  assert.equal(ms.row, null);
+  assert.equal(ms.canStart, false);
+  assert.equal(ms.title, "Fetching name…");
+  assert.deepEqual(asPanel(ms), panelMagnet(...args));
+});
+
+test("magnetConfirmState: real name on a stopped row can start, with size", () => {
+  const args = [[mPending()], [], [mRow({ name: "Big <b>Buck</b> Bunny", state: "stoppedDL", size: 276134947 })], MNOW];
+  const ms = Model.magnetConfirmState(...args);
+  assert.equal(ms.canStart, true);
+  assert.equal(ms.title, "Big bBuck/b Bunny", "angle brackets stripped as the widget does");
+  assert.equal(ms.sizeText, "263.3 MiB");
+  assert.deepEqual(asPanel(ms), panelMagnet(...args));
+});
+
+test("magnetConfirmState: a row found by infohash_v1 when its hash differs", () => {
+  const row = { hash: "", infohash_v1: MH, name: "v1 row", state: "stoppedDL", size: 10 };
+  const args = [[mPending()], [], [row], MNOW];
+  const ms = Model.magnetConfirmState(...args);
+  assert.equal(ms.row, row);
+  assert.equal(ms.canStart, true);
+  assert.deepEqual(asPanel(ms), panelMagnet(...args));
+});
+
+test("magnetConfirmState: pendingNeedsStop blocks start even with a real name", () => {
+  for (const state of ["downloading", "metaDL", "stalledDL", "forcedDL", "uploading"]) {
+    const args = [[mPending({ addedAt: MNOW - 60 })], [], [mRow({ name: "Real", state })], MNOW];
+    const ms = Model.magnetConfirmState(...args);
+    assert.equal(ms.canStart, false, state);
+    assert.equal(ms.title, "Real", state);
+    assert.deepEqual(asPanel(ms), panelMagnet(...args), state);
+  }
+});
+
+test("magnetConfirmState: the 15-second fallback starts under dn once the row is stopped", () => {
+  const at14 = [[mPending({ dn: "Fallback DN", addedAt: MNOW - 14 })], [], [mRow({ state: "stoppedDL" })], MNOW];
+  let ms = Model.magnetConfirmState(...at14);
+  assert.equal(ms.canStart, false);
+  assert.equal(ms.title, "Fetching name…");
+  assert.deepEqual(asPanel(ms), panelMagnet(...at14));
+  const at15 = [[mPending({ dn: "Fallback DN", addedAt: MNOW - 15 })], [], [mRow({ state: "stoppedDL" })], MNOW];
+  ms = Model.magnetConfirmState(...at15);
+  assert.equal(ms.canStart, true);
+  assert.equal(ms.title, "Fallback DN");
+  assert.deepEqual(asPanel(ms), panelMagnet(...at15));
+  // no dn: the row's (hash) name
+  const noDn = [[mPending({ addedAt: MNOW - 30 })], [], [mRow({ state: "stoppedDL" })], MNOW];
+  ms = Model.magnetConfirmState(...noDn);
+  assert.equal(ms.canStart, true);
+  assert.equal(ms.title, MH);
+  assert.deepEqual(asPanel(ms), panelMagnet(...noDn));
+  // still downloading after 15 s: never startable
+  const busy = [[mPending({ dn: "Fallback DN", addedAt: MNOW - 30 })], [], [mRow({ state: "metaDL" })], MNOW];
+  ms = Model.magnetConfirmState(...busy);
+  assert.equal(ms.canStart, false);
+  assert.equal(ms.title, "Fetching name…");
+  assert.deepEqual(asPanel(ms), panelMagnet(...busy));
+});
+
+test("magnetConfirmState: inbox-only item and an inbox error", () => {
+  const line = { url: "magnet:?xt=urn:btih:" + "e".repeat(40), ts: 5, notified: false, ids: [], dn: "" };
+  let args = [[], [line], [], MNOW];
+  let ms = Model.magnetConfirmState(...args);
+  assert.equal(ms.active, true);
+  assert.equal(ms.hash, "");
+  assert.equal(ms.inboxOnly, true);
+  assert.equal(ms.isError, false);
+  assert.equal(ms.title, "Fetching name…");
+  assert.deepEqual(asPanel(ms), panelMagnet(...args));
+  const bad = Object.assign({}, line, { error: "unidentified" });
+  args = [[], [bad], [], MNOW];
+  ms = Model.magnetConfirmState(...args);
+  assert.equal(ms.isError, true);
+  assert.equal(ms.error, "unidentified");
+  assert.equal(ms.inboxOnly, true);
+  assert.equal(ms.canStart, false);
+  assert.deepEqual(asPanel(ms), panelMagnet(...args));
+  // a pending item wins over an inbox error
+  args = [[mPending()], [bad], [mRow()], MNOW];
+  ms = Model.magnetConfirmState(...args);
+  assert.equal(ms.isError, false);
+  assert.equal(ms.error, "");
+  assert.equal(ms.inboxOnly, false);
+  assert.deepEqual(asPanel(ms), panelMagnet(...args));
+});
+
+test("magnetConfirmState: more counts everything after the current item", () => {
+  const line = { url: "magnet:?xt=urn:btih:" + "e".repeat(40), ts: 5 };
+  let args = [[mPending(), mPending({ hash: "f".repeat(40) })], [line], [mRow()], MNOW];
+  let ms = Model.magnetConfirmState(...args);
+  assert.equal(ms.more, 2);
+  assert.deepEqual(asPanel(ms), panelMagnet(...args));
+  args = [[], [line, line], [], MNOW];
+  ms = Model.magnetConfirmState(...args);
+  assert.equal(ms.more, 1);
+  assert.deepEqual(asPanel(ms), panelMagnet(...args));
+});
+
+test("magnetConfirmState agrees with the widget's derivations on a generated matrix", () => {
+  const names = [MH, MH.toUpperCase(), "", "  ", "Real <i>name</i>"];
+  const states = ["metaDL", "stoppedDL", "pausedUP", "downloading", "error", undefined];
+  const ages = [0, 14.9, 15, 400];
+  const dns = ["", "The DN"];
+  const sizes = [0, -1, 5000];
+  const inboxes = [[], [{ url: "u", ts: 1 }], [{ url: "u", ts: 1, error: "boom" }]];
+  let n = 0;
+  for (const name of names) for (const state of states) for (const age of ages) for (const dn of dns)
+    for (const size of sizes) for (const inbox of inboxes) for (const withRow of [true, false]) {
+      const pending = [mPending({ dn, addedAt: MNOW - age })];
+      const torrents = withRow ? [mRow({ name, state, size })] : [mRow({ hash: "0".repeat(40) })];
+      assert.deepEqual(asPanel(Model.magnetConfirmState(pending, inbox, torrents, MNOW)),
+        panelMagnet(pending, inbox, torrents, MNOW));
+      assert.deepEqual(asPanel(Model.magnetConfirmState([], inbox, torrents, MNOW)),
+        panelMagnet([], inbox, torrents, MNOW));
+      n++;
+    }
+  assert.ok(n > 1000);
+  // a pending entry without a hash (never matches a row)
+  const noHash = [[{ url: "u", dn: "x", addedAt: 0 }], [], [mRow()], MNOW];
+  assert.deepEqual(asPanel(Model.magnetConfirmState(...noHash)), panelMagnet(...noHash));
+});

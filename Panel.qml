@@ -75,44 +75,19 @@ Panel {
   }
   readonly property string toggleHint: qbt.transferring ? "Stop all torrents" : "Start all torrents"
   readonly property bool showClipboard: qbt.ready && view === "list" && Model.isAddableTarget(qbt.clipboardText)
-  readonly property var magnetCurrentPending: (qbt.magnetPending && qbt.magnetPending.length > 0) ? qbt.magnetPending[0] : null
-  readonly property var magnetCurrentInbox: (qbt.magnetInbox && qbt.magnetInbox.length > 0) ? qbt.magnetInbox[0] : null
-  readonly property var magnetCurrentRow: {
-    var p = magnetCurrentPending
-    if (!p || !p.hash) return null
-    for (var i = 0; i < qbt.torrents.length; i++) {
-      if (qbt.torrents[i].hash === p.hash || Model.torrentId(qbt.torrents[i]) === p.hash) return qbt.torrents[i]
-    }
-    return null
-  }
-  readonly property bool magnetHasQueue: ((qbt.magnetPending && qbt.magnetPending.length > 0) || (qbt.magnetInbox && qbt.magnetInbox.length > 0))
-  readonly property bool magnetIsError: {
-    if (magnetCurrentPending) return false
-    var line = magnetCurrentInbox
-    return !!(line && line.error)
-  }
-  readonly property bool magnetCanStart: {
-    var p = magnetCurrentPending
-    var row = magnetCurrentRow
-    if (!p || !row) return false
-    if (Model.isRealName(row.name, p.hash) && !Model.pendingNeedsStop(row.state)) return true
-    var age = Date.now() / 1000 - Number(p.addedAt || 0)
-    return age >= 15 && !Model.pendingNeedsStop(row.state)
-  }
-  readonly property string magnetTitle: {
-    var row = magnetCurrentRow
-    var p = magnetCurrentPending
-    if (row && p && Model.isRealName(row.name, p.hash)) return Model.plainText(row.name)
-    if (magnetCanStart && p && (p.dn || (row && row.name))) return Model.plainText(p.dn || row.name)
-    if (magnetCurrentPending || magnetCurrentInbox) return "Fetching name…"
-    return ""
-  }
-  readonly property string magnetSizeText: {
-    var row = magnetCurrentRow
-    if (row && Number(row.size) > 0) return Model.formatSize(row.size)
-    return ""
-  }
-  readonly property int magnetMore: Model.magnetMoreWaiting((qbt.magnetPending || []).length, (qbt.magnetInbox || []).length)
+  // Model.magnetConfirmState is the one derivation the window shares. The
+  // binding re-runs on every magnet snapshot (250 ms while magnets wait),
+  // which is also what re-reads Date.now() for the 15-second fallback.
+  readonly property var magnetState: Model.magnetConfirmState(qbt.magnetPending, qbt.magnetInbox, qbt.torrents, Date.now() / 1000)
+  readonly property var magnetCurrentPending: magnetState.pending
+  readonly property var magnetCurrentInbox: magnetState.inbox
+  readonly property var magnetCurrentRow: magnetState.row
+  readonly property bool magnetHasQueue: magnetState.active
+  readonly property bool magnetIsError: magnetState.isError
+  readonly property bool magnetCanStart: magnetState.canStart
+  readonly property string magnetTitle: magnetState.title
+  readonly property string magnetSizeText: magnetState.sizeText
+  readonly property int magnetMore: magnetState.more
   readonly property bool magnetConfirmOpen: magnetHasQueue && view === "list"
 
   function selectedFile() {

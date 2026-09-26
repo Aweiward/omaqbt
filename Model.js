@@ -156,6 +156,65 @@ function magnetMoreWaiting(pendingLen, inboxLen) {
   return n - 1;
 }
 
+// magnetConfirmState(pending, inbox, torrents, nowSec) -> the browser-magnet
+// confirm both views show: the bar widget's popup (Panel.qml aliases its
+// magnetCurrentPending .. magnetMore properties to these fields) and the
+// window's pinned row. The current item is pending[0], else inbox[0]. Its
+// name and size come from the status row for the pending hash; it can start
+// once that row has a real name and is stopped, or 15 s after the add if
+// the row is stopped by then. nowSec is Date.now() / 1000 from the caller.
+//
+// {active, hash, inboxOnly, isError, canStart, title, sizeText, more} plus
+// the current pending entry, inbox line and status row (`pending`, `inbox`,
+// `row`, each null when absent) and the inbox line's `error` text.
+// inboxOnly: there is no pending hash to act on, only an inbox line (cancel
+// drops the line instead of deleting a torrent).
+function magnetConfirmState(pending, inbox, torrents, nowSec) {
+  var pList = pending || [];
+  var iList = inbox || [];
+  var tList = torrents || [];
+  var p = pList.length > 0 ? pList[0] : null;
+  var line = iList.length > 0 ? iList[0] : null;
+  var row = null;
+  if (p && p.hash) {
+    for (var i = 0; i < tList.length; i++) {
+      if (tList[i].hash === p.hash || torrentId(tList[i]) === p.hash) {
+        row = tList[i];
+        break;
+      }
+    }
+  }
+  var isError = !p && !!(line && line.error);
+  var canStart = false;
+  if (p && row) {
+    if (isRealName(row.name, p.hash) && !pendingNeedsStop(row.state)) {
+      canStart = true;
+    } else {
+      var age = nowSec - Number(p.addedAt || 0);
+      canStart = age >= 15 && !pendingNeedsStop(row.state);
+    }
+  }
+  var title = "";
+  if (row && p && isRealName(row.name, p.hash)) title = plainText(row.name);
+  else if (canStart && p && (p.dn || (row && row.name))) title = plainText(p.dn || row.name);
+  else if (p || line) title = "Fetching name…";
+  var hash = p && p.hash ? String(p.hash) : "";
+  return {
+    active: pList.length > 0 || iList.length > 0,
+    hash: hash,
+    inboxOnly: hash === "" && line !== null,
+    isError: isError,
+    canStart: canStart,
+    title: title,
+    sizeText: row && Number(row.size) > 0 ? formatSize(row.size) : "",
+    more: magnetMoreWaiting(pList.length, iList.length),
+    error: isError ? String(line.error) : "",
+    pending: p,
+    inbox: line,
+    row: row
+  };
+}
+
 function enqueueAction(queue, item) {
   return (queue || []).concat([item]);
 }
@@ -1136,6 +1195,7 @@ if (typeof module !== "undefined" && module.exports) {
     excludePending: excludePending,
     pendingNeedsStop: pendingNeedsStop,
     magnetMoreWaiting: magnetMoreWaiting,
+    magnetConfirmState: magnetConfirmState,
     enqueueAction: enqueueAction,
     makeActionItem: makeActionItem,
     shiftAction: shiftAction,
