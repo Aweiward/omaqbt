@@ -139,20 +139,6 @@ function clamp01(n) {
   return p > 1 ? 1 : p;
 }
 
-// Sizes the way the table shows them: "1.3 GiB", "754 MiB", "512 B".
-function sizeText(bytes) {
-  var n = Number(bytes);
-  if (!isFinite(n) || n < 0) n = 0;
-  var units = ["B", "KiB", "MiB", "GiB", "TiB"];
-  var i = 0;
-  while (n >= 1024 && i < units.length - 1) {
-    n = n / 1024;
-    i++;
-  }
-  if (i === 0) return Math.round(n) + " B";
-  return (n < 100 ? n.toFixed(1) : String(Math.round(n))) + " " + units[i];
-}
-
 // Compact per-row rates: "0", "820K", "4.1M", "12.4M".
 function rateText(bytesPerSec) {
   var n = Number(bytesPerSec);
@@ -228,7 +214,7 @@ function projectRow(row) {
     name: Model.plainText(r.name),
     glyph: g.glyph,
     glyphTone: g.tone,
-    sizeText: sizeText(r.size),
+    sizeText: Model.sizeText(r.size),
     bar: showBar ? barText(r.progress) : "",
     barTone: g.tone,
     progressText: word !== "" ? word : Model.formatPercent(clamp01(r.progress)),
@@ -1142,8 +1128,8 @@ function inspectorInfo(row, dateText) {
     name: text(r.name),
     fields: [
       { label: "State", value: g.glyph + " " + word + " · " + Model.formatPercent(clamp01(r.progress)), tone: g.tone },
-      { label: "Size", value: hasSize ? sizeText(size) + " (" + sizeText(size * clamp01(r.progress)) + " done)" : "—", tone: "fg" },
-      { label: "Speed", value: dl === null && ul === null ? "—" : "↓ " + sizeText(dl || 0) + "/s · ↑ " + sizeText(ul || 0) + "/s", tone: "fg" },
+      { label: "Size", value: hasSize ? Model.sizeText(size) + " (" + Model.sizeText(size * clamp01(r.progress)) + " done)" : "—", tone: "fg" },
+      { label: "Speed", value: dl === null && ul === null ? "—" : "↓ " + Model.sizeText(dl || 0) + "/s · ↑ " + Model.sizeText(ul || 0) + "/s", tone: "fg" },
       { label: "Peers", value: seeds === null && leechs === null ? "—" : plural(seeds || 0, "seed", "seeds") + " · " + plural(leechs || 0, "leecher", "leechers"), tone: "fg" },
       { label: "Ratio", value: hasRatio ? Math.max(0, ratio).toFixed(2) + " · limit " + Model.ratioLimitLabel(r.ratioLimit === undefined ? -2 : r.ratioLimit) : "—", tone: "fg" },
       { label: "Category", value: text(r.category), tone: "fg" },
@@ -1631,7 +1617,7 @@ if (typeof module !== "undefined" && module.exports) {
     isDefaultFilter: isDefaultFilter,
     filterLabel: filterLabel,
     paneTitle: paneTitle,
-    sizeText: sizeText,
+    sizeText: Model.sizeText,
     rateText: rateText,
     barCells: barCells,
     barText: barText,

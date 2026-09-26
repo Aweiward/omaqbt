@@ -273,6 +273,23 @@ function formatCompactRate(bytesPerSec) {
   return text + units[i];
 }
 
+// Sizes the way the table and inspector show them: "1.3 GiB", "754 MiB",
+// "512 B" (one decimal under 100 in a unit, none at or above -- moved here
+// from ClientView.js so InspectorView.js can share it without importing
+// ClientView.js).
+function sizeText(bytes) {
+  var n = Number(bytes);
+  if (!isFinite(n) || n < 0) n = 0;
+  var units = ["B", "KiB", "MiB", "GiB", "TiB"];
+  var i = 0;
+  while (n >= 1024 && i < units.length - 1) {
+    n = n / 1024;
+    i++;
+  }
+  if (i === 0) return Math.round(n) + " B";
+  return (n < 100 ? n.toFixed(1) : String(Math.round(n))) + " " + units[i];
+}
+
 function barSpeedText(dlSpeed, upSpeed, active) {
   if (!active) return "";
   return "↓" + formatCompactRate(dlSpeed) + " ↑" + formatCompactRate(upSpeed);
@@ -1200,6 +1217,7 @@ if (typeof module !== "undefined" && module.exports) {
     makeActionItem: makeActionItem,
     shiftAction: shiftAction,
     formatSize: formatSize,
+    sizeText: sizeText,
     formatRate: formatRate,
     formatCompactRate: formatCompactRate,
     barSpeedText: barSpeedText,
