@@ -431,6 +431,56 @@ TestCase {
     compare(sl.selectedCount, 0)
   }
 
+  function hx(i) { var s = i.toString(16); while (s.length < 40) s = "0" + s; return s }
+
+  function test_visual_bulk_over_2500_chunks_and_reports_once() {
+    var o = make()
+    var rows = []
+    for (var i = 0; i < 2500; i++) rows.push(tt(hx(i), "t" + i, { addedOn: i }))
+    o.svc.torrents = rows
+    key(o.c, "V", 0x56, 0x02000000)
+    o.c.cursorHash = hx(0)           // G is NORMAL-only; stretch the range directly
+    compare(o.c.visualHashes.length, 2500)
+    var before = o.svc.calls.length
+    key(o.c, " ", 0x20)
+    var acted = o.svc.calls.slice(before).filter(function(c) { return c.name === "stop" })
+    compare(acted.length, 3, "2500 hashes go out as 3 chunks")
+    compare(acted[0].args[0].split("|").length, 1000)
+    compare(acted[1].args[0].split("|").length, 1000)
+    compare(acted[2].args[0].split("|").length, 500)
+    compare(acted[2].args[1].hashes.length, 500, "each chunk carries its own hashes")
+    var t1 = o.svc.seq - 2, t2 = o.svc.seq - 1, t3 = o.svc.seq
+    compare(o.c.messageLine.text, "Stopping 2500 torrents…")
+    o.svc.actionFinished(t1, false, "HTTP 500", "window", [])
+    compare(o.c.messageLine.text, "Stopping 2500 torrents…", "no error while chunks run")
+    o.svc.actionFinished(t2, true, "", "window", [])
+    compare(o.c.messageLine.tone, "muted")
+    o.svc.actionFinished(t3, true, "", "window", [])
+    compare(o.c.messageLine.text, "Couldn't stop 2500 torrents: HTTP 500")
+    compare(o.c.messageLine.tone, "urgent")
+    compare(Object.keys(o.c.errorHashes).length, 2500)
+  }
+
+  function test_visual_bulk_delete_and_recheck_chunk() {
+    var o = make()
+    var rows = []
+    for (var i = 0; i < 1500; i++) rows.push(tt(hx(i), "t" + i, { addedOn: i }))
+    o.svc.torrents = rows
+    key(o.c, "V", 0x56, 0x02000000); o.c.cursorHash = hx(0)
+    compare(o.c.visualHashes.length, 1500)
+    var before = o.svc.calls.length
+    key(o.c, "e")
+    compare(o.svc.calls.slice(before).filter(function(c) { return c.name === "recheck" }).length, 2)
+    key(o.c, "V", 0x56, 0x02000000); o.c.cursorHash = hx(1499)
+    compare(o.c.visualHashes.length, 1500)
+    key(o.c, "x"); key(o.c, "y")
+    var dels = o.svc.calls.filter(function(c) { return c.name === "delete" })
+    compare(dels.length, 2)
+    compare(dels[0].args[0].split("|").length, 1000)
+    compare(dels[1].args[0].split("|").length, 500)
+    compare(o.c.messageLine.text, "Removing 1500 torrents…")
+  }
+
   function test_t_tracks_every_toggle_all_ticket() {
     var o = make()
     o.svc.torrents = list3()

@@ -371,9 +371,20 @@ Item {
     return { origin: "window", hashes: hashes }
   }
 
+  // Runs call(joined, chunk) once per Model.chunkHashes chunk of hashes (one
+  // argv string can't carry a large VISUAL range) and returns the tickets,
+  // which track() reports as one action.
+  function perChunk(hashes, call) {
+    var chunks = Model.chunkHashes(hashes)
+    var tickets = []
+    for (var i = 0; i < chunks.length; i++) tickets.push(call(chunks[i].join("|"), chunks[i]))
+    return tickets
+  }
+
   // ---- messages --------------------------------------------------------------
 
-  // Records one of this window's tickets and shows its progress.
+  // Records one of this window's tickets (or the tickets of one chunked
+  // action, as an array) and shows its progress.
   function track(ticket, kind, hashes) {
     messages = View.msgTrack(messages, ticket, kind, hashes.length, hashes)
   }
@@ -559,8 +570,9 @@ Item {
       hashes = targets
       if (hashes.length === 0) return
       starts = View.toggleStarts(rawFor(hashes))
-      if (starts) track(service.startHash(hashes.join("|"), opts(hashes)), "start", hashes)
-      else track(service.stopHash(hashes.join("|"), opts(hashes)), "stop", hashes)
+      track(perChunk(hashes, function(joined, chunk) {
+        return starts ? service.startHash(joined, opts(chunk)) : service.stopHash(joined, opts(chunk))
+      }), starts ? "start" : "stop", hashes)
       return
 
     case "torrent.remove":
@@ -569,13 +581,17 @@ Item {
       confirmHashes = []
       if (hashes.length === 0) return
       var withFiles = commandId === "torrent.delete"
-      track(service.deleteHash(hashes.join("|"), withFiles, opts(hashes)), withFiles ? "delete" : "remove", hashes)
+      track(perChunk(hashes, function(joined, chunk) {
+        return service.deleteHash(joined, withFiles, opts(chunk))
+      }), withFiles ? "delete" : "remove", hashes)
       return
 
     case "torrent.recheck":
       hashes = targets
       if (hashes.length === 0) return
-      track(service.recheckHash(hashes.join("|"), opts(hashes)), "recheck", hashes)
+      track(perChunk(hashes, function(joined, chunk) {
+        return service.recheckHash(joined, opts(chunk))
+      }), "recheck", hashes)
       return
 
     case "torrent.openFolder":
