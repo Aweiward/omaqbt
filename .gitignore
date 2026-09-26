@@ -11,3 +11,4 @@ tests/fixtures/.rid
 tests/fixtures/.bind
 tests/fixtures/.magnet-state
 tests/fixtures/cookies
+__pycache__/
