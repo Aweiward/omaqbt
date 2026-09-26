@@ -253,8 +253,11 @@ Item {
     Qt.callLater(function() { table.positionAt(root.cursorIndex) })
   }
 
-  // reveal: also scroll the cursor into view even if its index is the same
-  // (restore, re-sort). Otherwise it is revealed only when its index moved.
+  // reveal: scroll the cursor row into view afterwards. Only changes the
+  // user started pass it (restore, s/S, a filter or query change; cursor
+  // keys reveal through setCursor). Background status ticks never do, even
+  // when a dynamic sort moves the cursor's index, so a tick can't snap the
+  // view back while the user scrolls.
   function rebuildRows(reveal) {
     if (!service) return
     var torrents = service.torrents || []
@@ -270,8 +273,7 @@ Item {
     // An automatic cursor move (its torrent went away, or a restored hash
     // no longer exists) isn't saved; only user moves are.
     cursorHash = View.resolveCursor(v.rows, cursorHash, prevIndex)
-    var nextIndex = View.indexOfHash(v.rows, cursorHash)
-    if (nextIndex >= 0 && (reveal === true || nextIndex !== prevIndex)) revealCursor()
+    if (reveal === true && View.indexOfHash(v.rows, cursorHash) >= 0) revealCursor()
   }
 
   function setCursor(hash) {
@@ -420,10 +422,10 @@ Item {
     } else if (Model.isAddableTarget(text)) {
       track(service.addTarget(text, false, "", opts([])), View.progressText("add", 1))
       textQuery = ""
-      rebuildRows()
+      rebuildRows(true)
     } else {
       textQuery = Model.listQuery(text)
-      rebuildRows()
+      rebuildRows(true)
     }
     endInput()
   }
@@ -442,7 +444,7 @@ Item {
   function cancelInput() {
     if (inputPurpose === "filter") {
       textQuery = queryBeforeEdit
-      rebuildRows()
+      rebuildRows(true)
     }
     moveHashes = []
     endInput()
@@ -559,13 +561,13 @@ Item {
     case "filter.clearText":
       if (textQuery === "") return
       textQuery = ""
-      rebuildRows()
+      rebuildRows(true)
       return
 
     case "filter.reset":
       textQuery = ""
       filter = View.defaultFilter()
-      rebuildRows()
+      rebuildRows(true)
       saveView()
       return
 
@@ -853,7 +855,7 @@ Item {
           // "Matches update as you type"; a pasted magnet/URL/path is an
           // add target, not a query, so it doesn't filter the table empty.
           root.textQuery = Model.listQuery(text)
-          root.rebuildRows()
+          root.rebuildRows(true)
         }
       }
     }
