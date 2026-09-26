@@ -23,8 +23,9 @@ import "ClientView.js" as View
 // event, calls Registry.dispatch, and hands the result to run(). No
 // PanelKeyCatcher (it eats h/j/k/l, Esc, Tab, Enter and Space).
 //
-// Task 7 scope: the filter and inspector panes are titled placeholders;
-// `?` and `V` do nothing yet; messages are progress only (Task 8).
+// Decisions (targets, the VISUAL range, messages, filter/file cursors,
+// inspector fields, help rows) live in ClientView.js as pure, node-tested
+// functions; this file wires them to Service and the panes.
 Item {
   id: root
 
@@ -65,16 +66,48 @@ Item {
   property string inputPurpose: ""
   property string queryBeforeEdit: ""
   property var moveHashes: []
-  // A message this window owns (progress in muted, a validation problem in
-  // urgent); cleared by the next key.
-  property string noteText: ""
-  property string noteTone: "muted"
-  // ticket -> progress text, for this window's own actions only.
-  property var tickets: ({})
-  property string progressText: ""
+  // The status-line message state (View.emptyMessages): this window's
+  // tickets and their progress, an error kept until the next key (with its
+  // rows marked `!`), and one-key notes.
+  property var messages: View.emptyMessages()
+  readonly property var messageLine: View.messageLine(messages)
   // When `y` asked for the clipboard (ms); its answer is used only if it
   // arrives soon after, so a stale request can't add something later.
   property double clipboardAskedAt: 0
+
+  // ---- VISUAL ----------------------------------------------------------------
+  // The row V was pressed on; the range is anchor..cursor in the current
+  // order (View.visualRange). Empty outside VISUAL.
+  property string anchorHash: ""
+  readonly property var visualHashes: mode === "VISUAL" ? View.visualRange(tableRows, anchorHash, cursorHash) : []
+  // The rows painted with Style.selectionFill: the live range in VISUAL,
+  // and the fixed range a CONFIRM raised from VISUAL will act on.
+  readonly property var rangeHashes: View.hashSet(mode === "VISUAL" ? visualHashes
+    : (mode === "CONFIRM" && confirmHashes.length > 1 ? confirmHashes : []))
+  readonly property var errorHashes: View.hashSet(messages.errorHashes)
+
+  // ---- filter pane -------------------------------------------------------------
+  property var filterEntries: []
+  // The j/k cursor in the filter pane; Enter applies it (becomes `filter`).
+  property var filterCursor: View.defaultFilter()
+
+  // ---- inspector -----------------------------------------------------------------
+  readonly property var cursorRow: tableState === "rows" ? rawRow(cursorHash) : null
+  readonly property var inspectorInfo: View.inspectorInfo(cursorRow, function(sec) {
+    return Qt.formatDateTime(new Date(sec * 1000), "yyyy-MM-dd hh:mm")
+  })
+  readonly property var filesState: View.filesView(
+    service && cursorRow ? (service.filesByHash || {})[cursorHash] : [],
+    service && cursorRow ? (service.filesStatusByHash || {})[cursorHash] : undefined)
+  property int fileIndex: 0
+  // The hash whose files this window last asked for, and whether a failed
+  // answer for it still has to be reported on the status line.
+  property string filesLoadedHash: ""
+  property bool filesErrorPending: false
+
+  // ---- help ------------------------------------------------------------------------
+  property bool helpOpen: false
+  property string helpPane: "table"
 
   // ---- rows ---------------------------------------------------------------
   property var rawRows: []
@@ -270,6 +303,8 @@ Item {
     tableRows = v.rows
     liveCount = live.length
     matchesInAll = Model.filterByQuery(live, textQuery).length
+    var entries = View.filterEntries(Model.filterGroups(live, service.categories || [], service.tags || []))
+    if (!View.sameEntries(filterEntries, entries)) filterEntries = entries
     // An automatic cursor move (its torrent went away, or a restored hash
     // no longer exists) isn't saved; only user moves are.
     cursorHash = View.resolveCursor(v.rows, cursorHash, prevIndex)
@@ -286,7 +321,28 @@ Item {
   function setPane(next) {
     if (next === pane) return
     pane = next
+    // Entering the filter pane puts its cursor on the active filter.
+    if (next === "filters") setFilterCursor(View.filterIndex(filterEntries, filter) >= 0 ? filter : View.moveFilterCursor(filterEntries, null, 1))
     saveView()
+  }
+
+  function setFilterCursor(f) {
+    filterCursor = { group: f.group, value: f.value }
+    var i = View.filterIndex(filterEntries, filterCursor)
+    if (i >= 0) Qt.callLater(function() { filterPane.positionAt(i) })
+  }
+
+  function applyFilter(f) {
+    filter = { group: f.group, value: f.value }
+    rebuildRows(true)
+    saveView()
+  }
+
+  function rawRow(hash) {
+    for (var i = 0; i < rawRows.length; i++) {
+      if (Model.torrentId(rawRows[i]) === hash) return rawRows[i]
+    }
+    return null
   }
 
   function rawFor(hashes) {
@@ -297,42 +353,53 @@ Item {
     return out
   }
 
-  // The torrents a command acts on. Task 8 widens this to the VISUAL range.
-  function targetHashes() {
-    return cursorIndex >= 0 ? [cursorHash] : []
-  }
-
   function opts(hashes) {
     return { origin: "window", hashes: hashes }
   }
 
   // ---- messages --------------------------------------------------------------
 
-  function track(ticket, text) {
-    if (!ticket || ticket <= 0) return
-    var next = ({})
-    for (var k in tickets) next[k] = tickets[k]
-    next[ticket] = text
-    tickets = next
-    progressText = text
-  }
-
-  function finishTicket(ticket) {
-    if (!Object.prototype.hasOwnProperty.call(tickets, ticket)) return
-    var next = ({})
-    var last = ""
-    for (var k in tickets) {
-      if (String(k) === String(ticket)) continue
-      next[k] = tickets[k]
-      last = tickets[k]
-    }
-    tickets = next
-    progressText = last
+  // Records one of this window's tickets and shows its progress.
+  function track(ticket, kind, hashes) {
+    messages = View.msgTrack(messages, ticket, kind, hashes.length, hashes)
   }
 
   function note(text, tone) {
-    noteText = text
-    noteTone = tone || "muted"
+    messages = View.msgNote(messages, text, tone)
+  }
+
+  // ---- files (inspector tab 4) ----------------------------------------------
+
+  // Asks Service for the cursor row's files when the Files tab shows a row
+  // whose files this window hasn't asked for yet (force: `r` reloads).
+  function syncFiles(force) {
+    if (!service || inspectorTab !== "files" || cursorRow === null) return
+    if (!force && filesLoadedHash === cursorHash) return
+    if (filesLoadedHash !== cursorHash) fileIndex = 0
+    filesLoadedHash = cursorHash
+    filesErrorPending = true
+    service.loadFiles(cursorHash, opts([cursorHash]))
+  }
+
+  // A failed read of the files this window asked for goes to the status
+  // line once (the Files tab itself shows "Couldn't read files").
+  function checkFilesStatus() {
+    if (!filesErrorPending || !service) return
+    var st = (service.filesStatusByHash || {})[filesLoadedHash]
+    if (!st || st.state === "loading") return
+    filesErrorPending = false
+    if (st.state === "error") {
+      messages = View.msgError(messages, View.failureText("files", 1) + (st.error ? ": " + st.error : "."), [])
+    }
+  }
+
+  function cycleFile(index) {
+    var files = service.filesFor(cursorHash)
+    if (index < 0 || index >= files.length) return
+    var file = files[index]
+    var next = Model.cyclePriority(file.priority)
+    track(service.setPrio(cursorHash, file.index, next, opts([cursorHash])), "prio", [cursorHash])
+    service.setFilesFor(cursorHash, View.withPriority(files, file.index, next))
   }
 
   // ---- keys --------------------------------------------------------------------
@@ -343,27 +410,24 @@ Item {
 
   function handleKey(event) {
     var ev = View.keyEvent(event.key, event.text, event.modifiers, Date.now())
-    noteText = ""
-    var st = ({})
-    for (var k in regState) st[k] = regState[k]
-    st.pane = View.dispatchPane(pane, tableState)
-    st.hasTorrent = tableState === "rows" && cursorIndex >= 0
-    st.selectionCount = 0
-    var res = Registry.dispatch(st, ev)
-
-    // Task 8 owns VISUAL and the help overlay: V and ? do nothing yet, and
-    // the mode switch dispatch() made for V is dropped with them.
-    if (res.commandId === "visual.enter" || res.commandId === "help.toggle") {
-      st.prefix = null
-      st.prefixAt = 0
-      regState = st
+    // Any key ends an error (and its row marks) or a note.
+    messages = View.msgKey(messages)
+    if (helpOpen) {
+      // The overlay takes the key that closes it.
+      helpOpen = false
       return
     }
+    // Targets are fixed before dispatch: Space/x/X/e from VISUAL come back
+    // in NORMAL or CONFIRM, and must still act on the range as it stood.
+    var targets = View.targetHashes(regState.mode, tableRows, cursorHash, anchorHash)
+    var st = View.dispatchState(regState, pane, tableState, cursorIndex >= 0, targets)
+    var res = Registry.dispatch(st, ev)
 
     regState = res.state
+    anchorHash = View.nextAnchor(res.state.mode, res.commandId, anchorHash, cursorHash)
     if (res.confirm) {
       confirm = res.confirm
-      confirmHashes = targetHashes()
+      confirmHashes = targets
       return
     }
     if (res.state.mode !== "CONFIRM") confirm = null
@@ -371,7 +435,7 @@ Item {
       handleBlocked(ev)
       return
     }
-    if (res.commandId) run(res.commandId, res.args || ({}), ev)
+    if (res.commandId) run(res.commandId, res.args || ({}), ev, targets)
   }
 
   // A key whose command needs a torrent, pressed with none under the
@@ -417,10 +481,10 @@ Item {
         stayInInsert()
         return
       }
-      track(service.setLocation(moveHashes.join("|"), text, opts(moveHashes)), View.progressText("move", moveHashes.length))
+      track(service.setLocation(moveHashes.join("|"), text, opts(moveHashes)), "move", moveHashes)
       moveHashes = []
     } else if (Model.isAddableTarget(text)) {
-      track(service.addTarget(text, false, "", opts([])), View.progressText("add", 1))
+      track(service.addTarget(text, false, "", opts([])), "add", [])
       textQuery = ""
       rebuildRows(true)
     } else {
@@ -452,9 +516,12 @@ Item {
 
   // Maps a command id from CommandRegistry to Service calls and view
   // changes. Service calls always carry {origin: "window", hashes}.
-  function run(commandId, args, ev) {
+  // targets: View.targetHashes as it stood before dispatch (the VISUAL
+  // range, or the cursor row).
+  function run(commandId, args, ev, targets) {
     if (!service) return
-    var hashes, rows, starts
+    var hashes, rows, starts, ticket
+    targets = targets || []
 
     switch (commandId) {
     case "cursor.down":
@@ -464,44 +531,57 @@ Item {
       setCursor(View.moveCursor(tableRows, cursorHash, commandId))
       return
 
+    case "visual.enter":
+    case "visual.exit":
+      // The mode and the anchor were set in handleKey.
+      return
+
+    case "help.toggle":
+      helpPane = View.dispatchPane(pane, tableState)
+      helpOpen = true
+      return
+
     case "torrent.toggle":
-      hashes = targetHashes()
+      hashes = targets
       if (hashes.length === 0) return
       starts = View.toggleStarts(rawFor(hashes))
-      if (starts) track(service.startHash(hashes.join("|"), opts(hashes)), View.progressText("start", hashes.length))
-      else track(service.stopHash(hashes.join("|"), opts(hashes)), View.progressText("stop", hashes.length))
+      if (starts) track(service.startHash(hashes.join("|"), opts(hashes)), "start", hashes)
+      else track(service.stopHash(hashes.join("|"), opts(hashes)), "stop", hashes)
       return
 
     case "torrent.remove":
     case "torrent.delete":
-      hashes = args.confirmed === true ? confirmHashes : targetHashes()
+      hashes = args.confirmed === true ? confirmHashes : targets
       confirmHashes = []
       if (hashes.length === 0) return
       var withFiles = commandId === "torrent.delete"
-      track(service.deleteHash(hashes.join("|"), withFiles, opts(hashes)),
-        View.progressText(withFiles ? "delete" : "remove", hashes.length))
+      track(service.deleteHash(hashes.join("|"), withFiles, opts(hashes)), withFiles ? "delete" : "remove", hashes)
       return
 
     case "torrent.recheck":
-      hashes = targetHashes()
+      hashes = targets
       if (hashes.length === 0) return
-      track(service.recheckHash(hashes.join("|"), opts(hashes)), View.progressText("recheck", hashes.length))
+      track(service.recheckHash(hashes.join("|"), opts(hashes)), "recheck", hashes)
       return
 
     case "torrent.openFolder":
-      rows = rawFor(targetHashes())
-      if (rows.length > 0 && rows[0].savePath) service.openPath(rows[0].savePath)
+      rows = rawFor(targets)
+      if (rows.length > 0 && rows[0].savePath) service.openPath(rows[0].savePath, opts(targets))
       return
 
     case "torrent.copyMagnet":
-      rows = rawFor(targetHashes())
+      rows = rawFor(targets)
       if (rows.length === 0) return
-      service.copyMagnet(rows[0])
-      note("Copied magnet.", "muted")
+      // The window validates its own input: Service returns 0 silently.
+      if (!Model.magnetUriFor(rows[0])) {
+        note("No magnet for this torrent.", "urgent")
+        return
+      }
+      track(service.copyMagnet(rows[0], opts(targets)), "copy", targets)
       return
 
     case "torrent.move":
-      hashes = targetHashes()
+      hashes = targets
       rows = rawFor(hashes)
       if (rows.length === 0) return
       moveHashes = hashes
@@ -511,13 +591,15 @@ Item {
     case "inspector.files":
       // Enter doubles as the primary action of a blocking state.
       if (isEnterKey(ev) && tableState === "daemon") {
-        service.startDaemon()
-        note(View.progressText("daemon", 0), "muted")
+        ticket = service.startDaemon(opts([]))
+        if (ticket > 0) track(ticket, "daemon", [])
+        else note(View.progressText("daemon", 0), "muted")
         return
       }
       if (isEnterKey(ev) && tableState === "notInstalled") {
-        service.installDaemon()
-        note(View.progressText("install", 0), "muted")
+        ticket = service.installDaemon(opts([]))
+        if (ticket > 0) track(ticket, "install", [])
+        else note(View.progressText("install", 0), "muted")
         return
       }
       inspectorTab = "files"
@@ -533,11 +615,11 @@ Item {
       for (var i = 0; i < live.length; i++) hashes.push(Model.torrentId(live[i]))
       if (hashes.length === 0) return
       starts = !Model.anyActive(live)
-      track(service.toggleAll(opts(hashes)), View.progressText(starts ? "startAll" : "stopAll", hashes.length))
+      track(service.toggleAll(opts(hashes)), starts ? "startAll" : "stopAll", hashes)
       return
 
     case "turtle.toggle":
-      track(service.toggleTurtle(opts([])), View.progressText("turtle", 0))
+      track(service.toggleTurtle(opts([])), "turtle", [])
       return
 
     case "sort.next":
@@ -567,8 +649,31 @@ Item {
     case "filter.reset":
       textQuery = ""
       filter = View.defaultFilter()
+      filterCursor = View.defaultFilter()
       rebuildRows(true)
       saveView()
+      return
+
+    case "filter.down":
+    case "filter.up":
+      setFilterCursor(View.moveFilterCursor(filterEntries, filterCursor, commandId === "filter.down" ? 1 : -1))
+      return
+
+    case "filter.apply":
+      if (View.filterIndex(filterEntries, filterCursor) < 0) return
+      applyFilter(filterCursor)
+      return
+
+    case "file.down":
+    case "file.up":
+      if (inspectorTab !== "files" || filesState.state !== "rows") return
+      fileIndex = View.moveIndex(filesState.rows.length, fileIndex, commandId === "file.down" ? 1 : -1)
+      inspector.positionFile(fileIndex)
+      return
+
+    case "file.cycle":
+      if (inspectorTab !== "files" || filesState.state !== "rows") return
+      cycleFile(fileIndex)
       return
 
     case "insert.commit":
@@ -581,6 +686,7 @@ Item {
 
     case "refresh":
       service.refresh()
+      syncFiles(true)
       return
 
     case "pane.next":
@@ -601,7 +707,6 @@ Item {
       return
 
     default:
-      // filter.down/up/apply: Task 8 (FilterPane).
       return
     }
   }
@@ -609,6 +714,9 @@ Item {
   // ---- wiring ----------------------------------------------------------------
 
   onServiceChanged: adoptService()
+  onCursorHashChanged: syncFiles(false)
+  onInspectorTabChanged: syncFiles(false)
+  onTableStateChanged: syncFiles(false)
 
   Component.onCompleted: {
     if (service) adoptService()
@@ -628,22 +736,20 @@ Item {
       if (!root.viewTouched) root.applyViewState(root.service.viewState)
     }
     function onActionFinished(ticket, ok, error, origin, hashes) {
-      // Strictly this window's own tickets: a pending-magnet drop can emit
-      // extra window-origin signals that carry our hashes.
-      root.finishTicket(ticket)
+      // Strictly this window's own tickets (msgFinish ignores the rest): a
+      // pending-magnet drop can emit extra window-origin signals that
+      // carry our hashes.
+      root.messages = View.msgFinish(root.messages, ticket, ok, error)
     }
-    function onClipboardTextChanged() {
-      if (root.clipboardAskedAt <= 0) return
-      if (Date.now() - root.clipboardAskedAt > 3000) {
-        root.clipboardAskedAt = 0
-        return
-      }
-      var text = String(root.service.clipboardText || "").trim()
-      if (text === "") return
+    function onClipboardRead(text) {
+      var outcome = View.clipboardOutcome(text, root.clipboardAskedAt, Date.now())
+      if (outcome === "none") return
       root.clipboardAskedAt = 0
-      if (Model.isAddableTarget(text)) root.track(root.service.addTarget(text, false, "", root.opts([])), View.progressText("add", 1))
-      else root.note("The clipboard has no magnet, .torrent URL or .torrent path.", "urgent")
+      if (outcome === "add") root.track(root.service.addTarget(String(text).trim(), false, "", root.opts([])), "add", [])
+      else if (outcome === "empty") root.note("The clipboard is empty.", "urgent")
+      else if (outcome === "invalid") root.note("The clipboard has no magnet, .torrent URL or .torrent path.", "urgent")
     }
+    function onFilesStatusByHashChanged() { root.checkFilesStatus() }
   }
 
   Timer {
@@ -793,6 +899,22 @@ Item {
           height: panes.height
           title: "Filters"
           focusedPane: root.pane === "filters"
+
+          FilterPane {
+            id: filterPane
+            anchors.fill: parent
+            entries: root.filterEntries
+            activeFilter: root.filter
+            cursorFilter: root.filterCursor
+            focusedPane: root.pane === "filters"
+            onItemClicked: function(group, value) {
+              root.leaveInsert()
+              root.setPane("filters")
+              root.setFilterCursor({ group: group, value: value })
+              root.applyFilter({ group: group, value: value })
+              keyRoot.forceActiveFocus()
+            }
+          }
         }
 
         Pane {
@@ -811,6 +933,8 @@ Item {
             tableState: root.tableState
             stateCopy: root.stateCopy
             showLoadingText: root.loadingTextDue
+            rangeHashes: root.rangeHashes
+            errorHashes: root.errorHashes
             onRowClicked: function(hash) {
               root.leaveInsert()
               root.setPane("table")
@@ -826,6 +950,28 @@ Item {
           title: "Inspector"
           focusedPane: root.pane === "inspector"
           rightLine: false
+
+          InspectorPane {
+            id: inspector
+            anchors.fill: parent
+            tab: root.inspectorTab
+            info: root.inspectorInfo
+            files: root.filesState
+            fileIndex: root.fileIndex
+            focusedPane: root.pane === "inspector"
+            onTabClicked: function(tab) {
+              root.leaveInsert()
+              root.inspectorTab = tab
+              keyRoot.forceActiveFocus()
+            }
+            onFileClicked: function(index) {
+              root.leaveInsert()
+              root.setPane("inspector")
+              root.fileIndex = index
+              root.cycleFile(index)
+              keyRoot.forceActiveFocus()
+            }
+          }
         }
       }
 
@@ -837,17 +983,20 @@ Item {
         mode: root.mode
         confirmParts: root.confirm ? View.confirmLine(root.confirm) : null
         countText: View.countText(root.liveCount)
+        selectedCount: root.mode === "VISUAL" ? root.visualHashes.length : 0
         speedText: root.service ? "↓ " + Model.formatRate(root.service.dlSpeed) + " ↑ " + Model.formatRate(root.service.upSpeed) : ""
         turtle: !!root.service && root.service.altSpeed
         vpn: root.service ? View.vpnPart(root.service.vpnIface, root.service.bindIface, root.service.vpnUnbound) : null
         sidecarDown: !!root.service && root.service.sidecarState === "down"
         loading: root.loading
-        message: root.noteText !== "" ? root.noteText : root.progressText
-        messageTone: root.noteText !== "" ? root.noteTone : "muted"
+        message: root.messageLine.text
+        messageTone: root.messageLine.tone
         inputPurpose: root.inputPurpose
         hints: View.modeHints(root.mode, {
           accept: root.confirm ? View.confirmLine(root.confirm).accept : "",
-          purpose: root.inputPurpose
+          purpose: root.inputPurpose,
+          pane: View.dispatchPane(root.pane, root.tableState),
+          filesTab: root.inspectorTab === "files"
         })
 
         onInputEdited: function(text) {
@@ -856,6 +1005,18 @@ Item {
           // add target, not a query, so it doesn't filter the table empty.
           root.textQuery = Model.listQuery(text)
           root.rebuildRows(true)
+        }
+      }
+
+      HelpOverlay {
+        anchors.fill: parent
+        visible: root.helpOpen
+        groups: root.helpOpen ? View.helpRows(Registry.helpFor("NORMAL", root.helpPane)) : []
+        mode: "NORMAL"
+        paneName: root.helpPane
+        onDismissed: {
+          root.helpOpen = false
+          keyRoot.forceActiveFocus()
         }
       }
     }
