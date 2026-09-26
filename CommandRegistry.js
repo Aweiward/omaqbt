@@ -80,6 +80,12 @@ var commands = [
   { id: "filter.up", title: "Up", group: "View", keys: ["k"], modes: ["NORMAL"], panes: ["filters"], needs: "none" },
   { id: "filter.apply", title: "Apply filter", group: "View", keys: ["Enter"], modes: ["NORMAL"], panes: ["filters"], needs: "none" },
 
+  // NORMAL, inspector pane: the Files tab's list (the window ignores these
+  // on the Info tab). Space cycles a file's priority like a widget click.
+  { id: "file.down", title: "Next file", group: "View", keys: ["j", "Down"], modes: ["NORMAL"], panes: ["inspector"], needs: "none" },
+  { id: "file.up", title: "Previous file", group: "View", keys: ["k", "Up"], modes: ["NORMAL"], panes: ["inspector"], needs: "none" },
+  { id: "file.cycle", title: "Cycle file priority", group: "Torrent", keys: ["Space"], modes: ["NORMAL"], panes: ["inspector"], needs: "torrent" },
+
   // VISUAL (j/k/Space/x/X/e reuse the NORMAL,table rows above; this is the exit)
   { id: "visual.exit", title: "Exit visual", group: "View", keys: ["Esc", "V"], modes: ["VISUAL"], panes: ["table"], needs: "none" },
 

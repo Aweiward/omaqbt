@@ -454,6 +454,7 @@ function progressText(kind, count) {
   if (kind === "daemon") return "Starting qbittorrent-nox…";
   if (kind === "install") return "Installing qbittorrent-nox…";
   if (kind === "copy") return "Copying magnet…";
+  if (kind === "prio") return "Setting file priority…";
   return "Working…";
 }
 
@@ -471,7 +472,8 @@ function confirmLine(confirm) {
   return { lead: "Remove " + t + "? ", strong: "", tail: "Files stay on disk.", accept: "remove" };
 }
 
-// Key hints for the status line's right side, per mode.
+// Key hints for the status line's right side, per mode (and, in NORMAL,
+// per focused pane). ctx: {accept, purpose, pane, filesTab}.
 function modeHints(mode, ctx) {
   var c = ctx || {};
   if (mode === "CONFIRM") {
@@ -481,14 +483,486 @@ function modeHints(mode, ctx) {
     if (c.purpose === "move") return [{ key: "Enter", label: "move" }, { key: "Esc", label: "cancel" }];
     return [{ key: "Enter", label: "keep filter" }, { key: "Esc", label: "cancel" }];
   }
+  if (mode === "VISUAL") {
+    return [
+      { key: "Space", label: "start/stop" },
+      { key: "x", label: "remove" },
+      { key: "X", label: "delete files" },
+      { key: "Esc", label: "cancel" }
+    ];
+  }
+  if (c.pane === "filters") {
+    return [
+      { key: "j/k", label: "move" },
+      { key: "Enter", label: "apply" },
+      { key: "Tab", label: "pane" },
+      { key: "?", label: "keys" }
+    ];
+  }
+  if (c.pane === "inspector") {
+    if (c.filesTab === true) {
+      return [
+        { key: "j/k", label: "move" },
+        { key: "Space", label: "priority" },
+        { key: "1", label: "info" },
+        { key: "Tab", label: "pane" },
+        { key: "?", label: "keys" }
+      ];
+    }
+    return [
+      { key: "1", label: "info" },
+      { key: "4", label: "files" },
+      { key: "Tab", label: "pane" },
+      { key: "?", label: "keys" }
+    ];
+  }
   return [
     { key: "j/k", label: "move" },
     { key: "Space", label: "start/stop" },
-    { key: "x", label: "remove" },
+    { key: "V", label: "visual" },
     { key: "/", label: "filter" },
     { key: "s", label: "sort" },
+    { key: "?", label: "keys" },
     { key: "q", label: "close" }
   ];
+}
+
+// --- Tones ----------------------------------------------------------------
+
+// toneColor(tone, palette) -> the palette color for a tone name. palette
+// is qs.Commons' Color singleton in QML ({foreground, accent, muted,
+// urgent}); passing it in keeps this file free of Qt objects. The one
+// helper TorrentTable, StatusLine and the side panes share.
+function toneColor(tone, palette) {
+  var p = palette || {};
+  if (tone === "accent") return p.accent;
+  if (tone === "muted") return p.muted;
+  if (tone === "urgent") return p.urgent;
+  return p.foreground;
+}
+
+// --- Targets and VISUAL ---------------------------------------------------
+
+// visualRange(rows, anchorHash, cursorHash) -> the hashes from the anchor
+// row to the cursor row, inclusive, in the table's current order. When
+// the anchor row is gone (filtered out, or removed by a tick) the range
+// collapses to the cursor row; with no cursor row it is empty.
+function visualRange(rows, anchorHash, cursorHash) {
+  var list = rows || [];
+  var c = indexOfHash(list, cursorHash);
+  if (c === -1) return [];
+  var a = indexOfHash(list, anchorHash);
+  if (a === -1) a = c;
+  var lo = Math.min(a, c);
+  var hi = Math.max(a, c);
+  var out = [];
+  for (var i = lo; i <= hi; i++) out.push(list[i].hash);
+  return out;
+}
+
+// targetHashes(mode, rows, cursorHash, anchorHash) -> the torrents a
+// command acts on: the VISUAL range while mode is VISUAL, otherwise the
+// cursor row. The window computes this BEFORE dispatch: an action that
+// leaves VISUAL (Space, x, X, e) comes back with mode NORMAL or CONFIRM,
+// and must still act on the range as it stood when the key was pressed.
+function targetHashes(mode, rows, cursorHash, anchorHash) {
+  if (mode === "VISUAL") return visualRange(rows, anchorHash, cursorHash);
+  return indexOfHash(rows, cursorHash) !== -1 ? [String(cursorHash)] : [];
+}
+
+// dispatchState(regState, pane, state, hasCursorRow, targets) -> the state
+// handed to CommandRegistry.dispatch. selectionCount means something only
+// while mode is VISUAL (the registry contract), so it is 0 otherwise.
+function dispatchState(regState, pane, state, hasCursorRow, targets) {
+  var st = {};
+  var r = regState || {};
+  for (var k in r) {
+    if (Object.prototype.hasOwnProperty.call(r, k)) st[k] = r[k];
+  }
+  st.pane = dispatchPane(pane, state);
+  st.hasTorrent = state === "rows" && hasCursorRow === true;
+  st.selectionCount = st.mode === "VISUAL" ? (targets || []).length : 0;
+  return st;
+}
+
+// nextAnchor(nextMode, commandId, anchorHash, cursorHash) -> the VISUAL
+// anchor after a dispatch: set to the cursor by visual.enter, kept while
+// the mode stays VISUAL, cleared as soon as VISUAL is left (a CONFIRM
+// raised from VISUAL keeps its own copy of the range in confirmHashes).
+function nextAnchor(nextMode, commandId, anchorHash, cursorHash) {
+  if (nextMode !== "VISUAL") return "";
+  if (commandId === "visual.enter") return String(cursorHash || "");
+  return String(anchorHash || "");
+}
+
+// hashSet(list) -> {hash: true}, for per-row lookups in delegates.
+function hashSet(list) {
+  var out = {};
+  var l = list || [];
+  for (var i = 0; i < l.length; i++) out[String(l[i])] = true;
+  return out;
+}
+
+// --- Messages -------------------------------------------------------------
+//
+// The window's status-line message state. Immutable: every function
+// returns a new object. Priority when shown: error (urgent, kept until
+// the next key) > note > progress (muted, while this window's own tickets
+// run) > nothing (the stats show).
+
+function emptyMessages() {
+  return { tickets: {}, progress: "", error: "", errorHashes: [], note: "", noteTone: "muted" };
+}
+
+function copyMessages(m) {
+  var s = m || emptyMessages();
+  var tickets = {};
+  for (var k in s.tickets || {}) tickets[k] = s.tickets[k];
+  return {
+    tickets: tickets,
+    progress: String(s.progress || ""),
+    error: String(s.error || ""),
+    errorHashes: (s.errorHashes || []).slice(),
+    note: String(s.note || ""),
+    noteTone: s.noteTone || "muted"
+  };
+}
+
+// failureText(kind, count) -> the lead of an action's error line.
+function failureText(kind, count) {
+  var n = Number(count) || 0;
+  var t = plural(n, "torrent", "torrents");
+  if (kind === "start") return "Couldn't start " + t;
+  if (kind === "stop") return "Couldn't stop " + t;
+  if (kind === "remove") return "Couldn't remove " + t;
+  if (kind === "delete") return "Couldn't delete " + t;
+  if (kind === "recheck") return "Couldn't recheck " + t;
+  if (kind === "move") return "Couldn't move " + t;
+  if (kind === "startAll") return "Couldn't start all torrents";
+  if (kind === "stopAll") return "Couldn't stop all torrents";
+  if (kind === "turtle") return "Couldn't switch alt speed";
+  if (kind === "add") return "Couldn't add the torrent";
+  if (kind === "daemon") return "Couldn't start qbittorrent-nox";
+  if (kind === "install") return "Couldn't install qbittorrent-nox";
+  if (kind === "copy") return "Couldn't copy the magnet";
+  if (kind === "prio") return "Couldn't set the file priority";
+  if (kind === "files") return "Couldn't read files";
+  return "The action failed";
+}
+
+// msgTrack(m, ticket, kind, count, hashes) -> m with this window's ticket
+// recorded and its progress text showing. A ticket <= 0 (Service refused
+// the call) records nothing.
+function msgTrack(m, ticket, kind, count, hashes) {
+  var t = Number(ticket) || 0;
+  if (t <= 0) return m || emptyMessages();
+  var next = copyMessages(m);
+  var text = progressText(kind, count);
+  next.tickets[String(t)] = { kind: kind, count: Number(count) || 0, hashes: (hashes || []).slice(), text: text };
+  next.progress = text;
+  return next;
+}
+
+// A success note for actions whose effect isn't visible in the table.
+var DONE_NOTES = { copy: "Copied magnet." };
+
+function ownsTicket(m, ticket) {
+  return !!m && !!m.tickets && Object.prototype.hasOwnProperty.call(m.tickets, String(ticket));
+}
+
+// msgFinish(m, ticket, ok, error) -> m after one of this window's tickets
+// ended. A ticket the window doesn't own returns m unchanged (the same
+// object), so foreign completions -- another view's, or the extra ones a
+// pending-magnet drop emits with our hashes -- never touch the window. On
+// failure the error line and the affected hashes (for the row `!`) are
+// set; bulk actions report one error for all their torrents, since qbt
+// can't say which one failed.
+function msgFinish(m, ticket, ok, error) {
+  if (!ownsTicket(m, ticket)) return m;
+  var next = copyMessages(m);
+  var entry = next.tickets[String(ticket)];
+  delete next.tickets[String(ticket)];
+  var last = "";
+  for (var k in next.tickets) last = next.tickets[k].text;
+  next.progress = last;
+  if (ok === true && DONE_NOTES[entry.kind]) {
+    next.note = DONE_NOTES[entry.kind];
+    next.noteTone = "muted";
+  }
+  if (ok !== true) {
+    var err = String(error || "").trim();
+    next.error = failureText(entry.kind, entry.count) + (err !== "" ? ": " + err : ".");
+    next.errorHashes = entry.hashes.slice();
+  }
+  return next;
+}
+
+// msgError(m, text, hashes) -> m showing an urgent error until the next key.
+function msgError(m, text, hashes) {
+  var next = copyMessages(m);
+  next.error = String(text || "");
+  next.errorHashes = (hashes || []).slice();
+  return next;
+}
+
+// msgNote(m, text, tone) -> m with a one-key note (e.g. "Copied magnet.").
+function msgNote(m, text, tone) {
+  var next = copyMessages(m);
+  next.note = String(text || "");
+  next.noteTone = tone || "muted";
+  return next;
+}
+
+// msgKey(m) -> m after a keypress: the error, its row marks and any note
+// clear; progress for tickets still running stays.
+function msgKey(m) {
+  var next = copyMessages(m);
+  next.error = "";
+  next.errorHashes = [];
+  next.note = "";
+  next.noteTone = "muted";
+  return next;
+}
+
+// messageLine(m) -> {text, tone} for the status line ("" = show stats).
+function messageLine(m) {
+  var s = m || emptyMessages();
+  if (s.error) return { text: s.error, tone: "urgent" };
+  if (s.note) return { text: s.note, tone: s.noteTone || "muted" };
+  if (s.progress) return { text: s.progress, tone: "muted" };
+  return { text: "", tone: "muted" };
+}
+
+// --- Clipboard ------------------------------------------------------------
+
+// clipboardOutcome(text, askedAt, now) -> what a clipboard answer means
+// for the window's `y` (add from clipboard): "none" when the window
+// didn't ask, "stale" when it answered more than 3 s later, "empty",
+// "add" for an addable target, "invalid" otherwise. Every outcome but
+// "none" disarms the request.
+function clipboardOutcome(text, askedAt, now) {
+  var asked = Number(askedAt) || 0;
+  if (asked <= 0) return "none";
+  if ((Number(now) || 0) - asked > 3000) return "stale";
+  var t = String(text || "").trim();
+  if (t === "") return "empty";
+  return Model.isAddableTarget(t) ? "add" : "invalid";
+}
+
+// --- Filter pane ----------------------------------------------------------
+
+var FILTER_GROUP_TITLES = { status: "Status", category: "Categories", tag: "Tags", tracker: "Trackers" };
+
+function sameFilter(a, b) {
+  var x = a || {};
+  var y = b || {};
+  return String(x.group) === String(y.group) && String(x.value) === String(y.value);
+}
+
+// filterEntries(groups) -> Model.filterGroups flattened for the pane:
+// a header entry per group, then its items. Every value is a string, a
+// number or a bool so the pane can compare lists cheaply.
+function filterEntries(groups) {
+  var out = [];
+  var g = groups || [];
+  for (var i = 0; i < g.length; i++) {
+    out.push({ kind: "header", group: g[i].group, value: "", label: FILTER_GROUP_TITLES[g[i].group] || String(g[i].group), count: 0, zero: false });
+    var items = g[i].items || [];
+    for (var j = 0; j < items.length; j++) {
+      var it = items[j];
+      out.push({
+        kind: "item",
+        group: it.group,
+        value: String(it.value),
+        label: Model.plainText(it.label),
+        count: Number(it.count) || 0,
+        zero: it.zero === true
+      });
+    }
+  }
+  return out;
+}
+
+// filterIndex(entries, filter) -> the index of the item entry for filter,
+// or -1 (e.g. a restored category that no longer exists).
+function filterIndex(entries, filter) {
+  var e = entries || [];
+  for (var i = 0; i < e.length; i++) {
+    if (e[i].kind === "item" && sameFilter(e[i], filter)) return i;
+  }
+  return -1;
+}
+
+// moveFilterCursor(entries, cursor, delta) -> the {group, value} the
+// filter pane's cursor lands on after j (+1) or k (-1). Headers are
+// skipped; movement clamps at the ends. A cursor that isn't in the list
+// starts from the first item.
+function moveFilterCursor(entries, cursor, delta) {
+  var e = entries || [];
+  var items = [];
+  for (var i = 0; i < e.length; i++) if (e[i].kind === "item") items.push(e[i]);
+  if (items.length === 0) return cursor || defaultFilter();
+  var at = -1;
+  for (var j = 0; j < items.length; j++) if (sameFilter(items[j], cursor)) at = j;
+  var next = at === -1 ? 0 : Math.max(0, Math.min(items.length - 1, at + (delta > 0 ? 1 : -1)));
+  return { group: items[next].group, value: items[next].value };
+}
+
+// sameEntries(a, b) -> true when two filterEntries lists render the same,
+// so a status tick that changes no count leaves the pane's delegates alone.
+function sameEntries(a, b) {
+  var x = a || [];
+  var y = b || [];
+  if (x.length !== y.length) return false;
+  for (var i = 0; i < x.length; i++) {
+    if (x[i].kind !== y[i].kind || x[i].group !== y[i].group || x[i].value !== y[i].value
+      || x[i].label !== y[i].label || x[i].count !== y[i].count || x[i].zero !== y[i].zero) return false;
+  }
+  return true;
+}
+
+// --- Inspector ------------------------------------------------------------
+
+// inspectorInfo(row, dateText) -> the Info tab for the cursor row, or null
+// when there is no cursor row ("Select a torrent"). dateText(epochSec)
+// formats the added time (QML passes Qt.formatDateTime; keeping it an
+// argument keeps this file free of Date). Missing values show "—".
+function inspectorInfo(row, dateText) {
+  if (!row) return null;
+  var r = row;
+  var group = Model.statusGroup(r);
+  var g = GLYPHS[group] || GLYPHS.stopped;
+  var word = progressWord(group, r.state) || group;
+  var size = Number(r.size);
+  var hasSize = isFinite(size) && size > 0;
+  var ratio = Number(r.ratio);
+  var hasRatio = r.ratio !== undefined && r.ratio !== null && isFinite(ratio);
+  var added = Number(r.addedOn);
+  var fmt = typeof dateText === "function" ? dateText : function(s) { return Model.formatDate(s); };
+  function num(v) {
+    var n = Number(v);
+    return v === undefined || v === null || !isFinite(n) ? null : n;
+  }
+  var seeds = num(r.numSeeds);
+  var leechs = num(r.numLeechs);
+  var dl = num(r.dlSpeed);
+  var ul = num(r.upSpeed);
+  function text(v) {
+    var s = Model.plainText(v);
+    return s === "" ? "—" : s;
+  }
+  return {
+    name: text(r.name),
+    fields: [
+      { label: "State", value: g.glyph + " " + word + " · " + Model.formatPercent(clamp01(r.progress)), tone: g.tone },
+      { label: "Size", value: hasSize ? sizeText(size) + " (" + sizeText(size * clamp01(r.progress)) + " done)" : "—", tone: "fg" },
+      { label: "Speed", value: dl === null && ul === null ? "—" : "↓ " + sizeText(dl || 0) + "/s · ↑ " + sizeText(ul || 0) + "/s", tone: "fg" },
+      { label: "Peers", value: seeds === null && leechs === null ? "—" : plural(seeds || 0, "seed", "seeds") + " · " + plural(leechs || 0, "leecher", "leechers"), tone: "fg" },
+      { label: "Ratio", value: hasRatio ? Math.max(0, ratio).toFixed(2) + " · limit " + Model.ratioLimitLabel(r.ratioLimit === undefined ? -2 : r.ratioLimit) : "—", tone: "fg" },
+      { label: "Category", value: text(r.category), tone: "fg" },
+      { label: "Added", value: isFinite(added) && added > 0 ? String(fmt(added)) : "—", tone: "fg" },
+      { label: "Save path", value: text(r.savePath), tone: "fg" }
+    ],
+    keys: [
+      { key: "o", label: "open folder" },
+      { key: "y", label: "copy magnet" },
+      { key: "m", label: "move" },
+      { key: "e", label: "recheck" }
+    ]
+  };
+}
+
+// filesView(files, status) -> the Files tab: {state, rows}. status is
+// Service's per-hash files status ({state: "loading"|"ok"|"error"}) or
+// undefined before any load. state: "loading" | "error" | "empty" | "rows".
+function filesView(files, status) {
+  var st = status && status.state ? status.state : "loading";
+  var list = Array.isArray(files) ? files : [];
+  if (st === "error") return { state: "error", rows: [] };
+  if (list.length === 0) return { state: st === "ok" ? "empty" : "loading", rows: [] };
+  var rows = [];
+  for (var i = 0; i < list.length; i++) {
+    var f = list[i] || {};
+    var prio = parseInt(String(f.priority), 10);
+    rows.push({
+      index: Number(f.index),
+      name: Model.plainText(f.name),
+      progressText: Model.formatPercent(clamp01(f.progress)),
+      priorityText: Model.priorityLabel(f.priority),
+      skipped: prio === 0
+    });
+  }
+  return { state: "rows", rows: rows };
+}
+
+// withPriority(files, index, prio) -> a copy of files with one file's
+// priority changed: the optimistic update the widget also makes after
+// setPrio, so the label moves before the next files load.
+function withPriority(files, index, prio) {
+  var out = [];
+  var list = files || [];
+  for (var i = 0; i < list.length; i++) {
+    var f = list[i];
+    if (f && Number(f.index) === Number(index)) {
+      out.push({ index: f.index, name: f.name, progress: f.progress, priority: prio });
+    } else {
+      out.push(f);
+    }
+  }
+  return out;
+}
+
+// moveIndex(count, index, delta) -> a list cursor moved by delta, clamped.
+function moveIndex(count, index, delta) {
+  var n = Number(count) || 0;
+  if (n <= 0) return 0;
+  var i = Number(index) || 0;
+  return Math.max(0, Math.min(n - 1, i + delta));
+}
+
+// --- Help -----------------------------------------------------------------
+
+var HELP_GROUPS = ["Torrent", "View", "Library", "App"];
+
+function helpKeyLabel(label) {
+  return label === "g g" ? "gg" : String(label);
+}
+
+// helpRows(rows) -> the `?` overlay from CommandRegistry.helpFor rows:
+// [{group, items: [{keys, title}]}], groups in Torrent / View / Library /
+// App order. A command bound on several rows (inspector.files: Enter and
+// 4) is listed once with all its keys; the reserved null-id row is
+// skipped (helpFor already leaves it out).
+function helpRows(rows) {
+  var byGroup = {};
+  var seen = {};
+  var list = rows || [];
+  for (var i = 0; i < list.length; i++) {
+    var r = list[i];
+    if (!r || r.id === null || r.id === undefined) continue;
+    var keys = (r.keys || []).map(helpKeyLabel);
+    if (seen[r.id]) {
+      var item = seen[r.id];
+      for (var k = 0; k < keys.length; k++) if (item.keyList.indexOf(keys[k]) === -1) item.keyList.push(keys[k]);
+      item.keys = item.keyList.join(" / ");
+      continue;
+    }
+    var entry = { keyList: keys.slice(), keys: keys.join(" / "), title: String(r.title) };
+    seen[r.id] = entry;
+    var g = HELP_GROUPS.indexOf(r.group) !== -1 ? r.group : "App";
+    if (!byGroup[g]) byGroup[g] = [];
+    byGroup[g].push(entry);
+  }
+  var out = [];
+  for (var j = 0; j < HELP_GROUPS.length; j++) {
+    var items = byGroup[HELP_GROUPS[j]];
+    if (!items) continue;
+    out.push({
+      group: HELP_GROUPS[j],
+      items: items.map(function(e) { return { keys: e.keys, title: e.title }; })
+    });
+  }
+  return out;
 }
 
 // The VPN part of the status line. tone "fg" when bound, "urgent" when a
@@ -544,6 +1018,32 @@ if (typeof module !== "undefined" && module.exports) {
     confirmLine: confirmLine,
     modeHints: modeHints,
     vpnPart: vpnPart,
-    isAbsolutePath: isAbsolutePath
+    isAbsolutePath: isAbsolutePath,
+    toneColor: toneColor,
+    visualRange: visualRange,
+    targetHashes: targetHashes,
+    dispatchState: dispatchState,
+    nextAnchor: nextAnchor,
+    hashSet: hashSet,
+    emptyMessages: emptyMessages,
+    failureText: failureText,
+    msgTrack: msgTrack,
+    msgFinish: msgFinish,
+    msgError: msgError,
+    msgNote: msgNote,
+    msgKey: msgKey,
+    messageLine: messageLine,
+    ownsTicket: ownsTicket,
+    clipboardOutcome: clipboardOutcome,
+    sameFilter: sameFilter,
+    filterEntries: filterEntries,
+    filterIndex: filterIndex,
+    moveFilterCursor: moveFilterCursor,
+    sameEntries: sameEntries,
+    inspectorInfo: inspectorInfo,
+    filesView: filesView,
+    withPriority: withPriority,
+    moveIndex: moveIndex,
+    helpRows: helpRows
   };
 }

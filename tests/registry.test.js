@@ -670,3 +670,31 @@ test("every command row has the documented shape", () => {
     assert.ok(validNeeds.includes(row.needs), row.id + " needs " + row.needs);
   }
 });
+
+// --- NORMAL, inspector pane: the Files tab list --------------------------
+
+test("j/k/Down/Up and Space in the inspector pane are the file list's keys", () => {
+  const s = state({ pane: "inspector", hasTorrent: true });
+  assert.equal(dispatch(s, ev("j", keyOf("j"))).commandId, "file.down");
+  assert.equal(dispatch(s, ev("", KEY.Down)).commandId, "file.down");
+  assert.equal(dispatch(s, ev("k", keyOf("k"))).commandId, "file.up");
+  assert.equal(dispatch(s, ev("", KEY.Up)).commandId, "file.up");
+  assert.equal(dispatch(s, ev(" ", KEY.Space)).commandId, "file.cycle");
+});
+
+test("file.cycle needs a torrent; the file rows stay out of the table and filters panes", () => {
+  const blocked = dispatch(state({ pane: "inspector", hasTorrent: false }), ev(" ", KEY.Space));
+  assert.equal(blocked.commandId, null);
+  assert.ok(blocked.blocked);
+  assert.equal(dispatch(state({ pane: "table", hasTorrent: true }), ev("j", keyOf("j"))).commandId, "cursor.down");
+  assert.equal(dispatch(state({ pane: "filters" }), ev("j", keyOf("j"))).commandId, "filter.down");
+  assert.equal(dispatch(state({ pane: "table", hasTorrent: true }), ev(" ", KEY.Space)).commandId, "torrent.toggle");
+});
+
+test("helpFor(NORMAL, inspector) lists the file rows and not the table's", () => {
+  const ids = helpFor("NORMAL", "inspector").map((r) => r.id);
+  assert.ok(ids.includes("file.down"));
+  assert.ok(ids.includes("file.cycle"));
+  assert.ok(!ids.includes("cursor.down"));
+  assert.ok(!ids.includes("torrent.toggle"));
+});

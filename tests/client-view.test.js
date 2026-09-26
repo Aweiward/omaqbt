@@ -414,3 +414,302 @@ test("dispatchPane makes Enter and y reach their commands from any restored pane
     assert.equal(raw.blocked, undefined);
   }
 });
+
+// --- Task 8: tones ---------------------------------------------------------
+
+test("toneColor maps tone names onto the palette it is given", () => {
+  const p = { foreground: "F", accent: "A", muted: "M", urgent: "U", background: "B" };
+  assert.equal(V.toneColor("accent", p), "A");
+  assert.equal(V.toneColor("muted", p), "M");
+  assert.equal(V.toneColor("urgent", p), "U");
+  assert.equal(V.toneColor("fg", p), "F");
+  assert.equal(V.toneColor("anything", p), "F");
+});
+
+// --- Task 8: VISUAL and targets ---------------------------------------------
+
+const R = (...ls) => ls.map((l) => ({ hash: H(l) }));
+
+test("visualRange spans anchor..cursor inclusive in the current order, either direction", () => {
+  const rows = R("a", "b", "c", "d");
+  assert.deepEqual(V.visualRange(rows, H("b"), H("d")), [H("b"), H("c"), H("d")]);
+  assert.deepEqual(V.visualRange(rows, H("d"), H("b")), [H("b"), H("c"), H("d")]);
+  assert.deepEqual(V.visualRange(rows, H("c"), H("c")), [H("c")]);
+});
+
+test("visualRange collapses to the cursor when the anchor is gone, and is empty with no cursor row", () => {
+  const rows = R("a", "b", "c");
+  assert.deepEqual(V.visualRange(rows, H("z"), H("b")), [H("b")]);
+  assert.deepEqual(V.visualRange(rows, H("a"), H("z")), []);
+  assert.deepEqual(V.visualRange([], H("a"), H("a")), []);
+});
+
+test("targetHashes: the range only while VISUAL, the cursor row otherwise", () => {
+  const rows = R("a", "b", "c");
+  assert.deepEqual(V.targetHashes("VISUAL", rows, H("c"), H("a")), [H("a"), H("b"), H("c")]);
+  assert.deepEqual(V.targetHashes("NORMAL", rows, H("c"), H("a")), [H("c")], "a stale anchor never widens NORMAL");
+  assert.deepEqual(V.targetHashes("NORMAL", rows, H("z"), ""), []);
+});
+
+test("dispatchState feeds selectionCount only in VISUAL, and blocking states dispatch as the table", () => {
+  const base = { mode: "VISUAL", pane: "table", prefix: null, prefixAt: 0, pending: null };
+  const st = V.dispatchState(base, "table", "rows", true, [H("a"), H("b")]);
+  assert.equal(st.selectionCount, 2);
+  assert.equal(st.hasTorrent, true);
+  assert.equal(V.dispatchState(Object.assign({}, base, { mode: "NORMAL" }), "table", "rows", true, [H("a"), H("b")]).selectionCount, 0);
+  const blocked = V.dispatchState(Object.assign({}, base, { mode: "NORMAL" }), "filters", "daemon", true, []);
+  assert.equal(blocked.pane, "table");
+  assert.equal(blocked.hasTorrent, false);
+  assert.equal(base.selectionCount, undefined, "the input state is not mutated");
+});
+
+test("VISUAL end to end: V, j, Space acts on both rows and the range ends", () => {
+  const rows = R("a", "b", "c");
+  let reg = { mode: "NORMAL", pane: "table", prefix: null, prefixAt: 0, hasTorrent: false, selectionCount: 0, pending: null };
+  let cursor = H("a");
+  let anchor = "";
+  function press(text, key) {
+    const targets = V.targetHashes(reg.mode, rows, cursor, anchor);
+    const st = V.dispatchState(reg, "table", "rows", V.indexOfHash(rows, cursor) >= 0, targets);
+    const res = Registry.dispatch(st, V.keyEvent(key, text, 0, 0));
+    reg = res.state;
+    anchor = V.nextAnchor(res.state.mode, res.commandId, anchor, cursor);
+    if (res.commandId === "cursor.down") cursor = V.moveCursor(rows, cursor, "cursor.down");
+    return { res, targets };
+  }
+  press("V", 0x56);
+  assert.equal(reg.mode, "VISUAL");
+  assert.equal(anchor, H("a"));
+  press("j", 0x4a);
+  assert.deepEqual(V.targetHashes(reg.mode, rows, cursor, anchor), [H("a"), H("b")]);
+  const sp = press(" ", KEY.Space);
+  assert.equal(sp.res.commandId, "torrent.toggle");
+  assert.deepEqual(sp.targets, [H("a"), H("b")], "targets are the range as it stood at keypress");
+  assert.equal(sp.res.args.count, 2);
+  assert.equal(reg.mode, "NORMAL");
+  assert.equal(anchor, "");
+  assert.equal(reg.selectionCount, 0);
+});
+
+test("VISUAL x over 2 rows and X over 1 row go through CONFIRM; x over 1 row does not", () => {
+  const rows = R("a", "b");
+  const vis = { mode: "VISUAL", pane: "table", prefix: null, prefixAt: 0, pending: null };
+  const two = V.dispatchState(vis, "table", "rows", true, V.targetHashes("VISUAL", rows, H("b"), H("a")));
+  assert.equal(Registry.dispatch(two, V.keyEvent(0x58, "x", 0, 0)).confirm.count, 2);
+  const one = V.dispatchState(vis, "table", "rows", true, V.targetHashes("VISUAL", rows, H("a"), H("a")));
+  assert.equal(Registry.dispatch(one, V.keyEvent(0x58, "x", 0, 0)).confirm, undefined);
+  assert.equal(Registry.dispatch(one, V.keyEvent(0x58, "X", V.MOD.Shift, 0)).confirm.count, 1);
+});
+
+test("nextAnchor: set by visual.enter, kept in VISUAL, cleared on leaving", () => {
+  assert.equal(V.nextAnchor("VISUAL", "visual.enter", "", H("c")), H("c"));
+  assert.equal(V.nextAnchor("VISUAL", "cursor.down", H("c"), H("d")), H("c"));
+  assert.equal(V.nextAnchor("NORMAL", "visual.exit", H("c"), H("d")), "");
+  assert.equal(V.nextAnchor("CONFIRM", null, H("c"), H("d")), "");
+});
+
+test("hashSet builds a lookup", () => {
+  assert.deepEqual(V.hashSet([H("a"), H("b")]), { [H("a")]: true, [H("b")]: true });
+  assert.deepEqual(V.hashSet(null), {});
+});
+
+// --- Task 8: messages --------------------------------------------------------
+
+test("msgTrack shows progress for a real ticket and ignores a refused one", () => {
+  const m0 = V.emptyMessages();
+  assert.equal(V.msgTrack(m0, 0, "start", 1, []), m0);
+  const m1 = V.msgTrack(m0, 7, "start", 2, [H("a"), H("b")]);
+  assert.deepEqual(V.messageLine(m1), { text: "Starting 2 torrents…", tone: "muted" });
+  assert.equal(V.ownsTicket(m1, 7), true);
+  assert.deepEqual(m0.tickets, {}, "immutable");
+});
+
+test("msgFinish ignores foreign tickets (returns the same object)", () => {
+  const m1 = V.msgTrack(V.emptyMessages(), 7, "start", 1, [H("a")]);
+  assert.equal(V.msgFinish(m1, 8, false, "boom"), m1);
+});
+
+test("msgFinish ok clears the progress; a failure sets an urgent error and the row marks", () => {
+  const m1 = V.msgTrack(V.emptyMessages(), 7, "stop", 2, [H("a"), H("b")]);
+  assert.deepEqual(V.messageLine(V.msgFinish(m1, 7, true, "")), { text: "", tone: "muted" });
+  const bad = V.msgFinish(m1, 7, false, "Forbidden");
+  assert.deepEqual(V.messageLine(bad), { text: "Couldn't stop 2 torrents: Forbidden", tone: "urgent" });
+  assert.deepEqual(bad.errorHashes, [H("a"), H("b")]);
+  assert.equal(V.messageLine(V.msgFinish(V.msgTrack(V.emptyMessages(), 1, "delete", 1, []), 1, false, "")).text, "Couldn't delete 1 torrent.");
+});
+
+test("an error outlives later progress and ticks, and clears on the next key only", () => {
+  let m = V.msgTrack(V.emptyMessages(), 1, "start", 1, [H("a")]);
+  m = V.msgTrack(m, 2, "recheck", 1, [H("b")]);
+  m = V.msgFinish(m, 1, false, "nope");
+  assert.equal(V.messageLine(m).tone, "urgent");
+  m = V.msgTrack(m, 3, "stop", 1, [H("c")]);
+  assert.equal(V.messageLine(m).tone, "urgent", "new progress does not hide the error");
+  m = V.msgKey(m);
+  assert.deepEqual(m.errorHashes, []);
+  assert.deepEqual(V.messageLine(m), { text: "Stopping 1 torrent…", tone: "muted" }, "the next key reveals running progress");
+  m = V.msgFinish(m, 3, true, "");
+  assert.deepEqual(V.messageLine(m), { text: "Rechecking 1 torrent…", tone: "muted" });
+});
+
+test("notes: one key long; a copy ticket notes Copied magnet. on success", () => {
+  const n = V.msgNote(V.emptyMessages(), "The clipboard is empty.", "urgent");
+  assert.deepEqual(V.messageLine(n), { text: "The clipboard is empty.", tone: "urgent" });
+  assert.deepEqual(V.messageLine(V.msgKey(n)), { text: "", tone: "muted" });
+  const c = V.msgFinish(V.msgTrack(V.emptyMessages(), 4, "copy", 1, [H("a")]), 4, true, "");
+  assert.deepEqual(V.messageLine(c), { text: "Copied magnet.", tone: "muted" });
+  const e = V.msgError(V.emptyMessages(), "Couldn't read files: x", []);
+  assert.equal(V.messageLine(e).tone, "urgent");
+});
+
+test("failureText covers every progress kind", () => {
+  for (const k of ["start", "stop", "remove", "delete", "recheck", "move", "startAll", "stopAll", "turtle", "add", "daemon", "install", "copy", "prio"]) {
+    assert.match(V.failureText(k, 2), /^Couldn't /, k);
+    assert.notEqual(V.progressText(k, 2), "Working…", k);
+  }
+});
+
+// --- Task 8: clipboard ---------------------------------------------------------
+
+test("clipboardOutcome: none, stale, empty, add, invalid", () => {
+  assert.equal(V.clipboardOutcome("magnet:?xt=urn:btih:" + "c".repeat(40), 0, 10), "none");
+  assert.equal(V.clipboardOutcome("x", 1000, 4001), "stale");
+  assert.equal(V.clipboardOutcome("   ", 1000, 1500), "empty");
+  assert.equal(V.clipboardOutcome("", 1000, 1500), "empty");
+  assert.equal(V.clipboardOutcome("magnet:?xt=urn:btih:" + "c".repeat(40), 1000, 1500), "add");
+  assert.equal(V.clipboardOutcome("hello", 1000, 1500), "invalid");
+});
+
+// --- Task 8: filter pane ---------------------------------------------------------
+
+test("filterEntries flattens Model.filterGroups with a header per group", () => {
+  const rows = [torrent({ hash: H("a"), category: "linux", tags: ["x"], tracker: "t.org" }), torrent({ hash: H("b"), state: "pausedDL" })];
+  const e = V.filterEntries(Model.filterGroups(rows, ["anime"], []));
+  const headers = e.filter((x) => x.kind === "header").map((x) => x.label);
+  assert.deepEqual(headers, ["Status", "Categories", "Tags", "Trackers"]);
+  const active = e.find((x) => x.kind === "item" && x.group === "status" && x.value === "Active");
+  assert.equal(active.count, 1);
+  const anime = e.find((x) => x.group === "category" && x.value === "anime");
+  assert.equal(anime.zero, true, "zero-count items stay listed");
+  const unc = e.find((x) => x.kind === "item" && x.group === "category" && x.value === "");
+  assert.equal(unc.label, "Uncategorized");
+});
+
+test("filterEntries strips angle brackets from untrusted labels", () => {
+  const e = V.filterEntries(Model.filterGroups([torrent({ category: "<img src=x>" })], [], []));
+  assert.ok(e.some((x) => x.label === "img src=x"));
+  assert.ok(e.some((x) => x.value === "<img src=x>"), "the value (the filter key) is kept exact");
+});
+
+test("moveFilterCursor skips headers and clamps; an unknown cursor starts at the first item", () => {
+  const e = V.filterEntries(Model.filterGroups([torrent({ category: "c1" })], [], []));
+  const all = { group: "status", value: "All" };
+  assert.deepEqual(V.moveFilterCursor(e, all, -1), all);
+  assert.deepEqual(V.moveFilterCursor(e, all, 1), { group: "status", value: "Active" });
+  const lastStatus = { group: "status", value: "Checking" };
+  assert.deepEqual(V.moveFilterCursor(e, lastStatus, 1), { group: "category", value: "" }, "crosses the Categories header");
+  const items = e.filter((x) => x.kind === "item");
+  const last = { group: items[items.length - 1].group, value: items[items.length - 1].value };
+  assert.deepEqual(V.moveFilterCursor(e, last, 1), last);
+  assert.deepEqual(V.moveFilterCursor(e, { group: "category", value: "gone" }, 1), all);
+});
+
+test("filterIndex and sameEntries", () => {
+  const e = V.filterEntries(Model.filterGroups([torrent()], [], []));
+  assert.equal(V.filterIndex(e, { group: "status", value: "All" }), 1);
+  assert.equal(V.filterIndex(e, { group: "category", value: "gone" }), -1);
+  assert.equal(V.sameEntries(e, V.filterEntries(Model.filterGroups([torrent()], [], []))), true);
+  assert.equal(V.sameEntries(e, V.filterEntries(Model.filterGroups([torrent(), torrent({ hash: H("b") })], [], []))), false);
+});
+
+test("applying a filter entry through Model.matchFilter re-filters viewRows", () => {
+  const list = [torrent({ hash: H("a"), category: "linux" }), torrent({ hash: H("b"), category: "" })];
+  const v = V.viewRows(list, [], { group: "category", value: "" }, "", "added", true);
+  assert.deepEqual(v.rows.map((r) => r.hash), [H("b")]);
+});
+
+// --- Task 8: inspector ------------------------------------------------------------
+
+test("inspectorInfo: null with no row; the spec's fields in order", () => {
+  assert.equal(V.inspectorInfo(null), null);
+  const row = torrent({
+    name: "Yoroi", state: "downloading", progress: 0.34, size: 1.7 * 1073741824,
+    dlSpeed: 4.1 * 1048576, upSpeed: 210 * 1024, numSeeds: 14, numLeechs: 3,
+    ratio: 0.03, ratioLimit: -2, category: "anime", addedOn: 1790000000, savePath: "/home/x/anime"
+  });
+  const info = V.inspectorInfo(row, (s) => "D" + s);
+  assert.equal(info.name, "Yoroi");
+  assert.deepEqual(info.fields.map((f) => f.label), ["State", "Size", "Speed", "Peers", "Ratio", "Category", "Added", "Save path"]);
+  const val = (l) => info.fields.find((f) => f.label === l).value;
+  assert.equal(val("State"), "● downloading · 34%");
+  assert.equal(info.fields[0].tone, "accent");
+  assert.equal(val("Size"), "1.7 GiB (592 MiB done)");
+  assert.equal(val("Speed"), "↓ 4.1 MiB/s · ↑ 210 KiB/s");
+  assert.equal(val("Peers"), "14 seeds · 3 leechers");
+  assert.equal(val("Ratio"), "0.03 · limit global");
+  assert.equal(val("Category"), "anime");
+  assert.equal(val("Added"), "D1790000000");
+  assert.equal(val("Save path"), "/home/x/anime");
+  assert.deepEqual(info.keys.map((k) => k.key), ["o", "y", "m", "e"]);
+});
+
+test("inspectorInfo: missing fields show —, errored rows say why", () => {
+  const info = V.inspectorInfo({ hash: H("a"), state: "missingFiles", progress: 0.5 });
+  const val = (l) => info.fields.find((f) => f.label === l).value;
+  assert.equal(info.name, "—");
+  assert.equal(val("State"), "! missing files · 50%");
+  assert.equal(info.fields[0].tone, "urgent");
+  for (const l of ["Size", "Speed", "Peers", "Ratio", "Category", "Added", "Save path"]) assert.equal(val(l), "—", l);
+});
+
+test("filesView: loading, error, empty and rows", () => {
+  assert.equal(V.filesView([], undefined).state, "loading");
+  assert.equal(V.filesView([], { state: "loading" }).state, "loading");
+  assert.equal(V.filesView([], { state: "error", error: "x" }).state, "error");
+  assert.equal(V.filesView([], { state: "ok" }).state, "empty");
+  const files = JSON.parse(fs.readFileSync(path.join(__dirname, "fixtures", "files.json"), "utf8"));
+  const v = V.filesView(files, { state: "ok" });
+  assert.equal(v.state, "rows");
+  assert.deepEqual(v.rows[0], { index: 0, name: "debian.iso", progressText: "42%", priorityText: "Low", skipped: false });
+  assert.equal(v.rows[1].skipped, true);
+  assert.equal(v.rows[1].priorityText, "Skip");
+});
+
+test("withPriority changes one file and leaves the input alone; moveIndex clamps", () => {
+  const files = [{ index: 0, name: "a", progress: 0, priority: 1 }, { index: 1, name: "b", progress: 0, priority: 6 }];
+  const next = V.withPriority(files, 1, 7);
+  assert.equal(next[1].priority, 7);
+  assert.equal(files[1].priority, 6);
+  assert.equal(next[0], files[0]);
+  assert.equal(V.moveIndex(2, 1, 1), 1);
+  assert.equal(V.moveIndex(2, 0, -1), 0);
+  assert.equal(V.moveIndex(0, 3, 1), 0);
+});
+
+// --- Task 8: help ------------------------------------------------------------------
+
+test("helpRows groups helpFor rows, merges duplicate ids and drops reserved rows", () => {
+  const groups = V.helpRows(Registry.helpFor("NORMAL", "table"));
+  assert.deepEqual(groups.map((g) => g.group), ["Torrent", "View", "Library", "App"]);
+  const view = groups.find((g) => g.group === "View").items;
+  const files = view.filter((i) => i.title === "Files");
+  assert.equal(files.length, 1);
+  assert.equal(files[0].keys, "Enter / 4");
+  assert.ok(view.some((i) => i.keys === "gg" && i.title === "Top"));
+  assert.ok(!view.some((i) => i.title === "Reserved"));
+  const withNull = V.helpRows([{ id: null, title: "Reserved", group: "View", keys: ["2"] }]);
+  assert.deepEqual(withNull, []);
+});
+
+test("helpRows for VISUAL lists the range actions and the exit", () => {
+  const items = V.helpRows(Registry.helpFor("VISUAL", "table")).flatMap((g) => g.items);
+  assert.ok(items.some((i) => i.title === "Exit visual" && i.keys === "Esc / V"));
+  assert.ok(items.some((i) => i.title === "Delete with files"));
+});
+
+test("modeHints: VISUAL and per-pane NORMAL hints", () => {
+  assert.deepEqual(V.modeHints("VISUAL").map((h) => h.key), ["Space", "x", "X", "Esc"]);
+  assert.ok(V.modeHints("NORMAL", { pane: "filters" }).some((h) => h.key === "Enter" && h.label === "apply"));
+  assert.ok(V.modeHints("NORMAL", { pane: "inspector", filesTab: true }).some((h) => h.label === "priority"));
+  assert.ok(V.modeHints("NORMAL", { pane: "table" }).some((h) => h.key === "?"));
+});
