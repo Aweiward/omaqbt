@@ -356,7 +356,8 @@ TestCase {
     key(o.c, "c")
     type(o, "animation")
     enter(o)
-    compare(confirmText(o), "animation already exists. Move 2 torrents into it and delete anime? Their files move to /dl/animation.")
+    // Final fix wave (ruling BR): the fixture's torrents are unfinished (progress 0.5).
+    compare(confirmText(o), "animation already exists. Move 2 torrents into it and delete anime? Their files move to /dl/animation; unfinished ones move to their download folder.")
     key(o.c, "y")
     compare(o.c.mode, "NORMAL", "one confirm, not two")
     compare(lastCall(o.svc, "renameCategory").args[2], true)
@@ -366,20 +367,30 @@ TestCase {
     key(o.c, "c")
     type(o, "shows")
     enter(o)
-    compare(confirmText(o), "Rename anime to shows? Their files move to /dl/shows.")
+    compare(confirmText(o), "Rename anime to shows? Their files move to /dl/shows; unfinished ones move to their download folder.")
     compare(o.c.confirm.accept, "rename")
     key(o.c, "y")
     compare(lastCall(o.svc, "renameCategory").args[1], "shows")
     compare(lastCall(o.svc, "renameCategory").args[2], false)
-    // an explicit path is kept by the rename: nothing moves, no confirm
+    // an explicit path is kept by the rename: a finished torrent doesn't
+    // move, no confirm (final fix wave, ruling BR: progress 1 here)
     o.svc.categoryPaths = { anime: { savePath: "/srv/anime", downloadPath: "" } }
-    o.svc.torrents = [tt(hh("a"), "alpha", { category: "anime", autoTmm: true, savePath: "/srv/anime" })]
+    o.svc.torrents = [tt(hh("a"), "alpha", { category: "anime", autoTmm: true, savePath: "/srv/anime", progress: 1, state: "uploading" })]
     on(o, "category", "anime")
     key(o.c, "c")
     type(o, "series")
     enter(o)
     compare(o.c.confirm, null)
     compare(lastCall(o.svc, "renameCategory").args[1], "series")
+    // ...but an unfinished one moves to its download folder: confirm (BR)
+    var renames = calls(o.svc, "renameCategory").length
+    o.svc.torrents = [tt(hh("a"), "alpha", { category: "anime", autoTmm: true, savePath: "/srv/anime" })]
+    on(o, "category", "anime")
+    key(o.c, "c")
+    type(o, "series")
+    enter(o)
+    compare(confirmText(o), "Rename anime to series? 1 unfinished torrent's files move to its download folder.")
+    compare(calls(o.svc, "renameCategory").length, renames, "nothing before y")
   }
 
   function test_c_counts_every_torrent_not_the_filtered_table() {
@@ -547,7 +558,8 @@ TestCase {
     o.c.applyFilter({ group: "category", value: "anime/2026" })
     on(o, "category", "anime/2026")
     key(o.c, "x")
-    compare(confirmText(o), "Delete category anime/2026? 1 torrent moves to anime. Its files move to /dl/anime.")
+    // Final fix wave (ruling BR): gamma is unfinished (progress 0.5).
+    compare(confirmText(o), "Delete category anime/2026? 1 torrent moves to anime. Its files move to /dl/anime; unfinished ones move to their download folder.")
     key(o.c, "y")
     compare(lastCall(o.svc, "removeCategory").args[0], "anime/2026")
     finish(o, true)
@@ -560,7 +572,8 @@ TestCase {
     o.svc.torrents = library().slice(0, 2)
     on(o, "category", "anime")
     key(o.c, "x")
-    compare(confirmText(o), "Delete category anime? 2 torrents become Uncategorized. Their files move to /dl.")
+    // Final fix wave (ruling BR): alpha and beta are unfinished (progress 0.5).
+    compare(confirmText(o), "Delete category anime? 2 torrents become Uncategorized. Their files move to /dl; unfinished ones move to their download folder.")
   }
 
   function test_x_unused_category_still_confirms() {
@@ -593,7 +606,8 @@ TestCase {
     key(o.c, "x")
     key(o.c, "y")
     finish(o, false, "HTTP 409")
-    compare(o.c.messageLine.text, "HTTP 409")
+    // Final fix wave (ruling BS, Minor 5): never a bare "HTTP 409".
+    compare(o.c.messageLine.text, "Deleting tag seedbox failed: HTTP 409")
     compare(o.c.filter.value, "seedbox")
   }
 
@@ -709,5 +723,109 @@ TestCase {
     compare(confirmText(o), "Delete category anime/2026? 1 torrent moves to anime.")
     key(o.c, "y")
     compare(lastCall(o.svc, "removeCategory").args[0], "anime/2026")
+  }
+
+  // ---- final fix wave: G8 at Enter (ruling BQ) ---------------------------------------
+
+  // The bash fallback after a failed preferences read, and an API-down tick.
+  function fallbackTick(o) { o.svc.relocation = { torrentChanged: false, categoryPathChanged: false }; o.svc.defaultSavePath = "" }
+  function apiDownTick(o) { o.svc.api = false; o.svc.torrents = [] }
+
+  function test_c_and_p_refuse_at_Enter_when_a_not_ready_tick_lands_after_the_key() {
+    var ticks = [fallbackTick, apiDownTick]
+    // c on anime/2026 (a rename qbt would take), p on anime
+    var starts = [["c", "shows", "anime/2026"], ["p", "/srv/anime", "anime"]]
+    for (var i = 0; i < ticks.length; i++) {
+      for (var j = 0; j < starts.length; j++) {
+        var what = starts[j][0] + " tick " + i
+        var o = make({ relocation: { torrentChanged: true, categoryPathChanged: true } })
+        on(o, "category", starts[j][2])
+        key(o.c, starts[j][0])
+        compare(o.c.mode, "INSERT", what)
+        type(o, starts[j][1])
+        ticks[i](o)
+        enter(o)
+        compare(o.c.mode, "INSERT", "refused, the field stays open: " + what)
+        compare(line(o.c).inputValue(), starts[j][1], what)
+        compare(o.c.messageLine.text, notReady, what)
+        compare(o.c.confirm, null, what)
+        compare(writes(o.svc).length, 0, "no write without a confirm: " + what)
+        esc(o)
+        compare(writes(o.svc).length, 0, what)
+      }
+    }
+  }
+
+  function test_x_confirm_runs_the_frozen_delete_after_a_not_ready_tick() {
+    var o = make({ relocation: { torrentChanged: true, categoryPathChanged: false } })
+    on(o, "category", "anime/2026")
+    key(o.c, "x")
+    compare(o.c.mode, "CONFIRM")
+    var shown = confirmText(o)
+    verify(shown.indexOf("Its files move to /dl/anime") !== -1, shown)
+    fallbackTick(o)
+    apiDownTick(o)
+    key(o.c, "y")
+    compare(o.c.mode, "NORMAL")
+    compare(writes(o.svc).length, 1, "exactly the confirmed write")
+    var call = lastCall(o.svc, "removeCategory")
+    compare(call.args[0], "anime/2026")
+    compare(call.args[1].origin, "window")
+  }
+
+  // ---- final fix wave: the empty library's filters pane (BS, Important 4) ---------
+
+  function test_empty_library_filters_pane_takes_its_keys_and_y_still_reads_the_clipboard() {
+    var o = make({ categories: [], tags: [] })
+    o.svc.torrents = []
+    compare(o.c.tableState, "empty")
+    on(o, "category", "")
+    key(o.c, "a")
+    compare(o.c.mode, "INSERT")
+    compare(o.c.inputPurpose, "categoryAdd")
+    type(o, "linux-isos")
+    enter(o)
+    compare(lastCall(o.svc, "addCategory").args[0], "linux-isos")
+    compare(o.c.pane, "filters")
+    key(o.c, "y")
+    compare(calls(o.svc, "readClipboard").length, 1, "y in the filters pane")
+    o.c.setPane("table")
+    key(o.c, "y")
+    compare(calls(o.svc, "readClipboard").length, 2, "and in the table")
+    // with rows, an unmatched y in the filters pane does nothing
+    o.svc.torrents = library()
+    on(o, "category", "")
+    key(o.c, "y")
+    compare(calls(o.svc, "readClipboard").length, 2)
+  }
+
+  // ---- final fix wave: failures name the action (BS, Minor 5) ----------------------
+
+  function test_a_p_x_failures_name_the_action() {
+    var o = make()
+    on(o, "category", "")
+    key(o.c, "a")
+    type(o, "fresh")
+    enter(o)
+    finish(o, false, "qBittorrent refused it (HTTP 409)")
+    compare(o.c.messageLine.text, "Adding category fresh failed: HTTP 409")
+    on(o, "tag", "")
+    key(o.c, "a")
+    type(o, "keep")
+    enter(o)
+    finish(o, false, "qBittorrent refused it (HTTP 409)")
+    compare(o.c.messageLine.text, "Adding tag keep failed: HTTP 409")
+    on(o, "category", "anime")
+    key(o.c, "p")
+    type(o, "/srv/anime")
+    enter(o)
+    finish(o, false, "qBittorrent refused it (HTTP 409)")
+    compare(o.c.messageLine.text, "Setting anime's save path failed: HTTP 409")
+    on(o, "category", "anime")
+    key(o.c, "x")
+    key(o.c, "y")
+    finish(o, false, "qBittorrent refused it (HTTP 409)")
+    compare(o.c.messageLine.text, "Deleting category anime failed: HTTP 409")
+    compare(o.c.messageLine.tone, "urgent")
   }
 }

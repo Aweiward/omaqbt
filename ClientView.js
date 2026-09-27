@@ -377,9 +377,13 @@ function tableState(s) {
 // library, loading) replaces the whole center with its own keys (Enter,
 // y, r), and those keys are table-pane rows in the registry. So while one
 // shows, keys dispatch as if the table were focused, whatever pane was
-// restored; with rows (or a no-match filter) the real pane is used.
+// restored; with rows (or a no-match filter) the real pane is used. The
+// empty library keeps the filters pane too, so its a/c/p/x and j/k work
+// with zero torrents (ruling BS); its `y` matches nothing there, and the
+// window reads an unmatched y in the empty library as add from clipboard.
 function dispatchPane(pane, state) {
   if (state === "rows" || state === "noMatch") return String(pane || "table");
+  if (state === "empty" && pane === "filters") return "filters";
   return "table";
 }
 
@@ -1071,10 +1075,11 @@ var BUSY_NOTE = "Busy, try again.";
 // (see msgFinish). A ticket <= 0 (Service refused the call because it is
 // busy), or an array with no ticket > 0, records nothing and notes
 // BUSY_NOTE.
-// copy (optional, slice 3a): {progress, done, raw} for an action whose
-// copy names its target ("Renaming anime → animation…" / "Renamed anime →
-// animation"); raw shows the failure as the error text alone (qbt's own
-// sentence, e.g. "Rename incomplete (12 of 21 moved); …").
+// copy (optional, slice 3a): {progress, done, raw, fail} for an action
+// whose copy names its target ("Renaming anime → animation…" / "Renamed
+// anime → animation"); raw shows the failure as the error text alone (qbt's
+// own sentence, e.g. "Rename incomplete (12 of 21 moved); …"); fail names
+// the action first ("Deleting category anime failed: HTTP 409").
 function msgTrack(m, ticket, kind, count, hashes, copy) {
   var list = Array.isArray(ticket) ? ticket : [ticket];
   var ids = [];
@@ -1091,7 +1096,7 @@ function msgTrack(m, ticket, kind, count, hashes, copy) {
   var group = ids[0];
   var own = (hashes || []).slice();
   for (var j = 0; j < ids.length; j++) {
-    next.tickets[ids[j]] = { kind: kind, count: Number(count) || 0, hashes: own, text: text, group: group, done: cp.done ? String(cp.done) : "", raw: cp.raw === true };
+    next.tickets[ids[j]] = { kind: kind, count: Number(count) || 0, hashes: own, text: text, group: group, done: cp.done ? String(cp.done) : "", raw: cp.raw === true, fail: cp.fail ? String(cp.fail) : "" };
   }
   next.groups[group] = { left: ids.length, failed: false, error: "" };
   next.progress = text;
@@ -1213,10 +1218,18 @@ function msgFinish(m, ticket, ok, error) {
   if (group.failed) {
     var err = group.error;
     if (entry.raw === true && err !== "") next.error = err;
+    else if (entry.fail) next.error = entry.fail + (err !== "" ? ": " + refusalDetail(err) : ".");
     else next.error = failureText(entry.kind, entry.count) + (err !== "" ? ": " + err : ".");
     next.errorHashes = entry.hashes.slice();
   }
   return next;
+}
+
+// qbt's bare "qBittorrent refused it (HTTP 409)" -> "HTTP 409"; any other
+// error as it is.
+function refusalDetail(err) {
+  var m = /^qBittorrent refused it \((.*)\)$/.exec(err);
+  return m ? m[1] : err;
 }
 
 // msgError(m, text, hashes) -> m showing an urgent error until the next key.

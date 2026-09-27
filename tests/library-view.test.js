@@ -229,7 +229,9 @@ test("movePlan: a category change moves nothing when torrent_changed_tmm_enabled
 test("movePlan: a missing relocation or status moves nothing", () => {
   const rows = [row({ category: "anime", savePath: "/dl/anime" })];
   assert.deepEqual(L.movePlan({ kind: "remove", name: "anime" }, rows, { defaultSavePath: "/dl" }), []);
-  assert.deepEqual(L.movePlan({ kind: "remove", name: "anime" }, rows, null), []);
+  // Final fix wave (ruling BQ): no status at all is not ready, so it fails
+  // closed like any other not-ready status instead of moving nothing.
+  assert.deepEqual(L.movePlan({ kind: "remove", name: "anime" }, rows, null), [{ hash: H("a"), from: "/dl/anime", to: "" }]);
   assert.deepEqual(L.movePlan({ kind: "nope" }, rows, status()), []);
   assert.deepEqual(L.movePlan(null, rows, status()), []);
 });
@@ -546,8 +548,10 @@ test("movePlan fails closed without a default save path: every managed row, to \
   assert.deepEqual(L.movePlan({ kind: "setCategory", hashes: [H("a")], name: "x" }, rows, st), [{ hash: H("a"), from: "/dl/anime", to: "" }]);
   assert.deepEqual(L.movePlan({ kind: "rename", old: "anime", new: "b" }, rows, st).map((p) => p.to), ["", ""]);
   assert.deepEqual(L.movePlan({ kind: "path", name: "anime", path: "" }, rows, st).map((p) => p.to), ["", ""]);
-  assert.deepEqual(L.movePlan({ kind: "path", name: "anime", path: "/srv/a" }, rows, st).map((p) => p.to), ["/srv/a", "/srv/a"],
-    "an absolute path still resolves");
+  // Final fix wave (ruling BQ): not ready, every destination is "", even a
+  // typed absolute path (the relocation preference isn't known either).
+  assert.deepEqual(L.movePlan({ kind: "path", name: "anime", path: "/srv/a" }, rows, st).map((p) => p.to), ["", ""],
+    "not ready: fail closed");
   const relDefault = status({ defaultSavePath: "dl" });
   assert.deepEqual(L.movePlan({ kind: "remove", name: "anime" }, [rows[0]], relDefault), [{ hash: H("a"), from: "/dl/anime", to: "" }],
     "a relative default never yields a relative destination");
@@ -571,14 +575,11 @@ test("tagStates with no target rows marks every tag none", () => {
 
 // --- slice 3a, Task 5: the filters pane's copy, footer and p's path rule -------
 
-test("libraryCopy: progress and done copy per action, qbt's error shown as-is", () => {
-  assert.deepEqual(L.libraryCopy("add", "category", "anime"), { progress: "Adding category…", done: "Category added", raw: true });
-  assert.deepEqual(L.libraryCopy("add", "tag", "keep"), { progress: "Adding tag…", done: "Tag added", raw: true });
+test("libraryCopy: progress and done copy per action; a rename's error shown as-is", () => {
+  // Final fix wave (ruling BS, Minor 5): only a rename keeps raw; a/p/x
+  // failures carry a `fail` prefix instead (see the test at the end).
   assert.deepEqual(L.libraryCopy("rename", "category", "anime", "animation"), { progress: "Renaming anime → animation…", done: "Renamed anime → animation", raw: true });
   assert.deepEqual(L.libraryCopy("rename", "tag", "keep", "kept"), { progress: "Renaming keep → kept…", done: "Renamed keep → kept", raw: true });
-  assert.deepEqual(L.libraryCopy("path", "category", "anime"), { progress: "Setting anime's save path…", done: "Save path set", raw: true });
-  assert.deepEqual(L.libraryCopy("remove", "category", "anime"), { progress: "Deleting category anime…", done: "Deleted category anime", raw: true });
-  assert.deepEqual(L.libraryCopy("remove", "tag", "seedbox"), { progress: "Deleting tag seedbox…", done: "Deleted tag seedbox", raw: true });
 });
 
 test("savePathError: empty (the default), absolute or ~/ -- qbt category-path's rule and message", () => {
@@ -820,4 +821,109 @@ test("pickerSteps: + New is two writes, the create first; a plain change is one"
     { kind: "tag", step: "set", name: "", hashes: [H("a"), H("b")], changes: { add: ["x", "y", "a"], remove: ["b"] } }
   ]);
   assert.deepEqual(L.pickerSteps("tag", { op: "none", creates: [], changes: { add: [], remove: [] } }, [H("a")]), []);
+});
+
+// --- Final fix wave: G8 at Enter (ruling BQ), unfinished torrents (BR), copy (BS) ---
+
+// The two not-ready shapes a status tick can land between a key and Enter:
+// the bash fallback after a failed preferences read, and an API-down tick.
+const FALLBACK = { defaultSavePath: "", categoryPaths: {}, relocation: { torrentChanged: false, categoryPathChanged: false } };
+const API_DOWN = { api: false, defaultSavePath: "/dl", categoryPaths: {}, relocation: { torrentChanged: true, categoryPathChanged: true } };
+
+test("libraryReady is false while the API is down; a status without api is judged on its folders", () => {
+  assert.equal(L.libraryReady(API_DOWN), false);
+  assert.equal(L.libraryReady(status({ api: true })), true);
+  assert.equal(L.libraryReady(status()), true, "node fixtures and stubs that omit api stay ready");
+  assert.equal(L.libraryReady(FALLBACK), false);
+});
+
+test("movePlan fails closed before the relocation check when not ready (BQ)", () => {
+  const rows = [
+    row({ hash: H("a"), category: "anime", savePath: "/dl/anime", progress: 1 }),
+    row({ hash: H("b"), category: "anime", savePath: "/dl/anime", autoTmm: false, progress: 1 })
+  ];
+  for (const st of [FALLBACK, API_DOWN, null]) {
+    const label = JSON.stringify(st);
+    assert.deepEqual(L.movePlan({ kind: "remove", name: "anime" }, rows, st), [{ hash: H("a"), from: "/dl/anime", to: "" }], label);
+    assert.deepEqual(L.movePlan({ kind: "rename", old: "anime", new: "b" }, rows, st), [{ hash: H("a"), from: "/dl/anime", to: "" }], label);
+    assert.deepEqual(L.movePlan({ kind: "setCategory", hashes: [H("a"), H("b")], name: "linux" }, rows, st), [{ hash: H("a"), from: "/dl/anime", to: "" }], label);
+    assert.deepEqual(L.movePlan({ kind: "path", name: "anime", path: "/srv/a" }, rows, st), [{ hash: H("a"), from: "/dl/anime", to: "" }], label);
+  }
+});
+
+test("movePlan setCategory: a captured hash missing from rows is an unknown managed row, to \"\" (BQ)", () => {
+  // an API-down tick empties torrents
+  assert.deepEqual(L.movePlan({ kind: "setCategory", hashes: [H("a")], name: "anime" }, [], API_DOWN), [{ hash: H("a"), from: "", to: "" }]);
+  assert.deepEqual(L.movePlan({ kind: "setCategory", hashes: [H("a")], name: "anime" }, [], FALLBACK), [{ hash: H("a"), from: "", to: "" }]);
+  // ready, relocation on: still unknown
+  assert.deepEqual(L.movePlan({ kind: "setCategory", hashes: [H("z")], name: "anime" }, [row()], status()), [{ hash: H("z"), from: "", to: "" }]);
+  // ready, relocation off: qBittorrent switches it to manual, nothing moves
+  assert.deepEqual(L.movePlan({ kind: "setCategory", hashes: [H("z")], name: "anime" }, [], status({ relocation: { torrentChanged: false } })), []);
+});
+
+test("categoryAccept confirms in both not-ready shapes instead of setting silently (BQ, final review Critical)", () => {
+  const torrents = [row({ hash: H("a"), category: "", autoTmm: true, savePath: "/dl", progress: 1 })];
+  const rows = L.categoryPickerRows("", ["anime"], torrents, FUZZY);
+  const fallback = L.categoryAccept(catRow(rows, "anime"), [H("a")], torrents, Object.assign({ categories: ["anime"] }, FALLBACK));
+  assert.equal(fallback.line, "Changes 1 torrent's category; its files move to a folder qBittorrent picks.");
+  const down = L.categoryAccept(catRow(rows, "anime"), [H("a")], [], Object.assign({ categories: [] }, API_DOWN));
+  assert.equal(down.line, "Changes 1 torrent's category; its files move to a folder qBittorrent picks.");
+});
+
+test("movePlan: an unfinished auto-managed torrent counts whenever its category changes (BR)", () => {
+  const st = status({ categoryPaths: { a: { savePath: "/srv/x" }, b: { savePath: "/srv/x" } } });
+  const un = row({ hash: H("a"), category: "a", savePath: "/srv/x", progress: 0.5 });
+  const done = row({ hash: H("b"), category: "a", savePath: "/srv/x", progress: 1 });
+  assert.deepEqual(L.movePlan({ kind: "setCategory", hashes: [H("a"), H("b")], name: "b" }, [un, done], st),
+    [{ hash: H("a"), from: "/srv/x", to: "/srv/x", unfinished: true }], "equal save paths: only the unfinished one");
+  assert.deepEqual(L.movePlan({ kind: "setCategory", hashes: [H("a")], name: "a" }, [un], st), [], "its category doesn't change");
+  assert.deepEqual(L.movePlan({ kind: "rename", old: "a", new: "c" }, [un, done], st),
+    [{ hash: H("a"), from: "/srv/x", to: "/srv/x", unfinished: true }], "a rename keeps an explicit path");
+  assert.deepEqual(L.movePlan({ kind: "remove", name: "a" }, [un], st), [{ hash: H("a"), from: "/srv/x", to: "/dl", unfinished: true }]);
+  assert.deepEqual(L.movePlan({ kind: "path", name: "a", path: "/srv/x" }, [un], st), [], "p: unfinished ones stay in the download folder");
+  assert.deepEqual(L.movePlan({ kind: "setCategory", hashes: [H("a")], name: "b" }, [un], status({ relocation: { torrentChanged: false } })), [],
+    "relocation off: nothing moves");
+  assert.deepEqual(L.movePlan({ kind: "setCategory", hashes: [H("a")], name: "b" }, [row({ hash: H("a"), category: "a", autoTmm: false, progress: 0 })], st), [],
+    "a manual torrent never moves");
+  assert.deepEqual(L.movePlan({ kind: "setCategory", hashes: [H("a")], name: "b" }, [row({ hash: H("a"), category: "a", savePath: "/srv/x" })], st), [],
+    "a row without progress counts as finished");
+});
+
+test("the confirms say unfinished torrents move to their download folder (BR)", () => {
+  const same = [{ hash: H("a"), from: "/srv/x", to: "/srv/x", unfinished: true }];
+  const moving = [{ hash: H("b"), from: "/dl", to: "/dl/anime" }];
+  const both = moving.concat(same);
+  assert.equal(L.moveConfirmLine(same, 1), "Changes 1 torrent's category; 1 unfinished torrent's files move to its download folder.");
+  assert.equal(L.moveConfirmLine(same.concat([{ hash: H("c"), from: "/srv/x", to: "/srv/x", unfinished: true }]), 3),
+    "Changes 3 torrents' category; 2 unfinished torrents' files move to their download folder.");
+  assert.equal(L.moveConfirmLine(both, 2), "Changes 2 torrents' category; 1 torrent's files move to /dl/anime; unfinished ones move to their download folder.");
+  assert.equal(L.moveConfirmLine([{ hash: H("b"), from: "/dl", to: "/dl/anime", unfinished: true }], 1),
+    "Changes 1 torrent's category; its files move to /dl/anime; unfinished ones move to their download folder.");
+  assert.equal(L.renameConfirmLine("a", "c", false, 1, same), "Rename a to c? 1 unfinished torrent's files move to its download folder.");
+  assert.equal(L.renameConfirmLine("a", "c", false, 2, both), "Rename a to c? 1 torrent's files move to /dl/anime; unfinished ones move to their download folder.");
+  assert.equal(L.deleteConfirmLine("category", "a", 1, 0, [{ hash: H("a"), from: "/srv/x", to: "/dl", unfinished: true }]),
+    "Delete category a? 1 torrent becomes Uncategorized. Its files move to /dl; unfinished ones move to their download folder.");
+});
+
+test("libraryCopy: a/p/x failures name the action; only a rename shows qbt's sentence alone (BS, Minor 5)", () => {
+  assert.deepEqual(L.libraryCopy("add", "category", "anime"), { progress: "Adding category…", done: "Category added", fail: "Adding category anime failed" });
+  assert.deepEqual(L.libraryCopy("add", "tag", "keep"), { progress: "Adding tag…", done: "Tag added", fail: "Adding tag keep failed" });
+  assert.deepEqual(L.libraryCopy("path", "category", "anime"), { progress: "Setting anime's save path…", done: "Save path set", fail: "Setting anime's save path failed" });
+  assert.deepEqual(L.libraryCopy("remove", "category", "anime"), { progress: "Deleting category anime…", done: "Deleted category anime", fail: "Deleting category anime failed" });
+  assert.deepEqual(L.libraryCopy("remove", "tag", "seedbox"), { progress: "Deleting tag seedbox…", done: "Deleted tag seedbox", fail: "Deleting tag seedbox failed" });
+  assert.equal(L.libraryCopy("rename", "category", "anime", "animation").raw, true);
+});
+
+test("pickerFailure: a later chunk's failure says how many changed first (BS, Minor 6)", () => {
+  const f = L.pickerFailure;
+  const chunk = { done: 1000, total: 1500 };
+  assert.equal(f("category", "set", "anime", [], "qBittorrent refused it (HTTP 409)", chunk), "Category set on 1000 of 1500; the rest failed (HTTP 409)");
+  assert.equal(f("category", "set", "", [], "qBittorrent refused it (HTTP 409)", chunk), "Category removed from 1000 of 1500; the rest failed (HTTP 409)");
+  assert.equal(f("category", "set", "x", ["x"], "qBittorrent refused it (HTTP 409)", chunk), "Created x; category set on 1000 of 1500; the rest failed (HTTP 409)");
+  assert.equal(f("category", "set", "anime", [], "", chunk), "Category set on 1000 of 1500; the rest failed.");
+  assert.equal(f("tag", "set", "", [], "qBittorrent refused it (HTTP 500)", chunk), "Tags changed on 1000 of 1500; the rest failed (HTTP 500)");
+  assert.equal(f("tag", "set", "", [], "Tags: removing seedbox failed (HTTP 409)", chunk), "Tags changed on 1000 of 1500; the rest: removing seedbox failed (HTTP 409)");
+  // nothing changed first: the lines as before
+  assert.equal(f("category", "set", "anime", [], "qBittorrent refused it (HTTP 409)", { done: 0, total: 1500 }), "Setting the category failed: HTTP 409");
+  assert.equal(f("category", "set", "anime", [], "qBittorrent refused it (HTTP 409)"), "Setting the category failed: HTTP 409");
 });

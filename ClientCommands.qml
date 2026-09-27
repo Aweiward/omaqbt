@@ -131,9 +131,11 @@ QtObject {
   // A key whose command needs a torrent, pressed with none under the
   // cursor. In the empty library, `y` means "add from clipboard" (the
   // empty state's copy), since there is no torrent to copy a magnet from.
+  // Client also sends an unmatched key here: the empty library's filters
+  // pane keeps its own keys (ruling BS), where y matches nothing.
   function handleBlocked(ev) {
     var c = client
-    if (!c.service) return
+    if (!c.service || !ev || c.mode !== "NORMAL") return
     if (c.tableState === "empty" && ev.text === "y" && !ev.modifiers.ctrl) {
       c.clipboardAskedAt = ev.now
       c.service.readClipboard()
@@ -229,6 +231,14 @@ QtObject {
     stayInInsert()
   }
 
+  // Ruling BQ (G8): the key-time gate isn't enough, since a status tick can
+  // land between the key and Enter. A category write that could move files
+  // checks again at Enter, before any plan: not ready (no default save
+  // path, or the API down) refuses instead of computing an empty plan.
+  function readyAtEnter() {
+    return Library.libraryReady(client.service)
+  }
+
   // Enter on a filters-pane INSERT. raw is the field exactly as typed: a
   // name is never trimmed, so an edge space gets its message instead of
   // being dropped silently. Counts and moves read every torrent
@@ -249,6 +259,7 @@ QtObject {
       return
     }
     if (purpose === "categoryPath") {
+      if (!readyAtEnter()) { refuseInput(Library.LIBRARY_NOT_READY); return }
       var path = raw.trim()
       err = Library.savePathError(path)
       if (err !== "") { refuseInput(err); return }
@@ -261,6 +272,7 @@ QtObject {
     // a merge, not a clash), then qbt's rename refusals, then one CONFIRM
     // for the merge and/or the move (G8, G9).
     if (raw === t.value) { endLibraryInput(); return }
+    if (t.kind === "category" && !readyAtEnter()) { refuseInput(Library.LIBRARY_NOT_READY); return }
     err = Library.nameError(t.kind, raw, [])
     if (err === "" && t.kind === "category") err = Library.renameError(t.value, raw, names)
     if (err !== "") { refuseInput(err); return }
@@ -426,6 +438,7 @@ QtObject {
     var kind = pickerKind
     var p = openPicker()
     if (!p) return
+    if (kind === "category" && !readyAtEnter()) { reopenPicker(Library.LIBRARY_NOT_READY); return }
     var accept = kind === "category"
       ? Library.categoryAccept(p.currentRow(), targets, svc.torrents, svc)
       : Library.tagAccept(p.original, p.working, p.currentRow())
@@ -471,9 +484,41 @@ QtObject {
       trackLibrary(s.kind === "tag" ? svc.addTag(s.name, c.opts([])) : svc.addCategory(s.name, "", c.opts([])), copy, watch)
       return
     }
-    trackLibrary(c.perChunk(s.hashes, function(joined, chunk) {
-      return s.kind === "tag" ? svc.editTags(joined, s.changes, c.opts(chunk)) : svc.setCategory(joined, s.name, c.opts(chunk))
-    }), copy, watch, s.hashes)
+    var sizes = ({})
+    var tickets = c.perChunk(s.hashes, function(joined, chunk) {
+      var t = s.kind === "tag" ? svc.editTags(joined, s.changes, c.opts(chunk)) : svc.setCategory(joined, s.name, c.opts(chunk))
+      if (Number(t) > 0) sizes[String(t)] = chunk.length
+      return t
+    })
+    var left = Object.keys(sizes)
+    if (left.length > 0) {
+      var tally = ({})
+      for (var k in pickerTally) tally[k] = pickerTally[k]
+      tally[left[0]] = { total: s.hashes.length, done: 0, left: left.length, error: null, sizes: sizes }
+      pickerTally = tally
+      watch.picker.group = left[0]
+    }
+    trackLibrary(tickets, copy, watch, s.hashes)
+  }
+
+  // group (a set's first ticket) -> {total, done, left, error, sizes}: a
+  // chunked set's tally, so its one line can say how many chunks changed
+  // before one failed (ruling BS, Minor 6). Chunks run in turn, and one
+  // failing doesn't stop the rest.
+  property var pickerTally: ({})
+
+  // A set's chunk ended: the tally after it, or null when the set has no
+  // tally (an add). Drops the tally once its last chunk is in.
+  function tallyChunk(ticket, ok, error, group) {
+    var t = pickerTally[group]
+    if (!t) return null
+    var next = { total: t.total, done: t.done + (ok === true ? (t.sizes[String(ticket)] || 0) : 0), left: t.left - 1,
+      error: ok !== true && t.error === null ? String(error || "") : t.error, sizes: t.sizes }
+    var tally = ({})
+    for (var k in pickerTally) if (k !== group) tally[k] = pickerTally[k]
+    if (next.left > 0) tally[group] = next
+    pickerTally = tally
+    return next
   }
 
   function runPickerSteps(steps, created) {
@@ -485,8 +530,16 @@ QtObject {
   // shows; a create that succeeded goes on to the next step.
   function pickerFinished(ticket, ok, error, p) {
     var c = client
+    var t = p.group ? tallyChunk(ticket, ok, error, p.group) : null
+    if (t && t.left > 0) {
+      // An earlier chunk: bookkeeping only; the last one reports.
+      c.messages = View.msgFinish(c.messages, ticket, true, "")
+      return
+    }
+    if (t && t.error !== null) { ok = false; error = t.error }
     if (ok !== true) {
-      c.messages = View.msgFinish(c.messages, ticket, false, Library.pickerFailure(p.kind, p.step, p.name, p.created, error))
+      c.messages = View.msgFinish(c.messages, ticket, false,
+        Library.pickerFailure(p.kind, p.step, p.name, p.created, error, t ? { done: t.done, total: t.total } : null))
       c.service.refresh()
       return
     }

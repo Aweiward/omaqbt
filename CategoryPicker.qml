@@ -46,7 +46,10 @@ ListOverlay {
   }
 
   onQueryChanged: refresh(false)
-  onCategoriesChanged: if (visible) refresh(true)
+  // Not while the API is down, nor when the list empties (an API-down
+  // tick): rebuilding then would put the cursor on "+ New category" and
+  // keep it there after recovery (ruling BS).
+  onCategoriesChanged: if (visible && commands.client.service && commands.client.service.api && categories.length > 0) refresh(true)
   onKeyForwarded: function(event) { commands.client.handleKey(event) }
   onActivated: function(row) { commands.pickerClicked() }
   onDismissed: commands.closePicker()

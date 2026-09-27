@@ -391,13 +391,19 @@ test("dispatchPane: rows and noMatch keep the real pane", () => {
 test("dispatchPane: blocking states dispatch as the table pane", () => {
   for (const st of ["loading", "gui", "notInstalled", "daemon", "api", "empty"]) {
     for (const pane of ["filters", "inspector", "table"]) {
+      // Final fix wave (ruling BS, Important 4): the filters pane in the
+      // empty library keeps its keys (see the next tests).
+      if (st === "empty" && pane === "filters") continue;
       assert.equal(V.dispatchPane(pane, st), "table", st + "/" + pane);
     }
   }
 });
 
 test("dispatchPane makes Enter and y reach their commands from any restored pane", () => {
-  for (const pane of ["filters", "inspector"]) {
+  // Final fix wave (ruling BS, Important 4): the filters pane in the empty
+  // library now dispatches as itself; its y is covered by the test after
+  // this one, and Enter there is filter.apply.
+  for (const pane of ["inspector"]) {
     const base = { mode: "NORMAL", hasTorrent: false };
     // daemon / notInstalled: Enter must come back as inspector.files (the
     // window turns it into start daemon / install), not filter.apply.
@@ -1780,11 +1786,13 @@ test("libraryTarget: none on Status/Trackers rows, another pane, a blocking stat
     { filterCursor: { group: "tracker", value: "" } },
     { filterCursor: { group: "category", value: "gone" } },
     { filterCursor: null }, { filterEntries: [] }, { filterEntries: undefined },
-    { pane: "table" }, { pane: "inspector" }, { state: "empty" }, { state: "daemon" }
+    { pane: "table" }, { pane: "inspector" }, { state: "daemon" }
   ]) {
     assert.equal(V.inspectorDispatch(lib(o)).libraryTarget, null, JSON.stringify(o));
   }
   assert.notEqual(V.inspectorDispatch(lib({ state: "noMatch" })).libraryTarget, null, "a no-match filter keeps the pane");
+  // Final fix wave (ruling BS, Important 4): so does the empty library.
+  assert.notEqual(V.inspectorDispatch(lib({ state: "empty" })).libraryTarget, null, "the empty library keeps the pane");
 });
 
 test("libraryTarget: a category carries the not-ready refusal until the folders are known; a tag never does", () => {
@@ -1867,6 +1875,31 @@ test("msgTrack/msgFinish: an action's own progress and done copy, and qbt's erro
   assert.equal(V.messageLine(V.msgFinish(m, 5, false, "")).text, "The action failed.");
   // without copy, nothing changes
   assert.equal(V.messageLine(V.msgFinish(V.msgTrack(V.emptyMessages(), 1, "delete", 1, []), 1, false, "boom")).text, "Couldn't delete 1 torrent: boom");
+});
+
+test("dispatchPane: the filters pane keeps its keys in the empty library (BS, Important 4)", () => {
+  assert.equal(V.dispatchPane("filters", "empty"), "filters");
+  const base = { mode: "NORMAL", hasTorrent: false, pane: V.dispatchPane("filters", "empty") };
+  const target = { kind: "category", value: "", label: "" };
+  const a = Registry.dispatch(Object.assign({}, base, { libraryTarget: target }), V.keyEvent(0x41, "a", 0, 0));
+  assert.equal(a.commandId, "library.add");
+  const j = Registry.dispatch(base, V.keyEvent(0x4a, "j", 0, 0));
+  assert.equal(j.commandId, "filter.down");
+  // y matches nothing there; the window treats an unmatched y in the empty
+  // library as add from clipboard, as it does a blocked one
+  const y = Registry.dispatch(base, V.keyEvent(0x59, "y", 0, 0));
+  assert.equal(y.commandId, null);
+  assert.equal(V.libraryTarget({ pane: "filters", state: "empty", filterCursor: { group: "category", value: "" },
+    filterEntries: V.filterEntries(Model.filterGroups([], ["anime"], [])), libraryReady: true }).kind, "category");
+});
+
+test("msgTrack/msgFinish: a copy's fail prefix names the action; qBittorrent's refusal becomes its HTTP code (BS, Minor 5)", () => {
+  const copy = { progress: "Deleting category anime…", done: "Deleted category anime", fail: "Deleting category anime failed" };
+  const m = V.msgTrack(V.emptyMessages(), 5, "library", 0, [], copy);
+  assert.equal(V.messageLine(V.msgFinish(m, 5, false, "qBittorrent refused it (HTTP 409)\n")).text, "Deleting category anime failed: HTTP 409");
+  assert.equal(V.messageLine(V.msgFinish(m, 5, false, "anime doesn't exist.")).text, "Deleting category anime failed: anime doesn't exist.");
+  assert.equal(V.messageLine(V.msgFinish(m, 5, false, "")).text, "Deleting category anime failed.");
+  assert.equal(V.messageLine(V.msgFinish(m, 5, true, "")).text, "Deleted category anime");
 });
 
 // --- The C and T pickers (slice 3a, Task 6) ------------------------------------

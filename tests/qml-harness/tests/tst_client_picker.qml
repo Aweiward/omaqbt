@@ -230,7 +230,8 @@ TestCase {
     key(o.c, "C")
     enter(o)
     compare(o.c.mode, "CONFIRM")
-    compare(confirmText(o), "Changes 1 torrent's category; its files move to /dl.")
+    // Final fix wave (ruling BR): alpha is unfinished (progress 0.5).
+    compare(confirmText(o), "Changes 1 torrent's category; its files move to /dl; unfinished ones move to their download folder.")
     compare(writes(o.svc).length, 0, "nothing is written before y")
     key(o.c, "n")
     compare(o.c.mode, "NORMAL")
@@ -263,7 +264,8 @@ TestCase {
     compare(p.currentRow().title, "anime")
     enter(o)
     compare(o.c.mode, "CONFIRM")
-    compare(confirmText(o), "Changes 2 torrents' category; 1 torrent's files move to /dl/anime.",
+    // Final fix wave (ruling BR): gamma is unfinished (progress 0.5).
+    compare(confirmText(o), "Changes 2 torrents' category; 1 torrent's files move to /dl/anime; unfinished ones move to their download folder.",
       "beta is already on anime; gamma moves, delta is manual")
     compare(o.c.confirmHashes, [hh("c"), hh("d")])
     compare(writes(o.svc).length, 0)
@@ -312,7 +314,8 @@ TestCase {
     catPicker(o).setQuery("anime/new")
     compare(catPicker(o).currentRow().title, "+ New category \"anime/new\"")
     enter(o)
-    compare(confirmText(o), "Changes 1 torrent's category; its files move to /srv/anime/new.")
+    // Final fix wave (ruling BR): alpha is unfinished (progress 0.5).
+    compare(confirmText(o), "Changes 1 torrent's category; its files move to /srv/anime/new; unfinished ones move to their download folder.")
     compare(writes(o.svc).length, 0, "no category is created before y")
     key(o.c, "y")
     compare(lastCall(o.svc, "addCategory").args[0], "anime/new")
@@ -392,6 +395,108 @@ TestCase {
     p.cursor = 2
     enter(o)
     compare(lastCall(o.svc, "setCategory").args[1], legacy)
+  }
+
+  // ---- final fix wave: G8 at Enter (ruling BQ), the cursor across a blip (BS) --------
+
+  // The bash fallback after a failed preferences read, and an API-down tick.
+  function fallbackTick(o) { o.svc.relocation = { torrentChanged: false, categoryPathChanged: false }; o.svc.defaultSavePath = "" }
+  function apiDownTick(o) { o.svc.api = false; o.svc.torrents = []; o.svc.categories = [] }
+
+  function test_C_Enter_refuses_when_a_not_ready_tick_lands_after_C() {
+    var ticks = [fallbackTick, apiDownTick]
+    for (var i = 0; i < ticks.length; i++) {
+      var o = make()
+      relocate(o)
+      onRow(o, hh("d"))
+      key(o.c, "C")
+      compare(o.c.mode, "PICKER")
+      catPicker(o).setQuery("anime")
+      compare(catPicker(o).currentRow().title, "anime")
+      ticks[i](o)
+      enter(o)
+      compare(o.c.mode, "PICKER", "refused: the picker stays open (" + i + ")")
+      verify(catPicker(o).visible)
+      compare(o.c.messageLine.text, notReady)
+      compare(o.c.confirm, null)
+      compare(writes(o.svc).length, 0, "no write without a confirm (" + i + ")")
+      esc(o)
+      compare(writes(o.svc).length, 0)
+    }
+  }
+
+  function test_C_cursor_survives_an_api_blip() {
+    var o = make()
+    onRow(o, hh("d"))
+    key(o.c, "C")
+    var p = catPicker(o)
+    p.setQuery("ani")
+    compare(p.currentRow().title, "anime")
+    // an API-down tick, as Service applies it: api first, then the lists
+    o.svc.api = false
+    o.svc.torrents = []
+    o.svc.categories = []
+    compare(p.currentRow().title, "anime", "no rebuild while the API is down")
+    // recovery
+    o.svc.api = true
+    o.svc.torrents = library()
+    o.svc.categories = ["anime", "anime/2026"]
+    compare(p.currentRow().title, "anime")
+    enter(o)
+    compare(o.c.mode, "NORMAL")
+    compare(calls(o.svc, "addCategory").length, 0, "no \"ani\" category")
+    var call = lastCall(o.svc, "setCategory")
+    compare(call.args[0], hh("d"))
+    compare(call.args[1], "anime")
+  }
+
+  function test_C_cursor_survives_an_emptied_list() {
+    var o = make()
+    onRow(o, hh("d"))
+    key(o.c, "C")
+    var p = catPicker(o)
+    p.setQuery("ani")
+    o.svc.categories = []
+    compare(p.currentRow().title, "anime", "an emptied list doesn't rebuild the rows")
+    o.svc.categories = ["anime", "anime/2026", "anime/2027"]
+    compare(p.currentRow().title, "anime")
+    verify(titles(p).indexOf("anime/2027") !== -1, "a real change still rebuilds")
+    esc(o)
+  }
+
+  // Minor 6: a chunked set whose later chunk fails says how many changed.
+  function test_C_chunk_failure_counts_what_changed() {
+    var o = make()
+    var many = []
+    for (var i = 0; i < 1001; i++) {
+      var h = ("0000000000" + i.toString(16)).slice(-10)
+      many.push(tt(h + h + h + h, "t" + i, { addedOn: 2000 - i }))
+    }
+    o.svc.torrents = many
+    function pickAll() {
+      onRow(o, many[0].hash)
+      key(o.c, "V")
+      o.c.setCursor(many[1000].hash)
+      compare(o.c.visualHashes.length, 1001)
+      key(o.c, "C")
+      down(o)
+      compare(catPicker(o).currentRow().title, "anime")
+      enter(o)
+    }
+    pickAll()
+    compare(calls(o.svc, "setCategory").length, 2, "two chunks")
+    var refreshes = calls(o.svc, "refresh").length
+    o.svc.actionFinished(o.svc.seq - 1, true, "", "window", [])
+    compare(o.c.messageLine.text, "Setting category anime…", "still running")
+    o.svc.actionFinished(o.svc.seq, false, "qBittorrent refused it (HTTP 409)", "window", [])
+    compare(o.c.messageLine.text, "Category set on 1000 of 1001; the rest failed (HTTP 409)")
+    compare(o.c.messageLine.tone, "urgent")
+    compare(calls(o.svc, "refresh").length, refreshes + 1, "one refresh")
+    // the first chunk failing, the second fine: 1 of 1001 changed
+    pickAll()
+    o.svc.actionFinished(o.svc.seq - 1, false, "qBittorrent refused it (HTTP 409)", "window", [])
+    o.svc.actionFinished(o.svc.seq, true, "", "window", [])
+    compare(o.c.messageLine.text, "Category set on 1 of 1001; the rest failed (HTTP 409)")
   }
 
   // ---- T ---------------------------------------------------------------------------

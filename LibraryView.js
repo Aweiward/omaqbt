@@ -58,9 +58,11 @@ function hashList(hashes) {
 // default save path, since every category folder is resolved from it.
 var LIBRARY_NOT_READY = "Still reading qBittorrent's folders; try again in a moment.";
 
-// libraryReady(status) -> false while defaultSavePath is missing or empty.
+// libraryReady(status) -> false while defaultSavePath is missing or empty,
+// or while the API is down (status.api false: its torrents and categories
+// are empty, not real). A status without `api` is judged on its folders.
 function libraryReady(status) {
-  return !!status && typeof status.defaultSavePath === "string" && status.defaultSavePath !== "";
+  return !!status && status.api !== false && typeof status.defaultSavePath === "string" && status.defaultSavePath !== "";
 }
 
 // QDir::cleanPath, as qBittorrent's Path does: duplicate slashes collapse,
@@ -228,26 +230,45 @@ var RELOCATION_PREFERENCE = {
   path: "categoryPathChanged"
 };
 
-// movePlan(action, rows, status) -> [{hash, from, to}] for the auto-managed
-// rows whose files the action would move, or []. `rows` is every torrent
-// (Service.torrents). action is one of:
+// movePlan(action, rows, status) -> [{hash, from, to, unfinished?}] for the
+// auto-managed rows whose files the action would move, or []. `rows` is
+// every torrent (Service.torrents). action is one of:
 //   {kind: "setCategory", hashes, name}         C (hashes: see hashList;
 //                                               name "" = none)
 //   {kind: "rename", old, new}                  c (a merge when new exists)
 //   {kind: "remove", name}                      x
 //   {kind: "path", name, path, home?}           p (path "" = default; "~/"
 //                                               uses home, else shown as typed)
+//
+// Not ready (libraryReady false: no default save path, or the API down) it
+// fails closed before the relocation check (ruling BQ): the relocation
+// preferences and the folders aren't known, so every affected managed row
+// counts, with to "". A setCategory hash missing from rows is an unknown
+// managed row ({hash, from: "", to: ""}) whenever a move is possible.
+//
+// Ruling BR: qBittorrent 5.2.3's adjustStorageLocation moves an unfinished
+// torrent to its download path when it has one, and download paths differ
+// per category, so an auto-managed row with progress < 1 counts whenever
+// its category changes (setCategory to another category, rename, remove),
+// even when the save paths are equal; it carries unfinished: true. Not for
+// "path": a save-path change leaves unfinished torrents where they are.
 function movePlan(action, rows, status) {
   var pref = action ? RELOCATION_PREFERENCE[action.kind] : undefined;
-  if (!pref || !status || !status.relocation || status.relocation[pref] !== true) return [];
+  if (!pref) return [];
+  var ready = libraryReady(status);
+  if (ready && (!status.relocation || status.relocation[pref] !== true)) return [];
   var affects, to;
+  var changes = function(row) { return true; };
+  var st = status || {};
   if (action.kind === "setCategory") {
     var hashes = hashList(action.hashes);
+    var target = String(action.name || "");
     affects = function(row) { return hashes.indexOf(Model.torrentId(row)) !== -1; };
+    changes = function(row) { return String(row.category || "") !== target; };
     to = categorySavePath(action.name, status);
   } else if (action.kind === "rename") {
     // qbt's create step copies old's save path; a merge needs equal paths.
-    var paths = status.categoryPaths || {};
+    var paths = st.categoryPaths || {};
     var source = Object.prototype.hasOwnProperty.call(paths, action.new) ? action.new : action.old;
     affects = function(row) { return String(row.category || "") === action.old; };
     to = resolveSavePath(explicitSavePath(source, status), String(action.new), status);
@@ -261,25 +282,63 @@ function movePlan(action, rows, status) {
     var p = String(action.path || "");
     if (p.indexOf("~/") === 0 && action.home) p = joinPath(action.home, p.substring(2));
     affects = function(row) { return String(row.category || "") === action.name; };
+    changes = function(row) { return false; };
     to = p.indexOf("~/") === 0 ? p : resolveSavePath(p, String(action.name || ""), status);
   }
+  if (!ready) to = "";
   // Fail closed (ruling BM): a destination that didn't resolve to an
   // absolute folder (no default save path yet) is "", and every managed
   // row still counts, so a caller that skipped libraryReady still confirms.
   // A "~/" path without home stays as typed; qbt expands it.
   if (to.charAt(0) !== "/" && to.indexOf("~/") !== 0) to = "";
   var out = [];
+  var seen = [];
   var list = rows || [];
   for (var i = 0; i < list.length; i++) {
     var row = list[i];
-    if (!row || row.autoTmm !== true || !affects(row)) continue;
+    if (!row) continue;
+    if (action.kind === "setCategory") seen.push(Model.torrentId(row));
+    if (row.autoTmm !== true || !affects(row)) continue;
     var from = cleanPath(row.savePath);
-    if (to === "" || from !== to) out.push({ hash: Model.torrentId(row), from: from, to: to });
+    var unfinished = Number(row.progress) < 1 && changes(row);
+    if (to !== "" && from === to && !unfinished) continue;
+    var entry = { hash: Model.torrentId(row), from: from, to: to };
+    if (unfinished) entry.unfinished = true;
+    out.push(entry);
+  }
+  if (action.kind === "setCategory") {
+    for (var j = 0; j < hashes.length; j++) if (seen.indexOf(hashes[j]) === -1) out.push({ hash: hashes[j], from: "", to: "" });
   }
   return out;
 }
 
 // --- Confirm copy (one CONFIRM per action) ------------------------------------------
+
+// Ruling BR: the rows that move to a save path, i.e. all but the unfinished
+// ones whose save path stays (those move only to their download folder).
+function movers(plan) {
+  var out = [];
+  for (var i = 0; i < plan.length; i++) if (!(plan[i].unfinished === true && plan[i].to !== "" && plan[i].from === plan[i].to)) out.push(plan[i]);
+  return out;
+}
+
+function unfinishedCount(plan) {
+  var n = 0;
+  for (var i = 0; i < plan.length; i++) if (plan[i].unfinished === true) n++;
+  return n;
+}
+
+// "; unfinished ones move to their download folder" when the plan has any.
+function unfinishedClause(plan) {
+  return unfinishedCount(plan) > 0 ? "; unfinished ones move to their download folder" : "";
+}
+
+// When only unfinished rows move: "2 unfinished torrents' files move to
+// their download folder".
+function unfinishedOnly(plan) {
+  var u = unfinishedCount(plan);
+  return u + " unfinished" + plural(u, " torrent's", " torrents'") + " files move to " + plural(u, "its", "their") + " download folder";
+}
 
 function destinationText(plan) {
   var seen = [];
@@ -291,12 +350,18 @@ function destinationText(plan) {
 // The move sentence folded into a delete, rename or path confirm: "Their
 // files move to /dl." when every counted torrent moves, else "3 torrents'
 // files move to /dl." "" when nothing moves.
+// Unfinished rows (ruling BR) add "; unfinished ones move to their
+// download folder", or, when they are all that moves, "1 unfinished
+// torrent's files move to its download folder."
 function moveSentence(plan, count) {
   var list = plan || [];
   if (list.length === 0) return "";
-  var dest = destinationText(list);
-  if (list.length >= count) return plural(list.length, "Its", "Their") + " files move to " + dest + ".";
-  return torrentsPossessive(list.length) + " files move to " + dest + ".";
+  var m = movers(list);
+  if (m.length === 0) return unfinishedOnly(list) + ".";
+  var dest = destinationText(m);
+  var tail = unfinishedClause(list) + ".";
+  if (m.length >= count) return plural(m.length, "Its", "Their") + " files move to " + dest + tail;
+  return torrentsPossessive(m.length) + " files move to " + dest + tail;
 }
 
 // moveConfirmLine(plan, total) -> the C picker's confirm, or "" when nothing
@@ -307,10 +372,16 @@ function moveConfirmLine(plan, total) {
   var list = plan || [];
   if (list.length === 0) return "";
   var n = Math.max(Number(total) || 0, list.length);
-  var dest = destinationText(list);
-  var tail = list.length === n
-    ? plural(n, "its", "their") + " files move to " + dest + "."
-    : torrentsPossessive(list.length) + " files move to " + dest + ".";
+  var m = movers(list);
+  var tail;
+  if (m.length === 0) tail = unfinishedOnly(list) + ".";
+  else {
+    var dest = destinationText(m);
+    var rest = unfinishedClause(list) + ".";
+    tail = m.length === n
+      ? plural(n, "its", "their") + " files move to " + dest + rest
+      : torrentsPossessive(m.length) + " files move to " + dest + rest;
+  }
   return "Changes " + torrentsPossessive(n) + " category; " + tail;
 }
 
@@ -418,15 +489,17 @@ function followFilter(filter, action) {
 
 // libraryCopy(verb, kind, name, newName) -> the status line's copy for a
 // filters-pane write (ClientView.msgTrack's `copy`): verb "add", "rename",
-// "path" or "remove"; kind "category" or "tag". raw: a failure shows
-// qbt's own message as-is (e.g. "Rename incomplete (12 of 21 moved);
-// press c on anime again to finish.").
+// "path" or "remove"; kind "category" or "tag". A rename is raw: its
+// failure shows qbt's own sentence as-is, which stands alone (e.g. "Rename
+// incomplete (12 of 21 moved); press c on anime again to finish."). The
+// others carry `fail`, the action a failure names first: "Deleting
+// category anime failed: HTTP 409" (ruling BS, Minor 5).
 function libraryCopy(verb, kind, name, newName) {
   var what = kind === "tag" ? "tag" : "category";
-  if (verb === "add") return { progress: "Adding " + what + "…", done: (what === "tag" ? "Tag" : "Category") + " added", raw: true };
+  if (verb === "add") return { progress: "Adding " + what + "…", done: (what === "tag" ? "Tag" : "Category") + " added", fail: "Adding " + what + " " + name + " failed" };
   if (verb === "rename") return { progress: "Renaming " + name + " → " + newName + "…", done: "Renamed " + name + " → " + newName, raw: true };
-  if (verb === "path") return { progress: "Setting " + name + "'s save path…", done: "Save path set", raw: true };
-  return { progress: "Deleting " + what + " " + name + "…", done: "Deleted " + what + " " + name, raw: true };
+  if (verb === "path") return { progress: "Setting " + name + "'s save path…", done: "Save path set", fail: "Setting " + name + "'s save path failed" };
+  return { progress: "Deleting " + what + " " + name + "…", done: "Deleted " + what + " " + name, fail: "Deleting " + what + " " + name + " failed" };
 }
 
 // savePathError(text) -> "" or why `p` can't use text: qbt category-path
@@ -687,8 +760,11 @@ function pickerCopy(kind, step, name) {
 // "Tags: …" and "Category set on N of M …" sentences already do and pass
 // through; its bare "qBittorrent refused it (HTTP 409)" becomes "Setting
 // the category failed: HTTP 409"; after a create, "Created <name>;
-// setting it failed (HTTP 409)".
-function pickerFailure(kind, step, name, created, error) {
+// setting it failed (HTTP 409)". chunk ({done, total}, optional): the
+// hashes a chunked set covered, and how many of them were in chunks that
+// succeeded; when some did, the line says so (ruling BS, Minor 6):
+// "Category set on 1000 of 1500; the rest failed (HTTP 409)".
+function pickerFailure(kind, step, name, created, error, chunk) {
   var err = String(error || "").trim();
   var m = /^qBittorrent refused it \((.*)\)$/.exec(err);
   var detail = m ? m[1] : err;
@@ -696,6 +772,14 @@ function pickerFailure(kind, step, name, created, error) {
   var lead = made.length > 0 ? "Created " + made.join(", ") + "; " : "";
   var paren = detail === "" ? "" : " (" + detail.replace(/\.$/, "") + ")";
   var colon = detail === "" ? "." : ": " + detail;
+  var done = chunk ? Number(chunk.done) || 0 : 0;
+  var total = chunk ? Number(chunk.total) || 0 : 0;
+  if (step !== "add" && done > 0 && done < total) {
+    var head = kind === "tag" ? "Tags changed on " : (name === "" ? "Category removed from " : "Category set on ");
+    var rest = kind === "tag" && err.indexOf("Tags: ") === 0 ? "; the rest: " + err.substring(6) : "; the rest failed" + (paren === "" ? "." : paren);
+    var partial = head + done + " of " + total + rest;
+    return lead === "" ? partial : lead + partial.charAt(0).toLowerCase() + partial.substring(1);
+  }
   if (step === "add") {
     return lead === "" ? "Creating " + kind + " " + name + " failed" + colon : lead + "creating " + kind + " " + name + " failed" + paren;
   }

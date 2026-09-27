@@ -478,11 +478,12 @@ Item {
       return
     }
     if (res.state.mode !== "CONFIRM") confirm = null
-    if (res.blocked) {
+    // An unmatched key goes there too (the empty library's filters pane).
+    if (res.blocked || !res.commandId) {
       commands.handleBlocked(ev)
       return
     }
-    if (res.commandId) run(res.commandId, res.args || ({}), ev, targets)
+    run(res.commandId, res.args || ({}), ev, targets)
   }
 
   // The state a key or palette command resolves against, as it stands now.
