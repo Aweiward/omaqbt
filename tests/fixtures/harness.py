@@ -3,8 +3,9 @@
 `fixture_server()` gives each test its own throwaway qBittorrent WebUI
 fixture plus a matching env for `./qbt` / `./qbt-serve`: a free port, a
 fresh 0700 state dir (rid file + cookie jar live under it), an empty
-request log, and no VPN interface. Everything it creates is removed
-again on exit.
+request log, no VPN interface, and a temp magnet inbox plus stub
+raise/notify commands (never the real inbox or bar). Everything it
+creates is removed again on exit.
 """
 import contextlib
 import os
@@ -61,6 +62,23 @@ def start_fixture_server(extra_env=None):
     # re-reads it on every request, so a test can flip it mid-run.
     control_path = tmp_root / "control.json"
 
+    # Safe defaults for anything that could reach outside the test: the
+    # browser-magnet inbox (qbt magnet-inbox, a fetch-metadata rescue)
+    # lives under tmp_root, and the bar raise / notify-send are stubs that
+    # only log their arguments (the raise stub exits 1, "no IPC function",
+    # the way tests/actions.sh's does). A caller's extra_env still wins.
+    magnet_state = tmp_root / "magnet-state"
+    raise_log = tmp_root / "raise.log"
+    notify_log = tmp_root / "notify.log"
+    raise_log.write_text("")
+    notify_log.write_text("")
+    raise_cmd = tmp_root / "omarchy-shell"
+    raise_cmd.write_text(f"#!/bin/sh\nprintf '%s\\n' \"$*\" >>'{raise_log}'\nexit 1\n")
+    raise_cmd.chmod(0o755)
+    notify_cmd = tmp_root / "notify-send"
+    notify_cmd.write_text(f"#!/bin/sh\nprintf '%s\\n' \"$*\" >>'{notify_log}'\n")
+    notify_cmd.chmod(0o755)
+
     env = os.environ.copy()
     env.pop("QBT_FIXTURE_FORBIDDEN", None)
     env.pop("QBT_BIND_IFACE", None)
@@ -77,6 +95,9 @@ def start_fixture_server(extra_env=None):
         "QBT_STATE_DIR": str(state_dir),
         "QBT_FIXTURE_BIND_FILE": str(bind_path),
         "QBT_FIXTURE_CONTROL": str(control_path),
+        "QBT_MAGNET_STATE": str(magnet_state),
+        "QBT_RAISE_CMD": str(raise_cmd),
+        "QBT_NOTIFY_CMD": str(notify_cmd),
     })
     if extra_env:
         env.update(extra_env)

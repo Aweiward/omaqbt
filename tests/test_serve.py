@@ -415,6 +415,39 @@ class LocalhostGuardTests(unittest.TestCase):
                 self.assertIn("refusing non-localhost host", fatal["error"])
 
 
+class HarnessSafeDefaultsTests(unittest.TestCase):
+    """harness.fixture_server() must point the magnet inbox, the bar raise
+    and notify-send at throwaway stubs by default, so a regression in a
+    test can never write the real inbox or raise the real bar."""
+
+    MAGNET = "magnet:?xt=urn:btih:" + "c" * 40
+
+    def test_defaults_are_temp_stubs(self):
+        with harness.fixture_server() as (port, env):
+            tmp_root = Path(env["QBT_STATE_DIR"]).parent
+            for name in ("QBT_MAGNET_STATE", "QBT_RAISE_CMD", "QBT_NOTIFY_CMD"):
+                self.assertIn(name, env)
+                self.assertTrue(Path(env[name]).is_relative_to(tmp_root), (name, env[name]))
+            result = subprocess.run(
+                [str(ROOT / "qbt"), "magnet-inbox", self.MAGNET],
+                cwd=str(ROOT), env=env, text=True, capture_output=True,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            inbox = Path(env["QBT_MAGNET_STATE"]) / "magnet-inbox.jsonl"
+            self.assertIn(self.MAGNET, inbox.read_text())
+            self.assertNotEqual((tmp_root / "raise.log").read_text(), "")
+        self.assertFalse(tmp_root.exists())
+
+    def test_callers_can_still_override(self):
+        other = tempfile.mkdtemp(prefix="qbt-harness-override-")
+        try:
+            with harness.fixture_server(extra_env={"QBT_MAGNET_STATE": other}) as (port, env):
+                self.assertEqual(env["QBT_MAGNET_STATE"], other)
+        finally:
+            import shutil
+            shutil.rmtree(other, ignore_errors=True)
+
+
 class NoPreferencesCallTests(unittest.TestCase):
     def test_no_vpn_iface_skips_preferences(self):
         with harness.fixture_server() as (port, env):
