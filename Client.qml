@@ -159,9 +159,13 @@ Item {
   onTrackersViewChanged: trackerIndex = commands.stickRow("trackers", trackersView.rows, trackerIndex)
   onPeersViewChanged: peerIndex = commands.stickRow("peers", peersView.rows, peerIndex)
   // What x/c/b/f act on (View.inspectorDispatch), fed to every dispatch.
-  readonly property var inspectorState: View.inspectorDispatch({ pane: pane, state: tableState, tab: inspectorTab,
+  // inspectorState is its copy that only changes with its values, so a
+  // status tick doesn't rebuild an open palette's rows.
+  readonly property var inspectorNow: View.inspectorDispatch({ pane: pane, state: tableState, tab: inspectorTab,
     trackers: trackersView.rows, trackerIndex: trackerIndex, peers: peersView.rows, peerIndex: peerIndex, row: cursorRow,
     cursorHash: cursorHash, noMeta: infoTab.noMeta, pending: service ? service.magnetPendingHashes : [] })
+  property var inspectorState: View.inspectorDispatch({})
+  onInspectorNowChanged: if (!View.sameInspectorState(inspectorState, inspectorNow)) inspectorState = inspectorNow
 
   // ---- responsive layout (D5) ------------------------------------------------------
   // A collapsed pane with focus shows as an overlay; a resize that
@@ -477,7 +481,7 @@ Item {
 
   // The state a key or palette command resolves against, as it stands now.
   function registryState(targets) {
-    return View.dispatchState(regState, pane, tableState, cursorIndex >= 0, targets, inspectorState)
+    return View.dispatchState(regState, pane, tableState, cursorIndex >= 0, targets, inspectorNow)
   }
 
   // Ends INSERT the way Esc does (insert.cancel: the filter query goes
@@ -502,6 +506,7 @@ Item {
   onTableStateChanged: syncFiles(false)
 
   Component.onCompleted: {
+    inspectorState = inspectorNow
     if (service) adoptService()
     if (window.visible) requestWmFocus()
   }

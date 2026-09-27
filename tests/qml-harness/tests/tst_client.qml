@@ -2032,4 +2032,21 @@ TestCase {
     o.c.cursorHash = hh("a")
     compare(o.c.registryState([]).cursorPendingMagnet, false)
   }
+
+  function test_palette_eval_state_is_stable_across_a_status_tick() {
+    var o = make()
+    o.svc.torrents = list3()
+    key(o.c, "3")
+    o.svc.setInspect(hh("c"), "peers", { peers: peersWith(3, function(i) { return 1000 + i }) })
+    if (o.c.pane !== "inspector") key(o.c, "\t", 0x01000001)
+    var before = pal(o.c).evalState
+    compare(before.inspectorTarget.value, "10.0.0.2:6881")
+    // A tick: fresh torrent and peer objects, same values.
+    o.svc.torrents = list3()
+    o.svc.setInspect(hh("c"), "peers", { peers: peersWith(3, function(i) { return 1000 + i }) })
+    verify(pal(o.c).evalState === before, "an unchanged target doesn't rebuild the open palette's rows")
+    // A real change still reaches it.
+    key(o.c, "j")
+    compare(pal(o.c).evalState.inspectorTarget.value, "10.0.0.1:6881")
+  }
 }

@@ -1567,3 +1567,15 @@ test("paletteState keeps evaluating from the table when opened elsewhere (the ol
   assert.equal(st.inspectorTarget, null);
   assert.equal(paletteRow(st, "file.cycle").reason, "focus the inspector");
 });
+
+test("sameInspectorState: equal fields and target compare equal, any difference doesn't", () => {
+  const a = V.inspectorDispatch(insp());
+  assert.equal(V.sameInspectorState(a, V.inspectorDispatch(insp())), true, "a fresh but equal result");
+  assert.equal(V.sameInspectorState(a, V.inspectorDispatch(insp({ trackerIndex: 1 }))), false);
+  assert.equal(V.sameInspectorState(a, V.inspectorDispatch(insp({ tab: "peers" }))), false);
+  assert.equal(V.sameInspectorState(a, V.inspectorDispatch(insp({ noMeta: true }))), false);
+  assert.equal(V.sameInspectorState(a, V.inspectorDispatch(insp({ pending: [H("a")] }))), false);
+  assert.equal(V.sameInspectorState(a, V.inspectorDispatch(insp({ row: torrent({ state: "downloading" }) }))), false);
+  assert.equal(V.sameInspectorState(V.inspectorDispatch({}), V.inspectorDispatch({})), true);
+  assert.equal(V.sameInspectorState(null, a), false);
+});

@@ -826,6 +826,17 @@ function dispatchState(regState, pane, state, hasCursorRow, targets, inspector) 
   return st;
 }
 
+// sameInspectorState(a, b) -> whether two inspectorDispatch results hold
+// the same values (the window keeps its palette copy stable across status
+// ticks, which rebuild cursorRow and the tab rows every time).
+function sameInspectorState(a, b) {
+  if (!a || !b) return false;
+  var ta = a.inspectorTarget, tb = b.inspectorTarget;
+  var sameTarget = ta === tb || (!!ta && !!tb && ta.kind === tb.kind && ta.value === tb.value && ta.label === tb.label);
+  return sameTarget && a.trackersTab === b.trackersTab && a.cursorNoMetadata === b.cursorNoMetadata &&
+    a.cursorStopped === b.cursorStopped && a.cursorPendingMagnet === b.cursorPendingMagnet;
+}
+
 // inspectorDispatch(ctx) -> the inspector's part of the dispatch state:
 //   inspectorTarget: {kind: "tracker", value: url, label: host} for the
 //     trackers tab's cursor row, {kind: "peer", value: ipPort, label:
@@ -1747,6 +1758,7 @@ if (typeof module !== "undefined" && module.exports) {
     targetHashes: targetHashes,
     dispatchState: dispatchState,
     inspectorDispatch: inspectorDispatch,
+    sameInspectorState: sameInspectorState,
     FETCH_META_DONE_NOTE: FETCH_META_DONE_NOTE,
     nextAnchor: nextAnchor,
     leaveVisualState: leaveVisualState,
