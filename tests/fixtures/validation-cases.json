@@ -889,5 +889,275 @@
    "error": "",
    "why": "U+00A1, just past the C1 block"
   }
+ ],
+ "_comment_limits": "Shared D5 limit cases (slice 3b): qbt (tests/api-contract.sh, under en_US.UTF-8 and C: share-limits --ratio/--seed-time) and the window's limit parser must accept exactly the ok ones as canonical values on the wire. Ratio: -2, -1, or 0-9998 with at most 2 decimals (9998 itself is the top: 9998.01 is refused). Seed time: whole minutes, -2, -1 or 0-525600. No leading zeros, signs, spaces or exponents.",
+ "ratios": [
+  {
+   "input": "-2",
+   "ok": true,
+   "why": "default"
+  },
+  {
+   "input": "-1",
+   "ok": true,
+   "why": "none"
+  },
+  {
+   "input": "0",
+   "ok": true,
+   "why": "zero"
+  },
+  {
+   "input": "1",
+   "ok": true,
+   "why": "integer"
+  },
+  {
+   "input": "1.5",
+   "ok": true,
+   "why": "one decimal"
+  },
+  {
+   "input": "1.25",
+   "ok": true,
+   "why": "two decimals"
+  },
+  {
+   "input": "0.01",
+   "ok": true,
+   "why": "smallest step"
+  },
+  {
+   "input": "10",
+   "ok": true,
+   "why": "two digits"
+  },
+  {
+   "input": "9997.99",
+   "ok": true,
+   "why": "just under the top"
+  },
+  {
+   "input": "9998",
+   "ok": true,
+   "why": "the top"
+  },
+  {
+   "input": "9998.0",
+   "ok": true,
+   "why": "the top with a zero decimal"
+  },
+  {
+   "input": "9998.00",
+   "ok": true,
+   "why": "the top with two zero decimals"
+  },
+  {
+   "input": "",
+   "ok": false,
+   "why": "empty"
+  },
+  {
+   "input": "-3",
+   "ok": false,
+   "why": "below -2"
+  },
+  {
+   "input": "-0",
+   "ok": false,
+   "why": "negative zero"
+  },
+  {
+   "input": "-1.5",
+   "ok": false,
+   "why": "negative decimal"
+  },
+  {
+   "input": "-2.0",
+   "ok": false,
+   "why": "-2 with a decimal"
+  },
+  {
+   "input": "1.234",
+   "ok": false,
+   "why": "three decimals"
+  },
+  {
+   "input": "1.",
+   "ok": false,
+   "why": "trailing dot"
+  },
+  {
+   "input": ".5",
+   "ok": false,
+   "why": "leading dot"
+  },
+  {
+   "input": "01",
+   "ok": false,
+   "why": "leading zero"
+  },
+  {
+   "input": "9998.01",
+   "ok": false,
+   "why": "just over the top"
+  },
+  {
+   "input": "9999",
+   "ok": false,
+   "why": "above the top"
+  },
+  {
+   "input": "10000",
+   "ok": false,
+   "why": "five digits"
+  },
+  {
+   "input": "1e3",
+   "ok": false,
+   "why": "exponent"
+  },
+  {
+   "input": "+1",
+   "ok": false,
+   "why": "plus sign"
+  },
+  {
+   "input": "1,5",
+   "ok": false,
+   "why": "decimal comma"
+  },
+  {
+   "input": " 1",
+   "ok": false,
+   "why": "leading space"
+  },
+  {
+   "input": "1 ",
+   "ok": false,
+   "why": "trailing space"
+  },
+  {
+   "input": "\uff11",
+   "ok": false,
+   "why": "fullwidth digit"
+  },
+  {
+   "input": "0x1",
+   "ok": false,
+   "why": "hex"
+  },
+  {
+   "input": "18446744073709551617",
+   "ok": false,
+   "why": "wraps a 64-bit integer to 1"
+  },
+  {
+   "input": "nan",
+   "ok": false,
+   "why": "nan"
+  },
+  {
+   "input": "1.5.0",
+   "ok": false,
+   "why": "two dots"
+  },
+  {
+   "input": "1\n",
+   "ok": false,
+   "why": "trailing newline"
+  }
+ ],
+ "seedTimes": [
+  {
+   "input": "-2",
+   "ok": true,
+   "why": "default"
+  },
+  {
+   "input": "-1",
+   "ok": true,
+   "why": "none"
+  },
+  {
+   "input": "0",
+   "ok": true,
+   "why": "zero"
+  },
+  {
+   "input": "1",
+   "ok": true,
+   "why": "one minute"
+  },
+  {
+   "input": "90",
+   "ok": true,
+   "why": "ninety minutes"
+  },
+  {
+   "input": "525600",
+   "ok": true,
+   "why": "the top (365 days)"
+  },
+  {
+   "input": "",
+   "ok": false,
+   "why": "empty"
+  },
+  {
+   "input": "-3",
+   "ok": false,
+   "why": "below -2"
+  },
+  {
+   "input": "-0",
+   "ok": false,
+   "why": "negative zero"
+  },
+  {
+   "input": "525601",
+   "ok": false,
+   "why": "just over the top"
+  },
+  {
+   "input": "1000000",
+   "ok": false,
+   "why": "seven digits"
+  },
+  {
+   "input": "01",
+   "ok": false,
+   "why": "leading zero"
+  },
+  {
+   "input": "1.5",
+   "ok": false,
+   "why": "decimal"
+  },
+  {
+   "input": "90m",
+   "ok": false,
+   "why": "unit suffix"
+  },
+  {
+   "input": "\uff11\uff10",
+   "ok": false,
+   "why": "fullwidth digits"
+  },
+  {
+   "input": "18446744073709551617",
+   "ok": false,
+   "why": "wraps a 64-bit integer to 1"
+  },
+  {
+   "input": " 1",
+   "ok": false,
+   "why": "leading space"
+  },
+  {
+   "input": "+1",
+   "ok": false,
+   "why": "plus sign"
+  }
  ]
 }

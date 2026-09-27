@@ -106,8 +106,9 @@ EXTRA_TORRENTS = {
 # shape qBittorrent 5.2.3 serves (savePath, snake_case download_path that is
 # a path, false or null, and name). QBT_FIXTURE_LIBRARY may name a JSON file
 # {"categories": {...}, "tags": [...], "torrents": {hash: {"category": "",
-# "tags": "a, b"}}} that replaces the starting categories/tags and adds
-# torrents (listed by torrents/info), so a test can seed thousands of rows.
+# "tags": "a, b"}}, "preferences": {...}} that replaces the starting
+# categories/tags, adds torrents (listed by torrents/info), so a test can
+# seed thousands of rows, and overrides /app/preferences keys.
 def _category_defaults():
     """A fresh CategoryOptions as 5.2.3's toJSON shows it: no save path, the
     global download path, and every share limit on "use global"."""
@@ -125,9 +126,11 @@ def _load_library():
     categories = copy.deepcopy(FULL.get("categories") or {})
     tags = list(FULL.get("tags") or [])
     torrents = {}
+    preferences = {}
     path = os.environ.get("QBT_FIXTURE_LIBRARY")
     if path:
         data = json.loads(Path(path).read_text())
+        preferences = dict(data.get("preferences") or {})
         if "categories" in data:
             categories = data["categories"]
         if "tags" in data:
@@ -140,10 +143,10 @@ def _load_library():
         c.setdefault("name", name)
         for key, value in _category_defaults().items():
             c.setdefault(key, value)
-    return categories, tags, torrents
+    return categories, tags, torrents, preferences
 
 
-CATEGORIES, TAGS, LIBRARY = _load_library()
+CATEGORIES, TAGS, LIBRARY, PREFERENCES = _load_library()
 # qBittorrent's Session::isValidCategoryName.
 _CATEGORY_RE = re.compile(r"^([^\\/]|[^\\/]([^\\/]|/(?=[^/]))*[^\\/])$")
 # Per-route call counters for "<fault>@N" (fail only the Nth call).
@@ -225,6 +228,21 @@ def _category_options(form):
     else:
         download = False
     return (form.get("savePath") or [""])[0], download
+
+
+# What torrents/info shows for a row that doesn't carry its own: 5.2.3's
+# per-torrent share limits on "use default", no progress, toggles off.
+_SHARE_DEFAULTS = {
+    "ratio_limit": -2,
+    "seeding_time_limit": -2,
+    "inactive_seeding_time_limit": -2,
+    "share_limit_action": "Default",
+    "ratio": 0,
+    "seeding_time": 0,
+    "progress": 0,
+    "seq_dl": False,
+    "f_l_piece_prio": False,
+}
 
 
 # Serving each request on its own thread (ThreadingHTTPServer, below) means
@@ -379,7 +397,50 @@ def _remove_tags(form):
     return 200
 
 
+_SHARE_PARAMS = ("hashes", "ratioLimit", "seedingTimeLimit", "inactiveSeedingTimeLimit", "shareLimitAction")
+
+
+_SHARE_ACTIONS = ("Default", "Stop", "Remove", "RemoveWithContent", "EnableSuperSeeding")
+
+
+def _number(value):
+    try:
+        n = float(value)
+    except ValueError:
+        return 0
+    return int(n) if n.is_integer() else n
+
+
+def _set_share_limits(form):
+    """5.2.3's setShareLimitsAction: all four limits plus the hashes are
+    required (requireParams answers 400 otherwise). Each target keeps the
+    four values; an unknown action string reads as Default (toEnum)."""
+    if any(k not in form for k in _SHARE_PARAMS):
+        return 400
+    action = form["shareLimitAction"][0]
+    for row in _targets(form["hashes"][0]):
+        row["ratio_limit"] = _number(form["ratioLimit"][0])
+        row["seeding_time_limit"] = int(_number(form["seedingTimeLimit"][0]))
+        row["inactive_seeding_time_limit"] = int(_number(form["inactiveSeedingTimeLimit"][0]))
+        row["share_limit_action"] = action if action in _SHARE_ACTIONS else "Default"
+    return 200
+
+
+def _toggle(field):
+    """toggleSequentialDownload / toggleFirstLastPiecePrio: flip, per target."""
+    def apply(form):
+        if "hashes" not in form:
+            return 400
+        for row in _targets(form["hashes"][0]):
+            row[field] = not bool(row.get(field, False))
+        return 200
+    return apply
+
+
 _LIBRARY_WRITES = {
+    "/api/v2/torrents/setShareLimits": _set_share_limits,
+    "/api/v2/torrents/toggleSequentialDownload": _toggle("seq_dl"),
+    "/api/v2/torrents/toggleFirstLastPiecePrio": _toggle("f_l_piece_prio"),
     "/api/v2/torrents/createCategory": _create_category,
     "/api/v2/torrents/editCategory": _edit_category,
     "/api/v2/torrents/removeCategories": _remove_categories,
@@ -438,6 +499,10 @@ class Handler(BaseHTTPRequestHandler):
                 "categories": CATEGORIES,
                 "tags": TAGS,
                 "torrents": {h: {"category": t.get("category", ""), "tags": t.get("tags", "")} for h, t in LIBRARY.items()},
+                # Every row's share limits and toggles (slice 3b).
+                "limits": {h: {k: t.get(k, _SHARE_DEFAULTS[k]) for k in (
+                    "ratio_limit", "seeding_time_limit", "inactive_seeding_time_limit",
+                    "share_limit_action", "seq_dl", "f_l_piece_prio")} for h, t in _torrent_rows().items()},
             }).encode())
             return
         record("GET", parsed.path, "", parse_qs(parsed.query), self.headers.get("Cookie") or "")
@@ -500,6 +565,9 @@ class Handler(BaseHTTPRequestHandler):
                 row = dict(t)
                 row["hash"] = h
                 rows.append(row)
+            for row in rows:
+                for key, value in _SHARE_DEFAULTS.items():
+                    row.setdefault(key, value)
             hashes_param = parse_qs(parsed.query).get("hashes")
             if hashes_param:
                 wanted = set()
@@ -518,6 +586,16 @@ class Handler(BaseHTTPRequestHandler):
                 "save_path": DEFAULT_SAVE_PATH,
                 "torrent_changed_tmm_enabled": True,
                 "category_changed_tmm_enabled": False,
+                # The global share limits, as 5.2.3 serves them: max_ratio_act
+                # 0 Stop, 1 Remove, 2 EnableSuperSeeding, 3 RemoveWithContent.
+                "max_ratio_enabled": False,
+                "max_ratio": -1,
+                "max_seeding_time_enabled": False,
+                "max_seeding_time": -1,
+                "max_inactive_seeding_time_enabled": False,
+                "max_inactive_seeding_time": -1,
+                "max_ratio_act": 0,
+                **PREFERENCES,
             }).encode())
             return
         if parsed.path in _INSPECT_ROUTES:
@@ -602,8 +680,6 @@ class Handler(BaseHTTPRequestHandler):
             "/api/v2/torrents/filePrio",
             "/api/v2/torrents/setDownloadLimit",
             "/api/v2/torrents/setUploadLimit",
-            "/api/v2/torrents/toggleSequentialDownload",
-            "/api/v2/torrents/setShareLimits",
             "/api/v2/transfer/toggleSpeedLimitsMode",
         ):
             self._send(200, b"Ok.")
@@ -632,7 +708,13 @@ class Handler(BaseHTTPRequestHandler):
             if fault:
                 self._fault_reply(fault)
                 return
-            code = _LIBRARY_WRITES[parsed.path](parse_qs(body, keep_blank_values=True))
+            form = parse_qs(body, keep_blank_values=True)
+            code = _LIBRARY_WRITES[parsed.path](form)
+            if code == 400 and parsed.path == "/api/v2/torrents/setShareLimits":
+                # 5.2.3's requireParams names what's missing.
+                missing = ", ".join(k for k in _SHARE_PARAMS if k not in form)
+                self._send(400, f"Missing required parameters: {missing}".encode(), content_type="text/plain")
+                return
             self._send(code, b"" if code == 200 else b"refused")
             return
         if parsed.path in ("/api/v2/torrents/pause", "/api/v2/torrents/resume"):

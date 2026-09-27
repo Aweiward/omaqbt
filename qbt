@@ -107,6 +107,30 @@ valid_peer() {
   valid_port "$port"
 }
 
+# Slice 3b (D5): the canonical limit values on the wire. The boundaries are
+# pinned in tests/fixtures/validation-cases.json ("ratios", "seedTimes"),
+# which the window's parser is tested against too. Every regex caps the
+# length before any 10# arithmetic, so a long digit string can't wrap a
+# 64-bit integer back into range; no leading zeros.
+
+# Ratio: -2 (default), -1 (none), or 0-9998 with at most 2 decimals.
+valid_ratio() {
+  local input=${1:-} LC_ALL=C
+  [[ $input == -2 || $input == -1 ]] && return 0
+  [[ $input =~ ^(0|[1-9][[:digit:]]{0,3})(\.([[:digit:]]{1,2}))?$ ]] || return 1
+  local whole=$(( 10#${BASH_REMATCH[1]} )) frac=${BASH_REMATCH[3]}
+  (( whole < 9998 )) && return 0
+  (( whole == 9998 )) && [[ $frac =~ ^0*$ ]]
+}
+
+# Seed time: minutes, -2 (default), -1 (none), or 0-525600.
+valid_seed_minutes() {
+  local input=${1:-} LC_ALL=C
+  [[ $input == -2 || $input == -1 ]] && return 0
+  [[ $input =~ ^(0|[1-9][[:digit:]]{0,5})$ ]] || return 1
+  (( 10#$input <= 525600 ))
+}
+
 ensure_state_dir() {
   local dir=$1
   [[ -n $dir ]] || return 0
@@ -614,11 +638,170 @@ cmd_sequential() {
   printf '%s\n' '{"ok":true}'
 }
 
+# The widget's ratio row: share-limits with only --ratio.
 cmd_sharelimit() {
-  local hash=${1:-} ratio=${2:-}
-  [[ -n $hash && -n $ratio ]] || die "usage: qbt sharelimit <hash> <ratio, -2 = global, -1 = none>"
-  valid_hashes "$hash" || die "invalid hash list"
-  api POST "/api/v2/torrents/setShareLimits" "hashes=${hash}&ratioLimit=${ratio}&seedingTimeLimit=-2&inactiveSeedingTimeLimit=-2" >/dev/null
+  [[ $# -eq 2 ]] || die "usage: qbt sharelimit <hash> <ratio, -2 = global, -1 = none>"
+  cmd_share_limits "$1" --ratio "$2"
+}
+
+# The target rows of a torrents/info body in $INFO for the hash list $1
+# ("all" or |-joined), in the list's order and once each. Fails closed:
+# anything that isn't an array of objects with a string hash is
+# error("unreadable"). Sets MISSING to the number of listed hashes absent
+# from the reply. Shared by share-limits and the on/off toggles.
+TARGETS_JQ='
+  def targets($want):
+    if type != "array" or any(.[]; type != "object" or (.hash | type) != "string")
+    then error("unreadable") else . end
+    | if $want == "all" then .
+      else . as $rows
+      | reduce ($want | split("|") | map(ascii_downcase))[] as $h ([]; if index([$h]) then . else . + [$h] end)
+      | map(. as $h | ([$rows[] | select((.hash | ascii_downcase) == $h)][0] // {missing: $h}))
+      end;
+'
+
+# "That torrent is gone." for one missing target, "N of those torrents are
+# gone." for more.
+die_gone() {
+  local n=$1
+  (( n == 1 )) && die "That torrent is gone."
+  die "${n} of those torrents are gone."
+}
+
+# D2/D8 (slice 3b). Sets the ratio and/or seed-time limit of every target and
+# keeps the rest of its share limits -- the other time limit, the inactive
+# seeding limit and the action string -- exactly as read, since 5.2.3's
+# setShareLimits needs all four. One POST per distinct (ratio, seed,
+# inactive, action) after the change, hashes in the body (no chunking; the
+# window chunks its argv). Without --force it refuses, before any write,
+# when a finished target already meets the new effective ratio or seed time
+# and its effective action removes it. Finished (Ruling CC): not forcedUP,
+# and progress >= 1 or a seeding state -- a torrent with every file unwanted
+# reports progress 0 but seeds. A ratio of -1 is qBittorrent's "at or above
+# MAX_RATIO", which meets any ratio limit >= 0. -2 and
+# "Default" resolve through the category, its parents, then the global
+# setting, like TorrentImpl::effective* and SessionImpl::category*.
+cmd_share_limits() {
+  local api_error_detail=code
+  local usage="usage: qbt share-limits <hash|list|all> [--ratio <-2|-1|0-9998>] [--seed-time <-2|-1|0-525600 minutes>] [--force]"
+  [[ $# -ge 1 ]] || die "$usage"
+  local hashes=$1 ratio="" seed="" force=false have_ratio=false have_seed=false
+  shift
+  while [[ $# -gt 0 ]]; do
+    case $1 in
+      --ratio) [[ $# -ge 2 && $have_ratio == false ]] || die "$usage"; ratio=$2; have_ratio=true; shift 2 ;;
+      --seed-time) [[ $# -ge 2 && $have_seed == false ]] || die "$usage"; seed=$2; have_seed=true; shift 2 ;;
+      --force) force=true; shift ;;
+      *) die "$usage" ;;
+    esac
+  done
+  [[ $have_ratio == true || $have_seed == true ]] || die "$usage"
+  valid_hashes "$hashes" || die "invalid hash list"
+  [[ $have_ratio == false ]] || valid_ratio "$ratio" || die "invalid ratio limit"
+  [[ $have_seed == false ]] || valid_seed_minutes "$seed" || die "invalid seed time limit"
+
+  local query=""
+  [[ $hashes == all ]] || query="?hashes=${hashes}"
+  api_or_die GET "/api/v2/torrents/info${query}"
+  local info=$API_BODY
+  api_or_die GET "/api/v2/torrents/categories"
+  local categories=$API_BODY
+  api_or_die GET "/api/v2/app/preferences"
+  local prefs=$API_BODY
+
+  local plan
+  # The three bodies go in on stdin: one argument can't exceed 128 KiB, and
+  # a thousand info rows are far more than that.
+  plan=$(printf '%s\n%s\n%s\n' "$info" "$categories" "$prefs" | jq -c -n \
+    --arg want "$hashes" --arg ratio "$ratio" --arg seed "$seed" "$TARGETS_JQ"'
+    [inputs] as [$info, $cats, $prefs] |
+    def num: if type == "number" then . else error("unreadable") end;
+    def parent: if test("/") then sub("/[^/]*$"; "") else "" end;
+    def cat($c): if ($cats[$c] // {}) | type == "object" then $cats[$c] // {} else error("unreadable") end;
+    # A limit left on -2 (or an action on "Default") defers to the
+    # category, then each parent, then the global value.
+    def chain($c; $field; $dflt; $global):
+      if $c == "" then $global
+      else (cat($c)[$field] // $dflt) as $v
+        | if $v == $dflt then chain($c | parent; $field; $dflt; $global) else $v end
+      end;
+    def global_limit($on; $value):
+      if $prefs[$on] == true then ($prefs[$value] | num) else -1 end;
+    try (
+      if ($cats | type) != "object" or ($prefs | type) != "object" then error("unreadable") else . end
+      | ($prefs.max_ratio_act | num
+         | if . == 0 or . == 1 or . == 2 or . == 3 then . else error("unreadable") end
+         | ["Stop", "Remove", "EnableSuperSeeding", "RemoveWithContent"][.]) as $global_act
+      | global_limit("max_ratio_enabled"; "max_ratio") as $global_ratio
+      | global_limit("max_seeding_time_enabled"; "max_seeding_time") as $global_seed
+      | ($info | targets($want)) as $rows
+      | [$rows[] | select(has("missing"))] as $missing
+      | if ($missing | length) > 0 then {missing: ($missing | length)}
+        else
+          [$rows[]
+            | (.category // "") as $c
+            | if ($c | type) != "string" or (.share_limit_action | type) != "string"
+                 or (.state | type) != "string" then error("unreadable") else . end
+            | (if $ratio == "" then (.ratio_limit | num | tostring) else $ratio end) as $r
+            | (if $seed == "" then (.seeding_time_limit | num | tostring) else $seed end) as $s
+            | (.inactive_seeding_time_limit | num | tostring) as $i
+            | .share_limit_action as $a
+            | (if ($r | tonumber) == -2 then chain($c; "ratio_limit"; -2; $global_ratio) else ($r | tonumber) end | num) as $eff_ratio
+            | (if ($s | tonumber) == -2 then chain($c; "seeding_time_limit"; -2; $global_seed) else ($s | tonumber) end | num) as $eff_seed
+            | (if $a == "Default" then chain($c; "share_limit_action"; "Default"; $global_act) else $a end
+               | if type == "string" then . else error("unreadable") end) as $eff_act
+            | .state as $st
+            | ($st != "forcedUP"
+               and ((.progress | num) >= 1
+                    or any("uploading", "stalledUP", "queuedUP", "stoppedUP", "checkingUP"; . == $st))) as $finished
+            | (($eff_ratio >= 0 and ((.ratio | num) < 0 or .ratio >= $eff_ratio))
+               or ($eff_seed >= 0 and (((.seeding_time | num) / 60) | floor) >= $eff_seed)) as $met
+            | {hash, r: $r, s: $s, i: $i, a: $a,
+               remove: ($finished and $met and ($eff_act == "Remove" or $eff_act == "RemoveWithContent")),
+               files: ($eff_act == "RemoveWithContent")}]
+          | {remove: (map(select(.remove)) | length),
+             files: any(.[]; .remove and .files),
+             total: length,
+             groups: (reduce .[] as $t ({order: [], by: {}};
+               ([$t.r, $t.s, $t.i, $t.a] | tojson) as $k
+               | if .by[$k] then .by[$k].hashes += [$t.hash]
+                 else .order += [$k] | .by[$k] = {hashes: [$t.hash], body: "&ratioLimit=\($t.r | @uri)&seedingTimeLimit=\($t.s | @uri)&inactiveSeedingTimeLimit=\($t.i | @uri)&shareLimitAction=\($t.a | @uri)"}
+                 end)
+               | [.order[] as $k | .by[$k] | {n: (.hashes | length), hashes: (.hashes | join("|")), body}])}
+        end
+    ) catch {unreadable: true}' 2>/dev/null) || die "qBittorrent sent something unreadable"
+  [[ $(jq -r '.unreadable // false' <<<"$plan") == false ]] || die "qBittorrent sent something unreadable"
+
+  local missing
+  missing=$(jq -r '.missing // 0' <<<"$plan")
+  (( missing == 0 )) || die_gone "$missing"
+
+  local remove files
+  remove=$(jq -r '.remove' <<<"$plan")
+  files=$(jq -r '.files' <<<"$plan")
+  if (( remove > 0 )) && [[ $force == false ]]; then
+    local them="them" their="their"
+    if (( remove == 1 )); then
+      if [[ $files == true ]]; then
+        die "1 torrent already meets that limit, and qBittorrent would remove it with its files."
+      fi
+      die "1 torrent already meets that limit, and qBittorrent would remove it."
+    fi
+    [[ $files == true ]] && die "${remove} torrents already meet that limit, and qBittorrent would remove ${them} with ${their} files."
+    die "${remove} torrents already meet that limit, and qBittorrent would remove ${them}."
+  fi
+
+  local total done=0 n group_hashes body
+  total=$(jq -r '.total' <<<"$plan")
+  while IFS=$'\t' read -r n group_hashes body; do
+    # These hashes came from qBittorrent and go into a form body as-is.
+    valid_hashes "$group_hashes" && [[ $group_hashes != all ]] || die "qBittorrent sent something unreadable"
+    if ! api_try POST "/api/v2/torrents/setShareLimits" "hashes=${group_hashes}${body}"; then
+      (( done == 0 )) && die "qBittorrent refused it (${API_FAIL})"
+      die "Share limits set on ${done} of ${total} torrents; qBittorrent refused the rest (${API_FAIL})"
+    fi
+    done=$(( done + n ))
+  done < <(jq -r '.groups[] | [.n, .hashes, .body] | @tsv' <<<"$plan")
   printf '%s\n' '{"ok":true}'
 }
 
@@ -1712,6 +1895,7 @@ case ${1:-} in
   limit) shift; cmd_limit "$@" ;;
   sequential) shift; cmd_sequential "$@" ;;
   sharelimit) shift; cmd_sharelimit "$@" ;;
+  share-limits) shift; cmd_share_limits "$@" ;;
   install) shift; cmd_install "$@" ;;
   start-daemon) shift; cmd_start_daemon "$@" ;;
   stop-daemon) shift; cmd_stop_daemon "$@" ;;
@@ -1733,5 +1917,5 @@ case ${1:-} in
   magnet-pending-drop) shift; cmd_magnet_pending_drop "$@" ;;
   magnet-install-handler) shift; cmd_magnet_install_handler "$@" ;;
   magnet-uninstall-handler) shift; cmd_magnet_uninstall_handler "$@" ;;
-  *) die "usage: qbt status|probe|add|start|stop|recheck|set-location|delete|reannounce|tracker-add|tracker-edit|tracker-remove|ban-peer|fetch-metadata|files|prio|turtle|limit|sequential|sharelimit|category-add|category-path|category-remove|category-rename|set-category|tag-add|tag-remove|tag-rename|tags|install|start-daemon|stop-daemon|magnet-paths|magnet-inbox|magnet-drain|magnet-pending-list|magnet-pending-drop|magnet-install-handler|magnet-uninstall-handler" ;;
+  *) die "usage: qbt status|probe|add|start|stop|recheck|set-location|delete|reannounce|tracker-add|tracker-edit|tracker-remove|ban-peer|fetch-metadata|files|prio|turtle|limit|sequential|sharelimit|share-limits|category-add|category-path|category-remove|category-rename|set-category|tag-add|tag-remove|tag-rename|tags|install|start-daemon|stop-daemon|magnet-paths|magnet-inbox|magnet-drain|magnet-pending-list|magnet-pending-drop|magnet-install-handler|magnet-uninstall-handler" ;;
 esac

@@ -233,6 +233,8 @@ try:
     assert "ratioLimit=1" in bodies
     assert "seedingTimeLimit=-2" in bodies
     assert "inactiveSeedingTimeLimit=-2" in bodies
+    # 5.2.3 answers 400 without it (the fixture does too): slice 3b's fix.
+    assert "shareLimitAction=Default" in bodies
     # .torrent uploads go multipart with the file under "torrents".
     assert 'name="torrents"' in bodies
     assert 'filename="upload me.torrent"' in bodies
@@ -592,6 +594,38 @@ if name_failures:
     print(f"\n{len(name_failures)} name-rule check(s) failed: {name_failures}", file=sys.stderr)
     sys.exit(1)
 print("name-rule-contract ok")
+
+# Slice 3b (D5): qbt accepts exactly the shared canonical limit values, and
+# refuses the rest with no request and no raw bash arithmetic error, under
+# en_US.UTF-8 and C. HASH_A is unfinished, so the D8 guard never fires.
+limit_failures = []
+LIMIT_COMMANDS = {
+    "ratios": lambda v: ["share-limits", HASH_A, "--ratio", v],
+    "seedTimes": lambda v: ["share-limits", HASH_A, "--seed-time", v],
+}
+for label_locale, base_env in (("en_US.UTF-8", lenv), ("C", cenv)):
+    with harness.fixture_server(extra_env=base_env) as (lport, lenv_):
+        for key, command in LIMIT_COMMANDS.items():
+            for c in cases[key]:
+                log_path = Path(lenv_["QBT_FIXTURE_LOG"])
+                before = len(json.loads(log_path.read_text() or "[]"))
+                result = subprocess.run(["./qbt", *command(c["input"])], env=lenv_, text=True, capture_output=True)
+                after = json.loads(log_path.read_text() or "[]")[before:]
+                raw_bash = any(t in result.stderr for t in ("value too great for base", "invalid integer constant", "arithmetic syntax error", "operand expected", "syntax error"))
+                writes = [e for e in after if e["method"] == "POST"]
+                if c["ok"]:
+                    ok = result.returncode == 0 and len(writes) == 1
+                else:
+                    ok = result.returncode != 0 and not after and not raw_bash
+                label = f"{key} under {label_locale} ({'accepts' if c['ok'] else 'rejects'} {c['why']}): {c['input']!r}"
+                print(("ok - " if ok else "FAIL - ") + label)
+                if not ok:
+                    limit_failures.append((label, result.returncode, result.stderr.strip()))
+
+if limit_failures:
+    print(f"\n{len(limit_failures)} limit-value check(s) failed: {limit_failures}", file=sys.stderr)
+    sys.exit(1)
+print("limit-value-contract ok")
 
 # Whole-branch review CRITICAL: the localhost guard must look at the whole
 # base, not a sed-extracted "host" (userinfo, backslash tricks, a foreign

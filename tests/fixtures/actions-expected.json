@@ -53,7 +53,32 @@
     "query": {}
   },
   {
-    "body": "hashes=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa&ratioLimit=1&seedingTimeLimit=-2&inactiveSeedingTimeLimit=-2",
+    "body": "",
+    "cookie": "",
+    "method": "GET",
+    "path": "/api/v2/torrents/info",
+    "query": {
+      "hashes": [
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      ]
+    }
+  },
+  {
+    "body": "",
+    "cookie": "",
+    "method": "GET",
+    "path": "/api/v2/torrents/categories",
+    "query": {}
+  },
+  {
+    "body": "",
+    "cookie": "",
+    "method": "GET",
+    "path": "/api/v2/app/preferences",
+    "query": {}
+  },
+  {
+    "body": "hashes=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa&ratioLimit=1&seedingTimeLimit=-2&inactiveSeedingTimeLimit=-2&shareLimitAction=Default",
     "cookie": "",
     "method": "POST",
     "path": "/api/v2/torrents/setShareLimits",

@@ -68,6 +68,9 @@ def fetch_metadata_env(timeout=None):
 # tests/fixtures/actions-expected.json. Do not add a `status` call anywhere
 # in this file: it would mint a session cookie and make the recorded
 # requests diverge from the baseline (which never calls `status`).
+# Slice 3b re-baselined the one `sharelimit` entry on purpose: 5.2.3's
+# setShareLimits answers 400 without all four limits, so the widget's call
+# now reads info, categories and preferences first and sends all four.
 SINGLE_HASH_CALLS = [
     ["start", HASH_A],
     ["stop", HASH_A],
@@ -1236,6 +1239,342 @@ with harness.fixture_server(extra_env=library_env(lib)) as (port, env):
     rc, err = raw("tags", HASH_A, "--add", ESC_TAG, "--remove", "ok-tag")
     check("ESC tag in the added list: exact stderr",
           rc != 0 and err == b"Tags: added that tag; removing ok-tag failed (HTTP 409)\n")
+
+
+# ---------------------------------------------------------------------------
+# Slice 3b, Task 1: share-limits (D2/D8) and the widget's sharelimit alias.
+# ---------------------------------------------------------------------------
+SL = {  # torrents/info rows; the fixture fills any missing share field.
+    "finished": {"progress": 1, "state": "stalledUP", "ratio": 2.0, "seeding_time": 7200},
+    "unfinished": {"progress": 0.5, "state": "downloading", "ratio": 2.0, "seeding_time": 7200},
+    "forced": {"progress": 1, "state": "forcedUP", "ratio": 2.0, "seeding_time": 7200},
+}
+SL_CATS = {
+    "plain": {"savePath": ""},
+    "rmc": {"savePath": "", "share_limit_action": "RemoveWithContent"},
+    "rm": {"savePath": "", "share_limit_action": "Remove"},
+    "stopcat": {"savePath": "", "share_limit_action": "Stop"},
+    "parent": {"savePath": "", "share_limit_action": "RemoveWithContent", "ratio_limit": 1},
+    "sparent": {"savePath": "", "share_limit_action": "RemoveWithContent", "seeding_time_limit": 60},
+    "sparent/child": {"savePath": ""},
+    "parent/child": {"savePath": ""},
+    "parent/stopchild": {"savePath": "", "share_limit_action": "Stop"},
+    "ratio1": {"savePath": "", "share_limit_action": "RemoveWithContent", "ratio_limit": 1},
+    "badact": {"savePath": "", "share_limit_action": 3},
+}
+# Where the effective action comes from: (torrent action, category).
+SL_SOURCES = {
+    "torrent": ("RemoveWithContent", ""),
+    "category": ("Default", "rmc"),
+    "parent category": ("Default", "parent/child"),
+    "global": ("Default", "plain"),
+}
+
+
+def sl_hash(n):
+    return f"{0x3b000 + n:040x}"
+
+
+def sl_library(torrents, preferences=None):
+    lib = {"categories": json.loads(json.dumps(SL_CATS)), "tags": [], "torrents": torrents}
+    if preferences is not None:
+        lib["preferences"] = preferences
+    return library_env(lib)
+
+
+def sl_limits(port, h):
+    return state(port)["limits"][h]
+
+
+# 29. The regression: the widget's `sharelimit <hash> <ratio>` succeeds
+#     against a setShareLimits that answers 400 without all four limits,
+#     and sends each one.
+with harness.fixture_server(extra_env=UTF8_ENV) as (port, env):
+    before = len(read_log(env))
+    r = run(env, "sharelimit", HASH_A, "1")
+    check("widget sharelimit succeeds against the 400-strict fixture", r.returncode == 0 and r.stdout.strip() == '{"ok":true}')
+    e = new_entries(env, before)
+    check("widget sharelimit: reads info, categories, preferences, then one write",
+          [x["path"] for x in e] == ["/api/v2/torrents/info", "/api/v2/torrents/categories", "/api/v2/app/preferences", "/api/v2/torrents/setShareLimits"])
+    check("widget sharelimit: all four limits, the action as read",
+          first_body(e) == f"hashes={HASH_A}&ratioLimit=1&seedingTimeLimit=-2&inactiveSeedingTimeLimit=-2&shareLimitAction=Default")
+    for ratio in ("-2", "-1", "2"):
+        r = run(env, "sharelimit", HASH_A, ratio)
+        check(f"widget sharelimit {ratio} succeeds", r.returncode == 0)
+    check("widget sharelimit: the fixture holds the last ratio", sl_limits(port, HASH_A)["ratio_limit"] == 2)
+    try:
+        _ur.urlopen(_ur.Request(f"http://127.0.0.1:{port}/api/v2/torrents/setShareLimits", method="POST",
+                                data=f"hashes={HASH_A}&ratioLimit=1&seedingTimeLimit=-2&inactiveSeedingTimeLimit=-2".encode()), timeout=5)
+        fixture_400 = None
+    except _ur.HTTPError as err:
+        fixture_400 = (err.code, err.read())
+    check("fixture: setShareLimits without the action is 5.2.3's 400",
+          fixture_400 == (400, b"Missing required parameters: shareLimitAction"))
+    for bad in (["sharelimit", HASH_A], ["sharelimit", HASH_A, "1", "2"], ["sharelimit", HASH_A, "1.234"], ["sharelimit", "zz", "1"]):
+        before = len(read_log(env))
+        r = run(env, *bad)
+        check(f"sharelimit refuses {bad[1:]!r} with no request", r.returncode != 0 and len(read_log(env)) == before)
+
+# 30. D2: a ratio keeps every target's other limits and its exact action
+#     string, across a range with mixed values; one POST per distinct
+#     (ratio, seed, inactive, action).
+mixed = {
+    sl_hash(1): dict(SL["unfinished"]),
+    sl_hash(2): dict(SL["unfinished"], ratio_limit=1.25, seeding_time_limit=30, inactive_seeding_time_limit=-1, share_limit_action="RemoveWithContent"),
+    sl_hash(3): dict(SL["unfinished"], ratio_limit=0.5, seeding_time_limit=30, inactive_seeding_time_limit=-1, share_limit_action="RemoveWithContent"),
+    sl_hash(4): dict(SL["unfinished"], ratio_limit=-1, seeding_time_limit=-1, inactive_seeding_time_limit=15, share_limit_action="EnableSuperSeeding"),
+    sl_hash(5): dict(SL["unfinished"], ratio_limit=3, seeding_time_limit=-2, inactive_seeding_time_limit=-2, share_limit_action="Stop"),
+}
+with harness.fixture_server(extra_env=sl_library(mixed)) as (port, env):
+    targets = "|".join(mixed)
+    before = len(read_log(env))
+    r = run(env, "share-limits", targets, "--ratio", "2")
+    check("share-limits --ratio over a mixed range succeeds", r.returncode == 0 and r.stdout.strip() == '{"ok":true}')
+    posts = posts_to(new_entries(env, before), "setShareLimits")
+    check("share-limits --ratio: one POST per distinct group (4 for 5 targets)", len(posts) == 4)
+    check("share-limits --ratio: the groups, in target order, with exact bodies", [x["body"] for x in posts] == [
+        f"hashes={sl_hash(1)}&ratioLimit=2&seedingTimeLimit=-2&inactiveSeedingTimeLimit=-2&shareLimitAction=Default",
+        f"hashes={sl_hash(2)}|{sl_hash(3)}&ratioLimit=2&seedingTimeLimit=30&inactiveSeedingTimeLimit=-1&shareLimitAction=RemoveWithContent",
+        f"hashes={sl_hash(4)}&ratioLimit=2&seedingTimeLimit=-1&inactiveSeedingTimeLimit=15&shareLimitAction=EnableSuperSeeding",
+        f"hashes={sl_hash(5)}&ratioLimit=2&seedingTimeLimit=-2&inactiveSeedingTimeLimit=-2&shareLimitAction=Stop",
+    ])
+    after = state(port)["limits"]
+    for h, t in mixed.items():
+        want = {"ratio_limit": 2, "seeding_time_limit": t.get("seeding_time_limit", -2),
+                "inactive_seeding_time_limit": t.get("inactive_seeding_time_limit", -2),
+                "share_limit_action": t.get("share_limit_action", "Default")}
+        got = {k: after[h][k] for k in want}
+        check(f"share-limits --ratio keeps {h[-2:]}'s other limits and action exactly", got == want)
+    before = len(read_log(env))
+    r = run(env, "share-limits", targets, "--seed-time", "45")
+    posts = posts_to(new_entries(env, before), "setShareLimits")
+    check("share-limits --seed-time: all ratios now 2, so 4 groups again", r.returncode == 0 and len(posts) == 4)
+    after = state(port)["limits"]
+    check("share-limits --seed-time keeps the ratio and actions",
+          all(after[h]["ratio_limit"] == 2 and after[h]["seeding_time_limit"] == 45 for h in mixed)
+          and after[sl_hash(2)]["share_limit_action"] == "RemoveWithContent"
+          and after[sl_hash(4)]["inactive_seeding_time_limit"] == 15)
+    before = len(read_log(env))
+    r = run(env, "share-limits", targets, "--ratio", "1.5", "--seed-time", "-1")
+    posts = posts_to(new_entries(env, before), "setShareLimits")
+    check("share-limits with both: 4 groups (inactive/action still differ)", r.returncode == 0 and len(posts) == 4)
+    check("share-limits with both: a decimal ratio is sent as given", all("&ratioLimit=1.5&seedingTimeLimit=-1&" in x["body"] for x in posts))
+    # A repeated hash is one target.
+    before = len(read_log(env))
+    r = run(env, "share-limits", f"{sl_hash(1)}|{sl_hash(1)}", "--ratio", "-1")
+    posts = posts_to(new_entries(env, before), "setShareLimits")
+    check("share-limits: a repeated hash is sent once", r.returncode == 0 and [x["body"].split("&")[0] for x in posts] == [f"hashes={sl_hash(1)}"])
+
+    # A first failure gives only the HTTP code.
+    control(env, {"setShareLimits": "409secret"})
+    r = run(env, "share-limits", targets, "--ratio", "3")
+    check("share-limits first failure: the HTTP code only",
+          r.returncode != 0 and r.stderr.strip() == "qBittorrent refused it (HTTP 409)")
+    control(env, {"info": "409secret"})
+    before = len(read_log(env))
+    r = run(env, "share-limits", targets, "--ratio", "3")
+    check("share-limits: an info failure gives the HTTP code only, never the body",
+          r.returncode != 0 and r.stderr.strip() == "qBittorrent refused it (HTTP 409)" and "SECRET" not in r.stderr
+          and not posts_to(new_entries(env, before)))
+    control(env, {"categories": "500"})
+    before = len(read_log(env))
+    r = run(env, "share-limits", targets, "--ratio", "3")
+    check("share-limits: a categories failure writes nothing",
+          r.returncode != 0 and r.stderr.strip() == "qBittorrent refused it (HTTP 500)" and not posts_to(new_entries(env, before)))
+    control(env, {})
+
+    # Gone targets and bad input: refused before any write.
+    for args, want in (
+        (["share-limits", HASH_NOTFOUND, "--ratio", "1"], "That torrent is gone."),
+        (["share-limits", f"{sl_hash(1)}|{HASH_NOTFOUND}", "--ratio", "1"], "That torrent is gone."),
+        (["share-limits", f"{HASH_NOTFOUND}|{'1' * 40}", "--ratio", "1"], "2 of those torrents are gone."),
+    ):
+        before = len(read_log(env))
+        r = run(env, *args)
+        check(f"share-limits {args[1][-6:]}: {want!r}", r.returncode != 0 and r.stderr.strip() == want and not posts_to(new_entries(env, before)))
+    usage = "usage: qbt share-limits <hash|list|all> [--ratio <-2|-1|0-9998>] [--seed-time <-2|-1|0-525600 minutes>] [--force]"
+    for args, want in (
+        (["share-limits", sl_hash(1)], usage),
+        (["share-limits", sl_hash(1), "--force"], usage),
+        (["share-limits", sl_hash(1), "--ratio"], usage),
+        (["share-limits", sl_hash(1), "--ratio", "1", "--ratio", "2"], usage),
+        (["share-limits", sl_hash(1), "--bogus", "1"], usage),
+        (["share-limits", "nothex", "--ratio", "1"], "invalid hash list"),
+        (["share-limits", sl_hash(1), "--ratio", "1.234"], "invalid ratio limit"),
+        (["share-limits", sl_hash(1), "--seed-time", "525601"], "invalid seed time limit"),
+    ):
+        before = len(read_log(env))
+        r = run(env, *args)
+        check(f"share-limits refuses {args[1:]!r} with no request", r.returncode != 0 and r.stderr.strip() == want and len(read_log(env)) == before)
+
+# Partial failure names how far it got ("@3": the fixture counts calls per
+# process, so this one starts fresh). Groups: {1}, {2,3}, {4}, {5}.
+with harness.fixture_server(extra_env=sl_library(mixed)) as (port, env):
+    control(env, {"setShareLimits": "409@3"})
+    r = run(env, "share-limits", "|".join(mixed), "--ratio", "3")
+    check("share-limits partial failure: exact message",
+          r.returncode != 0 and r.stderr.strip() == "Share limits set on 3 of 5 torrents; qBittorrent refused the rest (HTTP 409)")
+
+# 31. `all`: the unfiltered info, every row written by hash.
+with harness.fixture_server(extra_env=UTF8_ENV) as (port, env):
+    before = len(read_log(env))
+    r = run(env, "share-limits", "all", "--ratio", "5")
+    e = new_entries(env, before)
+    check("share-limits all: succeeds", r.returncode == 0)
+    check("share-limits all: info read unfiltered", e[0]["path"] == "/api/v2/torrents/info" and e[0]["query"] == {})
+    check("share-limits all: never sends hashes=all", all("hashes=all" not in x["body"] for x in posts_to(e)))
+    check("share-limits all: every row now has ratio 5", all(v["ratio_limit"] == 5 for v in state(port)["limits"].values()))
+
+# 32. D8 guard: every source of the action x met/unmet x finished/
+#     unfinished/forcedUP. Only a finished torrent that meets the new limit
+#     and would be removed is refused; --force sends it anyway.
+REFUSE_1_FILES = "1 torrent already meets that limit, and qBittorrent would remove it with its files."
+for source, (action, category) in SL_SOURCES.items():
+    act = 3 if source == "global" else 0
+    torrents = {}
+    for i, (kind, row) in enumerate(SL.items()):
+        torrents[sl_hash(10 + i)] = dict(row, share_limit_action=action, category=category)
+    with harness.fixture_server(extra_env=sl_library(torrents, {"max_ratio_act": act})) as (port, env):
+        for i, kind in enumerate(SL):
+            h = sl_hash(10 + i)
+            for ratio, met in (("1", True), ("3", False)):
+                before = len(read_log(env))
+                r = run(env, "share-limits", h, "--ratio", ratio)
+                refused = met and kind == "finished"
+                wrote = bool(posts_to(new_entries(env, before), "setShareLimits"))
+                if refused:
+                    ok = r.returncode != 0 and r.stderr.strip() == REFUSE_1_FILES and not wrote
+                else:
+                    ok = r.returncode == 0 and wrote
+                check(f"guard, action from {source}, {'met' if met else 'unmet'}, {kind}: {'refused' if refused else 'written'}", ok)
+        h = sl_hash(10)
+        before = len(read_log(env))
+        r = run(env, "share-limits", h, "--ratio", "1", "--force")
+        check(f"guard, action from {source}: --force writes", r.returncode == 0 and len(posts_to(new_entries(env, before), "setShareLimits")) == 1)
+
+# Seed time, -2 resolution, Remove without files, Stop, the widget alias,
+# and counts.
+guard_rows = {
+    sl_hash(20): dict(SL["finished"], share_limit_action="Remove"),
+    sl_hash(21): dict(SL["finished"], share_limit_action="RemoveWithContent"),
+    sl_hash(22): dict(SL["finished"], share_limit_action="Stop", category="rmc"),
+    sl_hash(23): dict(SL["finished"], share_limit_action="EnableSuperSeeding"),
+    sl_hash(24): dict(SL["finished"], category="ratio1"),
+    sl_hash(25): dict(SL["finished"], category="parent/child"),
+    sl_hash(26): dict(SL["finished"], category="parent/stopchild"),
+    sl_hash(27): dict(SL["finished"], category="rm"),
+    sl_hash(28): dict(SL["unfinished"], share_limit_action="RemoveWithContent"),
+    sl_hash(29): dict(SL["finished"], share_limit_action="Remove", seeding_time_limit=60),
+    sl_hash(30): dict(SL["finished"], category="sparent/child"),
+    # Fix round 1: maindata's ratio -1 means "at or above MAX_RATIO".
+    sl_hash(31): dict(SL["finished"], ratio=-1, share_limit_action="Remove"),
+    # Ruling CC: every file unwanted reports progress 0, yet it seeds.
+    sl_hash(32): dict(SL["finished"], progress=0, share_limit_action="RemoveWithContent"),
+    sl_hash(33): dict(SL["unfinished"], progress=0, state="UP", share_limit_action="RemoveWithContent"),
+    sl_hash(34): dict(SL["unfinished"], progress=0, share_limit_action="RemoveWithContent"),
+    sl_hash(35): dict(SL["forced"], progress=0, share_limit_action="RemoveWithContent"),
+}
+with harness.fixture_server(extra_env=sl_library(guard_rows, {"max_ratio_act": 3})) as (port, env):
+    def guard(args, want, label):
+        before = len(read_log(env))
+        r = run(env, *args)
+        wrote = bool(posts_to(new_entries(env, before), "setShareLimits"))
+        if want is None:
+            ok = r.returncode == 0 and wrote
+        else:
+            ok = r.returncode != 0 and r.stderr.strip() == want and not wrote
+        check(label, ok)
+        if not ok:
+            print(r.returncode, r.stderr, file=sys.stderr)
+
+    guard(["share-limits", sl_hash(20), "--ratio", "2"], "1 torrent already meets that limit, and qBittorrent would remove it.",
+          "guard: Remove (no files), ratio met at equality, singular copy")
+    guard(["share-limits", sl_hash(20), "--ratio", "2.01"], None, "guard: ratio just above the torrent's is written")
+    guard(["share-limits", sl_hash(20), "--ratio", "0"], "1 torrent already meets that limit, and qBittorrent would remove it.",
+          "guard: ratio 0 is met")
+    guard(["share-limits", sl_hash(20), "--ratio", "-1"], None, "guard: ratio -1 (none) is written")
+    guard(["share-limits", sl_hash(20), "--seed-time", "120"], "1 torrent already meets that limit, and qBittorrent would remove it.",
+          "guard: seed time met at equality (7200 s = 120 min)")
+    guard(["share-limits", sl_hash(20), "--seed-time", "121"], None, "guard: seed time above the seeding minutes is written")
+    guard(["share-limits", sl_hash(29), "--ratio", "3"], "1 torrent already meets that limit, and qBittorrent would remove it.",
+          "guard: a new ratio with the kept seed time already met is refused")
+    guard(["share-limits", sl_hash(22), "--ratio", "1"], None, "guard: the torrent's own Stop beats a RemoveWithContent category")
+    guard(["share-limits", sl_hash(23), "--ratio", "1"], None, "guard: EnableSuperSeeding is not refused")
+    guard(["share-limits", sl_hash(24), "--ratio", "-2"], REFUSE_1_FILES, "guard: -2 resolving to the category's ratio 1 is met")
+    guard(["share-limits", sl_hash(25), "--ratio", "-2"], REFUSE_1_FILES, "guard: -2 resolving through the parent category is met")
+    guard(["share-limits", sl_hash(30), "--seed-time", "-2"], REFUSE_1_FILES, "guard: seed -2 resolving to the parent's 60 min is met")
+    guard(["share-limits", sl_hash(30), "--seed-time", "121"], None, "guard: a seed time above the seeding minutes is written")
+    guard(["share-limits", sl_hash(26), "--ratio", "-2"], None, "guard: a child's Stop beats its parent's RemoveWithContent")
+    guard(["share-limits", sl_hash(27), "--ratio", "1"], "1 torrent already meets that limit, and qBittorrent would remove it.",
+          "guard: a Remove category (no files)")
+    guard(["share-limits", sl_hash(21), "--ratio", "-2"], None, "guard: -2 resolving to a disabled global ratio (-1) is written")
+    guard(["sharelimit", sl_hash(21), "1"], REFUSE_1_FILES, "guard: the widget alias gets the refusal")
+    guard(["share-limits", sl_hash(31), "--ratio", "5"], "1 torrent already meets that limit, and qBittorrent would remove it.",
+          "guard: a ratio of -1 (above MAX_RATIO) meets any ratio limit")
+    guard(["sharelimit", sl_hash(31), "2"], "1 torrent already meets that limit, and qBittorrent would remove it.",
+          "guard: the widget alias on a ratio of -1")
+    guard(["share-limits", sl_hash(31), "--ratio", "-1"], None, "guard: a ratio of -1 with no ratio limit is written")
+    guard(["share-limits", sl_hash(32), "--seed-time", "60"], REFUSE_1_FILES,
+          "guard: progress 0 but stalledUP (every file unwanted) counts as finished")
+    guard(["share-limits", sl_hash(33), "--seed-time", "60"], None, "guard: a state that only contains a seeding state's letters isn't finished")
+    guard(["share-limits", sl_hash(34), "--seed-time", "60"], None, "guard: progress 0 and downloading isn't finished")
+    guard(["share-limits", sl_hash(35), "--seed-time", "60"], None, "guard: progress 0 and forcedUP isn't finished")
+    guard(["share-limits", f"{sl_hash(20)}|{sl_hash(27)}", "--ratio", "1"],
+          "2 torrents already meet that limit, and qBittorrent would remove them.", "guard: plural, no files")
+    guard(["share-limits", f"{sl_hash(20)}|{sl_hash(21)}|{sl_hash(22)}|{sl_hash(28)}", "--ratio", "1"],
+          "2 torrents already meet that limit, and qBittorrent would remove them with their files.",
+          "guard: a VISUAL range counts only the finished removals; any with files says so")
+    before = len(read_log(env))
+    r = run(env, "share-limits", f"{sl_hash(20)}|{sl_hash(21)}|{sl_hash(22)}|{sl_hash(28)}", "--ratio", "1", "--force")
+    check("guard: --force writes the whole range, 3 groups", r.returncode == 0 and len(posts_to(new_entries(env, before), "setShareLimits")) == 3)
+
+# Ruling CC: each seeding state counts as finished at progress 0.
+cc_rows = {sl_hash(60 + i): dict(SL["finished"], progress=0, state=st, share_limit_action="Remove")
+           for i, st in enumerate(("uploading", "stalledUP", "queuedUP", "stoppedUP", "checkingUP"))}
+with harness.fixture_server(extra_env=sl_library(cc_rows)) as (port, env):
+    for h, row in cc_rows.items():
+        before = len(read_log(env))
+        r = run(env, "share-limits", h, "--seed-time", "60")
+        check(f"guard: progress 0 and {row['state']} is finished",
+              r.returncode != 0 and r.stderr.strip() == "1 torrent already meets that limit, and qBittorrent would remove it."
+              and not posts_to(new_entries(env, before)))
+
+# Global limits: -2 resolves to max_ratio / max_seeding_time only when enabled.
+glob_rows = {sl_hash(40): dict(SL["finished"], category="plain")}
+for prefs, args, refused, label in (
+    ({"max_ratio_act": 1, "max_ratio_enabled": True, "max_ratio": 1.5}, ["--ratio", "-2"], True, "enabled global ratio 1.5"),
+    ({"max_ratio_act": 1, "max_ratio_enabled": False, "max_ratio": 1.5}, ["--ratio", "-2"], False, "disabled global ratio"),
+    ({"max_ratio_act": 1, "max_ratio_enabled": True, "max_ratio": 2.5}, ["--ratio", "-2"], False, "enabled global ratio 2.5, unmet"),
+    ({"max_ratio_act": 1, "max_seeding_time_enabled": True, "max_seeding_time": 100}, ["--seed-time", "-2"], True, "enabled global seed time 100"),
+    ({"max_ratio_act": 1, "max_seeding_time_enabled": False, "max_seeding_time": 100}, ["--seed-time", "-2"], False, "disabled global seed time"),
+    ({"max_ratio_act": 0, "max_ratio_enabled": True, "max_ratio": 1.5}, ["--ratio", "-2"], False, "global Stop"),
+    ({"max_ratio_act": 2, "max_ratio_enabled": True, "max_ratio": 1.5}, ["--ratio", "-2"], False, "global EnableSuperSeeding"),
+):
+    with harness.fixture_server(extra_env=sl_library(glob_rows, prefs)) as (port, env):
+        before = len(read_log(env))
+        r = run(env, "share-limits", sl_hash(40), *args)
+        wrote = bool(posts_to(new_entries(env, before), "setShareLimits"))
+        if refused:
+            ok = r.returncode != 0 and r.stderr.strip() == "1 torrent already meets that limit, and qBittorrent would remove it." and not wrote
+        else:
+            ok = r.returncode == 0 and wrote
+        check(f"guard, {label}: {'refused' if refused else 'written'}", ok)
+
+# Fails closed on anything the guard or the write depends on.
+for label, prefs, rows in (
+    ("max_ratio_act out of range", {"max_ratio_act": 7}, glob_rows),
+    ("max_ratio_act -1", {"max_ratio_act": -1}, glob_rows),
+    ("max_ratio_act a string", {"max_ratio_act": "Remove"}, glob_rows),
+    ("an enabled max_ratio that isn't a number", {"max_ratio_enabled": True, "max_ratio": "x"}, glob_rows),
+    ("a seed limit that isn't a number", {}, {sl_hash(41): dict(SL["unfinished"], seeding_time_limit="30")}),
+    ("an action that isn't a string", {}, {sl_hash(42): dict(SL["unfinished"], share_limit_action=3)}),
+    ("a category action that isn't a string", {}, {sl_hash(43): dict(SL["unfinished"], category="badact")}),
+):
+    with harness.fixture_server(extra_env=sl_library(rows, prefs)) as (port, env):
+        before = len(read_log(env))
+        r = run(env, "share-limits", next(iter(rows)), "--ratio", "3")
+        check(f"share-limits fails closed on {label}",
+              r.returncode != 0 and r.stderr.strip() == "qBittorrent sent something unreadable" and not posts_to(new_entries(env, before)))
 
 if failures:
     print(f"\n{len(failures)} check(s) failed", file=sys.stderr)
