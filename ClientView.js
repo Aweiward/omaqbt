@@ -880,7 +880,11 @@ function inspectorDispatch(ctx) {
       // InspectorView.trackerRefusal, when c and x can't act on it.
       if (r.refusal) target.refusal = String(r.refusal);
     }
-    else if (r) target = { kind: "peer", value: String(r.ipPort), label: String(r.ipPort) };
+    else if (r) {
+      target = { kind: "peer", value: String(r.ipPort), label: String(r.ipPort) };
+      // InspectorView.peerRefusal, when b can't ban it.
+      if (r.refusal) target.refusal = String(r.refusal);
+    }
   }
   var st = row ? String(row.state || "").toLowerCase() : "";
   var hash = String(c.cursorHash || "");
@@ -1036,6 +1040,43 @@ var DONE_NOTES = {
   ban: "Peer banned"
 };
 var FETCH_META_DONE_NOTE = "Metadata received · stopped";
+
+// fetchMetaRefusal(row, fetching) -> "" when `f` can swap the cursor
+// torrent (the registry already required no metadata and no pending
+// browser magnet), else the note: this window is already fetching it
+// (after the swap it runs until qBittorrent stops it at metadata), or it
+// isn't stoppedDL/pausedDL, which qbt fetch-metadata refuses too.
+function fetchMetaRefusal(row, fetching) {
+  if (fetching === true) return "Already fetching metadata.";
+  if (!row) return "";
+  var st = String(row.state || "").toLowerCase();
+  return st === "stoppeddl" || st === "pauseddl" ? "" : "Stop it first.";
+}
+
+// fetchHolds(watch, now) -> whether the window keeps its cursor on a
+// fetch-metadata swap's hash (ClientCommands' watch {ticket, done, at}):
+// while the ticket runs (the hash drops out of the status stream between
+// the delete and the re-add), and for FETCH_HOLD_MS after it succeeded,
+// in case the status stream lags the re-add. Never after a failure (the
+// window drops the watch).
+var FETCH_HOLD_MS = 10000;
+function fetchHolds(watch, now) {
+  if (!watch) return false;
+  if (watch.done !== true) return true;
+  return (Number(now) || 0) - (Number(watch.at) || 0) <= FETCH_HOLD_MS;
+}
+
+// fetchMetaProgress(torrents, hash) -> where a fetch-metadata swap stands
+// in Service's torrent list: "absent" (between the delete and the re-add,
+// or gone), "waiting" (listed, size still unknown) or "received" (size >
+// 0, i.e. the metadata arrived).
+function fetchMetaProgress(torrents, hash) {
+  var list = torrents || [];
+  for (var i = 0; i < list.length; i++) {
+    if (Model.torrentId(list[i]) === hash) return Number(list[i].size) > 0 ? "received" : "waiting";
+  }
+  return "absent";
+}
 
 function ownsTicket(m, ticket) {
   return !!m && !!m.tickets && Object.prototype.hasOwnProperty.call(m.tickets, String(ticket));
@@ -1524,6 +1565,11 @@ function paletteRowFrom(entry, state, indices) {
     // handler ignores it), so the palette doesn't offer it enabled but inert.
     enabled = false;
     reason = "focus the files tab";
+  } else if (entry.id === "file.cycle" && state.cursorNoMetadata === true) {
+    // A no-metadata torrent has no files: Space there is Start download
+    // (Deviation 3), which this row's title doesn't say.
+    enabled = false;
+    reason = "no files yet";
   }
   return {
     kind: "command",
@@ -1787,6 +1833,9 @@ if (typeof module !== "undefined" && module.exports) {
     inspectorDispatch: inspectorDispatch,
     sameInspectorState: sameInspectorState,
     FETCH_META_DONE_NOTE: FETCH_META_DONE_NOTE,
+    fetchMetaRefusal: fetchMetaRefusal,
+    fetchMetaProgress: fetchMetaProgress,
+    fetchHolds: fetchHolds,
     nextAnchor: nextAnchor,
     leaveVisualState: leaveVisualState,
     BUSY_NOTE: BUSY_NOTE,

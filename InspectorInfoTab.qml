@@ -3,6 +3,7 @@ pragma ComponentBehavior: Bound
 import QtQuick
 import qs.Commons
 import "ClientView.js" as View
+import "InspectorView.js" as InspectorView
 
 // The Info tab: the cursor row's full name (wrapped), PiecesBar or the
 // no-metadata line, the slice-1 field block, the Transfer/Torrent groups
@@ -219,7 +220,8 @@ Item {
       anchors.topMargin: infoFoot.vPad
       spacing: Style.space(14)
       Repeater {
-        model: root.info ? root.info.keys : []
+        // No metadata: the pinned keys become Space and f (the states table).
+        model: !root.info ? [] : (root.noMeta ? InspectorView.emptyCopy("info", null).keys : root.info.keys)
         delegate: Row {
           id: act
           required property var modelData

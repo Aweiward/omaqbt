@@ -1517,13 +1517,8 @@ test("dispatchState copies the inspector fields, and resets them when none are g
   assert.equal(stale.cursorPendingMagnet, false);
 });
 
-// Rows shaped like Tasks 4/5's (synthetic here; paletteRows takes the table).
-// The tracker rows are real since Task 4; the rest stand in until Task 5
-// (skipped once a real row with that id exists).
-const INSPECTOR_ROWS = Registry.commands.concat([
-  { id: "peer.ban", title: "Ban peer", group: "Torrent", keys: ["b"], modes: ["NORMAL"], panes: ["inspector"], needs: "peer" },
-  { id: "torrent.fetchMetadata", title: "Fetch metadata only", group: "Torrent", keys: ["f"], modes: ["NORMAL"], panes: ["*"], needs: "noMetadata" }
-].filter((row) => !Registry.commands.some((r) => r.id === row.id)));
+// The inspector rows are all real since Task 5.
+const INSPECTOR_ROWS = Registry.commands;
 
 function paletteRow(state, id) {
   return V.paletteRows("", INSPECTOR_ROWS, [], state).find((r) => r.id === id);
@@ -1639,4 +1634,64 @@ test("inspectorDispatch: a tracker row's refusal rides on the target, only when 
   assert.equal(bad.refusal, rows[0].refusal);
   const ok = V.inspectorDispatch(insp({ trackers: rows, trackerIndex: 1 })).inspectorTarget;
   assert.deepEqual(ok, { kind: "tracker", value: "udp://ok.example/a", label: "ok.example" });
+});
+
+// --- peer ban and fetch metadata (slice 2b, Task 5) ---------------------------
+
+test("inspectorDispatch: a peer row's refusal rides on the target, only when set", () => {
+  const rows = [{ key: "bogus", ipPort: "bogus", refusal: "This peer's address can't be banned from here." }, { key: "203.0.113.42:6881", ipPort: "203.0.113.42:6881", refusal: "" }];
+  const bad = V.inspectorDispatch(insp({ tab: "peers", peers: rows, peerIndex: 0 })).inspectorTarget;
+  assert.equal(bad.refusal, rows[0].refusal);
+  const ok = V.inspectorDispatch(insp({ tab: "peers", peers: rows, peerIndex: 1 })).inspectorTarget;
+  assert.deepEqual(ok, { kind: "peer", value: "203.0.113.42:6881", label: "203.0.113.42:6881" });
+});
+
+test("fetchMetaRefusal: already fetching, then running, else nothing", () => {
+  const stopped = torrent({ hash: H("a"), state: "stoppedDL", size: 0 });
+  assert.equal(V.fetchMetaRefusal(stopped, false), "");
+  assert.equal(V.fetchMetaRefusal(torrent({ hash: H("a"), state: "pausedDL", size: -1 }), false), "");
+  assert.equal(V.fetchMetaRefusal(stopped, true), "Already fetching metadata.");
+  assert.equal(V.fetchMetaRefusal(torrent({ hash: H("a"), state: "metaDL", size: 0 }), true), "Already fetching metadata.");
+  for (const st of ["metaDL", "downloading", "stalledDL", "queuedDL", "forcedMetaDL"]) {
+    assert.equal(V.fetchMetaRefusal(torrent({ hash: H("a"), state: st, size: 0 }), false), "Stop it first.", st);
+  }
+  assert.equal(V.fetchMetaRefusal(null, false), "");
+});
+
+test("fetchMetaProgress: absent, waiting (size unknown) or received (size > 0)", () => {
+  const list = [torrent({ hash: H("a"), size: 0 }), torrent({ hash: H("b"), size: -1 }), torrent({ hash: H("c"), size: 4096 })];
+  assert.equal(V.fetchMetaProgress(list, H("a")), "waiting");
+  assert.equal(V.fetchMetaProgress(list, H("b")), "waiting");
+  assert.equal(V.fetchMetaProgress(list, H("c")), "received");
+  assert.equal(V.fetchMetaProgress(list, H("d")), "absent");
+  assert.equal(V.fetchMetaProgress(null, H("a")), "absent");
+  assert.equal(V.FETCH_META_DONE_NOTE, "Metadata received · stopped");
+});
+
+test("paletteRows: the real Ban peer and Fetch metadata only rows", () => {
+  const onPeers = V.paletteState("rows", true, V.inspectorDispatch(insp({ tab: "peers" })), "inspector");
+  assert.equal(paletteRow(onPeers, "peer.ban").enabled, true);
+  assert.equal(paletteRow(onPeers, "peer.ban").keys, "b");
+  const fromTable = V.paletteState("rows", true, V.inspectorDispatch(insp({ pane: "table", noMeta: true })), "table");
+  assert.equal(paletteRow(fromTable, "torrent.fetchMetadata").enabled, true);
+  assert.equal(paletteRow(fromTable, "torrent.fetchMetadata").keys, "f");
+});
+
+test("fetchHolds: the cursor waits on a swap in flight, then up to 10 s after it succeeds", () => {
+  assert.equal(V.fetchHolds(undefined, 5000), false);
+  assert.equal(V.fetchHolds(null, 5000), false);
+  assert.equal(V.fetchHolds({ ticket: 3, done: false, at: 0 }, 999999999), true, "in flight: no time limit");
+  assert.equal(V.fetchHolds({ ticket: 3, done: true, at: 1000 }, 1000), true);
+  assert.equal(V.fetchHolds({ ticket: 3, done: true, at: 1000 }, 11000), true);
+  assert.equal(V.fetchHolds({ ticket: 3, done: true, at: 1000 }, 11001), false);
+});
+
+test("paletteRows: Cycle file priority is dimmed on a no-metadata Files tab (Space starts it there)", () => {
+  const noMeta = V.paletteState("rows", true, V.inspectorDispatch(insp({ tab: "files", noMeta: true })), "inspector");
+  assert.equal(paletteRow(noMeta, "file.cycle").enabled, false);
+  assert.equal(paletteRow(noMeta, "file.cycle").reason, "no files yet");
+  const withFiles = V.paletteState("rows", true, V.inspectorDispatch(insp({ tab: "files", noMeta: false })), "inspector");
+  assert.equal(paletteRow(withFiles, "file.cycle").enabled, true);
+  const onInfo = V.paletteState("rows", true, V.inspectorDispatch(insp({ tab: "info", noMeta: true })), "inspector");
+  assert.equal(paletteRow(onInfo, "file.cycle").reason, "focus the files tab");
 });

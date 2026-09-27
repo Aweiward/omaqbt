@@ -94,6 +94,6 @@ Item {
   InspectorFooter {
     id: peerFoot
     visible: root.peers.state === "rows"
-    text: "j k move · y copy ip:port · sorted by ↓ then ↑"
+    text: "j k move · y copy ip:port · b ban · sorted by ↓ then ↑"
   }
 }

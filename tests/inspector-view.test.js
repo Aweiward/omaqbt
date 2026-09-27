@@ -639,11 +639,31 @@ test("emptyCopy peers: a null row is treated as stopped, and never throws", () =
   assert.equal(c.body, "The torrent is stopped. Start it to connect.");
 });
 
-test("emptyCopy files: no metadata copy, no keys in 2a", () => {
+test("emptyCopy files: no metadata copy with the Space and f keys (2b)", () => {
   const c = I.emptyCopy("files", {});
   assert.equal(c.title, "No file list yet");
   assert.equal(c.body, "qBittorrent needs the torrent's metadata first.");
-  assert.deepEqual(c.keys, []);
+  assert.deepEqual(c.keys, [{ key: "Space", label: "Start download" }, { key: "f", label: "Fetch metadata only" }]);
+});
+
+test("emptyCopy info: the no-metadata footer's keys are Space and f", () => {
+  assert.deepEqual(I.emptyCopy("info", {}).keys, [{ key: "Space", label: "Start download" }, { key: "f", label: "Fetch metadata only" }]);
+  // Each call hands back its own copy.
+  I.emptyCopy("info", {}).keys.push({ key: "x", label: "y" });
+  assert.equal(I.emptyCopy("files", {}).keys.length, 2);
+});
+
+test("peerRefusal: a note for anything peerError rejects, else empty; peerRows carry it", () => {
+  assert.equal(I.peerRefusal("203.0.113.42:51413"), "");
+  assert.equal(I.peerRefusal("[2001:db8::1]:6881"), "");
+  for (const bad of ["1.2.3.4:1|5.6.7.8:9", "", "1.2.3.4", "999.1.1.1:1", "1.2.3.4:0"]) {
+    assert.equal(I.peerRefusal(bad), "This peer's address can't be banned from here.", bad);
+  }
+  const rows = I.peerRows({ "203.0.113.42:51413": {}, "bogus": {} });
+  const byKey = {};
+  for (const r of rows) byKey[r.key] = r;
+  assert.equal(byKey["203.0.113.42:51413"].refusal, "");
+  assert.equal(byKey["bogus"].refusal, "This peer's address can't be banned from here.");
 });
 
 // --- listTab / trackerSummaryParts / trackerDetail / peerDetail (Task 5) ----

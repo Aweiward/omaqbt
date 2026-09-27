@@ -237,6 +237,16 @@ function peerError(ipPort) {
   return validPort(v4[5]) ? "" : bad;
 }
 
+// What the window says instead of banning a peer whose address qbt's
+// ban-peer would reject (peerError), so nobody confirms a ban that can't
+// run. qBittorrent's own peer list should never produce one.
+var PEER_REFUSAL_NOTE = "This peer's address can't be banned from here.";
+
+// peerRefusal(ipPort) -> "" when `b` can ban it, else PEER_REFUSAL_NOTE.
+function peerRefusal(ipPort) {
+  return peerError(ipPort) !== "" ? PEER_REFUSAL_NOTE : "";
+}
+
 // --- trackerRows ----------------------------------------------------------
 
 var PSEUDO_TRACKER_KIND = {
@@ -350,6 +360,8 @@ function peerRows(peersObject) {
       downText: Model.formatCompactRate(down),
       upText: Model.formatCompactRate(up),
       ipPort: key,
+      // Why b can't ban it ("" when it can).
+      refusal: peerRefusal(key),
       connection: Model.plainText(p.connection),
       downloaded: Model.sizeText(downloaded),
       flags: Model.plainText(p.flags),
@@ -715,6 +727,12 @@ function tabState(entry, sinceMs, nowMs, sidecarUp) {
 
 // emptyCopy(tab, row) -> {title, body, keys} for the states table's empty
 // state. `keys` are empty in 2a (Space and `f` arrive in 2b).
+// The keys a no-metadata torrent's Info footer and Files empty state pin
+// (a fresh array each call).
+function noMetadataKeys() {
+  return [{ key: "Space", label: "Start download" }, { key: "f", label: "Fetch metadata only" }];
+}
+
 function emptyCopy(tab, row) {
   if (tab === "peers") {
     var stopped = Model.statusGroup(row) === "stopped";
@@ -728,8 +746,10 @@ function emptyCopy(tab, row) {
     return { title: "No trackers", body: "This torrent only finds peers through DHT and PeX.", keys: [] };
   }
   if (tab === "files") {
-    return { title: "No file list yet", body: "qBittorrent needs the torrent's metadata first.", keys: [] };
+    return { title: "No file list yet", body: "qBittorrent needs the torrent's metadata first.", keys: noMetadataKeys() };
   }
+  // Info's no-metadata footer: only its keys change (the states table).
+  if (tab === "info") return { title: "", body: "", keys: noMetadataKeys() };
   return { title: "", body: "", keys: [] };
 }
 
@@ -884,6 +904,8 @@ if (typeof module !== "undefined" && module.exports) {
     PIPE_NOTE: PIPE_NOTE,
     UNUSABLE_NOTE: UNUSABLE_NOTE,
     trackerRefusal: trackerRefusal,
+    PEER_REFUSAL_NOTE: PEER_REFUSAL_NOTE,
+    peerRefusal: peerRefusal,
     trackerRows: trackerRows,
     peerRows: peerRows,
     peerSummary: peerSummary,

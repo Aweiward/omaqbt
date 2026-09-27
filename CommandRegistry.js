@@ -115,6 +115,15 @@ var commands = [
   { id: "tracker.edit", title: "Change tracker URL", group: "Torrent", keys: ["c"], modes: ["NORMAL"], panes: ["inspector"], needs: "tracker" },
   { id: "tracker.remove", title: "Remove tracker", group: "Torrent", keys: ["x"], modes: ["NORMAL"], panes: ["inspector"], needs: "tracker" },
 
+  // NORMAL, inspector pane, peers tab only: ban the peer under the cursor
+  // (captured at key time, CONFIRM). The ban is global: it goes on
+  // qBittorrent's IP ban list.
+  { id: "peer.ban", title: "Ban peer", group: "Torrent", keys: ["b"], modes: ["NORMAL"], panes: ["inspector"], needs: "peer" },
+
+  // NORMAL, any pane: swap a stopped no-metadata torrent for its magnet
+  // with stopCondition MetadataReceived (qbt fetch-metadata, F4).
+  { id: "torrent.fetchMetadata", title: "Fetch metadata only", group: "Torrent", keys: ["f"], modes: ["NORMAL"], panes: [PANE_ANY], needs: "noMetadata" },
+
   // VISUAL (j/k/Space/x/X/e reuse the NORMAL,table rows above; this is the exit)
   { id: "visual.exit", title: "Exit visual", group: "View", keys: ["Esc", "V"], modes: ["VISUAL"], panes: ["table"], needs: "none" },
 

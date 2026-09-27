@@ -85,6 +85,32 @@ Item {
       font.pixelSize: Style.font.body
       color: Color.muted
     }
+    Flow {
+      width: parent.width
+      spacing: Style.space(14)
+      Repeater {
+        model: filesNoMetaCopy.copy.keys
+        delegate: Row {
+          id: noMetaKey
+          required property var modelData
+          spacing: Style.space(6)
+          Text {
+            text: noMetaKey.modelData.key
+            textFormat: Text.PlainText
+            font.family: Style.fontFamily
+            font.pixelSize: Style.font.body
+            color: Color.foreground
+          }
+          Text {
+            text: noMetaKey.modelData.label
+            textFormat: Text.PlainText
+            font.family: Style.fontFamily
+            font.pixelSize: Style.font.body
+            color: Color.muted
+          }
+        }
+      }
+    }
   }
 
   InspectorList {

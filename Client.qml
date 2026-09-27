@@ -323,7 +323,9 @@ Item {
     if (!View.sameEntries(filterEntries, entries)) filterEntries = entries
     // An automatic cursor move (its torrent went away, or a restored hash
     // no longer exists) isn't saved; only user moves are.
-    cursorHash = View.resolveCursor(v.rows, cursorHash, prevIndex)
+    // A fetch-metadata swap keeps it on its hash while that drops out.
+    if (!commands.holdsCursor(cursorHash)) cursorHash = View.resolveCursor(v.rows, cursorHash, prevIndex)
+    commands.checkFetches()
     if (reveal === true && View.indexOfHash(v.rows, cursorHash) >= 0) revealCursor()
   }
 
@@ -527,7 +529,7 @@ Item {
       // Strictly this window's own tickets (msgFinish ignores the rest): a
       // pending-magnet drop can emit extra window-origin signals that
       // carry our hashes.
-      root.messages = View.msgFinish(root.messages, ticket, ok, error)
+      if (!commands.fetchFinished(ticket, ok)) root.messages = View.msgFinish(root.messages, ticket, ok, error)
     }
     function onClipboardRead(text) {
       var outcome = View.clipboardOutcome(text, root.clipboardAskedAt, Date.now())
@@ -748,7 +750,7 @@ Item {
           accept: root.confirm ? View.confirmLine(root.confirm).accept : "",
           purpose: root.inputPurpose,
           pane: View.dispatchPane(root.pane, root.tableState),
-          filesTab: root.inspectorTab === "files"
+          filesTab: root.inspectorTab === "files" && !root.infoTab.noMeta
         })
 
         onInputEdited: function(text) {

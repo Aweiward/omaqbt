@@ -78,6 +78,8 @@ TestCase {
       function addTracker(h, u, o) { return rec("addTracker", [h, u, o]) }
       function editTracker(h, a, b, o) { return rec("editTracker", [h, a, b, o]) }
       function removeTracker(h, u, o) { return rec("removeTracker", [h, u, o]) }
+      function banPeer(p, o) { return rec("banPeer", [p, o]) }
+      function fetchMetadata(h, o) { return rec("fetchMetadata", [h, o]) }
       function setInspect(h, tab, entry) {
         var n = ({}); for (var k in inspectByKey) n[k] = inspectByKey[k]
         var e = ({}); for (var f in entry) e[f] = entry[f]
@@ -1647,7 +1649,7 @@ TestCase {
     compare(o.c.peersView.rows[0].key, "10.0.0.39:6881", "sorted by ↓")
     verify(shows(o.c, "40 peers · 20 seeds"))
     verify(shows(o.c, "Client")); verify(shows(o.c, "Has")); verify(shows(o.c, "↓")); verify(shows(o.c, "↑"))
-    verify(shows(o.c, "j k move · y copy ip:port · sorted by ↓ then ↑"))
+    verify(shows(o.c, "j k move · y copy ip:port · b ban · sorted by ↓ then ↑"))
     key(o.c, "\t", 0x01000001)
     compare(o.c.pane, "inspector")
     for (var j = 0; j < 20; j++) key(o.c, "j")
@@ -2466,5 +2468,219 @@ TestCase {
       compare(lastCall(o.svc, "removeTracker"), null)
       compare(lastCall(o.svc, "delete"), null)
     }
+  }
+
+  // ---- peer ban, fetch metadata and the no-metadata keys (slice 2b, Task 5) ----
+
+  function onPeers() {
+    var o = make()
+    o.svc.torrents = list3()
+    key(o.c, "3")
+    o.svc.setInspect(hh("c"), "peers", { peers: peersWith(3, function(i) { return 1000 + i }) })
+    if (o.c.pane !== "inspector") key(o.c, "\t", 0x01000001)
+    compare(o.c.pane, "inspector")
+    compare(o.c.inspectorTab, "peers")
+    return o
+  }
+
+  function test_peer_b_bans_the_captured_peer_after_the_list_changes() {
+    var o = onPeers()
+    key(o.c, "j")
+    compare(o.c.peersView.rows[o.c.peerIndex].key, "10.0.0.1:6881")
+    key(o.c, "b")
+    compare(o.c.mode, "CONFIRM")
+    compare(o.c.confirm.kind, "peerBan")
+    verify(screenText(o.c).indexOf("Ban 10.0.0.1:6881 from all torrents? ") >= 0)
+    verify(shows(o.c, "It goes on qBittorrent's IP ban list."))
+    key(o.c, "n")
+    compare(o.c.mode, "NORMAL")
+    compare(lastCall(o.svc, "banPeer"), null)
+    key(o.c, "b")
+    compare(o.c.mode, "CONFIRM")
+    // While the question is up, the peer drops off the list (another sits
+    // at its index) and a tick drops gamma from the table.
+    o.svc.setInspect(hh("c"), "peers", { peers: { "10.0.0.7:6881": { dl_speed: 5 }, "10.0.0.8:6881": { dl_speed: 4 } } })
+    o.svc.torrents = [tt(hh("a"), "alpha", { addedOn: 1 }), tt(hh("b"), "beta", { addedOn: 2 })]
+    key(o.c, "y")
+    compare(o.c.mode, "NORMAL")
+    var b = lastCall(o.svc, "banPeer")
+    verify(b !== null)
+    compare(b.args[0], "10.0.0.1:6881", "the peer named when b was pressed")
+    compare(b.args[1].origin, "window")
+    compare(o.c.confirmHashes, [])
+    compare(lastCall(o.svc, "delete"), null)
+    compare(o.c.messageLine.text, "Banning peer…")
+    o.svc.actionFinished(o.svc.seq, true, "", "window", [])
+    compare(o.c.messageLine.text, "Peer banned")
+    // The cursor moved to beta when gamma dropped out; ban one of its peers.
+    o.svc.setInspect(o.c.cursorHash, "peers", { peers: { "10.0.0.9:6881": { dl_speed: 1 } } })
+    key(o.c, "b")
+    compare(o.c.mode, "CONFIRM")
+    key(o.c, "y")
+    compare(lastCall(o.svc, "banPeer").args[0], "10.0.0.9:6881")
+    o.svc.actionFinished(o.svc.seq, false, "HTTP 400", "window", [])
+    compare(o.c.messageLine.text, "Couldn't ban the peer: HTTP 400")
+  }
+
+  function test_b_off_the_peers_tab_is_a_silent_no_op() {
+    var o = onPeers()
+    var tabs = ["1", "2", "4", "5"]
+    for (var t = 0; t < tabs.length; t++) {
+      key(o.c, tabs[t])
+      key(o.c, "b")
+      compare(o.c.mode, "NORMAL", "tab " + tabs[t])
+      compare(o.c.confirm, null)
+    }
+    o.c.setPane("table")
+    key(o.c, "b")
+    compare(o.c.mode, "NORMAL")
+    compare(callCount(o.svc, "banPeer"), 0)
+  }
+
+  function test_b_on_a_peer_qbt_would_reject_is_refused_before_confirm() {
+    var o = onPeers()
+    o.svc.setInspect(hh("c"), "peers", { peers: { "bogus|1.2.3.4:1": { dl_speed: 9 } } })
+    compare(o.c.peersView.rows[0].key, "bogus|1.2.3.4:1")
+    key(o.c, "b")
+    compare(o.c.mode, "NORMAL")
+    compare(o.c.confirm, null)
+    compare(o.c.messageLine.text, "This peer's address can't be banned from here.")
+    compare(callCount(o.svc, "banPeer"), 0)
+  }
+
+  function noMetaList() {
+    return [tt(hh("a"), "alpha", { addedOn: 1 }), tt(hh("b"), "nometa", { addedOn: 2, size: 0, state: "stoppedDL", progress: 0 })]
+  }
+
+  function test_f_fetches_metadata_and_keeps_the_cursor_through_the_swap() {
+    var o = make()
+    o.svc.torrents = noMetaList()
+    compare(o.c.cursorHash, hh("b"))
+    var savedBefore = o.svc.saved.length
+    key(o.c, "f")
+    var f = lastCall(o.svc, "fetchMetadata")
+    verify(f !== null)
+    compare(f.args[0], hh("b"))
+    compare(f.args[1].origin, "window")
+    compare(f.args[1].hashes, [hh("b")])
+    compare(o.c.messageLine.text, "Fetching metadata…")
+    // The delete went through: the hash is gone for a tick.
+    o.svc.torrents = [tt(hh("a"), "alpha", { addedOn: 1 })]
+    compare(o.c.cursorHash, hh("b"), "the cursor waits on the swapped torrent")
+    compare(o.svc.saved.length, savedBefore, "view.json is not rewritten")
+    // The re-add: back, running until qBittorrent stops it at metadata.
+    o.svc.torrents = [tt(hh("a"), "alpha", { addedOn: 1 }), tt(hh("b"), "nometa", { addedOn: 9, size: 0, state: "metaDL", progress: 0 })]
+    compare(o.c.cursorHash, hh("b"))
+    compare(o.c.cursorIndex, 0)
+    o.svc.actionFinished(o.svc.seq, true, "", "window", [hh("b")])
+    compare(o.c.messageLine.text, "Fetching metadata…", "the ticket ending isn't the metadata arriving")
+    // Another f while it runs: already fetching, no second swap.
+    key(o.c, "f")
+    compare(o.c.messageLine.text, "Already fetching metadata.")
+    compare(callCount(o.svc, "fetchMetadata"), 1)
+    key(o.c, "w")
+    compare(o.c.messageLine.text, "Fetching metadata…", "a key doesn't clear the progress")
+    // A tick still without a size, and one where the hash is briefly gone again.
+    o.svc.torrents = [tt(hh("a"), "alpha", { addedOn: 1 })]
+    compare(o.c.cursorHash, hh("b"))
+    compare(o.c.messageLine.text, "Fetching metadata…")
+    o.svc.torrents = [tt(hh("a"), "alpha", { addedOn: 1 }), tt(hh("b"), "nometa", { addedOn: 9, size: 4096, state: "stoppedDL", progress: 0 })]
+    compare(o.c.messageLine.text, "Metadata received · stopped")
+    compare(o.c.cursorHash, hh("b"))
+    compare(o.svc.saved.length, savedBefore)
+  }
+
+  function test_f_failure_shows_qbts_error_and_releases_the_cursor() {
+    var o = make()
+    o.svc.torrents = noMetaList()
+    key(o.c, "f")
+    o.svc.torrents = [tt(hh("a"), "alpha", { addedOn: 1 })]
+    compare(o.c.cursorHash, hh("b"))
+    o.svc.actionFinished(o.svc.seq, false, "Couldn't finish re-adding it; the magnet is in your inbox.", "window", [hh("b")])
+    compare(o.c.messageLine.text, "Couldn't fetch metadata: Couldn't finish re-adding it; the magnet is in your inbox.")
+    o.svc.torrents = [tt(hh("a"), "alpha", { addedOn: 1 })]
+    compare(o.c.cursorHash, hh("a"), "no hold once the swap failed")
+  }
+
+  function test_f_refusals_make_no_call() {
+    var o = make()
+    // Has metadata: a silent no-op.
+    o.svc.torrents = [tt(hh("a"), "alpha", { addedOn: 1, state: "stoppedDL" })]
+    key(o.c, "f")
+    compare(o.c.mode, "NORMAL")
+    compare(o.c.messageLine.text, "")
+    // Running with no metadata: qbt would refuse too.
+    o.svc.torrents = [tt(hh("a"), "alpha", { addedOn: 1, size: 0, state: "metaDL", progress: 0 })]
+    key(o.c, "f")
+    compare(o.c.messageLine.text, "Stop it first.")
+    // A browser magnet still pending in the handler flow.
+    o.svc.torrents = noMetaList()
+    o.c.cursorHash = hh("b")
+    o.svc.magnetPendingHashes = [hh("b")]
+    o.c.cursorHash = hh("b")
+    key(o.c, "f")
+    compare(callCount(o.svc, "fetchMetadata"), 0)
+  }
+
+  function test_space_starts_a_no_metadata_torrent_on_info_and_files() {
+    var o = make()
+    o.svc.torrents = noMetaList()
+    key(o.c, "1")
+    if (o.c.pane !== "inspector") key(o.c, "\t", 0x01000001)
+    compare(o.c.pane, "inspector")
+    key(o.c, " ", 0x20)
+    var s = lastCall(o.svc, "start")
+    verify(s !== null)
+    compare(s.args[0], hh("b"))
+    compare(s.args[1].origin, "window")
+    key(o.c, "4")
+    o.svc.setFilesFor(hh("b"), [])
+    o.svc.setFilesStatus(hh("b"), "ok", "")
+    key(o.c, " ", 0x20)
+    compare(callCount(o.svc, "start"), 2)
+    compare(callCount(o.svc, "prio"), 0)
+    // Trackers/peers: Space stays inert.
+    key(o.c, "2")
+    key(o.c, " ", 0x20)
+    compare(callCount(o.svc, "start"), 2)
+    // A torrent with files: Space on Files still cycles the priority.
+    o.c.setPane("table")
+    key(o.c, "j")
+    compare(o.c.cursorHash, hh("a"))
+    key(o.c, "4")
+    if (o.c.pane !== "inspector") key(o.c, "\t", 0x01000001)
+    o.svc.setFilesFor(hh("a"), [{ index: 0, name: "a.mkv", size: 10, progress: 0, priority: 1 }])
+    o.svc.setFilesStatus(hh("a"), "ok", "")
+    key(o.c, " ", 0x20)
+    compare(callCount(o.svc, "prio"), 1)
+    compare(callCount(o.svc, "start"), 2)
+    // Info on a torrent with metadata: nothing.
+    key(o.c, "1")
+    key(o.c, " ", 0x20)
+    compare(callCount(o.svc, "start"), 2)
+    compare(callCount(o.svc, "stop"), 0)
+  }
+
+  function test_no_metadata_keys_render_on_info_and_files() {
+    var o = make()
+    o.svc.torrents = noMetaList()
+    key(o.c, "1")
+    verify(shows(o.c, "Start download"))
+    verify(shows(o.c, "Fetch metadata only"))
+    verify(shows(o.c, "Space"))
+    verify(shows(o.c, "f"))
+    verify(!shows(o.c, "open folder"), "the pinned keys become Space and f")
+    key(o.c, "4")
+    o.svc.setFilesFor(hh("b"), [])
+    o.svc.setFilesStatus(hh("b"), "ok", "")
+    verify(shows(o.c, "No file list yet"))
+    verify(shows(o.c, "Start download"))
+    verify(shows(o.c, "Fetch metadata only"))
+    // With metadata, Info keeps its usual keys.
+    o.c.setPane("table")
+    key(o.c, "j")
+    key(o.c, "1")
+    verify(shows(o.c, "open folder"))
+    verify(!shows(o.c, "Start download"))
   }
 }
