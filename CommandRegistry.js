@@ -75,7 +75,9 @@ var commands = [
   { id: "refresh", title: "Refresh", group: "Library", keys: ["r"], modes: ["NORMAL"], panes: [PANE_ANY], needs: "none" },
   { id: "inspector.info", title: "Info", group: "View", keys: ["1"], modes: ["NORMAL"], panes: [PANE_ANY], needs: "none" },
   { id: "inspector.files", title: "Files", group: "View", keys: ["4"], modes: ["NORMAL"], panes: [PANE_ANY], needs: "none" },
-  { id: null, title: "Reserved", group: "View", keys: ["2", "3", "5"], modes: ["NORMAL"], panes: [PANE_ANY], needs: "none" },
+  { id: "inspector.trackers", title: "Trackers", group: "View", keys: ["2"], modes: ["NORMAL"], panes: [PANE_ANY], needs: "none" },
+  { id: "inspector.peers", title: "Peers", group: "View", keys: ["3"], modes: ["NORMAL"], panes: [PANE_ANY], needs: "none" },
+  { id: null, title: "Reserved", group: "View", keys: ["5"], modes: ["NORMAL"], panes: [PANE_ANY], needs: "none" },
   { id: "pane.next", title: "Next pane", group: "View", keys: ["Tab", "Ctrl-l"], modes: ["NORMAL"], panes: [PANE_ANY], needs: "none" },
   { id: "pane.prev", title: "Prev pane", group: "View", keys: ["Shift-Tab", "Ctrl-h"], modes: ["NORMAL"], panes: [PANE_ANY], needs: "none" },
   { id: "help.toggle", title: "Help", group: "App", keys: ["?"], modes: ["NORMAL"], panes: [PANE_ANY], needs: "none" },
@@ -97,10 +99,11 @@ var commands = [
   { id: "filter.up", title: "Up", group: "View", keys: ["k"], modes: ["NORMAL"], panes: ["filters"], needs: "none" },
   { id: "filter.apply", title: "Apply filter", group: "View", keys: ["Enter"], modes: ["NORMAL"], panes: ["filters"], needs: "none" },
 
-  // NORMAL, inspector pane: the Files tab's list (the window ignores these
-  // on the Info tab). Space cycles a file's priority like a widget click.
-  { id: "file.down", title: "Next file", group: "View", keys: ["j", "Down"], modes: ["NORMAL"], panes: ["inspector"], needs: "none" },
-  { id: "file.up", title: "Previous file", group: "View", keys: ["k", "Up"], modes: ["NORMAL"], panes: ["inspector"], needs: "none" },
+  // NORMAL, inspector pane: the list the current tab shows (trackers,
+  // peers or files; the window ignores these on Info). Space cycles a
+  // file's priority like a widget click (Files only).
+  { id: "file.down", title: "Next row", group: "View", keys: ["j", "Down"], modes: ["NORMAL"], panes: ["inspector"], needs: "none" },
+  { id: "file.up", title: "Previous row", group: "View", keys: ["k", "Up"], modes: ["NORMAL"], panes: ["inspector"], needs: "none" },
   { id: "file.cycle", title: "Cycle file priority", group: "Torrent", keys: ["Space"], modes: ["NORMAL"], panes: ["inspector"], needs: "torrent" },
 
   // VISUAL (j/k/Space/x/X/e reuse the NORMAL,table rows above; this is the exit)

@@ -198,12 +198,31 @@ test("4 opens the files tab from any pane", () => {
   assert.equal(r.commandId, "inspector.files");
 });
 
-test("2, 3 and 5 are reserved no-ops", () => {
-  for (const d of ["2", "3", "5"]) {
-    const r = dispatch(state(), ev(d, 0x30 + Number(d)));
-    assert.equal(r.commandId, null, d);
-    assert.equal(r.blocked, undefined, d);
+test("5 is a reserved no-op", () => {
+  const r = dispatch(state(), ev("5", 0x35));
+  assert.equal(r.commandId, null);
+  assert.equal(r.blocked, undefined);
+  const reserved = commands.filter((c) => c.id === null);
+  assert.equal(reserved.length, 1);
+  assert.deepEqual(reserved[0].keys, ["5"]);
+});
+
+test("2 opens trackers and 3 opens peers from every pane, with no torrent needed", () => {
+  for (const pane of ["table", "filters", "inspector"]) {
+    const two = dispatch(state({ pane, hasTorrent: false }), ev("2", 0x32));
+    assert.equal(two.commandId, "inspector.trackers", pane);
+    assert.equal(two.blocked, undefined, pane);
+    const three = dispatch(state({ pane, hasTorrent: false }), ev("3", 0x33));
+    assert.equal(three.commandId, "inspector.peers", pane);
   }
+  const t = commands.find((c) => c.id === "inspector.trackers");
+  assert.equal(t.title, "Trackers");
+  assert.equal(commands.find((c) => c.id === "inspector.peers").title, "Peers");
+});
+
+test("file.down/file.up keep their ids and read as generic row moves", () => {
+  assert.equal(commands.find((c) => c.id === "file.down").title, "Next row");
+  assert.equal(commands.find((c) => c.id === "file.up").title, "Previous row");
 });
 
 test("Tab and Ctrl-l move to the next pane", () => {
@@ -468,9 +487,9 @@ test("Esc Esc after 600ms just clears the filter text again", () => {
   assert.notEqual(late.commandId, "filter.reset");
 });
 
-test("digits 2, 3 and 5 are no-ops in every pane", () => {
+test("digit 5 is a no-op in every pane", () => {
   for (const pane of ["table", "filters", "inspector"]) {
-    for (const d of ["2", "3", "5"]) {
+    for (const d of ["5"]) {
       const r = dispatch(state({ pane }), ev(d, 0x30 + Number(d)));
       assert.equal(r.commandId, null, pane + "/" + d);
     }

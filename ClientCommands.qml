@@ -4,6 +4,7 @@ import QtQuick
 import "Model.js" as Model
 import "CommandRegistry.js" as Registry
 import "ClientView.js" as View
+import "InspectorView.js" as InspectorView
 
 // The window's command -> action mapping: run() turns a command id from
 // CommandRegistry into Service calls and view changes on the Client it is
@@ -22,6 +23,74 @@ QtObject {
   required property var palette
   // The MagnetConfirm that runs magnet.start / magnet.cancel.
   required property var magnet
+
+  // ---- trackers and peers (inspector tabs 2, 3) ---------------------------
+
+  // The tracker url / peer ip:port under each tab's cursor, so a refresh
+  // that reorders the list (peers re-sort by speed every tick) keeps the
+  // cursor on the same row (stickRow).
+  property string trackerKey: ""
+  property string peerKey: ""
+
+  // Moves inspectNow past tabState's 300 ms "blank" so a tab still
+  // waiting for its first reply says "Loading…" (a little later than
+  // 300: a timer can fire a millisecond early, which would still read
+  // "blank" and never re-check).
+  property Timer inspectClock: Timer {
+    interval: 320
+    onTriggered: client.inspectNow = Date.now()
+  }
+
+  // The window's watch changed (hashChanged: the cursor torrent, else the
+  // tab): restart the stale-reply clock and tell Service. A new torrent
+  // starts both lists at the top.
+  function syncInspect(hashChanged) {
+    var c = client
+    if (hashChanged) {
+      c.trackerIndex = 0
+      c.peerIndex = 0
+      trackerKey = ""
+      peerKey = ""
+    }
+    c.inspectSince = Date.now()
+    c.inspectNow = c.inspectSince
+    inspectClock.restart()
+    if (c.service && typeof c.service.watch === "function") c.service.watch(c.watchHash, c.inspectorTab)
+  }
+
+  // A refresh of tab's rows: the index of the row with the same key (or
+  // the old index, clamped); an empty list leaves the index alone.
+  function stickRow(tab, rows, index) {
+    if (rows.length === 0) return index
+    var next = InspectorView.keyedIndex(rows, tab === "trackers" ? trackerKey : peerKey, index)
+    if (tab === "trackers") trackerKey = rows[next].key
+    else peerKey = rows[next].key
+    return next
+  }
+
+  function listRows(tab) {
+    return tab === "trackers" ? client.trackersView.rows : client.peersView.rows
+  }
+
+  // Puts tab's cursor on row index (a key or a click).
+  function setRow(tab, index) {
+    var rows = listRows(tab)
+    if (index < 0 || index >= rows.length) return
+    if (tab === "trackers") { client.trackerIndex = index; trackerKey = rows[index].key }
+    else { client.peerIndex = index; peerKey = rows[index].key }
+  }
+
+  // `y` in the inspector on trackers or peers (deviation 3: inside
+  // torrent.copyMagnet): the tracker's full URL, or the peer's ip:port.
+  function copyRow(tab, targets) {
+    var c = client
+    var row = listRows(tab)[tab === "trackers" ? c.trackerIndex : c.peerIndex]
+    if (!row) {
+      c.note(tab === "trackers" ? "No tracker to copy." : "No peer to copy.", "muted")
+      return
+    }
+    c.track(c.service.copyText(tab === "trackers" ? row.url : row.ipPort, c.opts(targets)), "copyText", targets)
+  }
 
   function isEnterKey(ev) {
     return ev.key === Registry.KEY.Return || ev.key === Registry.KEY.Enter
@@ -200,6 +269,10 @@ QtObject {
       return
 
     case "torrent.copyMagnet":
+      if (c.pane === "inspector" && (c.inspectorTab === "trackers" || c.inspectorTab === "peers")) {
+        copyRow(c.inspectorTab, targets)
+        return
+      }
       rows = c.rawFor(targets)
       if (rows.length === 0) return
       // The window validates its own input: Service returns 0 silently.
@@ -237,6 +310,14 @@ QtObject {
 
     case "inspector.info":
       c.inspectorTab = "info"
+      return
+
+    case "inspector.trackers":
+      c.inspectorTab = "trackers"
+      return
+
+    case "inspector.peers":
+      c.inspectorTab = "peers"
       return
 
     case "all.toggle":
@@ -296,6 +377,15 @@ QtObject {
 
     case "file.down":
     case "file.up":
+      // Moves the cursor of whichever list the current tab shows.
+      if (c.inspectorTab === "trackers" || c.inspectorTab === "peers") {
+        var tabRows = listRows(c.inspectorTab)
+        if (tabRows.length === 0) return
+        var at = c.inspectorTab === "trackers" ? c.trackerIndex : c.peerIndex
+        setRow(c.inspectorTab, View.moveIndex(tabRows.length, at, commandId === "file.down" ? 1 : -1))
+        inspectorPane.positionRow(c.inspectorTab, c.inspectorTab === "trackers" ? c.trackerIndex : c.peerIndex)
+        return
+      }
       if (c.inspectorTab !== "files" || c.filesState.state !== "rows") return
       c.fileIndex = View.moveIndex(c.filesState.rows.length, c.fileIndex, commandId === "file.down" ? 1 : -1)
       inspectorPane.positionFile(c.fileIndex)

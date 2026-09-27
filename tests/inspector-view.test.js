@@ -486,3 +486,99 @@ test("emptyCopy files: no metadata copy, no keys in 2a", () => {
   assert.equal(c.body, "qBittorrent needs the torrent's metadata first.");
   assert.deepEqual(c.keys, []);
 });
+
+// --- listTab / trackerSummaryParts / trackerDetail / peerDetail (Task 5) ----
+
+const TRACKERS_FIXTURE = [
+  { url: "** [DHT] **", status: 2, num_seeds: -1, num_leeches: -1 },
+  { url: "** [PeX] **", status: 0, num_seeds: -1, num_leeches: -1 },
+  { url: "https://tracker.example/announce?passkey=abc123", status: 2, tier: 0, num_seeds: 5, num_leeches: 3, msg: "" },
+  { url: "udp://t.example:1337/abc123/announce", status: 4, tier: 1, num_seeds: -1, num_leeches: -1, msg: "Connection timed out" }
+];
+
+test("listTab trackers: rows, summary and a title from a fresh entry", () => {
+  const t = I.listTab("trackers", { trackers: TRACKERS_FIXTURE, at: 1000 }, 900, 1000, true);
+  assert.equal(t.state, "rows");
+  assert.equal(t.rows.length, 2);
+  assert.equal(t.rows[0].host, "tracker.example");
+  assert.equal(t.summary.dht, "on");
+  assert.equal(t.summary.pex, "off");
+  assert.equal(t.title, "2 trackers");
+  const one = I.listTab("trackers", { trackers: TRACKERS_FIXTURE.slice(0, 3), at: 1000 }, 900, 1000, true);
+  assert.equal(one.title, "1 tracker");
+});
+
+test("listTab trackers: only pseudo-trackers is empty, not rows", () => {
+  const t = I.listTab("trackers", { trackers: TRACKERS_FIXTURE.slice(0, 2), at: 1000 }, 900, 1000, true);
+  assert.equal(t.state, "empty");
+  assert.deepEqual(t.rows, []);
+  assert.equal(t.title, "");
+});
+
+test("listTab: a stale entry is blank, then loading after 300 ms; error and sidecarDown win", () => {
+  const e = { trackers: TRACKERS_FIXTURE, at: 500 };
+  assert.equal(I.listTab("trackers", e, 900, 1000, true).state, "blank");
+  assert.deepEqual(I.listTab("trackers", e, 900, 1000, true).rows, []);
+  assert.equal(I.listTab("trackers", e, 900, 1200, true).state, "loading");
+  assert.equal(I.listTab("trackers", undefined, 900, 1000, true).state, "blank");
+  const err = I.listTab("trackers", { trackers: TRACKERS_FIXTURE, error: "boom", at: 1000 }, 900, 1000, true);
+  assert.equal(err.state, "error");
+  assert.deepEqual(err.rows, []);
+  assert.equal(err.title, "");
+  assert.equal(I.listTab("peers", { peers: {}, at: 1000 }, 900, 1000, false).state, "sidecarDown");
+});
+
+test("listTab peers: sorted rows and the 'N peers · M seeds' title", () => {
+  const peers = {
+    "10.0.0.1:1": { client: "A", progress: 1, dl_speed: 10, up_speed: 0 },
+    "10.0.0.2:2": { client: "B", progress: 0.5, dl_speed: 30, up_speed: 0 },
+    "10.0.0.3:3": { client: "C", progress: 1, dl_speed: 20, up_speed: 0 }
+  };
+  const t = I.listTab("peers", { peers, at: 1000 }, 900, 1000, true);
+  assert.equal(t.state, "rows");
+  assert.deepEqual(t.rows.map((r) => r.key), ["10.0.0.2:2", "10.0.0.3:3", "10.0.0.1:1"]);
+  assert.equal(t.title, "3 peers · 2 seeds");
+  assert.equal(I.listTab("peers", { peers: { "1.1.1.1:1": { progress: 1 } }, at: 1000 }, 900, 1000, true).title, "1 peer · 1 seed");
+  assert.equal(I.listTab("peers", { peers: {}, at: 1000 }, 900, 1000, true).state, "empty");
+});
+
+test("listTab carries the tab's empty copy for the cursor row", () => {
+  assert.equal(I.listTab("peers", { peers: {}, at: 1000 }, 900, 1000, true, { state: "stoppedDL" }).copy.body,
+    "The torrent is stopped. Start it to connect.");
+  assert.equal(I.listTab("peers", { peers: {}, at: 1000 }, 900, 1000, true, { state: "downloading" }).copy.body, "Looking for peers…");
+  assert.equal(I.listTab("trackers", undefined, 900, 1000, true, null).copy.title, "No trackers");
+});
+
+test("trackerSummaryParts: on in accent, counts muted, plurals", () => {
+  const parts = I.trackerSummaryParts({ dht: "on", pex: "off", lsd: "—", seeds: 212, peers: 1 });
+  assert.equal(parts.map((p) => p.text).join(""), "DHT on · PeX off · LSD —  ·  212 seeds · 1 peer");
+  assert.deepEqual(parts.filter((p) => p.tone === "accent").map((p) => p.text), ["on"]);
+});
+
+test("trackerDetail: status word urgent when failing, quoted message, redacted url, tier", () => {
+  const rows = I.trackerRows(TRACKERS_FIXTURE).rows;
+  const bad = I.trackerDetail(rows[1]);
+  assert.deepEqual(bad.status, { text: "not working", tone: "urgent" });
+  assert.equal(bad.message, "\"Connection timed out\"");
+  assert.equal(bad.url, "udp://t.example:1337/…");
+  assert.equal(bad.tier, "tier 1");
+  const ok = I.trackerDetail(rows[0]);
+  assert.equal(ok.status.tone, "fg");
+  assert.equal(ok.message, "");
+  assert.equal(ok.url, "https://tracker.example/…");
+  assert.equal(ok.tier, "tier 0");
+  assert.equal(I.trackerDetail(null).url, "");
+});
+
+test("peerDetail: ip apart from the rest, flags description on one line", () => {
+  const row = I.peerRows({ "203.0.113.42:51413": { connection: "uTP", downloaded: 1024, flags: "D X", flags_desc: "D = downloading\nX = peer from PEX" } })[0];
+  const d = I.peerDetail(row);
+  assert.equal(d.ip, "203.0.113.42");
+  assert.equal(d.rest, ":51413 · uTP · downloaded " + Model.sizeText(1024));
+  assert.equal(d.flags, "D X");
+  assert.equal(d.flagsDesc, "D = downloading · X = peer from PEX");
+  const v6 = I.peerDetail(I.peerRows({ "[::1]:6881": { connection: "BT" } })[0]);
+  assert.equal(v6.ip, "[::1]");
+  assert.equal(v6.rest.indexOf(":6881 · BT"), 0);
+  assert.equal(I.peerDetail(null).ip, "");
+});

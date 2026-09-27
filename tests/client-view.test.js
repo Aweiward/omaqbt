@@ -1382,3 +1382,10 @@ test("magnetLine: the MAGNET status line, +N more, and an error line", () => {
   assert.equal(err.error, "unidentified");
   assert.deepEqual(err.hints, [{ key: "Esc", label: "dismiss" }]);
 });
+
+test("copyText (y on trackers/peers): Copying… while it runs, then the note Copied; its own failure text", () => {
+  const t = V.msgTrack(V.emptyMessages(), 7, "copyText", 1, [H("a")]);
+  assert.deepEqual(V.messageLine(t), { text: "Copying…", tone: "muted" });
+  assert.deepEqual(V.messageLine(V.msgFinish(t, 7, true, "")), { text: "Copied", tone: "muted" });
+  assert.deepEqual(V.messageLine(V.msgFinish(t, 7, false, "wl-copy missing")), { text: "Couldn't copy: wl-copy missing", tone: "urgent" });
+});

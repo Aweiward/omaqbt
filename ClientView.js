@@ -481,7 +481,8 @@ function toggleStarts(rawRows) {
 
 // Progress copy for the status line (muted) while this window's action
 // runs. kind: start|stop|remove|delete|recheck|move|startAll|stopAll|
-// turtle|add|daemon|install|copy|prio|dropMagnet.
+// turtle|add|daemon|install|copy|copyText|prio|dropMagnet (copyText: `y`
+// on the trackers and peers tabs).
 function progressText(kind, count) {
   var n = Number(count) || 0;
   var t = plural(n, "torrent", "torrents");
@@ -498,6 +499,7 @@ function progressText(kind, count) {
   if (kind === "daemon") return "Starting qbittorrent-nox…";
   if (kind === "install") return "Installing qbittorrent-nox…";
   if (kind === "copy") return "Copying magnet…";
+  if (kind === "copyText") return "Copying…";
   if (kind === "prio") return "Setting file priority…";
   if (kind === "dropMagnet") return "Dropping the magnet…";
   return "Working…";
@@ -884,6 +886,7 @@ function failureText(kind, count) {
   if (kind === "daemon") return "Couldn't start qbittorrent-nox";
   if (kind === "install") return "Couldn't install qbittorrent-nox";
   if (kind === "copy") return "Couldn't copy the magnet";
+  if (kind === "copyText") return "Couldn't copy";
   if (kind === "prio") return "Couldn't set the file priority";
   if (kind === "files") return "Couldn't read files";
   if (kind === "dropMagnet") return "Couldn't drop the magnet";
@@ -922,7 +925,7 @@ function msgTrack(m, ticket, kind, count, hashes) {
 }
 
 // A success note for actions whose effect isn't visible in the table.
-var DONE_NOTES = { copy: "Copied magnet." };
+var DONE_NOTES = { copy: "Copied magnet.", copyText: "Copied" };
 
 function ownsTicket(m, ticket) {
   return !!m && !!m.tickets && Object.prototype.hasOwnProperty.call(m.tickets, String(ticket));

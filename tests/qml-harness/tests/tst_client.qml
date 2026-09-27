@@ -67,6 +67,19 @@ TestCase {
       function setFilesStatus(h, st, err) { var n = ({}); for (var k in filesStatusByHash) n[k] = filesStatusByHash[k]; n[h] = { state: st, error: err || "" }; filesStatusByHash = n }
       function loadFiles(h, o) { rec("loadFiles", [h, o]); setFilesFor(h, []); setFilesStatus(h, "loading", "") }
       function setPrio(h, i, p, o) { return rec("prio", [h, i, p, o]) }
+      // Inspector tabs 2/3 (Task 5). A watch is recorded without taking a
+      // ticket number, so tests that count tickets (seq) are unaffected.
+      property var inspectByKey: ({})
+      property bool sidecarDown: false
+      function watch(h, t) { calls.push({ name: "watch", args: [h, t] }) }
+      function copyText(t, o) { return rec("copyText", [t, o]) }
+      function setInspect(h, tab, entry) {
+        var n = ({}); for (var k in inspectByKey) n[k] = inspectByKey[k]
+        var e = ({}); for (var f in entry) e[f] = entry[f]
+        if (e.at === undefined) e.at = Date.now()
+        n[h + "|" + tab] = e
+        inspectByKey = n
+      }
     }
   }
 
@@ -620,8 +633,8 @@ TestCase {
     o.svc.torrents = [tt(hh("a"), "alpha", { numSeeds: 4, numLeechs: 1, category: "linux", savePath: "/dl/iso" })]
     compare(o.c.inspectorInfo.name, "alpha")
     compare(o.c.inspectorInfo.fields[5].value, "linux")
-    // 2, 3 and 5 do nothing
-    key(o.c, "2"); key(o.c, "3"); key(o.c, "5")
+    // 5 does nothing (2 and 3 open trackers and peers since Task 5)
+    key(o.c, "5")
     compare(o.c.inspectorTab, "info")
     key(o.c, "4")
     compare(o.c.inspectorTab, "files")
@@ -1325,5 +1338,238 @@ TestCase {
     list.rows = [{ key: "a", name: "Alpha2" }, { key: "b", name: "Beta2" }]
     compare(findByObjectName(lv.itemAtIndex(1), "detailText").text, "detail b Beta2",
       "the detail re-binds to the refreshed row, not a stale snapshot from when it loaded")
+  }
+
+  // Trackers and peers hand InspectorList a fresh array every second (peer
+  // speeds change every tick): that must neither rebuild the delegates nor
+  // move the view, or a scrolled list jumps to the top each tick.
+  function test_inspector_list_refresh_keeps_scroll_and_delegates() {
+    function rowsWith(speedOf) {
+      var out = []
+      for (var i = 0; i < 40; i++) out.push({ key: "k" + i, name: "peer " + i, down: String(speedOf(i)) })
+      return out
+    }
+    var list = createTemporaryObject(inspectorListComp, tc, {
+      width: 300,
+      height: 120,
+      rows: rowsWith(function(i) { return i }),
+      columns: [{ role: "name", width: 0 }, { role: "down", width: 60, align: "right" }],
+      focusedPane: true,
+      cursor: 20
+    })
+    var lv = findWith(list, "itemAtIndex")
+    var y = 19 * list.rowHeight
+    lv.contentY = y
+    compare(lv.contentY, y)
+    var before = lv.itemAtIndex(20)
+    verify(before !== null)
+    list.rows = rowsWith(function(i) { return 1000 - i })
+    compare(lv.contentY, y, "a refresh leaves the scroll position alone")
+    verify(lv.itemAtIndex(20) === before, "the delegate is reused, not rebuilt")
+    compare(findAllByObjectName(lv.itemAtIndex(20), "cell")[1].text, "980", "the reused delegate shows the new data")
+    // fewer rows, then more: count follows, the view is not reset to the top
+    list.rows = rowsWith(function(i) { return i }).slice(0, 30)
+    compare(lv.count, 30)
+    compare(lv.contentY, y)
+    list.rows = rowsWith(function(i) { return i })
+    compare(lv.count, 40)
+    compare(lv.contentY, y)
+  }
+
+  // ---- trackers and peers (Task 5) -------------------------------------
+
+  function trackersFixture() {
+    return [
+      { url: "** [DHT] **", status: 2, num_seeds: -1, num_leeches: -1 },
+      { url: "** [PeX] **", status: 2, num_seeds: -1, num_leeches: -1 },
+      { url: "** [LSD] **", status: 0, num_seeds: -1, num_leeches: -1 },
+      { url: "https://tracker.example/announce?passkey=abc123", status: 2, tier: 0, num_seeds: 14, num_leeches: 3, msg: "" },
+      { url: "udp://t.example:1337/abc123/announce", status: 4, tier: 1, num_seeds: -1, num_leeches: -1, msg: "Connection timed out" }
+    ]
+  }
+  function inspectorOf(c) { return findWith(winOf(c).contentItem, "positionFile") }
+  // Every Text a user could see under obj (every ancestor visible).
+  function visibleTexts(obj, out) {
+    out = out || []
+    if (!obj || obj.visible === false) return out
+    if (typeof obj.text === "string" && obj.font !== undefined) out.push(obj.text)
+    var kids = obj.children || []
+    for (var i = 0; i < kids.length; i++) visibleTexts(kids[i], out)
+    return out
+  }
+  // ListView delegates appear on the next polish, so let one pass first.
+  function shows(c, text) { wait(30); return visibleTexts(winOf(c).contentItem).indexOf(text) >= 0 }
+  function listViewIn(obj) {
+    if (!obj || obj.visible === false) return null
+    if (typeof obj.itemAtIndex === "function") return obj
+    var kids = obj.children || []
+    for (var i = 0; i < kids.length; i++) { var r = listViewIn(kids[i]); if (r) return r }
+    return null
+  }
+
+  function test_trackers_watch_follows_the_cursor_and_closing_clears_it() {
+    var o = make()
+    o.svc.torrents = list3()   // added desc: gamma(c), beta(b), alpha(a)
+    compare(o.c.cursorHash, hh("c"))
+    key(o.c, "2")
+    compare(o.c.inspectorTab, "trackers")
+    var w = lastCall(o.svc, "watch")
+    compare(w.args[0], hh("c"))
+    compare(w.args[1], "trackers")
+    key(o.c, "j")
+    compare(o.c.cursorHash, hh("b"))
+    w = lastCall(o.svc, "watch")
+    compare(w.args[0], hh("b"), "moving the table cursor re-watches the new torrent")
+    compare(w.args[1], "trackers")
+    key(o.c, "3")
+    compare(o.c.inspectorTab, "peers")
+    compare(lastCall(o.svc, "watch").args[1], "peers")
+    compare(lastCall(o.svc, "watch").args[0], hh("b"))
+    o.c.close()
+    w = lastCall(o.svc, "watch")
+    compare(w.args[0], "", "closing the window clears the watch")
+  }
+
+  function test_a_stale_reply_for_the_old_torrent_never_paints() {
+    var o = make()
+    o.svc.torrents = list3()
+    key(o.c, "2")
+    o.svc.setInspect(hh("c"), "trackers", { trackers: trackersFixture() })
+    compare(o.c.trackersView.state, "rows")
+    verify(shows(o.c, "tracker.example"))
+    key(o.c, "j")
+    compare(o.c.cursorHash, hh("b"))
+    // gamma's reply lands after the cursor moved to beta
+    o.svc.setInspect(hh("c"), "trackers", { trackers: trackersFixture() })
+    compare(o.c.trackersView.rows.length, 0)
+    verify(o.c.trackersView.state === "blank" || o.c.trackersView.state === "loading")
+    verify(!shows(o.c, "tracker.example"), "beta's tab never shows gamma's trackers")
+  }
+
+  function test_a_to_b_to_a_waits_for_a_fresh_reply() {
+    var o = make()
+    o.svc.torrents = list3()
+    key(o.c, "2")
+    o.svc.setInspect(hh("c"), "trackers", { trackers: trackersFixture() })
+    compare(o.c.trackersView.state, "rows")
+    wait(5)
+    key(o.c, "j"); key(o.c, "k")
+    compare(o.c.cursorHash, hh("c"))
+    compare(o.c.trackersView.state, "blank", "the reply stored for A before the round trip is not shown")
+    verify(!shows(o.c, "tracker.example"))
+    verify(!shows(o.c, "Loading trackers…"))
+    tryVerify(function() { return o.c.trackersView.state === "loading" }, 1000)
+    verify(shows(o.c, "Loading trackers…"))
+    o.svc.setInspect(hh("c"), "trackers", { trackers: trackersFixture() })
+    compare(o.c.trackersView.state, "rows")
+    verify(shows(o.c, "tracker.example"))
+  }
+
+  function test_trackers_render_without_passkeys_and_y_copies_the_full_url() {
+    var o = make()
+    o.svc.torrents = list3()
+    key(o.c, "2")
+    o.svc.setInspect(hh("c"), "trackers", { trackers: trackersFixture() })
+    verify(shows(o.c, "2 trackers"), "pane title right side")
+    verify(shows(o.c, "DHT "))
+    verify(shows(o.c, "  ·  14 seeds · 3 peers"))
+    verify(shows(o.c, "Tracker")); verify(shows(o.c, "Seeds")); verify(shows(o.c, "Peers"))
+    verify(shows(o.c, "tracker.example"))
+    verify(shows(o.c, "t.example:1337"))
+    verify(shows(o.c, "j k move · y copy"))
+    key(o.c, "\t", 0x01000001)
+    compare(o.c.pane, "inspector")
+    key(o.c, "j")
+    compare(o.c.trackerIndex, 1)
+    // the cursor row's detail: status, message, redacted url, tier
+    verify(shows(o.c, "not working"))
+    verify(shows(o.c, " · \"Connection timed out\""))
+    verify(shows(o.c, "udp://t.example:1337/…"))
+    verify(shows(o.c, "tier 1"))
+    var texts = visibleTexts(inspectorOf(o.c).parent)
+    verify(texts.length > 10)
+    for (var i = 0; i < texts.length; i++) verify(texts[i].indexOf("abc123") === -1, "no rendered text shows the passkey: " + texts[i])
+    key(o.c, "y")
+    var cp = lastCall(o.svc, "copyText")
+    verify(cp !== null)
+    compare(cp.args[0], "udp://t.example:1337/abc123/announce")
+    compare(cp.args[1].origin, "window")
+    compare(lastCall(o.svc, "copy"), null, "not a magnet copy")
+    o.svc.actionFinished(o.svc.seq, true, "", "window", [])
+    compare(o.c.messageLine.text, "Copied")
+    // k back to the first tracker, y copies its full https URL
+    key(o.c, "k")
+    compare(o.c.trackerIndex, 0)
+    verify(shows(o.c, "https://tracker.example/…"), "the query-passkey row's detail is open")
+    texts = visibleTexts(inspectorOf(o.c).parent)
+    for (var t = 0; t < texts.length; t++) verify(texts[t].indexOf("abc123") === -1, "no rendered text shows the passkey: " + texts[t])
+    key(o.c, "y")
+    compare(lastCall(o.svc, "copyText").args[0], "https://tracker.example/announce?passkey=abc123")
+  }
+
+  function peersWith(n, speedOf) {
+    var out = ({})
+    for (var i = 0; i < n; i++) out["10.0.0." + i + ":6881"] = { client: "client " + i, country_code: "de", progress: i % 2, dl_speed: speedOf(i), up_speed: 0, connection: "BT", flags: "D", flags_desc: "D = downloading" }
+    return out
+  }
+
+  function test_peers_sorted_sticky_cursor_scroll_and_y() {
+    var o = make()
+    o.svc.torrents = list3()
+    key(o.c, "3")
+    compare(o.c.inspectorTab, "peers")
+    o.svc.setInspect(hh("c"), "peers", { peers: peersWith(40, function(i) { return 1000 + i }) })
+    compare(o.c.peersView.state, "rows")
+    compare(o.c.peersView.rows[0].key, "10.0.0.39:6881", "sorted by ↓")
+    verify(shows(o.c, "40 peers · 20 seeds"))
+    verify(shows(o.c, "Client")); verify(shows(o.c, "Has")); verify(shows(o.c, "↓")); verify(shows(o.c, "↑"))
+    verify(shows(o.c, "j k move · y copy ip:port · sorted by ↓ then ↑"))
+    key(o.c, "\t", 0x01000001)
+    compare(o.c.pane, "inspector")
+    for (var j = 0; j < 20; j++) key(o.c, "j")
+    compare(o.c.peerIndex, 20)
+    var cursorKey = o.c.peersView.rows[20].key
+    compare(cursorKey, "10.0.0.19:6881")
+    verify(shows(o.c, "10.0.0.19"))
+    verify(shows(o.c, ":6881 · BT · downloaded 0 B"))
+    verify(shows(o.c, " · D = downloading"))
+    var lv = listViewIn(inspectorOf(o.c))
+    verify(lv !== null)
+    lv.contentY = 10 * Style.spacing.popupRowHeight   // mid-list, not the clamped bottom
+    var y = lv.contentY
+    verify(y > 0)
+    // the next tick reverses the speeds: the order flips
+    o.svc.setInspect(hh("c"), "peers", { peers: peersWith(40, function(i) { return 2000 - i }) })
+    compare(o.c.peersView.rows[0].key, "10.0.0.0:6881")
+    compare(o.c.peersView.rows[o.c.peerIndex].key, cursorKey, "the cursor sticks to its ip:port")
+    compare(o.c.peerIndex, 19)
+    compare(lv.contentY, y, "a refresh keeps the scroll position")
+    key(o.c, "y")
+    compare(lastCall(o.svc, "copyText").args[0], "10.0.0.19:6881")
+  }
+
+  function test_tab_states_loading_error_sidecar_down_and_empty() {
+    var o = make()
+    o.svc.torrents = list3()
+    key(o.c, "2")
+    compare(o.c.trackersView.state, "blank")
+    verify(!shows(o.c, "Loading trackers…"), "nothing for the first 300 ms")
+    tryVerify(function() { return o.c.trackersView.state === "loading" }, 1000)
+    verify(shows(o.c, "Loading trackers…"))
+    o.svc.setInspect(hh("c"), "trackers", { trackers: [], error: "HTTP 500" })
+    verify(shows(o.c, "Couldn't read trackers"))
+    verify(shows(o.c, "qbittorrent-nox didn't answer. The status line has the error; this retries every 5 s."))
+    o.svc.setInspect(hh("c"), "trackers", { trackers: trackersFixture().slice(0, 3) })
+    verify(shows(o.c, "No trackers"))
+    verify(shows(o.c, "This torrent only finds peers through DHT and PeX."))
+    o.svc.sidecarDown = true
+    verify(shows(o.c, "Needs qbt-serve (slow polling)"))
+    o.svc.sidecarDown = false
+    key(o.c, "3")
+    tryVerify(function() { return o.c.peersView.state === "loading" }, 1000)
+    verify(shows(o.c, "Loading peers…"))
+    o.svc.setInspect(hh("c"), "peers", { peers: {} })
+    verify(shows(o.c, "No peers"))
+    verify(shows(o.c, "Looking for peers…"))
   }
 }

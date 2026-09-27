@@ -125,6 +125,25 @@ Item {
     fileCursorKey = rows[next] ? rows[next].key : -1
   }
 
+  // ---- trackers and peers (inspector tabs 2, 3) -----------------------------------
+  // The torrent the sidecar reads ("" with no row, or closing). Replies are
+  // read under the current hash+tab only, so a late one for another torrent
+  // never paints; one older than inspectSince (ms, when this key became
+  // current) counts as none (A->B->A). inspectNow: tabState's clock.
+  readonly property string watchHash: opened && hasCursorRow ? cursorHash : ""
+  onWatchHashChanged: commands.syncInspect(true)
+  property double inspectSince: 0
+  property double inspectNow: 0
+  readonly property var inspectEntry: service && watchHash !== "" ? (service.inspectByKey || {})[watchHash + "|" + inspectorTab] : undefined
+  readonly property bool sidecarUp: !!service && !service.sidecarDown
+  readonly property var trackersView: InspectorView.listTab("trackers", inspectorTab === "trackers" ? inspectEntry : undefined, inspectSince, inspectNow, sidecarUp, cursorRow)
+  readonly property var peersView: InspectorView.listTab("peers", inspectorTab === "peers" ? inspectEntry : undefined, inspectSince, inspectNow, sidecarUp, cursorRow)
+  // Each list's cursor, kept on its url / ip:port (ClientCommands.stickRow).
+  property int trackerIndex: 0
+  property int peerIndex: 0
+  onTrackersViewChanged: trackerIndex = commands.stickRow("trackers", trackersView.rows, trackerIndex)
+  onPeersViewChanged: peerIndex = commands.stickRow("peers", peersView.rows, peerIndex)
+
   // ---- responsive layout (D5) ------------------------------------------------------
   // A collapsed pane with focus shows as an overlay; a resize that
   // collapses the focused pane gives focus back to the table.
@@ -447,7 +466,7 @@ Item {
 
   onServiceChanged: adoptService()
   onCursorHashChanged: syncFiles(false)
-  onInspectorTabChanged: syncFiles(false)
+  onInspectorTabChanged: { syncFiles(false); commands.syncInspect(false) }
   onTableStateChanged: syncFiles(false)
 
   Component.onCompleted: {
@@ -622,6 +641,7 @@ Item {
           width: Style.space(380)
           height: panes.height
           title: "Inspector"
+          titleRight: inspector.titleRight
           focusedPane: root.pane === "inspector"
           collapsed: !root.inspectorDocked
           rightLine: false
@@ -633,10 +653,20 @@ Item {
             info: root.inspectorInfo
             files: root.filesState
             fileIndex: root.fileIndex
+            trackers: root.trackersView
+            peers: root.peersView
+            trackerIndex: root.trackerIndex
+            peerIndex: root.peerIndex
             focusedPane: root.pane === "inspector"
             onTabClicked: function(tab) {
               root.leaveInsert()
               root.inspectorTab = tab
+              keyRoot.forceActiveFocus()
+            }
+            onListRowClicked: function(tab, index) {
+              root.leaveInsert()
+              root.setPane("inspector")
+              commands.setRow(tab, index)
               keyRoot.forceActiveFocus()
             }
             onFileClicked: function(index) {

@@ -16,6 +16,14 @@ import "ClientView.js" as View
 // cursor across a reorder or a resize with InspectorView.keyedIndex; this
 // component itself never reads `key` -- it only trusts `cursor` (an
 // index into `rows`).
+//
+// Refreshes: trackers and peers hand this a fresh `rows` array every
+// second. A JS array as the ListView model would rebuild every delegate
+// and reset the view to the top on each one, so the ListView's model is
+// instead a ListModel of placeholder slots whose count follows `rows`
+// (grown or shrunk at the end, never cleared), and each delegate reads
+// its row as `rows[index]`. A refresh then only re-evaluates the cells'
+// text: delegates, scroll position and the cursor index all stay.
 Item {
   id: list
 
@@ -55,6 +63,20 @@ Item {
   // can raise this to get as close to it as the model allows.
   property int cellSpacing: Style.space(8)
 
+  // Grows or shrinks `slots` at the end to rows.length.
+  function syncSlots() {
+    var n = (rows || []).length
+    if (slots.count > n) slots.remove(n, slots.count - n)
+    var add = []
+    for (var i = slots.count; i < n; i++) add.push({ slot: 0 })
+    if (add.length > 0) slots.append(add)
+  }
+
+  onRowsChanged: syncSlots()
+  Component.onCompleted: syncSlots()
+
+  ListModel { id: slots }
+
   function positionAt(index) {
     if (index < 0 || index >= listView.count) return
     listView.positionViewAtIndex(index, ListView.Contain)
@@ -66,7 +88,10 @@ Item {
   }
 
   function toneFor(column, row) {
-    return typeof column.tone === "function" ? column.tone(row) : column.tone
+    // A slot can briefly read past a shorter `rows` while a refresh
+    // shrinks the list; a per-row tone never sees that missing row.
+    if (typeof column.tone === "function") return row ? column.tone(row) : "fg"
+    return column.tone
   }
 
   // cellText(row, role) -> row[role] as text, or "" for a missing/null
@@ -108,7 +133,7 @@ Item {
     id: listView
     anchors.fill: parent
     clip: true
-    model: list.rows
+    model: slots
     boundsBehavior: Flickable.StopAtBounds
     keyNavigationEnabled: false
     highlightFollowsCurrentItem: false
@@ -119,8 +144,10 @@ Item {
 
     delegate: Item {
       id: rowItem
-      required property var modelData
       required property int index
+      // This slot's row: read from `rows` by position, so a refresh
+      // updates it in place (see the header comment).
+      readonly property var modelData: list.rows[index]
       readonly property bool isCursor: list.focusedPane && index === list.cursor
       readonly property bool hasDetail: rowItem.isCursor && list.detail !== null
 

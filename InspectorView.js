@@ -533,6 +533,90 @@ function emptyCopy(tab, row) {
   return { title: "", body: "", keys: [] };
 }
 
+// --- listTab and the trackers/peers detail lines ---------------------------
+
+function countWord(n, one, many) {
+  return n + " " + (n === 1 ? one : many);
+}
+
+// listTab(tab, entry, sinceMs, nowMs, sidecarUp, row) -> {state, rows,
+// summary, title, copy} for the trackers or peers tab. `entry` is Service's
+// inspectByKey[hash + "|" + tab] ({trackers|peers, error, at}); tabState
+// decides on the *shaped* rows, so a trackers reply holding only
+// DHT/PeX/LSD reads "empty". `rows` is empty unless state is "rows";
+// `title` is the pane title's right side ("8 trackers", "17 peers · 14
+// seeds"), "" otherwise. `copy` is emptyCopy(tab, row) for the cursor
+// torrent `row`.
+function listTab(tab, entry, sinceMs, nowMs, sidecarUp, row) {
+  var shaped, summary, title;
+  if (tab === "peers") {
+    shaped = peerRows(entry ? entry.peers : null);
+    summary = peerSummary(shaped);
+    title = countWord(summary.peers, "peer", "peers") + " · " + countWord(summary.seeds, "seed", "seeds");
+  } else {
+    var t = trackerRows(entry ? entry.trackers : null);
+    shaped = t.rows;
+    summary = t.summary;
+    title = countWord(shaped.length, "tracker", "trackers");
+  }
+  var probe = entry ? { at: entry.at, error: entry.error, data: shaped } : undefined;
+  var state = tabState(probe, sinceMs, nowMs, sidecarUp);
+  var shown = state === "rows";
+  return { state: state, rows: shown ? shaped : [], summary: summary, title: shown ? title : "", copy: emptyCopy(tab, row) };
+}
+
+// trackerSummaryParts(summary) -> [{text, tone}] for the trackers tab's
+// summary line: "DHT on · PeX on · LSD on  ·  212 seeds · 48 peers", with
+// each "on" in accent and everything else muted.
+function trackerSummaryParts(summary) {
+  var s = summary || {};
+  var parts = [];
+  var kinds = [["DHT", s.dht], ["PeX", s.pex], ["LSD", s.lsd]];
+  for (var i = 0; i < kinds.length; i++) {
+    var v = String(kinds[i][1] === undefined ? "—" : kinds[i][1]);
+    parts.push({ text: (i > 0 ? " · " : "") + kinds[i][0] + " ", tone: "muted" });
+    parts.push({ text: v, tone: v === "on" ? "accent" : "muted" });
+  }
+  var seeds = Number(s.seeds) || 0;
+  var peers = Number(s.peers) || 0;
+  parts.push({ text: "  ·  " + countWord(seeds, "seed", "seeds") + " · " + countWord(peers, "peer", "peers"), tone: "muted" });
+  return parts;
+}
+
+// trackerDetail(row) -> the cursor tracker's detail lines: {status: {text,
+// tone} (urgent when failing, else fg), message ('"…"', or "" when the
+// tracker said nothing), url (redacted: never the path or query), tier
+// ("tier N")}. qbt's tracker list carries no next-announce time here, so
+// the tier line has no announce part.
+function trackerDetail(row) {
+  var r = row || {};
+  var msg = String(r.message || "");
+  var tier = numOrNull(r.tier);
+  return {
+    status: { text: String(r.statusWord || ""), tone: r.tone === "urgent" ? "urgent" : "fg" },
+    message: msg === "" ? "" : "\"" + msg + "\"",
+    url: String(r.shownUrl || ""),
+    tier: "tier " + (tier === null ? "—" : tier)
+  };
+}
+
+// peerDetail(row) -> the cursor peer's detail lines: {ip (shown in fg),
+// rest (":port · connection · downloaded N"), flags, flagsDesc (qbt's
+// one-meaning-per-line description joined with " · ")}.
+function peerDetail(row) {
+  var r = row || {};
+  var addr = String(r.ipPort || "");
+  var cut = addr.lastIndexOf(":");
+  var ip = cut > 0 ? addr.slice(0, cut) : addr;
+  var rest = cut > 0 ? addr.slice(cut) : "";
+  var bits = [];
+  if (r.connection) bits.push(String(r.connection));
+  if (r.downloaded) bits.push("downloaded " + r.downloaded);
+  if (bits.length > 0) rest += (rest !== "" ? " · " : "") + bits.join(" · ");
+  var desc = String(r.flagsDesc || "").split(/\s*\n\s*/).filter(function(x) { return x !== ""; }).join(" · ");
+  return { ip: ip, rest: rest, flags: String(r.flags || ""), flagsDesc: desc };
+}
+
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     redactUrl: redactUrl,
@@ -546,6 +630,10 @@ if (typeof module !== "undefined" && module.exports) {
     infoGroups: infoGroups,
     chartSeries: chartSeries,
     tabState: tabState,
-    emptyCopy: emptyCopy
+    emptyCopy: emptyCopy,
+    listTab: listTab,
+    trackerSummaryParts: trackerSummaryParts,
+    trackerDetail: trackerDetail,
+    peerDetail: peerDetail
   };
 }
