@@ -31,16 +31,23 @@ die() {
 # v1 or 64-char v2 infohash). Anything else -- extra params, shell
 # metacharacters, empty segments -- is rejected before it ever reaches a
 # form body or query string.
+#
+# Uses the POSIX [:xdigit:] class, not a [0-9a-fA-F] range: under a UTF-8
+# locale (e.g. en_US.UTF-8), bash's =~ collates character *ranges* by the
+# locale's LC_COLLATE order, not raw code points, so [0-9a-fA-F] can end up
+# matching non-ASCII characters (accented letters, fullwidth digits,
+# superscripts) that collate between the range's endpoints. POSIX classes
+# are defined against LC_CTYPE instead and stay ASCII-only.
 valid_hashes() {
   local input=${1:-}
-  local hash_re='[0-9a-fA-F]{40}|[0-9a-fA-F]{64}'
+  local hash_re='[[:xdigit:]]{40}|[[:xdigit:]]{64}'
   local re="^(${hash_re})(\|(${hash_re}))*\$"
   [[ $input == all || $input =~ $re ]]
 }
 
 valid_single_hash() {
   local input=${1:-}
-  [[ $input =~ ^([0-9a-fA-F]{40}|[0-9a-fA-F]{64})$ ]]
+  [[ $input =~ ^([[:xdigit:]]{40}|[[:xdigit:]]{64})$ ]]
 }
 
 # F5: udp://, http://, https:// or wss://, at most 2048 characters, no
@@ -59,15 +66,17 @@ valid_tracker_url() {
 
 valid_port() {
   local port=${1:-}
-  # A leading zero (e.g. "089") would make bash read the number as octal
-  # and abort on the invalid digit; force base 10.
-  [[ $port =~ ^[0-9]+$ ]] || return 1
+  # [:digit:] (not [0-9], see valid_hashes above) so a fullwidth or other
+  # locale-collated digit-lookalike can't slip through here either -- and a
+  # leading zero (e.g. "089") would make bash read the number as octal and
+  # abort on the invalid digit, so force base 10 too.
+  [[ $port =~ ^[[:digit:]]+$ ]] || return 1
   (( 10#$port >= 1 && 10#$port <= 65535 ))
 }
 
 valid_ipv4() {
   local ip=${1:-}
-  [[ $ip =~ ^([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})$ ]] || return 1
+  [[ $ip =~ ^([[:digit:]]{1,3})\.([[:digit:]]{1,3})\.([[:digit:]]{1,3})\.([[:digit:]]{1,3})$ ]] || return 1
   local o
   for o in "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}" "${BASH_REMATCH[3]}" "${BASH_REMATCH[4]}"; do
     (( 10#$o <= 255 )) || return 1
@@ -80,7 +89,7 @@ valid_peer() {
   local input=${1:-}
   [[ -n $input ]] || return 1
   if [[ $input == \[*\]:* ]]; then
-    [[ $input =~ ^\[([0-9a-fA-F:]+)\]:([0-9]+)$ ]] || return 1
+    [[ $input =~ ^\[([[:xdigit:]:]+)\]:([[:digit:]]+)$ ]] || return 1
     valid_port "${BASH_REMATCH[2]}"
     return $?
   fi
@@ -369,47 +378,71 @@ cmd_ban_peer() {
   printf '%s\n' '{"ok":true}'
 }
 
-# Number of hash-count polls that fit in $2 seconds at a 0.2s interval, used
-# by fetch-metadata below to wait for a delete to take effect and for a
-# re-add to reappear. Production default is 5s; QBT_FETCH_METADATA_TIMEOUT
-# lets tests shrink it so a deliberately-failing poll doesn't stall the
-# suite.
+# Number of matching rows for $1, used by fetch-metadata below to wait for a
+# delete to take effect and for a re-add to reappear.
 fetch_metadata_hash_count() {
   local hash=$1
   api GET "/api/v2/torrents/info?hashes=${hash}" 2>/dev/null | jq --arg h "$hash" '[.[] | select((.hash // "" | ascii_downcase) == ($h | ascii_downcase))] | length'
 }
 
-fetch_metadata_wait_gone() {
-  local hash=$1 timeout=$2 interval=0.2
-  local iters=$(( timeout * 5 ))
-  (( iters >= 1 )) || iters=1
-  local i n
-  for (( i = 0; i < iters; i++ )); do
-    # A failed GET (dropped connection, timeout) must not read as "gone" --
-    # the pipeline would print nothing, and `[[ "" -eq 0 ]]` is true in
-    # bash, so check the assignment succeeded before trusting the count.
-    n=$(fetch_metadata_hash_count "$hash") && [[ $n == 0 ]] && return 0
+# Polls fetch_metadata_hash_count against an overall wall-clock deadline
+# (SECONDS, bash's own elapsed-time counter), not an iteration count: each
+# GET can itself take up to api()'s own --max-time before failing, so an
+# iteration budget (N tries * 0.2s) can't bound the real wall time -- N
+# slow/failing GETs at up to 5s each would stretch a 5s budget to N*5s.
+# $3 selects "gone" (0) or "present" (nonzero).
+fetch_metadata_wait_for() {
+  local hash=$1 timeout=$2 want=$3 interval=0.2
+  local deadline=$(( SECONDS + timeout ))
+  local n
+  while true; do
+    # A failed GET (dropped connection, timeout, 5xx) must not read as
+    # "gone" -- the pipeline prints nothing, and `[[ "" -eq 0 ]]` is true in
+    # bash, so check the assignment's own exit status before trusting $n.
+    if n=$(fetch_metadata_hash_count "$hash"); then
+      if [[ $want == gone && $n == 0 ]]; then return 0; fi
+      if [[ $want == present && $n -ge 1 ]]; then return 0; fi
+    fi
+    (( SECONDS < deadline )) || return 1
     sleep "$interval"
   done
-  n=$(fetch_metadata_hash_count "$hash") && [[ $n == 0 ]]
 }
 
-fetch_metadata_wait_present() {
-  local hash=$1 timeout=$2 interval=0.2
-  local iters=$(( timeout * 5 ))
-  (( iters >= 1 )) || iters=1
-  local i n
-  for (( i = 0; i < iters; i++ )); do
-    n=$(fetch_metadata_hash_count "$hash") && [[ $n -ge 1 ]] && return 0
-    sleep "$interval"
-  done
-  n=$(fetch_metadata_hash_count "$hash") && [[ $n -ge 1 ]]
+# F12/Review Focus 5: the magnet (and any tracker passkeys inside it) must
+# never be printed. Recovery always tries the inbox first -- with the
+# 20-item cap bypassed, since that cap guards against a flood of browser
+# clicks, not a rescue, and magnet-drain already dedupes an inbox entry
+# against the library, so inboxing a torrent that (rarely) still exists in
+# qBittorrent is harmless. Only if the inbox itself can't be written (e.g. a
+# hardened state dir) does this fall back to a 0600 file, naming only its
+# path.
+fetch_metadata_rescue() {
+  local hash=$1 magnet=$2
+  # A subshell: cmd_magnet_inbox's own `die` (e.g. some unexpected failure)
+  # must only end that subshell, never this command, and its stdout
+  # ({"ok":true}) must never leak onto ours.
+  if (cmd_magnet_inbox "$magnet" --force) >/dev/null 2>&1; then
+    die "Couldn't finish re-adding it; the magnet is in your inbox."
+  fi
+  local dir fallback
+  dir=$(magnet_state_dir)
+  if (ensure_state_dir "$dir") >/dev/null 2>&1; then
+    fallback="$dir/lost-magnet-$(date +%s)-$$.txt"
+    if (umask 077; printf '%s\n' "$magnet" >"$fallback") 2>/dev/null && [[ -s $fallback ]]; then
+      die "Couldn't finish re-adding it or save it to the inbox; the magnet is saved at: $fallback"
+    fi
+  fi
+  die "Couldn't finish re-adding it, and couldn't save the magnet anywhere; check qBittorrent for hash $hash"
 }
 
 # F4, Deviation 1. Swaps a metadata-less torrent for a fresh magnet add so
 # qBittorrent goes looking for metadata again. Every refusal below happens
 # before the delete; nothing is destroyed unless we already hold the magnet,
-# save path, category and tags needed to put it back.
+# save path, category and tags needed to put it back. Past that point the
+# torrent may already be gone no matter what a later step reports, so every
+# failure from here on -- the delete call itself failing, the wait-for-gone
+# deadline passing, a GET failing mid-poll, or any add failure -- runs the
+# same rescue rather than ever claiming the torrent is still safe.
 cmd_fetch_metadata() {
   local hash=${1:-}
   [[ -n $hash ]] || die "usage: qbt fetch-metadata <hash>"
@@ -428,17 +461,34 @@ cmd_fetch_metadata() {
   savepath=$(jq -r '.[0].save_path // empty' <<<"$row")
   category=$(jq -r '.[0].category // empty' <<<"$row")
   tags=$(jq -r '.[0].tags // empty' <<<"$row")
+  # qBittorrent joins tags with ", "; the WebUI add endpoint wants a bare
+  # comma list.
+  tags=${tags//, /,}
 
-  if [[ $total_size =~ ^-?[0-9]+$ ]] && (( total_size > 0 )); then
-    die "It already has metadata."
-  fi
+  # Fail closed: only a clean integer that's <= 0 counts as "no metadata".
+  # Anything jq couldn't read as a plain integer is treated the same as
+  # "has metadata" rather than assumed safe.
+  [[ $total_size =~ ^-?[0-9]+$ ]] || die "It already has metadata."
+  (( total_size <= 0 )) || die "It already has metadata."
   [[ $state == stoppedDL || $state == pausedDL ]] || die "Stop it first."
   [[ -n $magnet ]] || die "No magnet link for this torrent."
 
-  api POST "/api/v2/torrents/delete" "hashes=${hash}&deleteFiles=false" >/dev/null
-
   local timeout=${QBT_FETCH_METADATA_TIMEOUT:-5}
-  fetch_metadata_wait_gone "$hash" "$timeout" || die "qBittorrent didn't remove it in time"
+  [[ $timeout =~ ^[0-9]+$ ]] || timeout=5
+
+  # Not a bare `api POST ...`: that runs in this shell, so `die`'s `exit`
+  # would abort the whole command before any rescue ever ran (this is the
+  # exact bug: a delete that qBittorrent already applied, but whose
+  # response curl never delivered -- e.g. it timed out -- would otherwise
+  # kill the script here with the torrent already gone and no rescue).
+  # Wrapping it in a command substitution runs it in a subshell instead, so
+  # a `die` there only fails the assignment.
+  local delete_resp
+  if ! delete_resp=$(api POST "/api/v2/torrents/delete" "hashes=${hash}&deleteFiles=false" 2>&1); then
+    fetch_metadata_rescue "$hash" "$magnet"
+  fi
+
+  fetch_metadata_wait_for "$hash" "$timeout" gone || fetch_metadata_rescue "$hash" "$magnet"
 
   local add_body
   add_body="urls=$(jq -nr --arg v "$magnet" '$v|@uri')"
@@ -447,26 +497,12 @@ cmd_fetch_metadata() {
   add_body+="&tags=$(jq -nr --arg v "$tags" '$v|@uri')"
   add_body+="&stopCondition=MetadataReceived&stopped=false&paused=false"
 
-  local add_ok=true add_resp
+  local add_resp
   if ! add_resp=$(api POST "/api/v2/torrents/add" "$add_body" 2>&1); then
-    add_ok=false
-  elif [[ $add_resp != "Ok." ]]; then
-    add_ok=false
-  elif ! fetch_metadata_wait_present "$hash" "$timeout"; then
-    add_ok=false
+    fetch_metadata_rescue "$hash" "$magnet"
   fi
-
-  if [[ $add_ok != true ]]; then
-    # The torrent is already gone from qBittorrent at this point, so the
-    # magnet must not be lost too. Run the inbox in a subshell: its own
-    # `die` (e.g. inbox full) only ends that subshell, and its stdout
-    # ({"ok":true}) must not leak onto ours.
-    if (cmd_magnet_inbox "$magnet") >/dev/null 2>&1; then
-      die "Couldn't re-add it; the magnet is back in your inbox."
-    else
-      die "Couldn't re-add it and couldn't save it either; the magnet is: $magnet"
-    fi
-  fi
+  [[ $add_resp == "Ok." ]] || fetch_metadata_rescue "$hash" "$magnet"
+  fetch_metadata_wait_for "$hash" "$timeout" present || fetch_metadata_rescue "$hash" "$magnet"
 
   printf '%s\n' '{"ok":true}'
 }
@@ -798,6 +834,13 @@ cmd_magnet_uninstall_handler() {
 
 cmd_magnet_inbox() {
   local url=${1:-}
+  # --force is deliberately left out of the usage string below: it exists
+  # only so fetch_metadata_rescue (above) can bypass the 20-item cap when
+  # it's saving a torrent that would otherwise be lost, not for interactive
+  # use. Run by hand it's a harmless no-op under 20 entries and, over that,
+  # simply skips a warning the caller doesn't need.
+  local force=0
+  [[ ${2:-} == --force ]] && force=1
   [[ $url == magnet:* ]] || die "usage: qbt magnet-inbox <magnet-url>"
   export PATH="/usr/bin:$PATH"
   local dir inbox pending meta
@@ -807,9 +850,10 @@ cmd_magnet_inbox() {
   pending=$(magnet_pending_path)
   meta=$(magnet_meta "$url")
   set +e
-  python3 - "$inbox" "$pending" "$url" "$meta" <<'PY'
+  python3 - "$inbox" "$pending" "$url" "$meta" "$force" <<'PY'
 import json, os, sys, time
-inbox_path, pending_path, url, meta_raw = sys.argv[1:5]
+inbox_path, pending_path, url, meta_raw, force_raw = sys.argv[1:6]
+force = force_raw == "1"
 meta = json.loads(meta_raw)
 ids = set(meta.get("ids") or [])
 pending = []
@@ -825,7 +869,9 @@ def line_ids(obj):
     # parsed later; compare url
     return set()
 count = len(lines) + len(pending)
-if count >= 20:
+# The cap guards against a flood of browser-clicked magnets; a fetch-metadata
+# rescue is recovery, not a new arrival, and must never be dropped by it.
+if count >= 20 and not force:
     sys.exit(20)
 for ln in lines:
     obj = json.loads(ln)

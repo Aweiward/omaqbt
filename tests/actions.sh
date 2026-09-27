@@ -20,6 +20,8 @@ HASH_NOMETA = "d" * 40
 HASH_META = "e" * 40
 HASH_RUNNING = "f" * 40
 HASH_NOMAGNET = "9" * 40
+HASH_BADSIZE = "8" * 40
+HASH_NOTFOUND = "0" * 40
 MAGNET_NOMETA = f"magnet:?xt=urn:btih:{HASH_NOMETA}&dn=nometa"
 TRACKER_URL = "http://tracker.example.com:6969/announce"
 TRACKER_URL2 = "https://tracker2.example.com:443/announce"
@@ -317,11 +319,16 @@ finally:
     shutil.rmtree(stub_root, ignore_errors=True)
 
 # 8. fetch-metadata refusals: each stops after the initial GET, before any
-#    delete, with the documented message.
+#    delete, with the documented message. total_size fails closed (a value
+#    that isn't a clean integer must refuse, not be treated as "no
+#    metadata"), and a hash absent from torrents/info entirely is refused
+#    too.
 REFUSALS = [
     (HASH_META, "It already has metadata."),
     (HASH_RUNNING, "Stop it first."),
     (HASH_NOMAGNET, "No magnet link for this torrent."),
+    (HASH_BADSIZE, "It already has metadata."),
+    (HASH_NOTFOUND, "torrent not found"),
 ]
 extra_env, magnet_state, raise_log, notify_log, stub_root = fetch_metadata_env()
 try:
@@ -339,9 +346,25 @@ finally:
     shutil.rmtree(magnet_state, ignore_errors=True)
     shutil.rmtree(stub_root, ignore_errors=True)
 
-# 9. fetch-metadata delete-didn't-take: the row stays listed, so the poll
-#    times out. No add is ever attempted, and (since the torrent was never
-#    actually lost) the magnet never goes anywhere near the inbox.
+# Every failure from the moment the delete POST is sent must land the magnet
+# in the inbox (with the 20-item cap bypassed) and report an honest failure
+# -- never claim the torrent is still there, and never lose the magnet.
+# Sections 9-12 cover the four ways that can happen (Review Focus 2 / the
+# fix-round-1 CRITICAL).
+
+
+def check_rescued(label, r, magnet_state, raise_log, magnet=MAGNET_NOMETA):
+    check(f"{label}: exit != 0", r.returncode != 0)
+    check(f"{label}: honest message", "the magnet is in your inbox" in r.stderr)
+    check(f"{label}: message never claims the torrent is still there", "didn't remove it in time" not in r.stderr)
+    inbox_path = magnet_state / "magnet-inbox.jsonl"
+    check(f"{label}: inbox has the magnet", inbox_path.exists() and magnet in inbox_path.read_text())
+    check(f"{label}: raise stub was exercised (never the real shell)", raise_log.read_text() != "")
+
+
+# 9. delete never takes effect (the row stays listed forever): wait-for-gone
+#    times out on a real, valid, unchanging count -- still a rescue, not the
+#    old "didn't remove it in time" dead end. No add is ever attempted.
 extra_env, magnet_state, raise_log, notify_log, stub_root = fetch_metadata_env(timeout=1)
 try:
     with harness.fixture_server(extra_env=extra_env) as (port, env):
@@ -349,19 +372,70 @@ try:
         control_path.write_text(json.dumps({"delete": "noop"}))
         before = len(read_log(env))
         r = run(env, "fetch-metadata", HASH_NOMETA)
-        check("fetch-metadata delete-didn't-take: exit != 0", r.returncode != 0)
-        check("fetch-metadata delete-didn't-take: message", "didn't remove it in time" in r.stderr)
+        check_rescued("fetch-metadata delete-noop", r, magnet_state, raise_log)
         entries = read_log(env)[before:]
         adds = [e for e in entries if e["path"] == "/api/v2/torrents/add"]
-        check("fetch-metadata delete-didn't-take: no add", len(adds) == 0)
-        check("fetch-metadata delete-didn't-take: never touched the raise stub", raise_log.read_text() == "")
-        inbox_path = magnet_state / "magnet-inbox.jsonl"
-        check("fetch-metadata delete-didn't-take: nothing in the inbox", not inbox_path.exists() or inbox_path.read_text().strip() == "")
+        check("fetch-metadata delete-noop: no add", len(adds) == 0)
 finally:
     shutil.rmtree(magnet_state, ignore_errors=True)
     shutil.rmtree(stub_root, ignore_errors=True)
 
-# 10. fetch-metadata add-fails (404 from add): the magnet lands in the
+# 10. the delete is applied, but torrents/info starts 500ing on every poll
+#     right after (CRITICAL repro: a GET failure must not read as "gone").
+extra_env, magnet_state, raise_log, notify_log, stub_root = fetch_metadata_env(timeout=1)
+try:
+    with harness.fixture_server(extra_env=extra_env) as (port, env):
+        control_path = Path(env["QBT_FIXTURE_CONTROL"])
+        control_path.write_text(json.dumps({"info_after_delete": "500"}))
+        before = len(read_log(env))
+        r = run(env, "fetch-metadata", HASH_NOMETA)
+        check_rescued("fetch-metadata info-500-after-delete", r, magnet_state, raise_log)
+        entries = read_log(env)[before:]
+        adds = [e for e in entries if e["path"] == "/api/v2/torrents/add"]
+        check("fetch-metadata info-500-after-delete: no add", len(adds) == 0)
+        deletes = [e for e in entries if e["path"] == "/api/v2/torrents/delete"]
+        check("fetch-metadata info-500-after-delete: the delete itself was still sent", len(deletes) == 1)
+finally:
+    shutil.rmtree(magnet_state, ignore_errors=True)
+    shutil.rmtree(stub_root, ignore_errors=True)
+
+# 11. the delete is applied (the torrent really is gone) but the response
+#     itself comes back as an error -- curl/api() fails even though
+#     qBittorrent already did the work. Must still rescue, not die outright.
+extra_env, magnet_state, raise_log, notify_log, stub_root = fetch_metadata_env(timeout=1)
+try:
+    with harness.fixture_server(extra_env=extra_env) as (port, env):
+        control_path = Path(env["QBT_FIXTURE_CONTROL"])
+        control_path.write_text(json.dumps({"delete": "500"}))
+        r = run(env, "fetch-metadata", HASH_NOMETA)
+        check_rescued("fetch-metadata delete-applied-but-500", r, magnet_state, raise_log)
+        import urllib.request
+        rows = json.loads(urllib.request.urlopen(env["QBT_BASE"] + "/api/v2/torrents/info?hashes=" + HASH_NOMETA).read())
+        check("fetch-metadata delete-applied-but-500: the torrent really is gone from qbt", len(rows) == 0)
+finally:
+    shutil.rmtree(magnet_state, ignore_errors=True)
+    shutil.rmtree(stub_root, ignore_errors=True)
+
+# 12. the delete is applied late: qBittorrent answers 200 immediately but
+#     only actually removes the torrent after the poll window has already
+#     given up. Must still rescue (magnet-drain's library dedupe makes an
+#     unnecessary inbox entry harmless), never silently proceed to add.
+extra_env, magnet_state, raise_log, notify_log, stub_root = fetch_metadata_env(timeout=1)
+try:
+    with harness.fixture_server(extra_env=extra_env) as (port, env):
+        control_path = Path(env["QBT_FIXTURE_CONTROL"])
+        control_path.write_text(json.dumps({"delete": "late"}))
+        before = len(read_log(env))
+        r = run(env, "fetch-metadata", HASH_NOMETA)
+        check_rescued("fetch-metadata delete-applied-late", r, magnet_state, raise_log)
+        entries = read_log(env)[before:]
+        adds = [e for e in entries if e["path"] == "/api/v2/torrents/add"]
+        check("fetch-metadata delete-applied-late: no add", len(adds) == 0)
+finally:
+    shutil.rmtree(magnet_state, ignore_errors=True)
+    shutil.rmtree(stub_root, ignore_errors=True)
+
+# 13. fetch-metadata add-fails (404 from add): the magnet lands in the
 #     inbox, the raise stub (never the real shell) is exercised, exit != 0.
 extra_env, magnet_state, raise_log, notify_log, stub_root = fetch_metadata_env(timeout=1)
 try:
@@ -369,16 +443,12 @@ try:
         control_path = Path(env["QBT_FIXTURE_CONTROL"])
         control_path.write_text(json.dumps({"add": "404"}))
         r = run(env, "fetch-metadata", HASH_NOMETA)
-        check("fetch-metadata add-404: exit != 0", r.returncode != 0)
-        check("fetch-metadata add-404: message", "back in your inbox" in r.stderr)
-        inbox_path = magnet_state / "magnet-inbox.jsonl"
-        check("fetch-metadata add-404: inbox has the magnet", inbox_path.exists() and MAGNET_NOMETA in inbox_path.read_text())
-        check("fetch-metadata add-404: raise stub was exercised", raise_log.read_text() != "")
+        check_rescued("fetch-metadata add-404", r, magnet_state, raise_log)
 finally:
     shutil.rmtree(magnet_state, ignore_errors=True)
     shutil.rmtree(stub_root, ignore_errors=True)
 
-# 11. fetch-metadata add-fails (200 "Ok." but the hash never comes back):
+# 14. fetch-metadata add-fails (200 "Ok." but the hash never comes back):
 #     same recovery as a hard add failure.
 extra_env, magnet_state, raise_log, notify_log, stub_root = fetch_metadata_env(timeout=1)
 try:
@@ -386,14 +456,63 @@ try:
         control_path = Path(env["QBT_FIXTURE_CONTROL"])
         control_path.write_text(json.dumps({"add": "silent"}))
         r = run(env, "fetch-metadata", HASH_NOMETA)
-        check("fetch-metadata add-silent: exit != 0", r.returncode != 0)
-        check("fetch-metadata add-silent: message", "back in your inbox" in r.stderr)
-        inbox_path = magnet_state / "magnet-inbox.jsonl"
-        check("fetch-metadata add-silent: inbox has the magnet", inbox_path.exists() and MAGNET_NOMETA in inbox_path.read_text())
-        check("fetch-metadata add-silent: raise stub was exercised", raise_log.read_text() != "")
+        check_rescued("fetch-metadata add-silent", r, magnet_state, raise_log)
 finally:
     shutil.rmtree(magnet_state, ignore_errors=True)
     shutil.rmtree(stub_root, ignore_errors=True)
+
+# 15. the inbox cap must not apply to a rescue: with 20 unrelated magnets
+#     already queued (the ordinary cap threshold), fetch-metadata's own
+#     rescue must still land its magnet as entry 21, not fail as "inbox
+#     full" and fall through to printing the raw magnet.
+extra_env, magnet_state, raise_log, notify_log, stub_root = fetch_metadata_env(timeout=1)
+try:
+    with harness.fixture_server(extra_env=extra_env) as (port, env):
+        inbox_path = magnet_state / "magnet-inbox.jsonl"
+        inbox_path.parent.mkdir(parents=True, exist_ok=True)
+        filler = [
+            {"url": f"magnet:?xt=urn:btih:{i:040d}", "ts": 1, "notified": True, "ids": [f"{i:040d}"], "dn": ""}
+            for i in range(20)
+        ]
+        with open(inbox_path, "w") as f:
+            for row in filler:
+                f.write(json.dumps(row) + "\n")
+        control_path = Path(env["QBT_FIXTURE_CONTROL"])
+        control_path.write_text(json.dumps({"add": "404"}))
+        r = run(env, "fetch-metadata", HASH_NOMETA)
+        check("fetch-metadata rescue bypasses the inbox cap: exit != 0", r.returncode != 0)
+        check("fetch-metadata rescue bypasses the inbox cap: honest message", "the magnet is in your inbox" in r.stderr)
+        check("fetch-metadata rescue bypasses the inbox cap: never printed the raw magnet", MAGNET_NOMETA not in r.stderr)
+        lines = [ln for ln in inbox_path.read_text().splitlines() if ln.strip()]
+        check("fetch-metadata rescue bypasses the inbox cap: 21 entries now", len(lines) == 21)
+        check(
+            "fetch-metadata rescue bypasses the inbox cap: the rescued magnet is in there",
+            any(json.loads(ln).get("url") == MAGNET_NOMETA for ln in lines),
+        )
+finally:
+    shutil.rmtree(magnet_state, ignore_errors=True)
+    shutil.rmtree(stub_root, ignore_errors=True)
+
+# 16. If even the inbox rescue can't be written (state dir totally broken),
+#     fetch-metadata must still never print the magnet -- only name the
+#     hash, after genuinely trying the inbox (and the 0600-file fallback)
+#     first.
+blocked_state = tempfile.NamedTemporaryFile(prefix="qbt-actions-fm-blocked-", delete=False)
+blocked_state.close()
+extra_env, magnet_state, raise_log, notify_log, stub_root = fetch_metadata_env(timeout=1)
+extra_env["QBT_MAGNET_STATE"] = blocked_state.name  # a file, not a dir: ensure_state_dir must refuse it
+try:
+    with harness.fixture_server(extra_env=extra_env) as (port, env):
+        control_path = Path(env["QBT_FIXTURE_CONTROL"])
+        control_path.write_text(json.dumps({"add": "404"}))
+        r = run(env, "fetch-metadata", HASH_NOMETA)
+        check("fetch-metadata totally-blocked rescue: exit != 0", r.returncode != 0)
+        check("fetch-metadata totally-blocked rescue: names the hash", f"hash {HASH_NOMETA}" in r.stderr)
+        check("fetch-metadata totally-blocked rescue: never prints the magnet", MAGNET_NOMETA not in r.stderr)
+finally:
+    shutil.rmtree(magnet_state, ignore_errors=True)
+    shutil.rmtree(stub_root, ignore_errors=True)
+    Path(blocked_state.name).unlink(missing_ok=True)
 
 if failures:
     print(f"\n{len(failures)} check(s) failed", file=sys.stderr)

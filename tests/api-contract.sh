@@ -438,4 +438,54 @@ if rej_failures:
     print(f"\n{len(rej_failures)} injection-rejection check(s) failed: {rej_failures}", file=sys.stderr)
     sys.exit(1)
 print("injection-rejection-contract ok")
+
+# Fix round 1, IMPORTANT 1: under a UTF-8 locale, bash's =~ collates a
+# character *range* like [0-9a-fA-F] by LC_COLLATE order rather than raw
+# code points, so it can accept non-ASCII characters that happen to collate
+# inside that range (accented letters, fullwidth digits, superscripts).
+# valid_hashes/valid_single_hash/valid_port/valid_ipv4 all switched to POSIX
+# classes ([[:xdigit:]]/[[:digit:]]), which stay ASCII-only regardless of
+# locale. Run this block under LANG=en_US.UTF-8 specifically, since that is
+# the locale the bug reproduced under.
+locale_failures = []
+lenv = os.environ.copy()
+lenv["LANG"] = "en_US.UTF-8"
+lenv["LC_ALL"] = "en_US.UTF-8"
+with harness.fixture_server(extra_env=lenv) as (lport, lenv2):
+    non_ascii_hashes = [
+        "a" * 39 + "á",   # accented a
+        "a" * 39 + "Ä",
+        "a" * 39 + "１",  # fullwidth digit 1
+        "a" * 39 + "٣",   # arabic-indic digit
+        "a" * 39 + "ｂ",  # fullwidth b
+        "a" * 39 + "²",   # superscript 2
+        "a" * 39 + "ß",
+    ]
+    for h in non_ascii_hashes:
+        ok, result = _reject(lenv2, ["reannounce", h], f"reannounce rejects a non-ASCII hash under en_US.UTF-8: {h!r}")
+        if not ok:
+            locale_failures.append(("reannounce-nonascii-hash", h))
+
+    non_ascii_peers = [
+        "1.2.3.4:８0",   # fullwidth 8 in the port
+        "1.2.3.4:٣",     # arabic-indic digit port
+        "１.2.3.4:80",   # fullwidth digit in an octet
+    ]
+    for p in non_ascii_peers:
+        before = len(json.loads(Path(lenv2["QBT_FIXTURE_LOG"]).read_text() or "[]"))
+        result = subprocess.run(["./qbt", "ban-peer", p], env=lenv2, text=True, capture_output=True)
+        after = json.loads(Path(lenv2["QBT_FIXTURE_LOG"]).read_text() or "[]")
+        no_raw_bash_error = (
+            "invalid integer constant" not in result.stderr
+            and "value too great for base" not in result.stderr
+        )
+        ok = result.returncode != 0 and len(after) == before and no_raw_bash_error
+        print(("ok - " if ok else "FAIL - ") + f"ban-peer rejects a non-ASCII peer under en_US.UTF-8 with no raw bash error: {p!r}")
+        if not ok:
+            locale_failures.append(("ban-peer-nonascii-peer", p, result.stderr))
+
+if locale_failures:
+    print(f"\n{len(locale_failures)} locale check(s) failed: {locale_failures}", file=sys.stderr)
+    sys.exit(1)
+print("locale-contract ok")
 PY

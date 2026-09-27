@@ -33,6 +33,7 @@ HASH_NOMETA = "d" * 40
 HASH_META = "e" * 40
 HASH_RUNNING = "f" * 40
 HASH_NOMAGNET = "9" * 40
+HASH_BADSIZE = "8" * 40
 EXTRA_TORRENTS = {
     HASH_NOMETA: {
         "state": "stoppedDL",
@@ -40,7 +41,9 @@ EXTRA_TORRENTS = {
         "magnet_uri": f"magnet:?xt=urn:btih:{HASH_NOMETA}&dn=nometa",
         "save_path": "/home/user/Downloads/nometa",
         "category": "linux",
-        "tags": "iso,nometa",
+        # qBittorrent joins tags with ", "; qbt must normalise this to a bare
+        # comma list before re-adding.
+        "tags": "iso, nometa",
     },
     HASH_META: {
         "state": "pausedDL",
@@ -63,6 +66,16 @@ EXTRA_TORRENTS = {
         "total_size": 0,
         "magnet_uri": "",
         "save_path": "/home/user/Downloads/nomagnet",
+        "category": "",
+        "tags": "",
+    },
+    # total_size must fail closed: anything qbt can't read as a clean
+    # integer <= 0 has to refuse, not assume "no metadata".
+    HASH_BADSIZE: {
+        "state": "stoppedDL",
+        "total_size": "unknown",
+        "magnet_uri": f"magnet:?xt=urn:btih:{HASH_BADSIZE}",
+        "save_path": "/home/user/Downloads/badsize",
         "category": "",
         "tags": "",
     },
@@ -171,6 +184,14 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, b"1")
             return
         if parsed.path == "/api/v2/torrents/info":
+            # {"info": "500"} simulates torrents/info failing outright, for
+            # any hashes= lookup. A test that wants the *initial* (pre-delete)
+            # info check to still succeed should set {"info_after_delete":
+            # "500"} instead (see the delete handler below), which only
+            # flips this on once a delete has actually gone through.
+            if _control().get("info") == "500" and "hashes=" in parsed.query:
+                self._send(500, b"boom")
+                return
             rows = []
             for h, t in FULL["torrents"].items():
                 row = dict(t)
@@ -231,13 +252,35 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, b"Ok.")
             return
         if parsed.path == "/api/v2/torrents/delete":
-            if _control().get("delete") != "noop":
-                qs = parse_qs(body)
-                hashes = (qs.get("hashes") or [""])[0].split("|")
+            fault = _control().get("delete")
+            qs = parse_qs(body)
+            hashes = [h.lower() for h in (qs.get("hashes") or [""])[0].split("|") if h]
+
+            def _apply_delete():
                 for h in hashes:
-                    h = h.lower()
                     EXTRA_TORRENTS.pop(h, None)
                     ADDED[:] = [r for r in ADDED if (r.get("hash") or "").lower() != h]
+                if _control().get("info_after_delete") == "500":
+                    # Simulates torrents/info starting to 500 only once a
+                    # delete has actually gone through, so the poll that
+                    # follows a real delete gets nothing but failures.
+                    Path(os.environ["QBT_FIXTURE_CONTROL"]).write_text(json.dumps({"info": "500"}))
+
+            if fault == "noop":
+                pass  # Simulates a delete that never took effect.
+            elif fault == "late":
+                # Simulates a delete qBittorrent applies after the caller's
+                # poll window has already given up on it.
+                threading.Timer(1.5, _apply_delete).start()
+            else:
+                _apply_delete()
+
+            if fault == "500":
+                # Simulates a delete that DID apply (see _apply_delete above)
+                # but whose HTTP response comes back as an error -- curl
+                # dies, even though qBittorrent already did the work.
+                self._send(500, b"boom")
+                return
             self._send(200, b"Ok.")
             return
         if parsed.path in (
