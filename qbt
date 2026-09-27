@@ -124,15 +124,20 @@ ensure_state_dir() {
   fi
 }
 
+# Only a plain 1-5 digit port in 1-65535 is ever spliced into the base; a
+# conf line like "WebUI\Port=80@example.invalid" would otherwise turn the
+# port into userinfo and send every request to a foreign host.
 read_port() {
   local port=""
   if [[ -f $CONF ]]; then
     port=$(grep -E '^WebUI\\Port=' "$CONF" | tail -n1 | cut -d= -f2 || true)
+    port=${port%$'\r'}
   fi
-  if [[ -z ${port:-} ]]; then
-    port=8080
-  fi
-  printf '%s' "$port"
+  [[ -n $port ]] || port=8080
+  local LC_ALL=C
+  [[ $port =~ ^[[:digit:]]{1,5}$ ]] && (( 10#$port >= 1 && 10#$port <= 65535 )) \
+    || die "invalid WebUI\\Port in qBittorrent.conf"
+  printf '%s' "$(( 10#$port ))"
 }
 
 base_url() {
@@ -143,11 +148,16 @@ base_url() {
   printf 'http://127.0.0.1:%s' "$(read_port)"
 }
 
+# The whole base must be http://127.0.0.1:<port>, optionally followed by a
+# path. Matching the full prefix (not a sed-extracted "host") is what stops
+# userinfo ("http://127.0.0.1:80@127.0.0.2:1"), a backslash
+# ("http://127.0.0.1:1\@x") or another scheme ("gopher://127.0.0.1:1").
+# The base is never echoed: a refused one may carry something private.
 assert_local_base() {
-  local base host
+  local base LC_ALL=C
   base=$(base_url)
-  host=$(printf '%s' "$base" | sed -E 's#^[a-z]+://([^/:]+).*#\1#')
-  [[ $host == 127.0.0.1 ]] || die "refusing non-localhost host: $host"
+  [[ $base =~ ^http://127\.0\.0\.1:[[:digit:]]{1,5}(/|$) ]] \
+    || die "refusing non-localhost host (base must be http://127.0.0.1:<port>)"
 }
 
 lock_holder() {

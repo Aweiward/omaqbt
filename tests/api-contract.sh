@@ -550,4 +550,60 @@ if parity_failures:
     print(f"\n{len(parity_failures)} validation parity check(s) failed: {parity_failures}", file=sys.stderr)
     sys.exit(1)
 print("validation-parity-contract ok")
+
+# Whole-branch review CRITICAL: the localhost guard must look at the whole
+# base, not a sed-extracted "host" (userinfo, backslash tricks, a foreign
+# scheme) and must never splice an unchecked WebUI\Port from the conf.
+guard_failures = []
+free = socket.socket()
+free.bind(("127.0.0.1", 0))
+unused_port = free.getsockname()[1]
+free.close()
+with harness.fixture_server() as (gport, genv):
+    def _guard(env_, label):
+        before = len(json.loads(Path(genv["QBT_FIXTURE_LOG"]).read_text() or "[]"))
+        result = subprocess.run(["./qbt", "reannounce", HASH_A], env=env_, text=True, capture_output=True)
+        after = len(json.loads(Path(genv["QBT_FIXTURE_LOG"]).read_text() or "[]"))
+        ok = (
+            result.returncode != 0
+            and after == before
+            and "refusing non-localhost host" in result.stderr
+            and "example.invalid" not in result.stderr
+            and "127.0.0.2" not in result.stderr
+        )
+        print(("ok - " if ok else "FAIL - ") + label)
+        if not ok:
+            guard_failures.append((label, result.returncode, result.stderr.strip()))
+
+    for base in (
+        f"http://127.0.0.1:80@127.0.0.2:{unused_port}",
+        f"gopher://127.0.0.1:{gport}",
+        f"http://127.0.0.1:{gport}\\@x",
+    ):
+        benv = genv.copy()
+        benv["QBT_BASE"] = base
+        _guard(benv, f"localhost guard refuses QBT_BASE={base!r}")
+
+    conf_dir = Path(tempfile.mkdtemp(prefix="qbt-badport-"))
+    try:
+        (conf_dir / "qBittorrent.conf").write_text("[Preferences]\nWebUI\\Port=80@example.invalid\n")
+        cenv = genv.copy()
+        cenv.pop("QBT_BASE", None)
+        cenv["QBT_CONF"] = str(conf_dir / "qBittorrent.conf")
+        _guard(cenv, "localhost guard refuses a conf WebUI\\Port=80@example.invalid")
+    finally:
+        import shutil as _sh
+        _sh.rmtree(conf_dir, ignore_errors=True)
+
+    # The plain fixture base still works.
+    ok_run = subprocess.run(["./qbt", "reannounce", HASH_A], env=genv, text=True, capture_output=True)
+    good = ok_run.returncode == 0
+    print(("ok - " if good else "FAIL - ") + "localhost guard still accepts http://127.0.0.1:<port>")
+    if not good:
+        guard_failures.append(("plain base", ok_run.stderr))
+
+if guard_failures:
+    print(f"\n{len(guard_failures)} localhost-guard check(s) failed: {guard_failures}", file=sys.stderr)
+    sys.exit(1)
+print("localhost-guard-contract ok")
 PY
