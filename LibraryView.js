@@ -34,18 +34,37 @@ function names(list) {
   return Array.isArray(list) ? list : [];
 }
 
-// A path without its trailing slashes ("/" stays "/"), for comparing where
-// files are with where they would go.
-function trimSlashes(p) {
+// QDir::cleanPath, as qBittorrent's Path does: duplicate slashes collapse,
+// "." segments go, ".." removes the segment before it (never above "/"),
+// and a trailing slash goes. Used for every path compared or shown.
+function cleanPath(p) {
   var s = String(p || "");
-  while (s.length > 1 && s.charAt(s.length - 1) === "/") s = s.substring(0, s.length - 1);
-  return s;
+  if (s === "") return "";
+  var abs = s.charAt(0) === "/";
+  var parts = s.split("/");
+  var out = [];
+  for (var i = 0; i < parts.length; i++) {
+    var seg = parts[i];
+    if (seg === "" || seg === ".") continue;
+    if (seg === "..") {
+      if (out.length > 0 && out[out.length - 1] !== "..") out.pop();
+      else if (!abs) out.push("..");
+      continue;
+    }
+    out.push(seg);
+  }
+  var joined = out.join("/");
+  if (abs) return "/" + joined;
+  return joined === "" ? "." : joined;
 }
 
+// Path's operator/: an empty side gives the other side; otherwise the two
+// joined with "/" and cleaned.
 function joinPath(base, rest) {
-  var b = trimSlashes(base);
-  if (b === "") return String(rest);
-  return (b === "/" ? "" : b) + "/" + String(rest);
+  var b = String(base || ""), r = String(rest || "");
+  if (b === "") return cleanPath(r);
+  if (r === "") return cleanPath(b);
+  return cleanPath(b + "/" + r);
 }
 
 // --- Name rules (G4, OV5) -----------------------------------------------------
@@ -134,17 +153,36 @@ function explicitSavePath(name, status) {
   return entry.savePath;
 }
 
-// Where an auto-managed torrent on category `name` keeps its files: "" is
-// the default save path; an empty category save path (or a category not
-// created yet) is <default>/<name>; a relative one is under the default.
-function resolveSavePath(savePath, name, status) {
-  var base = (status && status.defaultSavePath) || "";
-  if (name === "") return trimSlashes(base);
-  if (savePath === "") return joinPath(base, name);
-  if (savePath.charAt(0) === "/") return trimSlashes(savePath);
-  return joinPath(base, savePath);
+// Utils::Fs::toValidPath on a leaf: each run of :?"*<>| becomes one space
+// (no trimming).
+function toValidLeaf(leaf) {
+  return String(leaf).replace(/[:?"*<>|]+/g, " ");
 }
 
+// Where an auto-managed torrent on category `name` keeps its files, if the
+// category's save path were `savePath` -- qBittorrent 5.2.3's
+// SessionImpl::categorySavePath:
+//   - name "" is the default save path;
+//   - an absolute savePath is itself;
+//   - a relative savePath is under the default save path (not the parent);
+//   - an empty savePath is the parent category's own folder (resolved the
+//     same way, recursively; a parent missing from categoryPaths counts as
+//     empty) plus "/" plus the leaf after the last "/", through toValidPath.
+// So top-level empty-path categories live at <default>/<name>.
+function resolveSavePath(savePath, name, status) {
+  var base = (status && status.defaultSavePath) || "";
+  if (name === "") return cleanPath(base);
+  var path = String(savePath || "");
+  if (path === "") {
+    path = toValidLeaf(name.substring(name.lastIndexOf("/") + 1));
+    base = categorySavePath(parentCategoryName(name), status);
+  }
+  if (path.charAt(0) === "/") return cleanPath(path);
+  return joinPath(base, path);
+}
+
+// categorySavePath(name, status) -> the folder category `name` uses now (a
+// category not created yet counts as having an empty save path).
 function categorySavePath(name, status) {
   var n = String(name || "");
   return resolveSavePath(n === "" ? "" : explicitSavePath(n, status), n, status);
@@ -193,14 +231,14 @@ function movePlan(action, rows, status) {
     var p = String(action.path || "");
     if (p.indexOf("~/") === 0 && action.home) p = joinPath(action.home, p.substring(2));
     affects = function(row) { return String(row.category || "") === action.name; };
-    to = p.indexOf("~/") === 0 ? p : resolveSavePath(p, String(action.name), status);
+    to = p.indexOf("~/") === 0 ? p : resolveSavePath(p, String(action.name || ""), status);
   }
   var out = [];
   var list = rows || [];
   for (var i = 0; i < list.length; i++) {
     var row = list[i];
     if (!row || row.autoTmm !== true || !affects(row)) continue;
-    var from = trimSlashes(row.savePath);
+    var from = cleanPath(row.savePath);
     if (from !== to) out.push({ hash: Model.torrentId(row), from: from, to: to });
   }
   return out;
@@ -294,8 +332,8 @@ function pathConfirmLine(name, plan) {
 // --- Usage (OV8) -------------------------------------------------------------------
 
 // usageCount(kind, name, rows, pendingHashes, ownOnly) -> how many torrents
-// the action touches. rows must be every torrent (Service.torrents), not the
-// table's rows: pending browser magnets count too (OV8), since the table
+// the action touches. Callers pass rows = Service.torrents, never the
+// table's rows (ruling BL): pending browser magnets count too (OV8), since the table
 // hides them but qBittorrent changes them all the same. pendingHashes
 // (Service.magnetPendingHashes) is part of the signature so the call site
 // says so; a pending row is counted from rows like any other, never

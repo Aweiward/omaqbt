@@ -133,6 +133,66 @@ test("categorySavePath: empty = <default>/<name>, explicit as-is, \"\" = the def
   assert.equal(L.categorySavePath("num", st), "/dl/num");
 });
 
+// --- categorySavePath: qBittorrent 5.2.3's SessionImpl::categorySavePath (fix 0) ---
+
+test("categorySavePath: a nested empty-path category under an explicit-path parent", () => {
+  const st = status({ categoryPaths: { anime: { savePath: "/srv/anime", downloadPath: "" }, "anime/2026": { savePath: "", downloadPath: "" } } });
+  assert.equal(L.categorySavePath("anime/2026", st), "/srv/anime/2026");
+  assert.equal(L.categorySavePath("anime/2026/deep", st), "/srv/anime/2026/deep", "recursive through an unknown middle");
+});
+
+test("categorySavePath: a nested category under an empty-path parent", () => {
+  const st = status({ categoryPaths: { anime: { savePath: "", downloadPath: "" }, "anime/2026": { savePath: "", downloadPath: "" } } });
+  assert.equal(L.categorySavePath("anime/2026", st), "/dl/anime/2026");
+  assert.equal(L.categorySavePath("x/y", status()), "/dl/x/y", "a parent missing from categoryPaths counts as empty");
+});
+
+test("categorySavePath: a relative explicit path resolves under the default, not the parent", () => {
+  const st = status({ categoryPaths: { anime: { savePath: "/srv/anime", downloadPath: "" }, "anime/rel": { savePath: "sub//dir/", downloadPath: "" } } });
+  assert.equal(L.categorySavePath("anime/rel", st), "/dl/sub/dir");
+});
+
+test("categorySavePath: an absolute explicit path is cleaned but kept", () => {
+  const st = status({ categoryPaths: { a: { savePath: "/srv//x/./y/../z/", downloadPath: "" } } });
+  assert.equal(L.categorySavePath("a", st), "/srv/x/z");
+});
+
+test("categorySavePath: a leaf's :?\"*<>| runs become one space, untrimmed", () => {
+  assert.equal(L.categorySavePath("a:b?c", status()), "/dl/a b c");
+  assert.equal(L.categorySavePath("p/::x**", status()), "/dl/p/ x ");
+  assert.equal(L.categorySavePath("<|>", status()), "/dl/ ");
+});
+
+test("categorySavePath: a \"..\" or \".\" leaf is resolved like QDir::cleanPath", () => {
+  assert.equal(L.categorySavePath("..", status({ defaultSavePath: "/home/u/dl" })), "/home/u");
+  assert.equal(L.categorySavePath("a/..", status()), "/dl");
+  assert.equal(L.categorySavePath("..", status({ defaultSavePath: "/" })), "/");
+});
+
+test("movePlan remove: a nested category whose parent has an explicit path", () => {
+  const st = status({ categoryPaths: { anime: { savePath: "/srv/anime", downloadPath: "" }, "anime/2026": { savePath: "", downloadPath: "" } } });
+  const rows = [
+    row({ hash: H("a"), category: "anime/2026", savePath: "/srv/anime/2026" }),
+    row({ hash: H("b"), category: "anime/2026/x", savePath: "/srv/anime/2026/x" })
+  ];
+  assert.deepEqual(L.movePlan({ kind: "remove", name: "anime/2026" }, rows, st), [
+    { hash: H("a"), from: "/srv/anime/2026", to: "/srv/anime" },
+    { hash: H("b"), from: "/srv/anime/2026/x", to: "/srv/anime" }
+  ]);
+});
+
+test("movePlan setCategory, rename and path use the same resolution", () => {
+  const st = status({ categoryPaths: { anime: { savePath: "/srv/anime", downloadPath: "" }, "anime/2026": { savePath: "", downloadPath: "" } } });
+  const r = [row({ hash: H("a"), category: "anime/2026", savePath: "/srv/anime/2026" })];
+  assert.deepEqual(L.movePlan({ kind: "setCategory", hashes: [H("a")], name: "anime/2027" }, r, st),
+    [{ hash: H("a"), from: "/srv/anime/2026", to: "/srv/anime/2027" }]);
+  assert.deepEqual(L.movePlan({ kind: "rename", old: "anime/2026", new: "anime/b:c" }, r, st),
+    [{ hash: H("a"), from: "/srv/anime/2026", to: "/srv/anime/b c" }]);
+  assert.deepEqual(L.movePlan({ kind: "path", name: "anime/2026", path: "rel" }, r, st),
+    [{ hash: H("a"), from: "/srv/anime/2026", to: "/dl/rel" }]);
+  assert.deepEqual(L.movePlan({ kind: "path", name: "anime/2026", path: "" }, r, st), [], "\"\" = parent/leaf = where it is");
+});
+
 // --- movePlan (G8, Deviation 3) ----------------------------------------------------
 
 test("movePlan setCategory: only the targeted auto-managed rows whose path changes", () => {
