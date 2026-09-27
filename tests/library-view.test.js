@@ -609,3 +609,215 @@ test("hasName and explicitSavePath: what c's merge check and p's prefill read", 
   assert.equal(L.explicitSavePath("gone", st), "");
   assert.equal(L.explicitSavePath("anime", {}), "");
 });
+
+// --- The C and T pickers (Task 6) ------------------------------------------------------
+
+// The pickers match with ClientView.fuzzyMatch (the palette's), passed in:
+// LibraryView can't import ClientView.
+const FUZZY = (() => {
+  const file = path.join(__dirname, "..", "ClientView.js");
+  const src = fs.readFileSync(file, "utf8").split("\n")
+    .map((line) => (/^\s*\.(import|pragma)\b/.test(line) ? "" : line)).join("\n");
+  const mod = { exports: {} };
+  vm.compileFunction(src, ["module", "Model", "Registry"], { filename: file })(mod, Model, require("../CommandRegistry.js"));
+  return mod.exports.fuzzyMatch;
+})();
+
+const catRow = (rows, title) => rows.find((r) => r.title === title);
+
+test("categoryPickerRows: (no category), each category with N of M now, in order, all enabled", () => {
+  const targets = [row({ hash: H("a"), category: "anime" }), row({ hash: H("b"), category: "anime" }), row({ hash: H("c"), category: "" })];
+  const rows = L.categoryPickerRows("", ["anime", "anime/2026", "  legacy//x"], targets, FUZZY);
+  assert.deepEqual(rows.map((r) => r.title), ["(no category)", "anime", "anime/2026", "  legacy//x"]);
+  assert.deepEqual(rows.map((r) => r.value), ["", "anime", "anime/2026", "  legacy//x"]);
+  assert.deepEqual(rows.map((r) => r.keys), ["1 of 3 now", "2 of 3 now", "", ""]);
+  assert.ok(rows.every((r) => r.enabled === true && r.isNew !== true && r.kind !== "divider"));
+  assert.equal(new Set(rows.map((r) => r.id)).size, rows.length, "ids are unique");
+});
+
+test("categoryPickerRows: a query filters fuzzily, best first, and offers + New for a name that doesn't exist", () => {
+  const rows = L.categoryPickerRows("ani", ["linux", "anime", "manila"], [row()], FUZZY);
+  assert.deepEqual(rows.map((r) => r.title), ["anime", "manila", "+ New category \"ani\""]);
+  assert.deepEqual(rows[0].indices, [0, 1, 2]);
+  const n = rows[2];
+  assert.equal(n.isNew, true);
+  assert.equal(n.value, "ani");
+  assert.equal(n.enabled, true);
+  assert.deepEqual(n.indices, []);
+});
+
+test("categoryPickerRows: an exact name gets no + New row; an invalid one is shown disabled with the reason", () => {
+  assert.equal(L.categoryPickerRows("anime", ["anime"], [row()], FUZZY).filter((r) => r.isNew).length, 0);
+  const bad = L.categoryPickerRows("a//b", ["anime"], [row()], FUZZY).find((r) => r.isNew);
+  assert.equal(bad.enabled, false);
+  assert.equal(bad.reason, "No // in a category.");
+  const edge = L.categoryPickerRows("x ", [], [row()], FUZZY);
+  assert.equal(edge.length, 1);
+  assert.equal(edge[0].reason, "No spaces at the start or end.");
+  // (no category) matches like any row
+  assert.ok(catRow(L.categoryPickerRows("no cat", ["anime"], [row()], FUZZY), "(no category)"));
+});
+
+function catStatus(overrides) {
+  return status(Object.assign({ categories: ["anime", "anime/2026"], categoryPaths: { anime: { savePath: "" } } }, overrides || {}));
+}
+
+test("categoryAccept: set on the targets that change; nothing when every target is already there", () => {
+  const torrents = [row({ hash: H("a"), category: "anime", autoTmm: false }), row({ hash: H("b"), category: "", autoTmm: false })];
+  const rows = L.categoryPickerRows("", ["anime"], torrents, FUZZY);
+  const r = L.categoryAccept(catRow(rows, "anime"), [H("a"), H("b")], torrents, catStatus());
+  assert.equal(r.op, "set");
+  assert.equal(r.name, "anime");
+  assert.deepEqual(r.hashes, [H("b")], "only the torrent whose category changes");
+  assert.equal(r.line, "", "manual torrents never move: no confirm");
+  assert.equal(L.categoryAccept(catRow(rows, "anime"), [H("a")], torrents, catStatus()).op, "none");
+  const none = L.categoryAccept(catRow(rows, "(no category)"), [H("a"), H("b")], torrents, catStatus());
+  assert.equal(none.op, "set");
+  assert.equal(none.name, "");
+  assert.deepEqual(none.hashes, [H("a")]);
+  assert.equal(L.categoryAccept(null, [H("a")], torrents, catStatus()).op, "none");
+});
+
+test("categoryAccept: an auto-managed move confirms with the real folder (G8), a mixed range counts both", () => {
+  const torrents = [
+    row({ hash: H("a"), category: "anime", autoTmm: true, savePath: "/dl/anime" }),
+    row({ hash: H("d"), category: "", autoTmm: false, savePath: "/dl" })
+  ];
+  const rows = L.categoryPickerRows("", ["anime", "anime/2026"], torrents, FUZZY);
+  const r = L.categoryAccept(catRow(rows, "anime/2026"), [H("a"), H("d")], torrents, catStatus());
+  assert.equal(r.op, "set");
+  assert.deepEqual(r.hashes, [H("a"), H("d")]);
+  assert.equal(r.line, "Changes 2 torrents' category; 1 torrent's files move to /dl/anime/2026.");
+  const one = L.categoryAccept(catRow(rows, "anime/2026"), [H("a")], torrents, catStatus());
+  assert.equal(one.line, "Changes 1 torrent's category; its files move to /dl/anime/2026.");
+  const off = L.categoryAccept(catRow(rows, "anime/2026"), [H("a")], torrents, catStatus({ relocation: { torrentChanged: false } }));
+  assert.equal(off.line, "", "relocation off: qBittorrent switches it to manual, nothing moves");
+  const back = L.categoryAccept(catRow(rows, "(no category)"), [H("a")], torrents, catStatus());
+  assert.equal(back.line, "Changes 1 torrent's category; its files move to /dl.");
+});
+
+test("categoryAccept: + New creates, then sets; its folder is <parent path or default>/<name>, confirmed first", () => {
+  const torrents = [row({ hash: H("a"), category: "", autoTmm: true, savePath: "/dl" })];
+  const st = catStatus({ categoryPaths: { anime: { savePath: "/srv/anime" } } });
+  const rows = L.categoryPickerRows("anime/new", st.categories, torrents, FUZZY);
+  const r = L.categoryAccept(rows.find((x) => x.isNew), [H("a")], torrents, st);
+  assert.equal(r.op, "create");
+  assert.equal(r.name, "anime/new");
+  assert.deepEqual(r.hashes, [H("a")]);
+  assert.equal(r.line, "Changes 1 torrent's category; its files move to /srv/anime/new.");
+  const top = L.categoryAccept(L.categoryPickerRows("fresh", st.categories, torrents, FUZZY).find((x) => x.isNew), [H("a")], torrents, st);
+  assert.equal(top.line, "Changes 1 torrent's category; its files move to /dl/fresh.");
+  // a disabled + New is refused with its reason
+  const bad = L.categoryAccept(L.categoryPickerRows("a//b", st.categories, torrents, FUZZY).find((x) => x.isNew), [H("a")], torrents, st);
+  assert.deepEqual([bad.op, bad.note], ["refuse", "No // in a category."]);
+  // a name that appeared since the rows were built is refused as a clash
+  const late = L.categoryAccept({ isNew: true, enabled: true, value: "anime" }, [H("a")], torrents, st);
+  assert.deepEqual([late.op, late.note], ["refuse", "\"anime\" already exists."]);
+});
+
+test("tagPickerRows: marks from the working states, a fuzzy query, + New tag for a new name", () => {
+  const states = L.tagStates(["seedbox", "keep"], [row({ tags: ["seedbox"] }), row({ tags: ["seedbox", "keep"] })]);
+  const rows = L.tagPickerRows("", states, FUZZY);
+  assert.deepEqual(rows.map((r) => r.prefix + " " + r.title), ["[x] seedbox", "[~] keep"]);
+  assert.ok(rows.every((r) => r.enabled === true));
+  const q = L.tagPickerRows("kee", states, FUZZY);
+  assert.deepEqual(q.map((r) => r.title), ["keep", "+ New tag \"kee\""]);
+  assert.equal(q[1].isNew, true);
+  assert.equal(q[1].value, "kee");
+  assert.equal(L.tagPickerRows("keep", states, FUZZY).filter((r) => r.isNew).length, 0);
+  assert.equal(L.tagPickerRows("a,b", states, FUZZY).find((r) => r.isNew).reason, "No commas in a tag.");
+  assert.equal(L.tagPickerRows("anime 2026", states, FUZZY).find((r) => r.isNew).enabled, true, "an inner space is fine");
+});
+
+test("toggleTag: some -> all -> none -> back to some; none -> all; a new tag joins as all and leaves when toggled off", () => {
+  const original = [{ name: "a", state: "some", mark: "[~]" }, { name: "b", state: "none", mark: "[ ]" }];
+  const st = (list, n) => list.find((x) => x.name === n);
+  let w = L.toggleTag(original, original, "a");
+  assert.equal(st(w, "a").state, "all");
+  assert.equal(st(w, "a").mark, "[x]");
+  w = L.toggleTag(w, original, "a");
+  assert.equal(st(w, "a").state, "none");
+  w = L.toggleTag(w, original, "a");
+  assert.equal(st(w, "a").state, "some", "back to how it was");
+  assert.equal(st(L.toggleTag(original, original, "b"), "b").state, "all");
+  assert.equal(st(original, "a").state, "some", "the input is never changed");
+  w = L.toggleTag(original, original, "fresh");
+  assert.deepEqual(st(w, "fresh"), { name: "fresh", state: "all", mark: "[x]", isNew: true });
+  w = L.toggleTag(w, original, "fresh");
+  assert.equal(st(w, "fresh"), undefined);
+});
+
+test("tagAccept: the new tags to create, then tagChanges only; nothing when unchanged", () => {
+  const original = [{ name: "a", state: "some", mark: "[~]" }, { name: "b", state: "all", mark: "[x]" }];
+  assert.deepEqual(L.tagAccept(original, original), { creates: [], changes: { add: [], remove: [] }, op: "none" });
+  let w = L.toggleTag(original, original, "b");
+  w = L.toggleTag(w, original, "new tag");
+  assert.deepEqual(L.tagAccept(original, w), { creates: ["new tag"], changes: { add: ["new tag"], remove: ["b"] }, op: "change" });
+});
+
+test("pickerCopy: progress and done lines name what changes", () => {
+  assert.deepEqual(L.pickerCopy("category", "set", "anime"), { progress: "Setting category anime…", done: "Category set to anime", raw: true });
+  assert.deepEqual(L.pickerCopy("category", "set", ""), { progress: "Removing the category…", done: "Category removed", raw: true });
+  assert.deepEqual(L.pickerCopy("category", "add", "anime"), { progress: "Creating category anime…", done: "", raw: true });
+  assert.deepEqual(L.pickerCopy("tag", "set", ""), { progress: "Changing tags…", done: "Tags changed", raw: true });
+  assert.deepEqual(L.pickerCopy("tag", "add", "keep"), { progress: "Creating tag keep…", done: "", raw: true });
+});
+
+test("pickerFailure: every line names the action; never a bare HTTP code (OV7)", () => {
+  const f = L.pickerFailure;
+  // set-category's first chunk
+  assert.equal(f("category", "set", "anime", [], "qBittorrent refused it (HTTP 409)"), "Setting the category failed: HTTP 409");
+  assert.equal(f("category", "set", "anime", [], "Category set on 1000 of 1001 torrents; qBittorrent refused the rest (HTTP 409)"),
+    "Category set on 1000 of 1001 torrents; qBittorrent refused the rest (HTTP 409)");
+  assert.equal(f("category", "set", "anime", [], "anime doesn't exist."), "Setting the category failed: anime doesn't exist.");
+  assert.equal(f("category", "set", "anime", [], ""), "Setting the category failed.");
+  // + New: created, then the set failed
+  assert.equal(f("category", "set", "omaqbt-test", ["omaqbt-test"], "qBittorrent refused it (HTTP 409)"), "Created omaqbt-test; setting it failed (HTTP 409)");
+  assert.equal(f("category", "set", "x", ["x"], "Category set on 1000 of 1001 torrents; qBittorrent refused the rest (HTTP 409)"),
+    "Created x; category set on 1000 of 1001 torrents; qBittorrent refused the rest (HTTP 409)");
+  assert.equal(f("category", "set", "x", ["x"], "couldn't reach qBittorrent"), "Created x; setting it failed (couldn't reach qBittorrent)");
+  // the add itself
+  assert.equal(f("category", "add", "x", [], "qBittorrent refused it (HTTP 409)"), "Creating category x failed: HTTP 409");
+  // tags: qbt's own sentence names the tag
+  assert.equal(f("tag", "set", "", [], "Tags: added keep; removing seedbox failed (HTTP 409)"), "Tags: added keep; removing seedbox failed (HTTP 409)");
+  assert.equal(f("tag", "set", "", [], "qBittorrent refused it (HTTP 500)"), "Changing the tags failed: HTTP 500");
+  assert.equal(f("tag", "set", "", ["keep"], "Tags: adding keep failed (HTTP 409)"), "Created keep; tags: adding keep failed (HTTP 409)");
+  assert.equal(f("tag", "set", "", ["keep"], "qBittorrent refused it (HTTP 409)"), "Created keep; tagging failed (HTTP 409)");
+  assert.equal(f("tag", "add", "b", ["a"], "qBittorrent refused it (HTTP 409)"), "Created a; creating tag b failed (HTTP 409)");
+  assert.equal(f("tag", "add", "b", [], "qBittorrent refused it (HTTP 409)"), "Creating tag b failed: HTTP 409");
+  for (const line of [f("category", "set", "", [], "HTTP 409"), f("tag", "set", "", [], "HTTP 409")]) {
+    assert.notEqual(line, "HTTP 409");
+    assert.match(line, /failed/);
+  }
+});
+
+test("tagAccept with the cursor row: Enter on + New tag creates and adds it; a refused + New stays open with the reason", () => {
+  const original = [{ name: "a", state: "none", mark: "[ ]" }];
+  const rows = L.tagPickerRows("new one", original, FUZZY);
+  const plus = rows.find((r) => r.isNew);
+  assert.deepEqual(L.tagAccept(original, original, plus), { creates: ["new one"], changes: { add: ["new one"], remove: [] }, op: "change" });
+  const bad = L.tagPickerRows(" x", original, FUZZY).find((r) => r.isNew);
+  assert.deepEqual(L.tagAccept(original, original, bad), { op: "refuse", note: "No spaces at the start or end." });
+  // an ordinary cursor row is never toggled by Enter
+  const aRow = L.tagPickerRows("", original, FUZZY)[0];
+  assert.equal(L.tagAccept(original, original, aRow).op, "none");
+});
+
+test("pickerSteps: + New is two writes, the create first; a plain change is one", () => {
+  assert.deepEqual(L.pickerSteps("category", { op: "set", name: "anime", hashes: [H("a")] }), [
+    { kind: "category", step: "set", name: "anime", hashes: [H("a")] }
+  ]);
+  assert.deepEqual(L.pickerSteps("category", { op: "set", name: "anime", hashes: [H("c")] }, [H("b"), H("c")]), [
+    { kind: "category", step: "set", name: "anime", hashes: [H("c")] }
+  ], "only the targets whose category changes, as the CONFIRM counted them");
+  assert.deepEqual(L.pickerSteps("category", { op: "create", name: "fresh", hashes: [H("a")] }), [
+    { kind: "category", step: "add", name: "fresh" },
+    { kind: "category", step: "set", name: "fresh", hashes: [H("a")] }
+  ]);
+  assert.deepEqual(L.pickerSteps("tag", { op: "change", creates: ["x", "y"], changes: { add: ["x", "y", "a"], remove: ["b"] } }, [H("a"), H("b")]), [
+    { kind: "tag", step: "add", name: "x" },
+    { kind: "tag", step: "add", name: "y" },
+    { kind: "tag", step: "set", name: "", hashes: [H("a"), H("b")], changes: { add: ["x", "y", "a"], remove: ["b"] } }
+  ]);
+  assert.deepEqual(L.pickerSteps("tag", { op: "none", creates: [], changes: { add: [], remove: [] } }, [H("a")]), []);
+});

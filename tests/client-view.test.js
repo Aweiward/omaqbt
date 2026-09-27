@@ -1868,3 +1868,39 @@ test("msgTrack/msgFinish: an action's own progress and done copy, and qbt's erro
   // without copy, nothing changes
   assert.equal(V.messageLine(V.msgFinish(V.msgTrack(V.emptyMessages(), 1, "delete", 1, []), 1, false, "boom")).text, "Couldn't delete 1 torrent: boom");
 });
+
+// --- The C and T pickers (slice 3a, Task 6) ------------------------------------
+
+test("dispatchState passes the open picker's flags fresh, and false without one", () => {
+  const st = V.dispatchState({ mode: "PICKER" }, "table", "rows", true, [H("a")], V.inspectorDispatch({}), { queryEmpty: true, multi: true });
+  assert.equal(st.pickerQueryEmpty, true);
+  assert.equal(st.pickerMulti, true);
+  const typed = V.dispatchState(st, "table", "rows", true, [H("a")], V.inspectorDispatch({}), { queryEmpty: false, multi: true });
+  assert.equal(typed.pickerQueryEmpty, false);
+  const none = V.dispatchState(st, "table", "rows", true, [H("a")], V.inspectorDispatch({}));
+  assert.equal(none.pickerQueryEmpty, false, "never carried over");
+  assert.equal(none.pickerMulti, false);
+  // end to end: Space toggles T's empty query, types into a typed one
+  assert.equal(Registry.dispatch(st, { key: KEY.Space, text: " ", modifiers: {} }).commandId, "picker.toggle");
+  assert.equal(Registry.dispatch(typed, { key: KEY.Space, text: " ", modifiers: {} }).commandId, null);
+});
+
+test("modeHints: a picker shows its own footer, like the palette", () => {
+  assert.deepEqual(V.modeHints("PICKER", { pane: "table" }), []);
+});
+
+test("confirmLine: C's move confirm shows the window's line with y set", () => {
+  const c = V.confirmLine({ kind: "categorySet", line: "Changes 2 torrents' category; 1 torrent's files move to /dl/anime." });
+  assert.deepEqual(c, { lead: "Changes 2 torrents' category; 1 torrent's files move to /dl/anime.", strong: "", tail: "", accept: "set" });
+});
+
+test("magnetSync in PICKER treats the picker's field like the palette's: no CONFIRM, focus goes back to the field", () => {
+  const ms = mstate([mpend("a")]);
+  const picking = Object.assign({}, MREG, { mode: "PICKER" });
+  let r = V.magnetSync(null, picking, ms, [MURL("a")], { opened: true, active: false });
+  assert.equal(r.regState, null, "a magnet never takes over an open picker");
+  assert.equal(r.focusField, true);
+  r = V.magnetSync(null, picking, ms, [MURL("a")], { opened: true, active: true });
+  assert.equal(r.focus, false);
+  assert.equal(r.mem.focusDue, true);
+});

@@ -514,7 +514,7 @@ function progressText(kind, count) {
 
 // The `y` hint of each library confirm; a rename that merges passes its
 // own ("merge").
-var LIBRARY_ACCEPT = { libraryRemove: "delete", libraryRename: "rename", libraryPath: "change" };
+var LIBRARY_ACCEPT = { libraryRemove: "delete", libraryRename: "rename", libraryPath: "change", categorySet: "set" };
 
 // confirmLine(confirm) -> the CONFIRM status line, from
 // CommandRegistry.dispatch's `confirm` result {commandId, count, withFiles}.
@@ -636,7 +636,7 @@ function magnetSync(mem, regState, ms, keys, ctx) {
     next = copyState(r, { mode: "NORMAL", pending: null });
   }
   var due = list.length > 0 && (m.focusDue === true || (arrived && c.opened === true));
-  var typing = r.mode === "INSERT" || r.mode === "COMMAND";
+  var typing = r.mode === "INSERT" || r.mode === "COMMAND" || r.mode === "PICKER";
   var hold = typing && c.active !== false;
   return {
     mem: { seen: list.slice(), handled: handled, focusDue: due && hold },
@@ -744,8 +744,8 @@ function modeHints(mode, ctx) {
     if (c.purpose === "categoryPath") return [{ key: "Enter", label: "set" }, { key: "Esc", label: "cancel" }];
     return [{ key: "Enter", label: "keep filter" }, { key: "Esc", label: "cancel" }];
   }
-  // The palette shows its own key hints in its footer.
-  if (mode === "COMMAND") return [];
+  // The palette and the C/T pickers show their own key hints in a footer.
+  if (mode === "COMMAND" || mode === "PICKER") return [];
   if (mode === "VISUAL") {
     return [
       { key: "Space", label: "start/stop" },
@@ -838,8 +838,10 @@ function targetHashes(mode, rows, cursorHash, anchorHash) {
 // something only while mode is VISUAL (the registry contract), so it is 0
 // otherwise. `inspector` is inspectorDispatch's result; its fields are
 // always written (null/false without one), so a target a previous dispatch
-// left in regState never carries over.
-function dispatchState(regState, pane, state, hasCursorRow, targets, inspector) {
+// left in regState never carries over. `picker` is the open C/T picker's
+// {queryEmpty, multi} (PICKER's Space/Tab rule), or null; its flags are
+// always written too.
+function dispatchState(regState, pane, state, hasCursorRow, targets, inspector, picker) {
   var st = {};
   var r = regState || {};
   for (var k in r) {
@@ -856,6 +858,9 @@ function dispatchState(regState, pane, state, hasCursorRow, targets, inspector) 
   st.cursorStopped = i.cursorStopped === true;
   st.cursorPendingMagnet = i.cursorPendingMagnet === true;
   st.libraryTarget = i.libraryTarget || null;
+  var p = picker || {};
+  st.pickerQueryEmpty = p.queryEmpty === true;
+  st.pickerMulti = p.multi === true;
   return st;
 }
 

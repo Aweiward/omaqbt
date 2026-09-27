@@ -495,6 +495,216 @@ function tagChanges(before, after) {
   return { add: add, remove: remove };
 }
 
+// --- The C and T pickers (Task 6) ---------------------------------------------------
+//
+// Rows are ListOverlay's {kind, id, title, indices, enabled, reason, keys,
+// prefix}, plus `value` (the category or tag name) and `isNew` ("+ New").
+// `match` is ClientView.fuzzyMatch (query, title) -> {score, indices} or
+// null, passed in because this file can't import ClientView.
+
+var NO_CATEGORY = "(no category)";
+
+// The rows a query keeps, best match first (ties keep their order).
+function matchRows(query, rows, match) {
+  if (query === "") return rows;
+  var hits = [];
+  for (var i = 0; i < rows.length; i++) {
+    var m = match(query, rows[i].title);
+    if (!m) continue;
+    rows[i].indices = m.indices;
+    hits.push({ row: rows[i], score: m.score, at: i });
+  }
+  hits.sort(function(a, b) { return b.score - a.score || a.at - b.at; });
+  return hits.map(function(h) { return h.row; });
+}
+
+// The "+ New …" row for a query that names nothing yet: enabled only when
+// nameError passes, else dimmed with the reason.
+function newRow(kind, query) {
+  var err = nameError(kind, query, []);
+  return { kind: kind, id: "new", value: query, title: "+ New " + kind + " \"" + query + "\"", indices: [],
+    enabled: err === "", reason: err, keys: "", isNew: true };
+}
+
+// categoryPickerRows(query, categories, targetRows, match) -> C's rows:
+// "(no category)", then every category (legacy names too: assigning an
+// existing one is allowed), each with "N of M now" when N of the M target
+// torrents are on it; and "+ New category "<query>"" unless the query is
+// exactly an existing name.
+function categoryPickerRows(query, categories, targetRows, match) {
+  var q = String(query || "");
+  var targets = names(targetRows);
+  var list = [""].concat(names(categories).map(String));
+  var rows = [];
+  for (var i = 0; i < list.length; i++) {
+    var have = 0;
+    for (var j = 0; j < targets.length; j++) if (String((targets[j] || {}).category || "") === list[i]) have++;
+    rows.push({ kind: "category", id: "c:" + list[i], value: list[i], title: list[i] === "" ? NO_CATEGORY : list[i], indices: [],
+      enabled: true, reason: "", keys: have > 0 ? have + " of " + targets.length + " now" : "" });
+  }
+  var out = matchRows(q, rows, match);
+  if (q !== "" && !hasName(categories, q)) out.push(newRow("category", q));
+  return out;
+}
+
+function rowFor(torrents, hash) {
+  var list = names(torrents);
+  for (var i = 0; i < list.length; i++) if (list[i] && Model.torrentId(list[i]) === hash) return list[i];
+  return null;
+}
+
+// categoryAccept(row, targets, torrents, status) -> what C's Enter does on
+// the target hashes captured when C was pressed:
+//   {op: "none"}                      no row, or every target is already on it
+//   {op: "refuse", note}              a "+ New" name nameError refuses
+//   {op: "set"|"create", name, hashes, line}
+// hashes are the targets whose category changes; "create" adds the
+// category (empty save path) before the set. line is the move CONFIRM
+// (G8), "" when nothing moves; it comes before any write. A new category's
+// folder is <parent's folder or default>/<name>, as qBittorrent makes it.
+function categoryAccept(row, targets, torrents, status) {
+  if (!row) return { op: "none" };
+  if (row.enabled === false) return { op: "refuse", note: String(row.reason || "") };
+  var name = String(row.value || "");
+  if (row.isNew === true) {
+    var err = nameError("category", name, status && status.categories);
+    if (err !== "") return { op: "refuse", note: err };
+  }
+  var all = hashList(targets);
+  var hashes = [];
+  for (var i = 0; i < all.length; i++) {
+    var t = rowFor(torrents, all[i]);
+    if (!t || String(t.category || "") !== name) hashes.push(all[i]);
+  }
+  if (hashes.length === 0 && row.isNew !== true) return { op: "none" };
+  var plan = movePlan({ kind: "setCategory", hashes: hashes, name: name }, torrents, status);
+  return { op: row.isNew === true ? "create" : "set", name: name, hashes: hashes, line: moveConfirmLine(plan, hashes.length) };
+}
+
+// tagPickerRows(query, states, match) -> T's rows from the working states
+// ([{name, state, mark, isNew?}], tagStates plus toggles): the mark as the
+// prefix, and "+ New tag "<query>"" unless a tag is exactly the query.
+function tagPickerRows(query, states, match) {
+  var q = String(query || "");
+  var list = names(states);
+  var rows = [];
+  var known = [];
+  for (var i = 0; i < list.length; i++) {
+    known.push(list[i].name);
+    rows.push({ kind: "tag", id: "t:" + list[i].name, value: list[i].name, title: list[i].name, indices: [],
+      enabled: true, reason: "", keys: "", prefix: list[i].mark });
+  }
+  var out = matchRows(q, rows, match);
+  if (q !== "" && known.indexOf(q) === -1) out.push(newRow("tag", q));
+  return out;
+}
+
+function withState(item, state) {
+  var out = { name: item.name, state: state, mark: TAG_MARK[state] };
+  if (item.isNew) out.isNew = true;
+  return out;
+}
+
+// toggleTag(states, original, name) -> a new working list with `name`
+// toggled: some -> all -> none -> (some again, when it started as some)
+// -> all. A name not in the list is a new tag: it joins as all (isNew),
+// and toggling it off drops it again. Neither input is changed.
+function toggleTag(states, original, name) {
+  var list = names(states);
+  var was = stateMap(original)[name];
+  var out = [];
+  var found = false;
+  for (var i = 0; i < list.length; i++) {
+    var item = list[i];
+    if (item.name !== name) { out.push(item); continue; }
+    found = true;
+    if (item.state === "all") {
+      if (!item.isNew) out.push(withState(item, "none"));
+    } else if (item.state === "none" && was === "some") {
+      out.push(withState(item, "some"));
+    } else {
+      out.push(withState(item, "all"));
+    }
+  }
+  if (!found) out.push({ name: String(name), state: "all", mark: TAG_MARK.all, isNew: true });
+  return out;
+}
+
+// tagAccept(original, working, row) -> what T's Enter sends: {creates:
+// new tags to add first, changes: tagChanges(original, working), op:
+// "change" or "none" when nothing changed}. An ordinary cursor row is never
+// toggled by Enter; `row` matters only when it is "+ New tag": Enter then
+// creates and adds that tag too, or {op: "refuse", note} when nameError
+// refuses it.
+function tagAccept(original, working, row) {
+  if (row && row.isNew === true) {
+    if (row.enabled === false) return { op: "refuse", note: String(row.reason || "") };
+    working = toggleTag(working, original, String(row.value));
+  }
+  var list = names(working);
+  var creates = [];
+  for (var i = 0; i < list.length; i++) if (list[i].isNew && list[i].state === "all") creates.push(list[i].name);
+  var changes = tagChanges(original, working);
+  return { creates: creates, changes: changes, op: changes.add.length + changes.remove.length > 0 ? "change" : "none" };
+}
+
+// pickerSteps(kind, accept, hashes) -> the writes an accepted picker runs,
+// in order, each after the one before succeeds: every "+ New" create
+// ({kind, step: "add", name}), then the one set ({kind, step: "set", name,
+// hashes} for a category, {..., changes} for tags). A category sets only
+// accept.hashes (the targets whose category changes, the ones its CONFIRM
+// counted); tags go to every target in `hashes`. accept is categoryAccept's
+// or tagAccept's result.
+function pickerSteps(kind, accept, hashes) {
+  var a = accept || {};
+  var steps = [];
+  if (kind === "tag") {
+    if (a.op !== "change") return [];
+    var creates = names(a.creates);
+    for (var i = 0; i < creates.length; i++) steps.push({ kind: "tag", step: "add", name: creates[i] });
+    steps.push({ kind: "tag", step: "set", name: "", hashes: hashList(hashes), changes: a.changes });
+    return steps;
+  }
+  if (a.op !== "set" && a.op !== "create") return [];
+  if (a.op === "create") steps.push({ kind: "category", step: "add", name: a.name });
+  steps.push({ kind: "category", step: "set", name: a.name, hashes: hashList(a.hashes) });
+  return steps;
+}
+
+// pickerCopy(kind, step, name) -> ClientView.msgTrack's copy for a picker
+// write: step "add" (a "+ New" create, no done note: the set follows) or
+// "set" (set-category, or tags).
+function pickerCopy(kind, step, name) {
+  if (step === "add") return { progress: "Creating " + kind + " " + name + "…", done: "", raw: true };
+  if (kind === "tag") return { progress: "Changing tags…", done: "Tags changed", raw: true };
+  if (name === "") return { progress: "Removing the category…", done: "Category removed", raw: true };
+  return { progress: "Setting category " + name + "…", done: "Category set to " + name, raw: true };
+}
+
+// pickerFailure(kind, step, name, created, error) -> the one status line
+// for a failed picker write (OV7). error is qbt's stderr; created are the
+// names this Enter already created. Every line names the action: qbt's
+// "Tags: …" and "Category set on N of M …" sentences already do and pass
+// through; its bare "qBittorrent refused it (HTTP 409)" becomes "Setting
+// the category failed: HTTP 409"; after a create, "Created <name>;
+// setting it failed (HTTP 409)".
+function pickerFailure(kind, step, name, created, error) {
+  var err = String(error || "").trim();
+  var m = /^qBittorrent refused it \((.*)\)$/.exec(err);
+  var detail = m ? m[1] : err;
+  var made = names(created);
+  var lead = made.length > 0 ? "Created " + made.join(", ") + "; " : "";
+  var paren = detail === "" ? "" : " (" + detail.replace(/\.$/, "") + ")";
+  var colon = detail === "" ? "." : ": " + detail;
+  if (step === "add") {
+    return lead === "" ? "Creating " + kind + " " + name + " failed" + colon : lead + "creating " + kind + " " + name + " failed" + paren;
+  }
+  var named = kind === "tag" ? err.indexOf("Tags: ") === 0 : err.indexOf("Category set on ") === 0;
+  if (named) return lead === "" ? err : lead + err.charAt(0).toLowerCase() + err.substring(1);
+  if (lead !== "") return lead + (kind === "tag" ? "tagging failed" : "setting it failed") + paren;
+  return (kind === "tag" ? "Changing the tags failed" : "Setting the category failed") + colon;
+}
+
 if (typeof module !== "undefined") {
   module.exports = {
     nameError: nameError,
@@ -519,6 +729,14 @@ if (typeof module !== "undefined") {
     savePathError: savePathError,
     footerKeys: footerKeys,
     hasName: hasName,
-    explicitSavePath: explicitSavePath
+    explicitSavePath: explicitSavePath,
+    categoryPickerRows: categoryPickerRows,
+    categoryAccept: categoryAccept,
+    tagPickerRows: tagPickerRows,
+    toggleTag: toggleTag,
+    tagAccept: tagAccept,
+    pickerSteps: pickerSteps,
+    pickerCopy: pickerCopy,
+    pickerFailure: pickerFailure
   };
 }

@@ -1494,3 +1494,55 @@ test("dispatchCommand runs the library rows from the filters pane only", () => {
   assert.equal(Registry.dispatchCommand(filters({ libraryTarget: CAT }), "library.path").commandId, "library.path");
   assert.equal(Registry.dispatchCommand(state({ pane: "table", libraryTarget: CAT }), "library.path").commandId, null);
 });
+
+// --- NORMAL/VISUAL, table: the C and T pickers (slice 3a, Task 6) ------------
+
+test("C and T: torrent.category and torrent.tags, NORMAL and VISUAL, table pane, needs a selection", () => {
+  const want = { "torrent.category": "C", "torrent.tags": "T" };
+  for (const id of Object.keys(want)) {
+    const rows = commands.filter((c) => c.id === id);
+    assert.equal(rows.length, 1, id);
+    assert.deepEqual(rows[0].keys, [want[id]], id);
+    assert.deepEqual(rows[0].modes, ["NORMAL", "VISUAL"], id);
+    assert.deepEqual(rows[0].panes, ["table"], id);
+    assert.equal(rows[0].needs, "selection", id);
+    assert.equal(rows[0].group, "Torrent", id);
+  }
+  assert.ok(helpFor("NORMAL", "table").some((r) => r.id === "torrent.category"));
+  assert.ok(!helpFor("NORMAL", "filters").some((r) => r.id === "torrent.tags"), "table pane only");
+});
+
+test("C and T open PICKER on the cursor row", () => {
+  for (const [text, id] of [["C", "torrent.category"], ["T", "torrent.tags"]]) {
+    const r = dispatch(state({ hasTorrent: true }), ev(text, keyOf(text)));
+    assert.equal(r.commandId, id);
+    assert.equal(r.state.mode, "PICKER");
+    assert.equal(r.args.count, 1);
+    assert.equal(r.args.range, undefined);
+  }
+});
+
+test("C from VISUAL opens PICKER on the range and drops the stale range count", () => {
+  const r = dispatch(state({ mode: "VISUAL", selectionCount: 3, hasTorrent: true }), ev("C", keyOf("C")));
+  assert.equal(r.commandId, "torrent.category");
+  assert.equal(r.state.mode, "PICKER");
+  assert.equal(r.args.count, 3);
+  assert.equal(r.args.range, true);
+  assert.equal(r.state.selectionCount, 0, "PICKER never carries a VISUAL range count");
+});
+
+test("C and T are blocked with no torrent, and do nothing outside the table", () => {
+  const r = dispatch(state({ hasTorrent: false }), ev("T", keyOf("T")));
+  assert.equal(r.commandId, null);
+  assert.equal(r.blocked, "needs a selected torrent");
+  assert.equal(r.state.mode, "NORMAL");
+  const f = dispatch(state({ pane: "filters" }), ev("C", keyOf("C")));
+  assert.equal(f.commandId, null);
+  assert.equal(f.state.mode, "NORMAL");
+});
+
+test("the palette opens the pickers the same way", () => {
+  const r = Registry.dispatchCommand(state({ hasTorrent: true }), "torrent.tags");
+  assert.equal(r.commandId, "torrent.tags");
+  assert.equal(r.state.mode, "PICKER");
+});

@@ -24,6 +24,9 @@ QtObject {
   required property var palette
   // The MagnetConfirm that runs magnet.start / magnet.cancel.
   required property var magnet
+  // C's and T's pickers (slice 3a), which the picker.* commands drive.
+  required property var categoryPicker
+  required property var tagPicker
 
   // ---- trackers and peers (inspector tabs 2, 3) ---------------------------
 
@@ -147,9 +150,10 @@ QtObject {
     c.regState = st
   }
 
-  // The text field that owns the keys in INSERT or COMMAND, else null.
+  // The text field that owns the keys in INSERT, COMMAND or PICKER, else null.
   function typingField() {
     var m = client.mode
+    if (m === "PICKER") return openPicker() ? openPicker().inputField : null
     return m === "INSERT" ? inputLine.inputField : (m === "COMMAND" ? palette.inputField : null)
   }
 
@@ -323,25 +327,31 @@ QtObject {
     }
   }
 
-  function trackLibrary(ticket, copy, watch) {
+  // ticket: one ticket, or a chunked write's array of them (one watch
+  // each); hashes: the torrents a failure marks (none for a-x).
+  function trackLibrary(ticket, copy, watch, hashes) {
     var c = client
-    c.messages = View.msgTrack(c.messages, ticket, "library", 0, [], copy)
-    if (!(Number(ticket) > 0) || !watch) return
+    var own = hashes || []
+    c.messages = View.msgTrack(c.messages, ticket, "library", own.length, own, copy)
+    if (!watch) return
+    var list = Array.isArray(ticket) ? ticket : [ticket]
     var n = ({})
     for (var k in libraryWatches) n[k] = libraryWatches[k]
-    n[String(ticket)] = watch
+    for (var i = 0; i < list.length; i++) if (Number(list[i]) > 0) n[String(list[i])] = watch
     libraryWatches = n
   }
 
   // Client's actionFinished: once one of these writes succeeds, the active
   // filter and the filters cursor follow a renamed or deleted name (OV9,
-  // Review Focus 4) and view.json saves; a's cursor goes to the new row.
-  function libraryFinished(ticket, ok) {
+  // Review Focus 4) and view.json saves; a's cursor goes to the new row. A
+  // picker write goes on to its next step, or reports its failure.
+  function libraryFinished(ticket, ok, error) {
     var w = libraryWatches[String(ticket)]
     if (!w) return
     var n = ({})
     for (var k in libraryWatches) if (k !== String(ticket)) n[k] = libraryWatches[k]
     libraryWatches = n
+    if (w.picker) { pickerFinished(ticket, ok, error, w.picker); return }
     if (ok !== true) return
     var c = client
     if (w.cursor) { c.setFilterCursor(w.cursor); return }
@@ -349,6 +359,140 @@ QtObject {
     var fc = Library.followFilter(c.filterCursor, w.follow)
     if (fc !== c.filterCursor) c.setFilterCursor(fc)
     if (f !== c.filter) c.applyFilter(f)
+  }
+
+  // ---- the C and T pickers (slice 3a) ------------------------------------------
+
+  // "category" or "tag" while a picker is open, else "".
+  property string pickerKind: ""
+  // The torrents it acts on, captured when C or T was pressed (the cursor
+  // row or the VISUAL range); a status tick or a cursor move never changes
+  // them. The table paints them while the picker is up.
+  property var pickerTargets: []
+
+  function openPicker() {
+    return pickerKind === "category" ? categoryPicker : (pickerKind === "tag" ? tagPicker : null)
+  }
+
+  // Dispatch's PICKER flags (Space/Tab), read fresh for every key.
+  function pickerFlags() {
+    var p = client.mode === "PICKER" ? openPicker() : null
+    return p ? { queryEmpty: p.query === "", multi: p.multi } : null
+  }
+
+  // C or T (dispatch already put the mode in PICKER). C writes a category,
+  // so it waits for qBittorrent's folders (ruling BM) and lands in NORMAL.
+  function startPicker(kind, targets) {
+    var c = client
+    var svc = c.service
+    if (targets.length === 0) { setMode("NORMAL"); return }
+    if (kind === "category" && !libraryReady) {
+      setMode("NORMAL")
+      c.note(Library.LIBRARY_NOT_READY, "urgent")
+      return
+    }
+    pickerTargets = targets.slice()
+    pickerKind = kind
+    var rows = []
+    var all = svc.torrents || []
+    for (var i = 0; i < all.length; i++) if (targets.indexOf(Model.torrentId(all[i])) !== -1) rows.push(all[i])
+    if (kind === "category") categoryPicker.open(rows)
+    else tagPicker.open(Library.tagStates(svc.tags, rows), targets.length)
+  }
+
+  // Esc, a scrim click, or an accept: nothing is left open.
+  function closePicker() {
+    pickerKind = ""
+    pickerTargets = []
+    setMode("NORMAL")
+    keyItem.forceActiveFocus()
+  }
+
+  // A refused Enter (a "+ New" name nameError refuses) keeps it open.
+  function reopenPicker(note) {
+    client.note(note, "urgent")
+    setMode("PICKER")
+    openPicker().focusField()
+  }
+
+  // Enter (dispatch is back in NORMAL). C: set the category, after one
+  // move CONFIRM that names the real folder when qBittorrent would move
+  // files (G8; `y` comes back as torrent.category with args.confirmed).
+  // T: send what the toggles changed, nothing when unchanged.
+  function acceptPicker() {
+    var c = client
+    var svc = c.service
+    var targets = pickerTargets
+    var kind = pickerKind
+    var p = openPicker()
+    if (!p) return
+    var accept = kind === "category"
+      ? Library.categoryAccept(p.currentRow(), targets, svc.torrents, svc)
+      : Library.tagAccept(p.original, p.working, p.currentRow())
+    if (accept.op === "refuse") { reopenPicker(accept.note); return }
+    closePicker()
+    var steps = Library.pickerSteps(kind, accept, targets)
+    if (steps.length === 0) return
+    if (kind === "category" && accept.line !== "") {
+      var r = Registry.raiseConfirm(c.regState, "torrent.category", "categorySet", { steps: steps })
+      c.regState = r.state
+      c.confirmHashes = accept.hashes
+      c.confirm = withLine(r.confirm, accept.line, "set")
+      return
+    }
+    runPickerSteps(steps, [])
+  }
+
+  // Space/Tab on T: toggle the cursor row (a refused "+ New tag" says why).
+  function togglePicker() {
+    if (pickerKind !== "tag") return
+    var row = tagPicker.currentRow()
+    if (!row) return
+    if (row.enabled === false) { client.note(row.reason, "urgent"); return }
+    tagPicker.toggle(row.value)
+  }
+
+  // A click on a row: C picks it, T toggles it.
+  function pickerClicked() {
+    if (pickerKind === "tag") { togglePicker(); return }
+    setMode("NORMAL")
+    acceptPicker()
+  }
+
+  // Runs steps[0] (LibraryView.pickerSteps); each later step runs once the
+  // one before succeeds (pickerFinished). created: the "+ New" names made.
+  function runPickerStep(steps, created) {
+    var c = client
+    var svc = c.service
+    var s = steps[0]
+    var watch = { picker: { kind: s.kind, step: s.step, name: s.name, created: created, rest: steps.slice(1) } }
+    var copy = Library.pickerCopy(s.kind, s.step, s.name)
+    if (s.step === "add") {
+      trackLibrary(s.kind === "tag" ? svc.addTag(s.name, c.opts([])) : svc.addCategory(s.name, "", c.opts([])), copy, watch)
+      return
+    }
+    trackLibrary(c.perChunk(s.hashes, function(joined, chunk) {
+      return s.kind === "tag" ? svc.editTags(joined, s.changes, c.opts(chunk)) : svc.setCategory(joined, s.name, c.opts(chunk))
+    }), copy, watch, s.hashes)
+  }
+
+  function runPickerSteps(steps, created) {
+    if (steps.length > 0) runPickerStep(steps, created)
+  }
+
+  // A picker write ended. A failure reports one line that names the action
+  // (LibraryView.pickerFailure, OV7) and refreshes, so what did change
+  // shows; a create that succeeded goes on to the next step.
+  function pickerFinished(ticket, ok, error, p) {
+    var c = client
+    if (ok !== true) {
+      c.messages = View.msgFinish(c.messages, ticket, false, Library.pickerFailure(p.kind, p.step, p.name, p.created, error))
+      c.service.refresh()
+      return
+    }
+    if (p.rest.length === 0) return
+    c.messages = View.msgFinish(c.messages, ticket, true, "")
+    runPickerSteps(p.rest, p.step === "add" ? p.created.concat([p.name]) : p.created)
   }
 
   // ---- fetch metadata only (f, slice 2b) ---------------------------------------
@@ -785,6 +929,34 @@ QtObject {
         return
       }
       runLibraryWrite(commandId, args)
+      return
+
+    // C and T: open the picker on the targets captured now; C's move
+    // CONFIRM comes back here with args.confirmed and the steps it asked about.
+    case "torrent.category":
+      if (args.confirmed === true) { c.confirmHashes = []; runPickerSteps(args.steps || [], []); return }
+      startPicker("category", targets)
+      return
+
+    case "torrent.tags":
+      startPicker("tag", targets)
+      return
+
+    case "picker.accept":
+      acceptPicker()
+      return
+
+    case "picker.cancel":
+      closePicker()
+      return
+
+    case "picker.up":
+    case "picker.down":
+      if (openPicker()) openPicker().move(commandId === "picker.down" ? 1 : -1)
+      return
+
+    case "picker.toggle":
+      togglePicker()
       return
 
     case "torrent.fetchMetadata":

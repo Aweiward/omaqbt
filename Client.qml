@@ -84,9 +84,9 @@ Item {
   property string anchorHash: ""
   readonly property var visualHashes: mode === "VISUAL" ? View.visualRange(tableRows, anchorHash, cursorHash) : []
   // The rows painted with Style.selectionFill: the live range in VISUAL,
-  // and the fixed range a CONFIRM raised from VISUAL will act on.
+  // and the fixed range a CONFIRM or a C/T picker raised from VISUAL will act on.
   readonly property var rangeHashes: View.hashSet(mode === "VISUAL" ? visualHashes
-    : (mode === "CONFIRM" && confirmHashes.length > 1 ? confirmHashes : []))
+    : (mode === "CONFIRM" && confirmHashes.length > 1 ? confirmHashes : (mode === "PICKER" ? commands.pickerTargets : [])))
   readonly property var errorHashes: View.hashSet(messages.errorHashes)
 
   // ---- filter pane -------------------------------------------------------------
@@ -240,8 +240,8 @@ Item {
   function close() {
     if (closing) return
     closing = true
-    // A palette left open would come back without its field focused.
-    if (mode === "COMMAND") commands.closePalette()
+    // A palette or picker left open would come back without its field focused.
+    if (mode === "COMMAND") commands.closePalette(); else if (mode === "PICKER") commands.closePicker()
     opened = false
     window.visible = false
     if (service) service.windowOpen = false
@@ -487,7 +487,7 @@ Item {
 
   // The state a key or palette command resolves against, as it stands now.
   function registryState(targets) {
-    return View.dispatchState(regState, pane, tableState, cursorIndex >= 0, targets, inspectorNow)
+    return View.dispatchState(regState, pane, tableState, cursorIndex >= 0, targets, inspectorNow, commands.pickerFlags())
   }
 
   // Ends INSERT the way Esc does (insert.cancel: the filter query goes
@@ -530,7 +530,7 @@ Item {
       if (!root.viewTouched) root.applyViewState(root.service.viewState)
     }
     function onActionFinished(ticket, ok, error, origin, hashes) {
-      commands.libraryFinished(ticket, ok)
+      commands.libraryFinished(ticket, ok, error)
       // Strictly this window's own tickets (msgFinish ignores the rest): a
       // pending-magnet drop can emit extra window-origin signals that
       // carry our hashes.
@@ -555,6 +555,8 @@ Item {
     keyItem: keyRoot
     palette: cmdPalette
     magnet: magnetRow
+    categoryPicker: catPicker
+    tagPicker: tagPicker
   }
 
   WmFocus {
@@ -790,6 +792,9 @@ Item {
         onActivated: function(row) { commands.runPaletteRow(row) }
         onDismissed: commands.closePalette()
       }
+
+      CategoryPicker { id: catPicker; anchors.fill: parent; commands: commands }
+      TagPicker { id: tagPicker; anchors.fill: parent; commands: commands }
     }
   }
 }

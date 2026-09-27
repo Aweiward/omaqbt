@@ -65,6 +65,11 @@ var commands = [
   { id: "torrent.move", title: "Move", group: "Torrent", keys: ["m"], modes: ["NORMAL"], panes: ["table", "inspector"], needs: "torrent" },
   { id: "torrent.recheck", title: "Recheck", group: "Torrent", keys: ["e"], modes: ["NORMAL", "VISUAL"], panes: ["table", "inspector"], needs: "selection" },
   { id: "visual.enter", title: "Visual select", group: "View", keys: ["V"], modes: ["NORMAL"], panes: ["table"], needs: "torrent" },
+  // C and T (slice 3a): the category and tag pickers on the cursor row or
+  // the VISUAL range (the window captures the targets at key time). Both
+  // open PICKER; C's Enter may raise a move CONFIRM (G8).
+  { id: "torrent.category", title: "Set category", group: "Torrent", keys: ["C"], modes: ["NORMAL", "VISUAL"], panes: ["table"], needs: "selection" },
+  { id: "torrent.tags", title: "Edit tags", group: "Torrent", keys: ["T"], modes: ["NORMAL", "VISUAL"], panes: ["table"], needs: "selection" },
 
   // NORMAL, any pane
   { id: "all.toggle", title: "Start/stop all", group: "Library", keys: ["t"], modes: ["NORMAL"], panes: [PANE_ANY], needs: "none" },
@@ -174,6 +179,8 @@ var MODE_AFTER = {
   "palette.open": "COMMAND",
   "palette.close": "NORMAL",
   "palette.run": "NORMAL",
+  "torrent.category": "PICKER",
+  "torrent.tags": "PICKER",
   "picker.accept": "NORMAL",
   "picker.cancel": "NORMAL"
 };
@@ -559,10 +566,11 @@ function resolveRow(s, row, now) {
   if (EXITS_VISUAL[row.id] === true && s.mode === "VISUAL") {
     nextState = assign(nextState, { mode: "NORMAL" });
   }
-  // Leaving VISUAL (via visual.exit or an EXITS_VISUAL action) drops the
-  // range. Without this, a stale selectionCount would leak range semantics
-  // into the NORMAL mode that follows (see confirmCount/buildArgs).
-  if (s.mode === "VISUAL" && nextState.mode === "NORMAL") {
+  // Leaving VISUAL (via visual.exit, an EXITS_VISUAL action, or C/T's
+  // PICKER) drops the range. Without this, a stale selectionCount would
+  // leak range semantics into the mode that follows (see confirmCount/
+  // buildArgs); the pickers act on the targets the window captured.
+  if (s.mode === "VISUAL" && nextState.mode !== "VISUAL") {
     nextState = assign(nextState, { selectionCount: 0 });
   }
 
