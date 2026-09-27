@@ -656,6 +656,95 @@ class WatchChartTests(unittest.TestCase):
                 self._assert_no_chart_http_calls(env)
 
 
+class SpeedHistApiGuardTests(unittest.TestCase):
+    """do_tick only feeds the speedhist buffer when maindata was actually
+    re-fetched this tick (`status["api"]` true) -- a failed fetch must
+    neither grow the buffer with a stale replay nor wipe it outright."""
+
+    def test_a_failed_maindata_fetch_neither_grows_nor_wipes_the_buffer(self):
+        # do_tick calls read_inspect() -- and so emits one "inspect" line
+        # for the active watch -- on *every* tick, not just when a watch
+        # command arrives; at a 200ms cadence that is many lines during a
+        # ~1s fault window. Reading every one of them (rather than
+        # resending "watch" and taking whatever inspect line happens to be
+        # sitting oldest in the backlog) checks the buffer is untouched on
+        # each individual tick while maindata fails, not just at a single
+        # sampled instant.
+        with harness.fixture_server() as (port, env):
+            with ServeProcess(env) as sp:
+                sp.readline()  # the first tick already sampled debian.iso
+                h = "a" * 40
+                sp.send({"cmd": "cadence", "ms": 200})
+                sp.send({"cmd": "watch", "hash": h, "tab": "chart"})
+                first = sp.read_until(lambda o: o.get("type") == "inspect", timeout=5)
+                baseline = first["points"]
+                self.assertGreater(len(baseline), 0)
+
+                _write_control(env["QBT_FIXTURE_CONTROL"], {"maindata": "404"})
+                deadline = time.monotonic() + 1.2
+                saw_any = False
+                while True:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        break
+                    try:
+                        obj = sp.readline(timeout=remaining)
+                    except AssertionError:
+                        break
+                    if obj.get("type") == "inspect" and obj.get("tab") == "chart":
+                        saw_any = True
+                        self.assertEqual(
+                            obj["points"], baseline,
+                            "no growth, no wipe, no duplication while maindata fails",
+                        )
+                self.assertTrue(saw_any, "no chart inspect line arrived during the fault window")
+
+                # Restore the route; the next tick that lands in a new
+                # whole second grows the buffer again, with the earlier
+                # samples still exactly as they were.
+                _write_control(env["QBT_FIXTURE_CONTROL"], {"maindata": "ok"})
+                grown = sp.read_until(
+                    lambda o: o.get("type") == "inspect" and o.get("tab") == "chart"
+                    and len(o.get("points") or []) > len(baseline),
+                    timeout=5,
+                )
+                self.assertEqual(
+                    grown["points"][: len(baseline)], baseline,
+                    "the samples taken before the failure are untouched",
+                )
+
+    def test_gui_lock_holder_never_calls_maindata_or_creates_a_buffer(self):
+        # lockHolder "gui" makes build_status skip the maindata fetch
+        # outright (api always False), the other, cheaper way to reach the
+        # same guard: record() must never run, so a torrent that would
+        # otherwise get a buffer (debian.iso, dlspeed 1887436) never does.
+        with harness.fixture_server(extra_env={"QBT_LOCK": "gui"}) as (port, env):
+            with ServeProcess(env) as sp:
+                first = sp.readline()
+                self.assertEqual(first.get("api"), False)
+                h = "a" * 40
+                sp.send({"cmd": "cadence", "ms": 200})
+                sp.send({"cmd": "watch", "hash": h, "tab": "chart"})
+                deadline = time.monotonic() + 0.8
+                while True:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        break
+                    try:
+                        obj = sp.readline(timeout=remaining)
+                    except AssertionError:
+                        break
+                    if obj.get("type") == "inspect" and obj.get("tab") == "chart":
+                        self.assertEqual(obj["points"], [], "no buffer while api is always false")
+
+                # The harness's own readiness probe (start_fixture_server)
+                # makes exactly one maindata GET before the sidecar even
+                # starts; qbt-serve itself must add no more.
+                entries = _read_log(env["QBT_FIXTURE_LOG"])
+                maindata_reqs = [e for e in entries if e["path"] == "/api/v2/sync/maindata"]
+                self.assertEqual(len(maindata_reqs), 1, "only the harness's readiness check")
+
+
 class WatchCollapseTests(unittest.TestCase):
     def test_five_queued_watches_collapse_to_the_last(self):
         with harness.fixture_server() as (port, env):

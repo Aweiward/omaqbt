@@ -3,8 +3,9 @@ pragma ComponentBehavior: Bound
 import QtQuick
 import qs.Commons
 
-// The inspector's chart tab (mockup row 1/2, col 5, "Chart A"): a legend
-// row, a 190px Canvas line chart, a fixed time axis and Peak/Average rows.
+// The inspector's chart tab (mockup row 1 col 4, "Chart A"; row 2 col 4 is
+// the idle state): a legend row, a 190px Canvas line chart, a fixed time
+// axis and Peak/Average rows.
 // `series` is InspectorView.chartTab(...).series (itself
 // InspectorView.chartSeries(...)'s output): {down, up, max, maxText,
 // peakText, avgText, nowDlText, nowUlText, empty}. No I/O, no Date: every

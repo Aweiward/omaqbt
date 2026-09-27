@@ -16,6 +16,12 @@ from array import array
 MAX_SLOTS = 600
 MAX_BUFFERS = 200
 STALE_SECONDS = 600.0
+# The count cap above only bounds the number of slots, not their
+# wall-clock span: at anything slower than one sample per second it would
+# let a buffer cover hours, not 10 minutes. WINDOW_SECONDS bounds the span
+# itself, trimmed by age every tick, so 600 slots really do mean 10
+# minutes regardless of cadence.
+WINDOW_SECONDS = 600.0
 
 
 def _rate(value):
@@ -87,6 +93,14 @@ class SpeedHistory:
                     del buf.t[0]
                     del buf.dl[0]
                     del buf.up[0]
+            # Age trim: drop anything older than the window, however few
+            # slots that leaves (the count cap above can't catch this at a
+            # slow cadence). The slot this tick just touched is always
+            # within the window, so this can never empty the buffer.
+            while buf.t and buf.t[0] < now - WINDOW_SECONDS:
+                del buf.t[0]
+                del buf.dl[0]
+                del buf.up[0]
             if nonzero:
                 buf.last_nonzero_at = now
 

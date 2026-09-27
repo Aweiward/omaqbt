@@ -50,6 +50,19 @@ class SlotCapTests(unittest.TestCase):
         self.assertEqual(pts[-1][0], 1600.0)
         self.assertEqual(pts[-1][1], 601.0)
 
+    def test_a_slow_cadence_is_still_trimmed_to_a_600s_window_by_age(self):
+        # One sample every 60s for 16 ticks (900s of wall-clock span): far
+        # under the 600-slot count cap (only 16 slots), but the window
+        # itself must still be capped at 600s -- 600 slots only mean 10
+        # minutes when sampling is at least once a second; at any slower
+        # cadence the count cap alone would let the buffer span hours.
+        sh = speedhist.SpeedHistory()
+        for i in range(16):
+            sh.record(torrents(**{H: (5, 0)}), 60 * i)
+        pts = sh.points(H)
+        # t=0..900 in steps of 60; only 300..900 (the last 600s) survive.
+        self.assertEqual([p[0] for p in pts], [60.0 * i for i in range(5, 16)])
+
 
 class CreationTests(unittest.TestCase):
     def test_a_zero_sample_never_creates_a_buffer(self):

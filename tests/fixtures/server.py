@@ -108,6 +108,12 @@ class Handler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         record("GET", parsed.path, "", parse_qs(parsed.query), self.headers.get("Cookie") or "")
         if parsed.path == "/api/v2/sync/maindata":
+            fault = _fault("maindata")
+            if fault == "sleep3":
+                time.sleep(3)
+            elif fault == "404":
+                self._send(404, b"{}")
+                return
             rid = (parse_qs(parsed.query).get("rid") or ["0"])[0]
             sid, is_new = self._session()
             payload = DELTA if rid not in ("", "0") and not is_new else FULL
