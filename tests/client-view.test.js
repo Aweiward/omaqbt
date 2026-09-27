@@ -710,6 +710,17 @@ test("inspectorInfo: null with no row; the spec's fields in order", () => {
   assert.deepEqual(info.keys.map((k) => k.key), ["o", "y", "m", "e"]);
 });
 
+test("inspectorInfo: noMeta swaps the State field's percentage for 'waiting for metadata'", () => {
+  const row = torrent({ name: "magnet", state: "stoppedDL", progress: 0, size: -1 });
+  const info = V.inspectorInfo(row, (s) => "D" + s, true);
+  const val = (l) => info.fields.find((f) => f.label === l).value;
+  assert.equal(val("State"), "‖ stopped · waiting for metadata");
+  assert.equal(info.fields[0].tone, "muted");
+  // false (or omitted) keeps the plain percentage
+  assert.equal(V.inspectorInfo(row, (s) => "D" + s, false).fields[0].value, "‖ stopped · 0%");
+  assert.equal(V.inspectorInfo(row, (s) => "D" + s).fields[0].value, "‖ stopped · 0%");
+});
+
 test("inspectorInfo: missing fields show —, errored rows say why", () => {
   const info = V.inspectorInfo({ hash: H("a"), state: "missingFiles", progress: 0.5 });
   const val = (l) => info.fields.find((f) => f.label === l).value;

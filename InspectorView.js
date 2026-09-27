@@ -613,6 +613,37 @@ function trackerDetail(row) {
   };
 }
 
+// --- infoView -----------------------------------------------------------
+
+// The pieces bar's cell count (mockup row 1, col 1): PiecesBar draws one
+// line of this many glyphs, whatever `states.length` is.
+var PIECES_CELLS = 48;
+
+// infoView(entry, sinceMs, sidecarUp, row, fmtDate) -> {noMeta, cells,
+// legend, groups} for the Info tab's pieces bar and Transfer/Torrent
+// groups. `entry` is Service's inspectByKey[hash+"|info"] ({props, pieces,
+// error, at}) or undefined, read independent of whichever inspector tab is
+// currently shown -- a switch to Files, Trackers or Peers still needs this
+// torrent's no-metadata state. An entry older than sinceMs (stale, e.g.
+// after A->B->A or a switch away from the Info tab and back) or a down
+// sidecar counts as none: `cells` is then [], every group value reads "—"
+// (infoGroups(null)), and `noMeta` falls back to the row's own size
+// (noMetadata's fallback) -- exactly right for a torrent whose Info tab
+// hasn't been read yet, and for the primary case, every stopped magnet in
+// the user's library today.
+function infoView(entry, sinceMs, sidecarUp, row, fmtDate) {
+  var since = Number(sinceMs) || 0;
+  var fresh = sidecarUp !== false && !!entry && Number(entry.at) >= since;
+  var props = fresh && entry.props ? entry.props : null;
+  var pieces = fresh && Array.isArray(entry.pieces) ? entry.pieces : [];
+  return {
+    noMeta: noMetadata(row, props),
+    cells: binPieces(pieces, PIECES_CELLS),
+    legend: piecesLegend(pieces),
+    groups: infoGroups(props, fmtDate)
+  };
+}
+
 // peerDetail(row) -> the cursor peer's detail lines: {ip (shown in fg),
 // rest (":port · connection · downloaded N"), flags, flagsDesc (qbt's
 // one-meaning-per-line description joined with " · ")}.
@@ -647,6 +678,7 @@ if (typeof module !== "undefined" && module.exports) {
     listTab: listTab,
     trackerSummaryParts: trackerSummaryParts,
     trackerDetail: trackerDetail,
-    peerDetail: peerDetail
+    peerDetail: peerDetail,
+    infoView: infoView
   };
 }

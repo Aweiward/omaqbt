@@ -25,6 +25,11 @@ Item {
   property string tab: "info"
   // View.inspectorInfo(...), or null when there is no cursor row.
   property var info: null
+  // InspectorView.infoView(...)'s pieces bar and Transfer/Torrent groups.
+  property var pieces: []
+  property string piecesLegend: ""
+  property bool noMeta: false
+  property var groups: []
   // View.filesView(...): {state: "loading"|"error"|"empty"|"rows", rows}.
   property var files: ({ state: "loading", rows: [] })
   property int fileIndex: 0
@@ -326,68 +331,189 @@ Item {
     }
 
     // ---- 1 info --------------------------------------------------------
-    Flickable {
-      id: infoFlick
+    // The action keys are pinned outside the Flickable (infoFoot), so
+    // scrolling the name/fields/groups to the bottom never carries them
+    // off screen.
+    Item {
+      id: infoBody
       visible: pane.info !== null && pane.tab === "info"
       anchors.fill: parent
-      clip: true
-      contentWidth: width
-      contentHeight: infoColumn.height + Style.space(14)
-      boundsBehavior: Flickable.StopAtBounds
 
-      Column {
-        id: infoColumn
-        width: infoFlick.width
-        topPadding: Style.space(14)
-        spacing: Style.space(14)
-
-        Text {
-          x: pane.padX
-          width: infoColumn.width - 2 * pane.padX
-          text: pane.info ? pane.info.name : ""
-          textFormat: Text.PlainText
-          wrapMode: Text.WrapAnywhere
-          lineHeight: 1.2
-          font.family: Style.fontFamily
-          font.pixelSize: Style.font.title
-          color: Color.foreground
-        }
+      Flickable {
+        id: infoFlick
+        objectName: "infoFlick"
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.top: parent.top
+        anchors.bottom: infoFoot.top
+        clip: true
+        contentWidth: width
+        contentHeight: infoColumn.height + Style.space(14)
+        boundsBehavior: Flickable.StopAtBounds
 
         Column {
-          x: pane.padX
-          width: infoColumn.width - 2 * pane.padX
-          spacing: Style.space(10)
+          id: infoColumn
+          width: infoFlick.width
+          topPadding: Style.space(14)
+          spacing: Style.space(14)
+
+          Text {
+            x: pane.padX
+            width: infoColumn.width - 2 * pane.padX
+            text: pane.info ? pane.info.name : ""
+            textFormat: Text.PlainText
+            wrapMode: Text.WrapAnywhere
+            lineHeight: 1.2
+            font.family: Style.fontFamily
+            font.pixelSize: Style.font.title
+            color: Color.foreground
+          }
+
+          // Hidden with no cells too: while the sidecar is down, or before
+          // the first info reply arrives, InspectorView.infoView hands back
+          // [] rather than a bar of all-missing glyphs and a "0 of 0" legend.
+          PiecesBar {
+            visible: !pane.noMeta && pane.pieces.length > 0
+            x: pane.padX
+            width: infoColumn.width - 2 * pane.padX
+            cells: pane.pieces
+            legend: pane.piecesLegend
+          }
+
+          Text {
+            visible: pane.noMeta
+            x: pane.padX
+            width: infoColumn.width - 2 * pane.padX
+            text: "no metadata yet · pieces and files appear once it's fetched"
+            textFormat: Text.PlainText
+            wrapMode: Text.WordWrap
+            font.family: Style.fontFamily
+            font.pixelSize: Style.font.bodySmall
+            color: Color.muted
+          }
+
+          Column {
+            x: pane.padX
+            width: infoColumn.width - 2 * pane.padX
+            spacing: Style.space(10)
+
+            Repeater {
+              model: pane.info ? pane.info.fields : []
+              delegate: Row {
+                id: field
+                required property var modelData
+                width: parent.width
+                Text {
+                  width: Style.space(96)
+                  text: field.modelData.label
+                  textFormat: Text.PlainText
+                  font.family: Style.fontFamily
+                  font.pixelSize: Style.font.body
+                  color: Color.muted
+                }
+                Text {
+                  width: field.width - Style.space(96)
+                  text: field.modelData.value
+                  textFormat: Text.PlainText
+                  wrapMode: Text.WrapAnywhere
+                  font.family: Style.fontFamily
+                  font.pixelSize: Style.font.body
+                  color: pane.toneColor(field.modelData.tone)
+                }
+              }
+            }
+          }
 
           Repeater {
-            model: pane.info ? pane.info.fields : []
-            delegate: Row {
-              id: field
+            model: pane.groups
+            delegate: Column {
+              id: group
               required property var modelData
-              width: parent.width
+              x: pane.padX
+              width: infoColumn.width - 2 * pane.padX
+              spacing: Style.space(8)
+
               Text {
-                width: Style.space(96)
-                text: field.modelData.label
+                text: group.modelData.title
                 textFormat: Text.PlainText
                 font.family: Style.fontFamily
-                font.pixelSize: Style.font.body
+                font.pixelSize: Style.font.caption
+                font.capitalization: Font.AllUppercase
+                font.bold: false
+                font.letterSpacing: Style.font.caption * 0.12
                 color: Color.muted
               }
-              Text {
-                width: field.width - Style.space(96)
-                text: field.modelData.value
-                textFormat: Text.PlainText
-                wrapMode: Text.WrapAnywhere
-                font.family: Style.fontFamily
-                font.pixelSize: Style.font.body
-                color: pane.toneColor(field.modelData.tone)
+
+              Column {
+                width: group.width
+                spacing: Style.space(10)
+
+                Repeater {
+                  model: group.modelData.fields
+                  // The value wraps (Comment is untrusted, arbitrary-length
+                  // qBittorrent text); the note (Downloaded's short "· N
+                  // this session" suffix, the only field that carries one)
+                  // sits after it in its own muted tone, so the value's
+                  // width leaves room for it instead of always wrapping.
+                  delegate: Row {
+                    id: gfield
+                    required property var modelData
+                    width: group.width
+                    Text {
+                      width: Style.space(96)
+                      text: gfield.modelData.label
+                      textFormat: Text.PlainText
+                      font.family: Style.fontFamily
+                      font.pixelSize: Style.font.body
+                      color: Color.muted
+                    }
+                    Text {
+                      id: gvalue
+                      width: gfield.width - Style.space(96) - (gnote.visible ? gnote.implicitWidth : 0)
+                      text: gfield.modelData.value
+                      textFormat: Text.PlainText
+                      wrapMode: Text.WrapAnywhere
+                      font.family: Style.fontFamily
+                      font.pixelSize: Style.font.body
+                      color: pane.toneColor(gfield.modelData.tone)
+                    }
+                    Text {
+                      id: gnote
+                      visible: !!gfield.modelData.note
+                      text: " " + gfield.modelData.note
+                      textFormat: Text.PlainText
+                      font.family: Style.fontFamily
+                      font.pixelSize: Style.font.body
+                      color: Color.muted
+                    }
+                  }
+                }
               }
             }
           }
         }
+      }
 
+      Item {
+        id: infoFoot
+        objectName: "infoActionsFooter"
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.bottom: parent.bottom
+        height: Style.space(28)
+        Rectangle {
+          anchors.left: parent.left
+          anchors.right: parent.right
+          anchors.top: parent.top
+          height: 1
+          color: pane.lineColor
+        }
         Flow {
-          x: pane.padX
-          width: infoColumn.width - 2 * pane.padX
+          anchors.left: parent.left
+          anchors.leftMargin: pane.padX
+          anchors.right: parent.right
+          anchors.rightMargin: pane.padX
+          anchors.verticalCenter: parent.verticalCenter
           spacing: Style.space(14)
           Repeater {
             model: pane.info ? pane.info.keys : []
@@ -522,8 +648,12 @@ Item {
     }
 
     // ---- 4 files -------------------------------------------------------
+    // A no-metadata torrent's empty files list gets its own explanation
+    // (emptyCopy("files", ...)) instead of the plain "No files.": qBittorrent
+    // has nothing to list until the magnet resolves.
     Text {
       visible: pane.info !== null && pane.tab === "files" && pane.files.state !== "rows"
+        && !(pane.files.state === "empty" && pane.noMeta)
       anchors.left: parent.left
       anchors.leftMargin: pane.padX
       anchors.top: parent.top
@@ -537,6 +667,37 @@ Item {
       font.family: Style.fontFamily
       font.pixelSize: Style.font.body
       color: pane.files.state === "error" ? Color.urgent : Color.muted
+    }
+
+    Column {
+      id: filesNoMetaCopy
+      visible: pane.info !== null && pane.tab === "files" && pane.files.state === "empty" && pane.noMeta
+      readonly property var copy: InspectorView.emptyCopy("files", null)
+      anchors.left: parent.left
+      anchors.leftMargin: pane.padX
+      anchors.right: parent.right
+      anchors.rightMargin: pane.padX
+      anchors.top: parent.top
+      anchors.topMargin: Style.space(14)
+      spacing: Style.space(6)
+      Text {
+        width: parent.width
+        text: filesNoMetaCopy.copy.title
+        textFormat: Text.PlainText
+        wrapMode: Text.WordWrap
+        font.family: Style.fontFamily
+        font.pixelSize: Style.font.body
+        color: Color.foreground
+      }
+      Text {
+        width: parent.width
+        text: filesNoMetaCopy.copy.body
+        textFormat: Text.PlainText
+        wrapMode: Text.WordWrap
+        font.family: Style.fontFamily
+        font.pixelSize: Style.font.body
+        color: Color.muted
+      }
     }
 
     InspectorList {

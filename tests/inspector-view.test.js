@@ -611,3 +611,42 @@ test("listTab: an error entry exposes its text and never its retained rows", () 
   assert.deepEqual(t.rows, []);
   assert.equal(I.listTab("trackers", { trackers: TRACKERS_FIXTURE, at: 1000 }, 900, 1000, true).error, "");
 });
+
+// --- infoView (Task 6) -------------------------------------------------------
+
+test("infoView: a fresh entry carries pieces into cells/legend and props into groups", () => {
+  const props = { has_metadata: true, total_downloaded: 1073741824 };
+  const pieces = [2, 2, 0, 0];
+  const v = I.infoView({ props: props, pieces: pieces, at: 1000 }, 900, true, { size: 5000 }, fmtDate);
+  assert.equal(v.noMeta, false);
+  assert.equal(v.cells.length, 48);
+  assert.equal(v.legend, I.piecesLegend(pieces));
+  assert.equal(v.groups[0].fields.find((f) => f.label === "Downloaded").value, "1.0 GiB");
+});
+
+test("infoView: no entry yet shows noMeta from the row alone and every group value —", () => {
+  const v = I.infoView(undefined, 900, true, { size: -1 }, fmtDate);
+  assert.equal(v.noMeta, true);
+  assert.deepEqual(v.cells, []);
+  for (const g of v.groups) for (const f of g.fields) assert.equal(f.value, "—");
+});
+
+test("infoView: a stale entry (at < sinceMs, e.g. after A->B->A) counts as none", () => {
+  const props = { has_metadata: true };
+  const v = I.infoView({ props: props, pieces: [2, 2], at: 800 }, 900, true, { size: -1 }, fmtDate);
+  assert.equal(v.noMeta, true, "the stale props never override the row's own size");
+  assert.deepEqual(v.cells, []);
+});
+
+test("infoView: sidecar down blanks a fresh entry too", () => {
+  const props = { has_metadata: true };
+  const v = I.infoView({ props: props, pieces: [2, 2], at: 1000 }, 900, false, { size: -1 }, fmtDate);
+  assert.equal(v.noMeta, true, "props.has_metadata is ignored once down; the row's own size wins");
+  assert.deepEqual(v.cells, []);
+  for (const g of v.groups) for (const f of g.fields) assert.equal(f.value, "—");
+});
+
+test("infoView: has_metadata false wins even at a nonzero size", () => {
+  const v = I.infoView({ props: { has_metadata: false }, pieces: [], at: 1000 }, 900, true, { size: 5000 }, fmtDate);
+  assert.equal(v.noMeta, true);
+});

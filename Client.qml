@@ -96,7 +96,7 @@ Item {
   readonly property var cursorRow: tableState === "rows" ? rawRow(cursorHash) : null
   readonly property var inspectorInfo: View.inspectorInfo(cursorRow, function(sec) {
     return Qt.formatDateTime(new Date(sec * 1000), "yyyy-MM-dd hh:mm")
-  })
+  }, infoTab.noMeta)
   // Bound to a bool, not to cursorRow: cursorRow is a fresh object every
   // status tick, and re-running filesView would hand the Files ListView a
   // new model and reset its scroll on every tick.
@@ -139,6 +139,16 @@ Item {
   readonly property bool sidecarUp: !!service && !service.sidecarDown
   readonly property var trackersView: InspectorView.listTab("trackers", inspectorTab === "trackers" ? inspectEntry : undefined, inspectSince, inspectNow, sidecarUp, cursorRow)
   readonly property var peersView: InspectorView.listTab("peers", inspectorTab === "peers" ? inspectEntry : undefined, inspectSince, inspectNow, sidecarUp, cursorRow)
+  // The Info tab's pieces bar and Transfer/Torrent groups. Read from the
+  // "|info" key regardless of which tab is shown, unlike inspectEntry
+  // above: a switch to Files needs this torrent's no-metadata state too,
+  // and InspectorView.infoView's own staleness/sidecar gate already blanks
+  // it once inspectSince moves past a switch away from Info (Task 3's
+  // pattern, same as tabState).
+  readonly property var infoEntry: service && watchHash !== "" ? (service.inspectByKey || {})[watchHash + "|info"] : undefined
+  readonly property var infoTab: InspectorView.infoView(infoEntry, inspectSince, sidecarUp, cursorRow, function(sec) {
+    return Qt.formatDateTime(new Date(sec * 1000), "yyyy-MM-dd hh:mm")
+  })
   // Each list's cursor, kept on its url / ip:port (ClientCommands.stickRow).
   property int trackerIndex: 0
   property int peerIndex: 0
@@ -652,6 +662,10 @@ Item {
             anchors.fill: parent
             tab: root.inspectorTab
             info: root.inspectorInfo
+            pieces: root.infoTab.cells
+            piecesLegend: root.infoTab.legend
+            noMeta: root.infoTab.noMeta
+            groups: root.infoTab.groups
             files: root.filesState
             fileIndex: root.fileIndex
             trackers: root.trackersView

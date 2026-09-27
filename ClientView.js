@@ -1099,11 +1099,14 @@ function sameEntries(a, b) {
 
 // --- Inspector ------------------------------------------------------------
 
-// inspectorInfo(row, dateText) -> the Info tab for the cursor row, or null
-// when there is no cursor row ("Select a torrent"). dateText(epochSec)
+// inspectorInfo(row, dateText, noMeta) -> the Info tab for the cursor row,
+// or null when there is no cursor row ("Select a torrent"). dateText(epochSec)
 // formats the added time (QML passes Qt.formatDateTime; keeping it an
-// argument keeps this file free of Date). Missing values show "—".
-function inspectorInfo(row, dateText) {
+// argument keeps this file free of Date). Missing values show "—". noMeta
+// (InspectorView.noMetadata's result) swaps the State field's percentage
+// for "waiting for metadata" -- true for every torrent in the user's
+// library today, whose state is stopped, size unknown.
+function inspectorInfo(row, dateText, noMeta) {
   if (!row) return null;
   var r = row;
   var group = Model.statusGroup(r);
@@ -1127,10 +1130,11 @@ function inspectorInfo(row, dateText) {
     var s = Model.plainText(v);
     return s === "" ? "—" : s;
   }
+  var stateSuffix = noMeta === true ? "waiting for metadata" : Model.formatPercent(clamp01(r.progress));
   return {
     name: text(r.name),
     fields: [
-      { label: "State", value: g.glyph + " " + word + " · " + Model.formatPercent(clamp01(r.progress)), tone: g.tone },
+      { label: "State", value: g.glyph + " " + word + " · " + stateSuffix, tone: g.tone },
       { label: "Size", value: hasSize ? Model.sizeText(size) + " (" + Model.sizeText(size * clamp01(r.progress)) + " done)" : "—", tone: "fg" },
       { label: "Speed", value: dl === null && ul === null ? "—" : "↓ " + Model.sizeText(dl || 0) + "/s · ↑ " + Model.sizeText(ul || 0) + "/s", tone: "fg" },
       { label: "Peers", value: seeds === null && leechs === null ? "—" : plural(seeds || 0, "seed", "seeds") + " · " + plural(leechs || 0, "leecher", "leechers"), tone: "fg" },

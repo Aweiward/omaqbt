@@ -1388,6 +1388,13 @@ TestCase {
     ]
   }
   function inspectorOf(c) { return findWith(winOf(c).contentItem, "positionFile") }
+  function findByName(obj, name) {
+    if (!obj) return null
+    if (obj.objectName === name) return obj
+    var kids = obj.children || []
+    for (var i = 0; i < kids.length; i++) { var r = findByName(kids[i], name); if (r) return r }
+    return null
+  }
   // Every Text a user could see under obj (every ancestor visible).
   function visibleTexts(obj, out) {
     out = out || []
@@ -1631,5 +1638,96 @@ TestCase {
     compare(o.c.messageLine.text, "", "the stale error under the old key is not noted")
     o.svc.setInspect(hh("c"), "trackers", { trackers: [], error: "timed out" })
     compare(o.c.messageLine.text, "Couldn't read trackers: timed out")
+  }
+
+  // ---- info tab: pieces bar, groups, no-metadata (Task 6) ----------------
+
+  function propsFixture(extra) {
+    var p = {
+      addition_date: 1700000000, comment: "hello", hash: hh("a"),
+      is_private: false, nb_connections: 17, nb_connections_limit: 100,
+      piece_size: 1048576, pieces_num: 4, time_elapsed: 8040, seeding_time: 0,
+      total_downloaded: 1073741824, total_downloaded_session: 0,
+      total_uploaded: 2147483648, total_wasted: 0, has_metadata: true
+    }
+    for (var k in extra || {}) p[k] = extra[k]
+    return p
+  }
+
+  function test_info_pieces_bar_and_transfer_torrent_groups() {
+    var o = make()
+    o.svc.torrents = [tt(hh("a"), "alpha", { size: 5000000000 })]
+    key(o.c, "1")
+    compare(o.c.inspectorTab, "info")
+    o.svc.setInspect(hh("a"), "info", { props: propsFixture(), pieces: [2, 2, 0, 0] })
+    wait(30)
+    var insp = inspectorOf(o.c)
+    var bar = findWith(insp, "markup")
+    verify(bar !== null, "PiecesBar is in the tree")
+    compare(bar.cells.length, 48)
+    verify(shows(o.c, "pieces 2 of 4 · █ have ▓ partial ░ missing"))
+    verify(shows(o.c, "Transfer"))
+    verify(shows(o.c, "Torrent"))
+    verify(shows(o.c, "17 of 100"), "Connections field")
+    verify(shows(o.c, "hello"), "Comment field")
+    // Sidecar down: the pieces area shows nothing, the groups show "--",
+    // and there is no "Needs qbt-serve" blocker over the whole tab.
+    o.svc.sidecarDown = true
+    wait(30)
+    verify(!shows(o.c, "pieces 2 of 4 · █ have ▓ partial ░ missing"))
+    // The bar itself (not just its old legend text) is gone: with no fresh
+    // pieces, InspectorView.infoView hands back [], and a bar shown with []
+    // would render an empty line plus a "0 of 0" legend.
+    verify(!shows(o.c, "pieces 0 of 0 · █ have ▓ partial ░ missing"))
+    verify(!shows(o.c, "17 of 100"))
+    verify(!shows(o.c, "Needs qbt-serve (slow polling)"))
+    verify(shows(o.c, "alpha"), "the slice-1 block stays up")
+  }
+
+  function test_info_no_metadata_shows_muted_line_and_no_bar_and_state_text() {
+    var o = make()
+    o.svc.torrents = [tt(hh("a"), "alpha", { size: -1, state: "stoppedDL", progress: 0 })]
+    key(o.c, "1")
+    wait(30)
+    verify(shows(o.c, "no metadata yet · pieces and files appear once it's fetched"))
+    verify(shows(o.c, "‖ stopped · waiting for metadata"))
+    var insp = inspectorOf(o.c)
+    var bar = findWith(insp, "markup")
+    verify(bar !== null && bar.visible === false, "the pieces bar itself is hidden")
+  }
+
+  function test_files_no_metadata_shows_no_file_list_yet() {
+    var o = make()
+    o.svc.torrents = [tt(hh("a"), "alpha", { size: -1 })]
+    key(o.c, "4")
+    o.svc.setFilesFor(hh("a"), [])
+    o.svc.setFilesStatus(hh("a"), "ok", "")
+    compare(o.c.filesState.state, "empty")
+    verify(shows(o.c, "No file list yet"))
+    verify(shows(o.c, "qBittorrent needs the torrent's metadata first."))
+    verify(!shows(o.c, "No files."))
+  }
+
+  function test_info_action_keys_stay_pinned_after_scrolling_to_the_bottom() {
+    var o = make()
+    // A very long name (WrapAnywhere) forces the info Flickable's content
+    // taller than the pane, so scrolling to the bottom is a real move, not
+    // a no-op that would make the footer's fixed position vacuously true.
+    o.svc.torrents = [tt(hh("a"), "a".repeat(600), { size: 5000000000 })]
+    key(o.c, "1")
+    o.svc.setInspect(hh("a"), "info", { props: propsFixture(), pieces: [2, 2, 0, 0] })
+    wait(30)
+    var insp = inspectorOf(o.c)
+    var foot = findByName(insp, "infoActionsFooter")
+    verify(foot !== null, "the footer is in the tree")
+    var flick = findByName(insp, "infoFlick")
+    verify(flick !== null, "the flickable is in the tree")
+    verify(flick.contentHeight > flick.height, "the content actually overflows the pane")
+    var before = foot.mapToItem(insp, 0, 0).y
+    flick.contentY = flick.contentHeight - flick.height
+    wait(0)
+    var after = foot.mapToItem(insp, 0, 0).y
+    compare(after, before, "the footer doesn't move when the flickable scrolls")
+    verify(shows(o.c, "copy magnet"), "the action keys are still on screen")
   }
 }
