@@ -186,7 +186,7 @@ function hasPipe(url) {
 // What the window says instead of acting on such a tracker (qbt dies with
 // the same words).
 var PIPE_NOTE = "This tracker's URL can't be edited through the WebUI API.";
-var UNUSABLE_NOTE = "This tracker's URL can't be edited here.";
+var UNUSABLE_NOTE = "This tracker's URL can't be changed or removed from here.";
 
 // trackerUrlError(text) -> "" for a URL qbt accepts, else the message.
 // Checks, in qbt's order: at most 2048 characters; udp://, http://,

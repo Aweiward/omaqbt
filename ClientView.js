@@ -517,7 +517,7 @@ function progressText(kind, count) {
 // {lead, strong, tail, accept}: "Delete 2 torrents" + "and their files" +
 // "from disk?", accept "delete". An inspector confirm {kind, label, target}
 // names its captured row by label (a tracker's redacted host:port, never
-// its URL; a peer's ip:port).
+// its URL; a peer's IP, without the port: the ban is IP-wide).
 function confirmLine(confirm) {
   var c = confirm || {};
   if (c.kind === "trackerRemove" || c.kind === "peerBan") {
@@ -851,10 +851,22 @@ function sameInspectorState(a, b) {
     a.cursorStopped === b.cursorStopped && a.cursorPendingMagnet === b.cursorPendingMagnet;
 }
 
+// peerIp(ipPort) -> the peer's IP alone, for the ban confirm (a ban is
+// IP-wide, so the port would mislead): "203.0.113.42:6881" ->
+// "203.0.113.42", "[2001:db8::1]:51413" -> "2001:db8::1". Anything without
+// a recognisable ":port" comes back unchanged.
+function peerIp(ipPort) {
+  var s = String(ipPort === undefined || ipPort === null ? "" : ipPort);
+  var m = /^\[([^\]]*)\]:[0-9]+$/.exec(s);
+  if (m) return m[1];
+  m = /^([^:\[\]]+):[0-9]+$/.exec(s);
+  return m ? m[1] : s;
+}
+
 // inspectorDispatch(ctx) -> the inspector's part of the dispatch state:
 //   inspectorTarget: {kind: "tracker", value: url, label: host} for the
 //     trackers tab's cursor row, {kind: "peer", value: ipPort, label:
-//     ipPort} for the peers tab's; null on other tabs, an empty list, a
+//     peerIp(ipPort)} for the peers tab's (qbt bans `value`); null on other tabs, an empty list, a
 //     cursor off the list, or when the inspector isn't the focused pane.
 //   trackersTab: the focused inspector shows the trackers tab of a cursor
 //     torrent (even with no trackers, so `a` can add the first one).
@@ -881,7 +893,7 @@ function inspectorDispatch(ctx) {
       if (r.refusal) target.refusal = String(r.refusal);
     }
     else if (r) {
-      target = { kind: "peer", value: String(r.ipPort), label: String(r.ipPort) };
+      target = { kind: "peer", value: String(r.ipPort), label: peerIp(r.ipPort) };
       // InspectorView.peerRefusal, when b can't ban it.
       if (r.refusal) target.refusal = String(r.refusal);
     }
@@ -1907,6 +1919,7 @@ if (typeof module !== "undefined" && module.exports) {
     magnetDeferred: magnetDeferred,
     withMagnetWait: withMagnetWait,
     magnetAction: magnetAction,
-    magnetLine: magnetLine
+    magnetLine: magnetLine,
+    peerIp: peerIp
   };
 }

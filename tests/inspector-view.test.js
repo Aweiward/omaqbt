@@ -1013,7 +1013,7 @@ test("trackerRefusal: why a stored tracker URL can't be changed or removed, or \
   assert.equal(I.trackerRefusal("udp://a.example/x|y"), I.PIPE_NOTE);
   assert.equal(I.PIPE_NOTE, "This tracker's URL can't be edited through the WebUI API.");
   const bad = ["UDP://a.example/announce", "udp://a example/announce", "udp://tr\u00e9cker.example/a", "udp://a.example/" + "x".repeat(2048), "ftp://a.example/", ""];
-  for (const u of bad) assert.equal(I.trackerRefusal(u), "This tracker's URL can't be edited here.", JSON.stringify(u.slice(0, 40)));
+  for (const u of bad) assert.equal(I.trackerRefusal(u), "This tracker's URL can't be changed or removed from here.", JSON.stringify(u.slice(0, 40)));
 });
 
 test("trackerRows carries each row's refusal", () => {
@@ -1024,5 +1024,5 @@ test("trackerRows carries each row's refusal", () => {
   ]).rows;
   assert.equal(rows[0].refusal, "");
   assert.equal(rows[1].refusal, I.PIPE_NOTE);
-  assert.equal(rows[2].refusal, "This tracker's URL can't be edited here.");
+  assert.equal(rows[2].refusal, "This tracker's URL can't be changed or removed from here.");
 });

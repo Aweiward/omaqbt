@@ -1438,8 +1438,8 @@ test("confirmLine: tracker removal and peer ban", () => {
   assert.equal(t.lead + t.strong + t.tail, "Remove tracker tracker.example:1337 from this torrent?");
   assert.equal(t.accept, "remove");
   assert.doesNotMatch(t.lead + t.strong + t.tail, /abc123/);
-  const p = V.confirmLine({ kind: "peerBan", label: "203.0.113.42:6881" });
-  assert.equal(p.lead + p.strong + p.tail, "Ban 203.0.113.42:6881 from all torrents? It goes on qBittorrent's IP ban list.");
+  const p = V.confirmLine({ kind: "peerBan", label: "203.0.113.42" });
+  assert.equal(p.lead + p.strong + p.tail, "Ban 203.0.113.42 from all torrents? It goes on qBittorrent's IP ban list.");
   assert.equal(p.accept, "ban");
   // the label falls back to target.label
   const fb = V.confirmLine({ kind: "trackerRemove", target: { label: "a.example" } });
@@ -1459,7 +1459,7 @@ function insp(overrides) {
 test("inspectorDispatch: the tracker or peer row under the inspector cursor is the target", () => {
   assert.deepEqual(V.inspectorDispatch(insp()).inspectorTarget, { kind: "tracker", value: TRACKERS[0].url, label: "a.example" });
   assert.deepEqual(V.inspectorDispatch(insp({ trackerIndex: 1 })).inspectorTarget, { kind: "tracker", value: "udp://b.example:1337/x", label: "b.example:1337" });
-  assert.deepEqual(V.inspectorDispatch(insp({ tab: "peers", peerIndex: 1 })).inspectorTarget, { kind: "peer", value: "[2001:db8::1]:51413", label: "[2001:db8::1]:51413" });
+  assert.deepEqual(V.inspectorDispatch(insp({ tab: "peers", peerIndex: 1 })).inspectorTarget, { kind: "peer", value: "[2001:db8::1]:51413", label: "2001:db8::1" });
 });
 
 test("inspectorDispatch: no target on other tabs, empty lists, out-of-range cursors or another pane", () => {
@@ -1643,7 +1643,17 @@ test("inspectorDispatch: a peer row's refusal rides on the target, only when set
   const bad = V.inspectorDispatch(insp({ tab: "peers", peers: rows, peerIndex: 0 })).inspectorTarget;
   assert.equal(bad.refusal, rows[0].refusal);
   const ok = V.inspectorDispatch(insp({ tab: "peers", peers: rows, peerIndex: 1 })).inspectorTarget;
-  assert.deepEqual(ok, { kind: "peer", value: "203.0.113.42:6881", label: "203.0.113.42:6881" });
+  assert.deepEqual(ok, { kind: "peer", value: "203.0.113.42:6881", label: "203.0.113.42" });
+});
+
+test("peerIp: the ban confirm names the IP only (the ban is IP-wide)", () => {
+  assert.equal(V.peerIp("203.0.113.42:6881"), "203.0.113.42");
+  assert.equal(V.peerIp("[2001:db8::1]:51413"), "2001:db8::1");
+  assert.equal(V.peerIp("[::1]:1"), "::1");
+  // Anything without a recognisable :port is shown as it is.
+  assert.equal(V.peerIp("bogus"), "bogus");
+  assert.equal(V.peerIp(""), "");
+  assert.equal(V.peerIp(undefined), "");
 });
 
 test("fetchMetaRefusal: already fetching, then running, else nothing", () => {
