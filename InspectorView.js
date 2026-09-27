@@ -728,9 +728,18 @@ function tabState(entry, sinceMs, nowMs, sidecarUp) {
 // emptyCopy(tab, row) -> {title, body, keys} for the states table's empty
 // state. `keys` are empty in 2a (Space and `f` arrive in 2b).
 // The keys a no-metadata torrent's Info footer and Files empty state pin
-// (a fresh array each call).
-function noMetadataKeys() {
-  return [{ key: "Space", label: "Start download" }, { key: "f", label: "Fetch metadata only" }];
+// (a fresh array each call), for the torrent `row`: `Space` Start download
+// only when Space would start it (stopped, ClientView.toggleStarts'
+// buckets), `f` only when qbt fetch-metadata accepts its state (stoppedDL
+// or pausedDL). A running one (e.g. a fresh magnet in metaDL) gets none.
+function noMetadataKeys(row) {
+  var r = row || {};
+  var keys = [];
+  var bucket = Model.classifyState(r.state, r.progress);
+  if (bucket === "paused" || bucket === "completed") keys.push({ key: "Space", label: "Start download" });
+  var st = String(r.state || "").toLowerCase();
+  if (st === "stoppeddl" || st === "pauseddl") keys.push({ key: "f", label: "Fetch metadata only" });
+  return keys;
 }
 
 function emptyCopy(tab, row) {
@@ -746,10 +755,10 @@ function emptyCopy(tab, row) {
     return { title: "No trackers", body: "This torrent only finds peers through DHT and PeX.", keys: [] };
   }
   if (tab === "files") {
-    return { title: "No file list yet", body: "qBittorrent needs the torrent's metadata first.", keys: noMetadataKeys() };
+    return { title: "No file list yet", body: "qBittorrent needs the torrent's metadata first.", keys: noMetadataKeys(row) };
   }
   // Info's no-metadata footer: only its keys change (the states table).
-  if (tab === "info") return { title: "", body: "", keys: noMetadataKeys() };
+  if (tab === "info") return { title: "", body: "", keys: noMetadataKeys(row) };
   return { title: "", body: "", keys: [] };
 }
 

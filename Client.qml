@@ -323,10 +323,12 @@ Item {
     if (!View.sameEntries(filterEntries, entries)) filterEntries = entries
     // An automatic cursor move (its torrent went away, or a restored hash
     // no longer exists) isn't saved; only user moves are.
-    // A fetch-metadata swap keeps it on its hash while that drops out.
-    if (!commands.holdsCursor(cursorHash)) cursorHash = View.resolveCursor(v.rows, cursorHash, prevIndex)
+    // A fetch-metadata swap keeps it on its hash while that drops out, and
+    // shows the row once it's back (the re-add can land anywhere).
+    var held = commands.holdsCursor(cursorHash)
+    if (!held) cursorHash = View.resolveCursor(v.rows, cursorHash, prevIndex)
     commands.checkFetches()
-    if (reveal === true && View.indexOfHash(v.rows, cursorHash) >= 0) revealCursor()
+    if ((reveal === true || (held && prevIndex < 0)) && View.indexOfHash(v.rows, cursorHash) >= 0) revealCursor()
   }
 
   function setCursor(hash) {

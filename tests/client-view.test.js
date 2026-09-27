@@ -1658,14 +1658,32 @@ test("fetchMetaRefusal: already fetching, then running, else nothing", () => {
   assert.equal(V.fetchMetaRefusal(null, false), "");
 });
 
-test("fetchMetaProgress: absent, waiting (size unknown) or received (size > 0)", () => {
-  const list = [torrent({ hash: H("a"), size: 0 }), torrent({ hash: H("b"), size: -1 }), torrent({ hash: H("c"), size: 4096 })];
+test("fetchMetaProgress: absent, waiting (running, size unknown), stopped (no size) or received (size > 0)", () => {
+  const list = [torrent({ hash: H("a"), size: 0, state: "metaDL" }), torrent({ hash: H("b"), size: -1 }), torrent({ hash: H("c"), size: 4096 }),
+    torrent({ hash: H("e"), size: 0, state: "stoppedDL", progress: 0 }), torrent({ hash: H("f"), size: -1, state: "pausedDL", progress: 0 })];
   assert.equal(V.fetchMetaProgress(list, H("a")), "waiting");
   assert.equal(V.fetchMetaProgress(list, H("b")), "waiting");
   assert.equal(V.fetchMetaProgress(list, H("c")), "received");
   assert.equal(V.fetchMetaProgress(list, H("d")), "absent");
+  assert.equal(V.fetchMetaProgress(list, H("e")), "stopped");
+  assert.equal(V.fetchMetaProgress(list, H("f")), "stopped");
   assert.equal(V.fetchMetaProgress(null, H("a")), "absent");
   assert.equal(V.FETCH_META_DONE_NOTE, "Metadata received · stopped");
+});
+
+test("fetchWatchOutcome: keep, received, or end quietly", () => {
+  const running = { ticket: 4, done: false, at: 0 };
+  const done = { ticket: 4, done: true, at: 1000 };
+  assert.equal(V.fetchWatchOutcome(running, "received", 99999), "keep", "the ticket still runs");
+  assert.equal(V.fetchWatchOutcome(done, "received", 1000), "received");
+  assert.equal(V.fetchWatchOutcome(done, "waiting", 999999), "keep", "running without a size: still looking");
+  assert.equal(V.fetchWatchOutcome(done, "absent", 11000), "keep", "inside the 10 s hold");
+  assert.equal(V.fetchWatchOutcome(done, "absent", 11001), "quiet");
+  // Stopped with no size (the user stopped it, or qBittorrent did without
+  // metadata): a short grace for the status stream to catch up, then quiet.
+  assert.equal(V.fetchWatchOutcome(done, "stopped", 4000), "keep");
+  assert.equal(V.fetchWatchOutcome(done, "stopped", 4001), "quiet");
+  assert.equal(V.fetchWatchOutcome(null, "received", 1), "quiet");
 });
 
 test("paletteRows: the real Ban peer and Fetch metadata only rows", () => {

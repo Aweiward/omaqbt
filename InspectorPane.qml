@@ -166,6 +166,7 @@ Item {
       pieces: pane.pieces
       piecesLegend: pane.piecesLegend
       noMeta: pane.noMeta
+      row: pane.row
       infoErrored: pane.infoErrored
       groups: pane.groups
       padX: pane.padX

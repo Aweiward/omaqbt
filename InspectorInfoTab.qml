@@ -19,6 +19,8 @@ Item {
   property var pieces: []
   property string piecesLegend: ""
   property bool noMeta: false
+  // The raw cursor row (Client.cursorRow), for the no-metadata keys.
+  property var row: null
   // M2: true for a fresh Info-tab error -- see InspectorPane.qml's own
   // `infoErrored` property doc.
   property bool infoErrored: false
@@ -221,7 +223,7 @@ Item {
       spacing: Style.space(14)
       Repeater {
         // No metadata: the pinned keys become Space and f (the states table).
-        model: !root.info ? [] : (root.noMeta ? InspectorView.emptyCopy("info", null).keys : root.info.keys)
+        model: !root.info ? [] : (root.noMeta ? InspectorView.emptyCopy("info", root.row).keys : root.info.keys)
         delegate: Row {
           id: act
           required property var modelData

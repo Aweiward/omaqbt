@@ -639,18 +639,30 @@ test("emptyCopy peers: a null row is treated as stopped, and never throws", () =
   assert.equal(c.body, "The torrent is stopped. Start it to connect.");
 });
 
-test("emptyCopy files: no metadata copy with the Space and f keys (2b)", () => {
-  const c = I.emptyCopy("files", {});
+const NO_META_KEYS = [{ key: "Space", label: "Start download" }, { key: "f", label: "Fetch metadata only" }];
+
+test("emptyCopy files: no metadata copy; a stopped torrent gets the Space and f keys (2b)", () => {
+  const c = I.emptyCopy("files", { state: "stoppedDL", progress: 0 });
   assert.equal(c.title, "No file list yet");
   assert.equal(c.body, "qBittorrent needs the torrent's metadata first.");
-  assert.deepEqual(c.keys, [{ key: "Space", label: "Start download" }, { key: "f", label: "Fetch metadata only" }]);
+  assert.deepEqual(c.keys, NO_META_KEYS);
+  assert.deepEqual(I.emptyCopy("files", { state: "pausedDL", progress: 0 }).keys, NO_META_KEYS);
 });
 
-test("emptyCopy info: the no-metadata footer's keys are Space and f", () => {
-  assert.deepEqual(I.emptyCopy("info", {}).keys, [{ key: "Space", label: "Start download" }, { key: "f", label: "Fetch metadata only" }]);
+test("emptyCopy info/files: a running no-metadata torrent has nothing to start and f isn't allowed", () => {
+  for (const st of ["metaDL", "forcedMetaDL", "downloading", "stalledDL", "queuedDL"]) {
+    assert.deepEqual(I.emptyCopy("info", { state: st, progress: 0 }).keys, [], st);
+    assert.deepEqual(I.emptyCopy("files", { state: st, progress: 0 }).keys, [], st);
+  }
+  assert.deepEqual(I.emptyCopy("files", null).keys, []);
+  assert.deepEqual(I.emptyCopy("files", {}).keys, []);
+});
+
+test("emptyCopy info: a stopped no-metadata torrent's footer keys are Space and f", () => {
+  assert.deepEqual(I.emptyCopy("info", { state: "stoppedDL", progress: 0 }).keys, NO_META_KEYS);
   // Each call hands back its own copy.
-  I.emptyCopy("info", {}).keys.push({ key: "x", label: "y" });
-  assert.equal(I.emptyCopy("files", {}).keys.length, 2);
+  I.emptyCopy("info", { state: "stoppedDL" }).keys.push({ key: "x", label: "y" });
+  assert.equal(I.emptyCopy("files", { state: "stoppedDL" }).keys.length, 2);
 });
 
 test("peerRefusal: a note for anything peerError rejects, else empty; peerRows carry it", () => {

@@ -1068,14 +1068,36 @@ function fetchHolds(watch, now) {
 
 // fetchMetaProgress(torrents, hash) -> where a fetch-metadata swap stands
 // in Service's torrent list: "absent" (between the delete and the re-add,
-// or gone), "waiting" (listed, size still unknown) or "received" (size >
-// 0, i.e. the metadata arrived).
+// or gone), "received" (size > 0, i.e. the metadata arrived), "stopped"
+// (listed, no size, stoppedDL/pausedDL: someone stopped it before the
+// metadata came) or "waiting" (listed, running, size still unknown).
 function fetchMetaProgress(torrents, hash) {
   var list = torrents || [];
   for (var i = 0; i < list.length; i++) {
-    if (Model.torrentId(list[i]) === hash) return Number(list[i].size) > 0 ? "received" : "waiting";
+    if (Model.torrentId(list[i]) !== hash) continue;
+    if (Number(list[i].size) > 0) return "received";
+    var st = String(list[i].state || "").toLowerCase();
+    return st === "stoppeddl" || st === "pauseddl" ? "stopped" : "waiting";
   }
   return "absent";
+}
+
+// fetchWatchOutcome(watch, progress, now) -> what a status tick does with
+// one of the window's fetch-metadata watches, given fetchMetaProgress:
+// "keep" (the ticket still runs, or it's running without a size yet, or
+// it's absent inside the fetchHolds window, or stopped inside
+// FETCH_STOPPED_GRACE_MS of the ticket's success, while the status stream
+// catches up with the re-add), "received" (report the done note), or
+// "quiet" (end it with no note: gone after the hold, or stopped with no
+// metadata, so "Fetching metadata…" can't stay forever).
+var FETCH_STOPPED_GRACE_MS = 3000;
+function fetchWatchOutcome(watch, progress, now) {
+  if (!watch) return "quiet";
+  if (watch.done !== true) return "keep";
+  if (progress === "received") return "received";
+  if (progress === "waiting") return "keep";
+  if (progress === "absent") return fetchHolds(watch, now) ? "keep" : "quiet";
+  return (Number(now) || 0) - (Number(watch.at) || 0) <= FETCH_STOPPED_GRACE_MS ? "keep" : "quiet";
 }
 
 function ownsTicket(m, ticket) {
@@ -1836,6 +1858,7 @@ if (typeof module !== "undefined" && module.exports) {
     fetchMetaRefusal: fetchMetaRefusal,
     fetchMetaProgress: fetchMetaProgress,
     fetchHolds: fetchHolds,
+    fetchWatchOutcome: fetchWatchOutcome,
     nextAnchor: nextAnchor,
     leaveVisualState: leaveVisualState,
     BUSY_NOTE: BUSY_NOTE,

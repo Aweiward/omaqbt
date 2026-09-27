@@ -224,18 +224,18 @@ QtObject {
   }
 
   // A status tick: a finished swap whose torrent reports a size is done;
-  // one whose torrent is still gone once the hold ran out ends quietly.
+  // one whose torrent is still gone once the hold ran out, or stopped
+  // with no metadata, ends quietly (View.fetchWatchOutcome).
   function checkFetches() {
     var c = client
     var now = Date.now()
     for (var h in fetchWatches) {
       var w = fetchWatches[h]
-      if (w.done !== true) continue
-      var p = View.fetchMetaProgress(c.service.torrents, h)
-      if (p === "waiting" || (p === "absent" && View.fetchHolds(w, now))) continue
+      var outcome = View.fetchWatchOutcome(w, View.fetchMetaProgress(c.service.torrents, h), now)
+      if (outcome === "keep") continue
       setFetchWatch(h, null)
       c.messages = View.msgFinish(c.messages, w.ticket, true, "")
-      if (p === "received") c.note(View.FETCH_META_DONE_NOTE, "muted")
+      if (outcome === "received") c.note(View.FETCH_META_DONE_NOTE, "muted")
     }
   }
 
@@ -529,8 +529,11 @@ QtObject {
         return
       }
       // Deviation 3: on a no-metadata torrent's Info or Files tab, Space
-      // is `Space Start download` (Pause/resume for that torrent).
-      if ((c.inspectorTab === "info" || c.inspectorTab === "files") && c.cursorRow && c.infoTab.noMeta) run("torrent.toggle", args, ev, targets)
+      // is `Space Start download`: it starts a stopped one (the toggle's
+      // start path) and never stops a running one (e.g. a magnet in
+      // metaDL, or a fetch-metadata re-add).
+      if ((c.inspectorTab === "info" || c.inspectorTab === "files") && c.cursorRow && c.infoTab.noMeta
+          && View.toggleStarts(c.rawFor(targets))) run("torrent.toggle", args, ev, targets)
       return
 
     // The trackers tab (Deviation 4: R too). The registry only lets these

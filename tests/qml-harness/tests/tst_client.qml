@@ -2602,7 +2602,11 @@ TestCase {
     compare(o.c.cursorHash, hh("a"), "no hold once the swap failed")
   }
 
-  function test_f_refusals_make_no_call() {
+  // The pending-browser-magnet refusal isn't reachable here: viewRows
+  // hides a pending hash from the table, so the cursor can never sit on
+  // one. registry.test.js ("f: a torrent with metadata, or a pending
+  // browser magnet, ...") covers that reason.
+  function test_f_refusals_with_metadata_or_running_make_no_call() {
     var o = make()
     // Has metadata: a silent no-op.
     o.svc.torrents = [tt(hh("a"), "alpha", { addedOn: 1, state: "stoppedDL" })]
@@ -2613,12 +2617,6 @@ TestCase {
     o.svc.torrents = [tt(hh("a"), "alpha", { addedOn: 1, size: 0, state: "metaDL", progress: 0 })]
     key(o.c, "f")
     compare(o.c.messageLine.text, "Stop it first.")
-    // A browser magnet still pending in the handler flow.
-    o.svc.torrents = noMetaList()
-    o.c.cursorHash = hh("b")
-    o.svc.magnetPendingHashes = [hh("b")]
-    o.c.cursorHash = hh("b")
-    key(o.c, "f")
     compare(callCount(o.svc, "fetchMetadata"), 0)
   }
 
@@ -2682,5 +2680,93 @@ TestCase {
     key(o.c, "1")
     verify(shows(o.c, "open folder"))
     verify(!shows(o.c, "Start download"))
+  }
+
+  // ---- Task 5 fix round 1 ----
+
+  function test_space_never_stops_a_running_no_metadata_torrent() {
+    var o = make()
+    o.svc.torrents = [tt(hh("a"), "magnet", { size: 0, state: "metaDL", progress: 0 })]
+    key(o.c, "1")
+    if (o.c.pane !== "inspector") key(o.c, "\t", 0x01000001)
+    compare(o.c.pane, "inspector")
+    key(o.c, " ", 0x20)
+    key(o.c, "4")
+    o.svc.setFilesFor(hh("a"), [])
+    o.svc.setFilesStatus(hh("a"), "ok", "")
+    key(o.c, " ", 0x20)
+    compare(callCount(o.svc, "stop"), 0, "Space Start download never stops it")
+    compare(callCount(o.svc, "start"), 0, "a running torrent has nothing to start")
+  }
+
+  function test_no_metadata_keys_only_show_when_stopped() {
+    var o = make()
+    o.svc.torrents = [tt(hh("a"), "magnet", { size: 0, state: "metaDL", progress: 0 })]
+    key(o.c, "1")
+    verify(shows(o.c, "no metadata yet · pieces and files appear once it's fetched"))
+    verify(!shows(o.c, "Start download"))
+    verify(!shows(o.c, "Fetch metadata only"))
+    verify(!shows(o.c, "open folder"))
+    key(o.c, "4")
+    o.svc.setFilesFor(hh("a"), [])
+    o.svc.setFilesStatus(hh("a"), "ok", "")
+    verify(shows(o.c, "No file list yet"))
+    verify(!shows(o.c, "Start download"))
+    verify(!shows(o.c, "Fetch metadata only"))
+    // Stopped: both keys.
+    o.svc.torrents = [tt(hh("a"), "magnet", { size: 0, state: "stoppedDL", progress: 0 })]
+    verify(shows(o.c, "Start download"))
+    verify(shows(o.c, "Fetch metadata only"))
+    key(o.c, "1")
+    verify(shows(o.c, "Start download"))
+    verify(shows(o.c, "Fetch metadata only"))
+  }
+
+  function test_f_ends_quietly_when_the_torrent_stops_without_metadata() {
+    var o = make()
+    o.svc.torrents = noMetaList()
+    key(o.c, "f")
+    o.svc.torrents = [tt(hh("a"), "alpha", { addedOn: 1 }), tt(hh("b"), "nometa", { addedOn: 9, size: 0, state: "metaDL", progress: 0 })]
+    o.svc.actionFinished(o.svc.seq, true, "", "window", [hh("b")])
+    compare(o.c.messageLine.text, "Fetching metadata…")
+    // The user stops it (or it never finds peers and is stopped): a tick
+    // inside the grace keeps the progress, one after it ends it quietly.
+    o.svc.torrents = [tt(hh("a"), "alpha", { addedOn: 1 }), tt(hh("b"), "nometa", { addedOn: 9, size: 0, state: "stoppedDL", progress: 0 })]
+    compare(o.c.messageLine.text, "Fetching metadata…")
+    wait(3200)
+    o.svc.torrents = [tt(hh("a"), "alpha", { addedOn: 1 }), tt(hh("b"), "nometa", { addedOn: 9, size: 0, state: "stoppedDL", progress: 0 })]
+    compare(o.c.messageLine.text, "", "no progress, no done note")
+    // f works again on it.
+    key(o.c, "f")
+    compare(callCount(o.svc, "fetchMetadata"), 2)
+  }
+
+  function tableListOf(c) {
+    var table = findWith(winOf(c).contentItem, "setRows")
+    for (var j = 0; j < table.children.length; j++) if (table.children[j].model !== undefined && table.children[j].count !== undefined) return table.children[j]
+    return null
+  }
+
+  function test_f_reveals_the_torrent_when_it_comes_back() {
+    var o = make()
+    var list = []
+    // Added desc: the no-metadata torrent (oldest) sits at the bottom.
+    list.push(tt(hh("0"), "nometa", { addedOn: 1, size: 0, state: "stoppedDL", progress: 0 }))
+    for (var i = 1; i < 80; i++) list.push(tt("f" + ("000" + i).slice(-3) + hh("e").slice(4), "t" + i, { addedOn: 10 + i }))
+    o.svc.torrents = list
+    key(o.c, "G", 0x47, 0x02000000)
+    compare(o.c.cursorHash, hh("0"))
+    wait(50)
+    var lv = tableListOf(o.c)
+    verify(lv !== null)
+    verify(lv.contentY > lv.originY + 100, "scrolled to the bottom")
+    key(o.c, "f")
+    o.svc.torrents = list.slice(1)
+    compare(o.c.cursorHash, hh("0"))
+    // The re-add resets addedOn: it comes back at the top.
+    o.svc.torrents = [tt(hh("0"), "nometa", { addedOn: 999, size: 0, state: "metaDL", progress: 0 })].concat(list.slice(1))
+    compare(o.c.cursorIndex, 0)
+    wait(50)
+    verify(lv.contentY <= lv.originY + 1, "the table scrolled to the cursor row, contentY " + lv.contentY)
   }
 }
