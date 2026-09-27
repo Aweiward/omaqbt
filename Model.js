@@ -864,7 +864,7 @@ function ratioLimitLabel(ratio) {
 // --- View state: parseViewState / serializeViewState -----------------------
 //
 // The shape the window consumes: {filter:{group,value}, sort, desc,
-// cursorHash, pane, paletteMru}. Every field falls back to its own default
+// cursorHash, pane, paletteMru, inspectorTab}. Every field falls back to its own default
 // independently of the others -- one bad field never invalidates the rest.
 //
 // Filter groups are exactly "status", "category", "tag" and "tracker"
@@ -882,9 +882,13 @@ function ratioLimitLabel(ratio) {
 // at 20 (see sanitizeMruList); the default is []. A stale id (a command
 // removed from the table) is not caught here -- Model.js does not import
 // CommandRegistry -- so that filtering happens later, in
-// ClientView.paletteRows.
+// ClientView.paletteRows. inspectorTab is one of the five inspector tabs
+// (exactly "info", "trackers", "peers", "files" and "chart" -- "chart" is
+// a valid saved value even before its own tab is built); an unknown or
+// missing value falls back to "info".
 var VIEW_STATE_FILTER_GROUPS = { status: true, category: true, tag: true, tracker: true };
 var VIEW_STATE_PANES = { table: true, filters: true, inspector: true };
+var VIEW_STATE_INSPECTOR_TABS = { info: true, trackers: true, peers: true, files: true, chart: true };
 var PALETTE_MRU_CAP = 20;
 
 // sanitizeMruList(raw) -> raw filtered down to a plain array of strings:
@@ -937,14 +941,15 @@ function parseViewState(raw) {
   var cursorHash = typeof parsed.cursorHash === "string" ? parsed.cursorHash : "";
   var pane = VIEW_STATE_PANES[parsed.pane] === true ? parsed.pane : "table";
   var paletteMru = sanitizeMruList(parsed.paletteMru);
+  var inspectorTab = VIEW_STATE_INSPECTOR_TABS[parsed.inspectorTab] === true ? parsed.inspectorTab : "info";
 
-  return { filter: { group: group, value: value }, sort: sort, desc: desc, cursorHash: cursorHash, pane: pane, paletteMru: paletteMru };
+  return { filter: { group: group, value: value }, sort: sort, desc: desc, cursorHash: cursorHash, pane: pane, paletteMru: paletteMru, inspectorTab: inspectorTab };
 }
 
 // serializeViewState(state) -> JSON text for view.json. Runs the input
 // through parseViewState first, so a caller can hand it whatever it has in
-// memory (even garbage) and get back exactly the canonical five fields,
-// each valid.
+// memory (even garbage) and get back exactly the canonical fields, each
+// valid.
 function serializeViewState(state) {
   return JSON.stringify(parseViewState(state));
 }

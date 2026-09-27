@@ -111,6 +111,15 @@ QtObject {
     c.track(c.service.copyText(tab === "trackers" ? row.url : row.ipPort, c.opts(targets)), "copyText", targets)
   }
 
+  // A digit's inspector.* command: switch to tab and, when the inspector
+  // is collapsed, open it as an overlay -- exactly as Ctrl-l does (Ruling
+  // C: Task 8 adds "chart" here as one more call site).
+  function openInspectorTab(tab) {
+    var c = client
+    c.setInspectorTab(tab)
+    if (!c.inspectorDocked) c.setPane("inspector")
+  }
+
   function isEnterKey(ev) {
     return ev.key === Registry.KEY.Return || ev.key === Registry.KEY.Enter
   }
@@ -324,19 +333,19 @@ QtObject {
         else c.note(View.progressText("install", 0), "muted")
         return
       }
-      c.inspectorTab = "files"
+      openInspectorTab("files")
       return
 
     case "inspector.info":
-      c.inspectorTab = "info"
+      openInspectorTab("info")
       return
 
     case "inspector.trackers":
-      c.inspectorTab = "trackers"
+      openInspectorTab("trackers")
       return
 
     case "inspector.peers":
-      c.inspectorTab = "peers"
+      openInspectorTab("peers")
       return
 
     case "all.toggle":

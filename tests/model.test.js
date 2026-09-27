@@ -1212,7 +1212,8 @@ const DEFAULT_VIEW_STATE = {
   desc: true,
   cursorHash: "",
   pane: "table",
-  paletteMru: []
+  paletteMru: [],
+  inspectorTab: "info"
 };
 
 test("parseViewState of null/undefined/missing input returns full defaults", () => {
@@ -1229,7 +1230,7 @@ test("parseViewState of corrupt JSON returns defaults", () => {
 });
 
 test("parseViewState accepts a plain object as well as a JSON string", () => {
-  const state = { filter: { group: "tag", value: "linux" }, sort: "size", desc: false, cursorHash: "abc123", pane: "inspector", paletteMru: ["torrent.remove", "sort.next"] };
+  const state = { filter: { group: "tag", value: "linux" }, sort: "size", desc: false, cursorHash: "abc123", pane: "inspector", paletteMru: ["torrent.remove", "sort.next"], inspectorTab: "trackers" };
   assert.deepEqual(Model.parseViewState(state), state);
   assert.deepEqual(Model.parseViewState(JSON.stringify(state)), state);
 });
@@ -1304,6 +1305,19 @@ test("parseViewState rejects an unknown pane, falling back to table", () => {
   assert.equal(Model.parseViewState('{"pane":"inspector"}').pane, "inspector");
 });
 
+test("parseViewState rejects an unknown or missing inspectorTab, falling back to info", () => {
+  assert.equal(Model.parseViewState('{"inspectorTab":"bogus"}').inspectorTab, "info");
+  assert.equal(Model.parseViewState({ inspectorTab: null }).inspectorTab, "info");
+  assert.equal(Model.parseViewState({ inspectorTab: 42 }).inspectorTab, "info");
+  assert.equal(Model.parseViewState({}).inspectorTab, "info");
+});
+
+test("parseViewState accepts every inspector tab", () => {
+  for (const tab of ["info", "trackers", "peers", "files", "chart"]) {
+    assert.equal(Model.parseViewState({ inspectorTab: tab }).inspectorTab, tab, tab);
+  }
+});
+
 test("parseViewState treats a non-object filter as missing", () => {
   assert.deepEqual(Model.parseViewState('{"filter":"bogus"}').filter, { group: "status", value: "All" });
   assert.deepEqual(Model.parseViewState('{"filter":null}').filter, { group: "status", value: "All" });
@@ -1311,7 +1325,7 @@ test("parseViewState treats a non-object filter as missing", () => {
 });
 
 test("serializeViewState round-trips through parseViewState", () => {
-  const state = { filter: { group: "category", value: "movies" }, sort: "ratio", desc: false, cursorHash: "deadbeef", pane: "filters", paletteMru: ["torrent.move"] };
+  const state = { filter: { group: "category", value: "movies" }, sort: "ratio", desc: false, cursorHash: "deadbeef", pane: "filters", paletteMru: ["torrent.move"], inspectorTab: "peers" };
   const text = Model.serializeViewState(state);
   assert.equal(typeof text, "string");
   assert.deepEqual(JSON.parse(text), state);

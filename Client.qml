@@ -54,10 +54,12 @@ Item {
   property bool viewTouched: false
   // The palette's recently used command ids, newest first (View.mruPush).
   property var paletteMru: []
+  // The inspector's shown tab (setInspectorTab; applyViewState restores it
+  // directly, like pane, so a restore isn't a user change).
+  property string inspectorTab: "info"
 
   // ---- per-view, not persisted --------------------------------------------
   property string textQuery: ""
-  property string inspectorTab: "info"
   property var regState: ({ mode: "NORMAL", pane: "table", prefix: null, prefixAt: 0, hasTorrent: false, selectionCount: 0, pending: null })
   property var confirm: null
   // The torrents a pending CONFIRM will act on, fixed when it was asked:
@@ -254,17 +256,26 @@ Item {
     sortDesc = v.desc
     cursorHash = v.cursorHash
     paletteMru = v.paletteMru
-    // Not setPane: that saves, and a restore must not count as a user
-    // change (viewTouched). VISUAL is table-only, so it ends here too.
+    // Not setPane/setInspectorTab: those save, and a restore must not
+    // count as a user change. VISUAL is table-only, so it ends here too.
     leaveVisual()
     pane = v.pane
+    inspectorTab = v.inspectorTab
     rebuildRows(true)
   }
 
   function saveView() {
     viewTouched = true
     if (!service || typeof service.saveViewState !== "function") return
-    service.saveViewState({ filter: filter, sort: sortMode, desc: sortDesc, cursorHash: cursorHash, pane: pane, paletteMru: paletteMru })
+    service.saveViewState({ filter: filter, sort: sortMode, desc: sortDesc, cursorHash: cursorHash, pane: pane, paletteMru: paletteMru, inspectorTab: inspectorTab })
+  }
+
+  // Switches the inspector's tab (a click, or a digit key's inspector.*
+  // command) and persists it, exactly as setPane persists a pane change.
+  function setInspectorTab(tab) {
+    if (tab === inspectorTab) return
+    inspectorTab = tab
+    saveView()
   }
 
   function adoptService() {
@@ -676,7 +687,7 @@ Item {
             focusedPane: root.pane === "inspector"
             onTabClicked: function(tab) {
               root.leaveInsert()
-              root.inspectorTab = tab
+              root.setInspectorTab(tab)
               keyRoot.forceActiveFocus()
             }
             onListRowClicked: function(tab, index) {

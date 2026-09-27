@@ -196,6 +196,27 @@ TestCase {
     compare(o.svc.saved[o.svc.saved.length - 1].pane, "inspector")
   }
 
+  function test_inspector_tab_persists_and_restores() {
+    var o = make()
+    o.svc.torrents = list3()
+    key(o.c, "3")
+    compare(o.c.inspectorTab, "peers")
+    compare(o.svc.saved[o.svc.saved.length - 1].inspectorTab, "peers")
+    // reopening restores the tab through the same watch path Task 5 wired
+    var o2 = make({ filter: { group: "status", value: "All" }, sort: "added", desc: true, cursorHash: "", pane: "table", inspectorTab: "peers" })
+    o2.svc.torrents = list3()
+    compare(o2.c.inspectorTab, "peers")
+    compare(lastCall(o2.svc, "watch").args[1], "peers")
+  }
+
+  function test_digit_does_not_open_the_inspector_when_docked() {
+    var o = make()
+    o.svc.torrents = list3()
+    compare(o.c.layout.inspector, "docked")
+    key(o.c, "3")
+    compare(o.c.inspectorTab, "peers")
+    compare(o.c.pane, "table", "digits only switch the tab when docked")
+  }
 
   function test_delete_confirm() {
     var o = make()
@@ -1103,6 +1124,23 @@ TestCase {
     ctrlL(o.c)
     compare(o.c.pane, "table")
     compare(inspector.visible, false)
+  }
+
+  function test_narrow_digit_opens_the_collapsed_inspector_on_that_tab() {
+    var o = narrow(850)
+    var inspector = paneTitled(o.c, "Inspector")
+    compare(inspector.visible, false)
+    key(o.c, "3")
+    compare(o.c.pane, "inspector", "3 opens the overlay, exactly as Ctrl-l does")
+    compare(o.c.inspectorTab, "peers")
+    compare(inspector.visible, true)
+    esc(o.c)
+    compare(o.c.pane, "table", "Esc closes it")
+    compare(inspector.visible, false)
+    compare(o.c.inspectorTab, "peers", "closing the overlay doesn't reset the tab")
+    key(o.c, "1")
+    compare(o.c.pane, "inspector")
+    compare(o.c.inspectorTab, "info")
   }
 
   function test_narrow_tab_opens_each_overlay_in_turn() {
