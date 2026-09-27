@@ -266,6 +266,48 @@ class MergeCategoriesTests(unittest.TestCase):
         merged = qbtsync.merge_categories(raw, cache)
         self.assertEqual(merged, {"linux": {"name": "linux"}})
 
+    def test_delta_partial_category_keeps_untouched_fields(self):
+        # qBittorrent's sync delta may resend a category as a partial object
+        # (e.g. only savePath after an edit); a whole-object replace would
+        # silently drop the other fields (like the download path) from the
+        # merged cache, and so from categoryPaths.
+        cache = {"os": {"name": "os", "savePath": "/data/os", "download_path": "/data/os-dl"}}
+        raw = {"full_update": False, "categories": {"os": {"savePath": "/new"}}}
+        merged = qbtsync.merge_categories(raw, cache)
+        self.assertEqual(merged, {
+            "os": {"name": "os", "savePath": "/new", "download_path": "/data/os-dl"},
+        })
+
+    def test_delta_changing_only_save_path_updates_just_that(self):
+        cache = {"linux": {"name": "linux", "savePath": "/old", "download_path": "/dl"}}
+        raw = {"full_update": False, "categories": {"linux": {"savePath": "/updated"}}}
+        merged = qbtsync.merge_categories(raw, cache)
+        self.assertEqual(merged["linux"]["savePath"], "/updated")
+        self.assertEqual(merged["linux"]["download_path"], "/dl")
+        self.assertEqual(merged["linux"]["name"], "linux")
+
+    def test_delta_new_category_is_inserted_whole(self):
+        cache = {"linux": {"name": "linux", "savePath": ""}}
+        raw = {"full_update": False, "categories": {"os": {"name": "os", "savePath": "/data/os"}}}
+        merged = qbtsync.merge_categories(raw, cache)
+        self.assertEqual(merged["os"], {"name": "os", "savePath": "/data/os"})
+        self.assertEqual(merged["linux"], {"name": "linux", "savePath": ""})
+
+    def test_categories_removed_still_drops_entry_after_a_partial_update_elsewhere(self):
+        cache = {
+            "os": {"name": "os", "savePath": "/data/os", "download_path": "/data/os-dl"},
+            "linux": {"name": "linux", "savePath": ""},
+        }
+        raw = {
+            "full_update": False,
+            "categories": {"os": {"savePath": "/new"}},
+            "categories_removed": ["linux"],
+        }
+        merged = qbtsync.merge_categories(raw, cache)
+        self.assertEqual(merged, {
+            "os": {"name": "os", "savePath": "/new", "download_path": "/data/os-dl"},
+        })
+
 
 class CategoryPathsTests(unittest.TestCase):
     """category_paths() builds the status's `categoryPaths` map from the
@@ -735,6 +777,24 @@ class BuildStatusTests(unittest.TestCase):
         status, errors = qbtsync.build_status(probe, client, sync, slow, 1000.0)
         self.assertEqual(status["vpnIface"], "")
         self.assertEqual(status["bindIface"], "")
+        self.assertIn("connection refused", errors)
+
+    def test_first_ever_preferences_failure_yields_default_save_path_and_relocation_defaults(self):
+        # Nothing has ever succeeded yet, so there is no "last known value"
+        # to keep: defaultSavePath/relocation must come back at their
+        # freshly-constructed SlowCache defaults, not stay unset/None.
+        full = json.loads((FIXTURES / "maindata-full.json").read_text())
+        probe = self.base_probe()
+        client = self.FakeClient({
+            "/api/v2/sync/maindata?rid=0": json.dumps(full),
+            "/api/v2/transfer/speedLimitsMode": "1",
+            "/api/v2/app/preferences": qbtsync.ApiError(None, "connection refused"),
+        })
+        sync = qbtsync.SyncState()
+        slow = qbtsync.SlowCache(interval=0)
+        status, errors = qbtsync.build_status(probe, client, sync, slow, 1000.0)
+        self.assertEqual(status["defaultSavePath"], "")
+        self.assertEqual(status["relocation"], {"torrentChanged": False, "categoryPathChanged": False})
         self.assertIn("connection refused", errors)
 
     def test_preferences_fetched_even_with_no_vpn_iface_configured(self):

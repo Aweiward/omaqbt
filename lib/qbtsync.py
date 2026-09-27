@@ -184,13 +184,22 @@ def merge_categories(raw, cache):
     """Merge maindata's top-level `categories` map into the persisted cache.
 
     Mirrors `merge_maindata`'s full/delta/removed handling: a full update
-    replaces the cache outright, a delta adds/overwrites the categories it
-    resends and drops the names in `categories_removed`.
+    replaces the cache outright, a delta drops the names in
+    `categories_removed`. A delta's own `categories` entries are merged
+    field-by-field into whatever is already cached for that name (a new
+    name just inserts whole), the same way `merge_maindata` merges a
+    torrent's fields -- qBittorrent's sync delta may resend a category as a
+    partial object (e.g. only `savePath` after an edit), and a whole-object
+    replace would silently drop the category's other fields (like its
+    download path) from the merged cache.
     """
     if raw.get("full_update"):
         return dict(raw.get("categories") or {})
     categories = dict(cache)
-    categories.update(raw.get("categories") or {})
+    for name, fields in (raw.get("categories") or {}).items():
+        merged = dict(categories.get(name) or {})
+        merged.update(fields or {})
+        categories[name] = merged
     for name in raw.get("categories_removed") or []:
         categories.pop(name, None)
     return categories
