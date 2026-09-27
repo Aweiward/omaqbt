@@ -1384,7 +1384,7 @@ TestCase {
       { url: "** [PeX] **", status: 2, num_seeds: -1, num_leeches: -1 },
       { url: "** [LSD] **", status: 0, num_seeds: -1, num_leeches: -1 },
       { url: "https://tracker.example/announce?passkey=abc123", status: 2, tier: 0, num_seeds: 14, num_leeches: 3, msg: "" },
-      { url: "udp://t.example:1337/abc123/announce", status: 4, tier: 1, num_seeds: -1, num_leeches: -1, msg: "Connection timed out" }
+      { url: "udp://t.example:1337/abc123/announce", status: 4, tier: 1, num_seeds: -1, num_leeches: -1, msg: "Connection timed out", next_announce: 840 }
     ]
   }
   function inspectorOf(c) { return findWith(winOf(c).contentItem, "positionFile") }
@@ -1485,7 +1485,7 @@ TestCase {
     verify(shows(o.c, "not working"))
     verify(shows(o.c, " · \"Connection timed out\""))
     verify(shows(o.c, "udp://t.example:1337/…"))
-    verify(shows(o.c, "tier 1"))
+    verify(shows(o.c, "tier 1 · next announce in 14m"))
     var texts = visibleTexts(inspectorOf(o.c).parent)
     verify(texts.length > 10)
     for (var i = 0; i < texts.length; i++) verify(texts[i].indexOf("abc123") === -1, "no rendered text shows the passkey: " + texts[i])
@@ -1501,6 +1501,7 @@ TestCase {
     key(o.c, "k")
     compare(o.c.trackerIndex, 0)
     verify(shows(o.c, "https://tracker.example/…"), "the query-passkey row's detail is open")
+    verify(shows(o.c, "tier 0"), "no announce part without next_announce")
     texts = visibleTexts(inspectorOf(o.c).parent)
     for (var t = 0; t < texts.length; t++) verify(texts[t].indexOf("abc123") === -1, "no rendered text shows the passkey: " + texts[t])
     key(o.c, "y")
@@ -1554,11 +1555,17 @@ TestCase {
     key(o.c, "2")
     compare(o.c.trackersView.state, "blank")
     verify(!shows(o.c, "Loading trackers…"), "nothing for the first 300 ms")
+    wait(200)
+    verify(!shows(o.c, "Loading trackers…"), "still nothing at ~250 ms")
     tryVerify(function() { return o.c.trackersView.state === "loading" }, 1000)
     verify(shows(o.c, "Loading trackers…"))
-    o.svc.setInspect(hh("c"), "trackers", { trackers: [], error: "HTTP 500" })
+    // an error entry that still carries rows (Service keeps prior data):
+    // the error screen wins, with the cause and the retry line
+    o.svc.setInspect(hh("c"), "trackers", { trackers: trackersFixture(), error: "HTTP 500" })
     verify(shows(o.c, "Couldn't read trackers"))
-    verify(shows(o.c, "qbittorrent-nox didn't answer. The status line has the error; this retries every 5 s."))
+    verify(shows(o.c, "HTTP 500"))
+    verify(shows(o.c, "Retrying every 5 s."))
+    verify(!shows(o.c, "tracker.example"), "retained rows are not drawn under an error")
     o.svc.setInspect(hh("c"), "trackers", { trackers: trackersFixture().slice(0, 3) })
     verify(shows(o.c, "No trackers"))
     verify(shows(o.c, "This torrent only finds peers through DHT and PeX."))
@@ -1571,5 +1578,58 @@ TestCase {
     o.svc.setInspect(hh("c"), "peers", { peers: {} })
     verify(shows(o.c, "No peers"))
     verify(shows(o.c, "Looking for peers…"))
+  }
+
+  // Ruling M: when the cursor's key leaves the list, the cursor goes to row 0.
+  function test_list_cursor_falls_back_to_the_first_row_when_its_key_is_gone() {
+    var o = make()
+    o.svc.torrents = list3()
+    key(o.c, "3")
+    o.svc.setInspect(hh("c"), "peers", { peers: peersWith(5, function(i) { return 100 - i }) })
+    key(o.c, "\t", 0x01000001)
+    key(o.c, "j"); key(o.c, "j"); key(o.c, "j")
+    compare(o.c.peerIndex, 3)
+    compare(o.c.peersView.rows[3].key, "10.0.0.3:6881")
+    var fewer = peersWith(5, function(i) { return 100 - i })
+    delete fewer["10.0.0.3:6881"]
+    o.svc.setInspect(hh("c"), "peers", { peers: fewer })
+    compare(o.c.peerIndex, 0, "the cursor peer left: first row")
+    key(o.c, "2")
+    o.svc.setInspect(hh("c"), "trackers", { trackers: trackersFixture() })
+    key(o.c, "j")
+    compare(o.c.trackerIndex, 1)
+    o.svc.setInspect(hh("c"), "trackers", { trackers: trackersFixture().slice(0, 4).concat([
+      { url: "udp://other.example:6969/announce", status: 2, tier: 1, num_seeds: 1, num_leeches: 1 }]) })
+    compare(o.c.trackersView.rows.length, 2)
+    compare(o.c.trackerIndex, 0, "the cursor tracker left: first row")
+  }
+
+  // Ruling L: the watched tab's read error goes to the status line once per
+  // new error; a success or a watch change re-arms it.
+  function test_inspect_error_notes_the_status_line_once_per_error() {
+    var o = make()
+    o.svc.torrents = list3()
+    key(o.c, "2")
+    o.svc.setInspect(hh("c"), "trackers", { trackers: [], error: "HTTP 500" })
+    compare(o.c.messageLine.text, "Couldn't read trackers: HTTP 500")
+    compare(o.c.messageLine.tone, "urgent")
+    key(o.c, "5")   // any key ends the note
+    compare(o.c.messageLine.text, "")
+    o.svc.setInspect(hh("c"), "trackers", { trackers: [], error: "HTTP 500" })
+    compare(o.c.messageLine.text, "", "the same error on the next tick is not noted again")
+    o.svc.setInspect(hh("c"), "trackers", { trackers: trackersFixture() })
+    compare(o.c.messageLine.text, "")
+    o.svc.setInspect(hh("c"), "trackers", { trackers: [], error: "HTTP 500" })
+    compare(o.c.messageLine.text, "Couldn't read trackers: HTTP 500", "after a success, the error notes again")
+    key(o.c, "5")
+    o.svc.setInspect(hh("c"), "trackers", { trackers: [], error: "timed out" })
+    compare(o.c.messageLine.text, "Couldn't read trackers: timed out", "a different error notes")
+    key(o.c, "5")
+    // a watch change re-arms: back on trackers, a fresh identical error notes
+    wait(5)   // a later millisecond than the stored error, as in real use
+    key(o.c, "3"); key(o.c, "2")
+    compare(o.c.messageLine.text, "", "the stale error under the old key is not noted")
+    o.svc.setInspect(hh("c"), "trackers", { trackers: [], error: "timed out" })
+    compare(o.c.messageLine.text, "Couldn't read trackers: timed out")
   }
 }

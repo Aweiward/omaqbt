@@ -489,10 +489,7 @@ test("Esc Esc after 600ms just clears the filter text again", () => {
 
 test("digit 5 is a no-op in every pane", () => {
   for (const pane of ["table", "filters", "inspector"]) {
-    for (const d of ["5"]) {
-      const r = dispatch(state({ pane }), ev(d, 0x30 + Number(d)));
-      assert.equal(r.commandId, null, pane + "/" + d);
-    }
+    assert.equal(dispatch(state({ pane }), ev("5", 0x35)).commandId, null, pane);
   }
 });
 

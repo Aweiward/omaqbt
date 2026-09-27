@@ -31,14 +31,17 @@ QtObject {
   // cursor on the same row (stickRow).
   property string trackerKey: ""
   property string peerKey: ""
+  // hash|tab|error of the inspect error last put on the status line, so
+  // each new error is noted once; "" after a success or a watch change.
+  property string notedInspectError: ""
 
   // Moves inspectNow past tabState's 300 ms "blank" so a tab still
-  // waiting for its first reply says "Loading…" (a little later than
-  // 300: a timer can fire a millisecond early, which would still read
-  // "blank" and never re-check).
+  // waiting for its first reply says "Loading…". A coarse timer can fire
+  // up to ~5% early, which would still read "blank" and never re-check,
+  // so the clock is advanced to at least since + TAB_BLANK_MS.
   property Timer inspectClock: Timer {
-    interval: 320
-    onTriggered: client.inspectNow = Date.now()
+    interval: InspectorView.TAB_BLANK_MS
+    onTriggered: client.inspectNow = Math.max(Date.now(), client.inspectSince + InspectorView.TAB_BLANK_MS)
   }
 
   // The window's watch changed (hashChanged: the cursor torrent, else the
@@ -52,17 +55,33 @@ QtObject {
       trackerKey = ""
       peerKey = ""
     }
+    notedInspectError = ""
     c.inspectSince = Date.now()
     c.inspectNow = c.inspectSince
     inspectClock.restart()
     if (c.service && typeof c.service.watch === "function") c.service.watch(c.watchHash, c.inspectorTab)
   }
 
-  // A refresh of tab's rows: the index of the row with the same key (or
-  // the old index, clamped); an empty list leaves the index alone.
+  // The watched tab's reply changed: a fresh error goes to the status line
+  // as an urgent note, once per hash|tab|error (Ruling L); a fresh success
+  // re-arms it. A stale entry (older than inspectSince) is ignored.
+  function checkInspectError() {
+    var c = client
+    var e = c.inspectEntry
+    if (!e || !(Number(e.at) >= c.inspectSince)) return
+    if (!e.error) { notedInspectError = ""; return }
+    var k = c.watchHash + "|" + c.inspectorTab + "|" + e.error
+    if (k === notedInspectError) return
+    notedInspectError = k
+    c.note("Couldn't read " + c.inspectorTab + ": " + e.error, "urgent")
+  }
+
+  // A refresh of tab's rows: the index of the row with the same key, or
+  // the first row when that key is gone (Ruling M); an empty list leaves
+  // the index alone.
   function stickRow(tab, rows, index) {
     if (rows.length === 0) return index
-    var next = InspectorView.keyedIndex(rows, tab === "trackers" ? trackerKey : peerKey, index)
+    var next = InspectorView.keyedIndex(rows, tab === "trackers" ? trackerKey : peerKey, 0)
     if (tab === "trackers") trackerKey = rows[next].key
     else peerKey = rows[next].key
     return next

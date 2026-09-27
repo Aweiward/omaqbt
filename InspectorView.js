@@ -150,7 +150,9 @@ function trackerRows(list) {
       message: Model.plainText(t.msg),
       tier: t.tier,
       seeds: countOrDash(t.num_seeds),
-      peers: countOrDash(t.num_leeches)
+      peers: countOrDash(t.num_leeches),
+      // Seconds to the next announce (qbt 5.x); null when absent or <= 0.
+      nextAnnounce: posOrNull(t.next_announce) || null
     });
   }
   return { summary: summary, rows: rows };
@@ -540,13 +542,15 @@ function countWord(n, one, many) {
 }
 
 // listTab(tab, entry, sinceMs, nowMs, sidecarUp, row) -> {state, rows,
-// summary, title, copy} for the trackers or peers tab. `entry` is Service's
+// summary, title, copy, error} for the trackers or peers tab. `entry` is Service's
 // inspectByKey[hash + "|" + tab] ({trackers|peers, error, at}); tabState
 // decides on the *shaped* rows, so a trackers reply holding only
 // DHT/PeX/LSD reads "empty". `rows` is empty unless state is "rows";
 // `title` is the pane title's right side ("8 trackers", "17 peers · 14
 // seeds"), "" otherwise. `copy` is emptyCopy(tab, row) for the cursor
-// torrent `row`.
+// torrent `row`. `error` is the entry's (Service-sanitized) error text in
+// the "error" state, else "": the error screen wins over any rows Service
+// kept alongside it.
 function listTab(tab, entry, sinceMs, nowMs, sidecarUp, row) {
   var shaped, summary, title;
   if (tab === "peers") {
@@ -562,7 +566,14 @@ function listTab(tab, entry, sinceMs, nowMs, sidecarUp, row) {
   var probe = entry ? { at: entry.at, error: entry.error, data: shaped } : undefined;
   var state = tabState(probe, sinceMs, nowMs, sidecarUp);
   var shown = state === "rows";
-  return { state: state, rows: shown ? shaped : [], summary: summary, title: shown ? title : "", copy: emptyCopy(tab, row) };
+  return {
+    state: state,
+    rows: shown ? shaped : [],
+    summary: summary,
+    title: shown ? title : "",
+    copy: emptyCopy(tab, row),
+    error: state === "error" ? String(entry.error) : ""
+  };
 }
 
 // trackerSummaryParts(summary) -> [{text, tone}] for the trackers tab's
@@ -586,17 +597,19 @@ function trackerSummaryParts(summary) {
 // trackerDetail(row) -> the cursor tracker's detail lines: {status: {text,
 // tone} (urgent when failing, else fg), message ('"…"', or "" when the
 // tracker said nothing), url (redacted: never the path or query), tier
-// ("tier N")}. qbt's tracker list carries no next-announce time here, so
-// the tier line has no announce part.
+// ("tier N · next announce in 14m"; "<1m" under a minute; no announce
+// part when nextAnnounce is absent)}.
 function trackerDetail(row) {
   var r = row || {};
   var msg = String(r.message || "");
   var tier = numOrNull(r.tier);
+  var next = posOrNull(r.nextAnnounce);
+  var announce = !next ? "" : " · next announce in " + (next < 60 ? "<1m" : durationText(next));
   return {
     status: { text: String(r.statusWord || ""), tone: r.tone === "urgent" ? "urgent" : "fg" },
     message: msg === "" ? "" : "\"" + msg + "\"",
     url: String(r.shownUrl || ""),
-    tier: "tier " + (tier === null ? "—" : tier)
+    tier: "tier " + (tier === null ? "—" : tier) + announce
   };
 }
 

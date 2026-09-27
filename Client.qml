@@ -135,6 +135,7 @@ Item {
   property double inspectSince: 0
   property double inspectNow: 0
   readonly property var inspectEntry: service && watchHash !== "" ? (service.inspectByKey || {})[watchHash + "|" + inspectorTab] : undefined
+  onInspectEntryChanged: commands.checkInspectError()
   readonly property bool sidecarUp: !!service && !service.sidecarDown
   readonly property var trackersView: InspectorView.listTab("trackers", inspectorTab === "trackers" ? inspectEntry : undefined, inspectSince, inspectNow, sidecarUp, cursorRow)
   readonly property var peersView: InspectorView.listTab("peers", inspectorTab === "peers" ? inspectEntry : undefined, inspectSince, inspectNow, sidecarUp, cursorRow)

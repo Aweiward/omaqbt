@@ -38,6 +38,8 @@ Item {
   readonly property string titleRight: info === null ? ""
     : (tab === "trackers" ? trackers.title : (tab === "peers" ? peers.title : ""))
 
+  readonly property string summaryJson: JSON.stringify(InspectorView.trackerSummaryParts(trackers.summary))
+
   signal tabClicked(string tab)
   signal fileClicked(int index)
   signal listRowClicked(string tab, int index)
@@ -81,14 +83,17 @@ Item {
     color: View.toneColor(tone, Color)
   }
 
-  // A tab's non-row state: nothing (blank), "Loading…", the read error,
-  // "Needs qbt-serve", or the empty copy. Inline components can't see
+  // A tab's non-row state: nothing (blank), "Loading…", the read error
+  // (its cause, then "Retrying every 5 s."), "Needs qbt-serve", or the
+  // empty copy. Inline components can't see
   // this file's ids, so everything comes in as properties.
   component TabMessage: Item {
     id: msg
     property string tabState: "blank"
     property string noun: ""
     property var copy: ({})
+    // The read error's (sanitized) text, for the "error" state.
+    property string error: ""
     readonly property bool big: tabState === "error" || tabState === "empty"
 
     Column {
@@ -125,8 +130,16 @@ Item {
         font.family: Style.fontFamily
         font.pixelSize: Style.font.body
         color: Color.muted
-        text: msg.tabState === "error" ? "qbittorrent-nox didn't answer. The status line has the error; this retries every 5 s."
-          : (msg.copy.body || "")
+        text: msg.tabState === "error" ? msg.error : (msg.copy.body || "")
+      }
+      Text {
+        visible: msg.tabState === "error"
+        width: parent.width
+        textFormat: Text.PlainText
+        font.family: Style.fontFamily
+        font.pixelSize: Style.font.body
+        color: Color.muted
+        text: "Retrying every 5 s."
       }
     }
   }
@@ -410,6 +423,7 @@ Item {
       TabMessage {
         anchors.fill: parent
         tabState: pane.trackers.state
+        error: pane.trackers.error || ""
         noun: "trackers"
         copy: pane.trackers.copy
       }
@@ -426,7 +440,9 @@ Item {
           anchors.leftMargin: pane.padX
           anchors.verticalCenter: parent.verticalCenter
           Repeater {
-            model: InspectorView.trackerSummaryParts(pane.trackers.summary)
+            // Through a string, which only notifies when the text changes,
+            // so the per-second refresh doesn't rebuild these delegates.
+            model: JSON.parse(pane.summaryJson)
             delegate: Text {
               required property var modelData
               text: modelData.text
@@ -477,6 +493,7 @@ Item {
       TabMessage {
         anchors.fill: parent
         tabState: pane.peers.state
+        error: pane.peers.error || ""
         noun: "peers"
         copy: pane.peers.copy
       }

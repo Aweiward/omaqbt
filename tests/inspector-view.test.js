@@ -582,3 +582,32 @@ test("peerDetail: ip apart from the rest, flags description on one line", () => 
   assert.equal(v6.rest.indexOf(":6881 · BT"), 0);
   assert.equal(I.peerDetail(null).ip, "");
 });
+
+// --- fix round 1: next announce, error text ---------------------------------
+
+test("trackerRows carries next_announce (seconds) as nextAnnounce, null when absent or not positive", () => {
+  const rows = I.trackerRows([
+    { url: "udp://a.example:1/announce", status: 2, next_announce: 840 },
+    { url: "udp://b.example:1/announce", status: 2 },
+    { url: "udp://c.example:1/announce", status: 2, next_announce: 0 },
+    { url: "udp://d.example:1/announce", status: 2, next_announce: -1 }
+  ]).rows;
+  assert.deepEqual(rows.map((r) => r.nextAnnounce), [840, null, null, null]);
+});
+
+test("trackerDetail: tier line carries 'next announce in Nm', '<1m' under a minute, omitted when absent", () => {
+  const mk = (next) => I.trackerRows([{ url: "udp://a.example:1/announce", status: 2, tier: 0, next_announce: next }]).rows[0];
+  assert.equal(I.trackerDetail(mk(840)).tier, "tier 0 · next announce in 14m");
+  assert.equal(I.trackerDetail(mk(59)).tier, "tier 0 · next announce in <1m");
+  assert.equal(I.trackerDetail(mk(3900)).tier, "tier 0 · next announce in 1h 5m");
+  assert.equal(I.trackerDetail(mk(undefined)).tier, "tier 0");
+  assert.equal(I.trackerDetail(mk(0)).tier, "tier 0");
+});
+
+test("listTab: an error entry exposes its text and never its retained rows", () => {
+  const t = I.listTab("trackers", { trackers: TRACKERS_FIXTURE, error: "HTTP 500", at: 1000 }, 900, 1000, true);
+  assert.equal(t.state, "error");
+  assert.equal(t.error, "HTTP 500");
+  assert.deepEqual(t.rows, []);
+  assert.equal(I.listTab("trackers", { trackers: TRACKERS_FIXTURE, at: 1000 }, 900, 1000, true).error, "");
+});
