@@ -158,6 +158,10 @@ Item {
   property int peerIndex: 0
   onTrackersViewChanged: trackerIndex = commands.stickRow("trackers", trackersView.rows, trackerIndex)
   onPeersViewChanged: peerIndex = commands.stickRow("peers", peersView.rows, peerIndex)
+  // What x/c/b/f act on (View.inspectorDispatch), fed to every dispatch.
+  readonly property var inspectorState: View.inspectorDispatch({ pane: pane, state: tableState, tab: inspectorTab,
+    trackers: trackersView.rows, trackerIndex: trackerIndex, peers: peersView.rows, peerIndex: peerIndex, row: cursorRow,
+    cursorHash: cursorHash, noMeta: infoTab.noMeta, pending: service ? service.magnetPendingHashes : [] })
 
   // ---- responsive layout (D5) ------------------------------------------------------
   // A collapsed pane with focus shows as an overlay; a resize that
@@ -454,8 +458,7 @@ Item {
     // Targets are fixed before dispatch: Space/x/X/e from VISUAL come back
     // in NORMAL or CONFIRM, and must still act on the range as it stood.
     var targets = View.targetHashes(regState.mode, tableRows, cursorHash, anchorHash)
-    var st = View.dispatchState(regState, pane, tableState, cursorIndex >= 0, targets)
-    var res = resolve(st)
+    var res = resolve(registryState(targets))
 
     regState = res.state
     anchorHash = View.nextAnchor(res.state.mode, res.commandId, anchorHash, cursorHash)
@@ -470,6 +473,11 @@ Item {
       return
     }
     if (res.commandId) run(res.commandId, res.args || ({}), ev, targets)
+  }
+
+  // The state a key or palette command resolves against, as it stands now.
+  function registryState(targets) {
+    return View.dispatchState(regState, pane, tableState, cursorIndex >= 0, targets, inspectorState)
   }
 
   // Ends INSERT the way Esc does (insert.cancel: the filter query goes
@@ -763,7 +771,7 @@ Item {
         anchors.fill: parent
         visible: root.mode === "COMMAND"
         mru: root.paletteMru
-        evalState: View.paletteState(root.tableState, root.cursorIndex >= 0)
+        evalState: View.paletteState(root.tableState, root.cursorIndex >= 0, root.inspectorState, root.pane)
         onKeyForwarded: function(event) { root.handleKey(event) }
         onActivated: function(row) { commands.runPaletteRow(row) }
         onDismissed: commands.closePalette()

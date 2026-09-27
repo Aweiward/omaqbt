@@ -1965,4 +1965,71 @@ TestCase {
     compare(after, before, "the footer doesn't move when the flickable scrolls")
     verify(shows(o.c, "copy magnet"), "the action keys are still on screen")
   }
+
+  // ---- the inspector target (slice 2b, Task 3) ----------------------------
+
+  function test_registry_state_follows_the_inspector_cursor_and_tab() {
+    var o = make()
+    o.svc.torrents = list3()
+    compare(o.c.cursorHash, hh("c"))
+    var st = o.c.registryState([])
+    compare(st.inspectorTarget, null, "the table pane has no inspector target")
+    compare(st.trackersTab, false)
+    key(o.c, "2")
+    o.svc.setInspect(hh("c"), "trackers", { trackers: trackersFixture() })
+    if (o.c.pane !== "inspector") key(o.c, "\t", 0x01000001)
+    compare(o.c.pane, "inspector")
+    st = o.c.registryState([])
+    compare(st.pane, "inspector")
+    compare(st.trackersTab, true)
+    compare(st.inspectorTarget, { kind: "tracker", value: "https://tracker.example/announce?passkey=abc123", label: "tracker.example" })
+    key(o.c, "j")
+    compare(o.c.registryState([]).inspectorTarget, { kind: "tracker", value: "udp://t.example:1337/abc123/announce", label: "t.example:1337" })
+    // The palette evaluates from the pane it was opened in, with the target.
+    compare(pal(o.c).evalState.pane, "inspector")
+    compare(pal(o.c).evalState.inspectorTarget.label, "t.example:1337")
+    // Only DHT/PeX/LSD: no tracker row, but still the trackers tab (a adds).
+    o.svc.setInspect(hh("c"), "trackers", { trackers: trackersFixture().slice(0, 3) })
+    st = o.c.registryState([])
+    compare(st.inspectorTarget, null)
+    compare(st.trackersTab, true)
+    key(o.c, "3")
+    o.svc.setInspect(hh("c"), "peers", { peers: peersWith(3, function(i) { return 1000 + i }) })
+    compare(o.c.inspectorTab, "peers")
+    st = o.c.registryState([])
+    compare(st.trackersTab, false)
+    compare(st.inspectorTarget, { kind: "peer", value: "10.0.0.2:6881", label: "10.0.0.2:6881" })
+    key(o.c, "j")
+    compare(o.c.registryState([]).inspectorTarget.value, "10.0.0.1:6881")
+    key(o.c, "1")
+    compare(o.c.registryState([]).inspectorTarget, null, "no target on Info")
+    // Back in the table the target is gone again.
+    key(o.c, "3")
+    o.c.setPane("table")
+    compare(o.c.registryState([]).inspectorTarget, null)
+  }
+
+  function test_registry_state_follows_the_cursor_torrents_metadata_flags() {
+    var o = make()
+    o.svc.torrents = [tt(hh("a"), "alpha", { addedOn: 1 }), tt(hh("b"), "nometa", { addedOn: 2, size: 0, state: "stoppedDL", progress: 0 })]
+    compare(o.c.cursorHash, hh("b"))
+    var st = o.c.registryState([])
+    compare(st.cursorNoMetadata, true)
+    compare(st.cursorStopped, true)
+    compare(st.cursorPendingMagnet, false)
+    key(o.c, "j")
+    compare(o.c.cursorHash, hh("a"))
+    st = o.c.registryState([])
+    compare(st.cursorNoMetadata, false)
+    compare(st.cursorStopped, false)
+    // The flags reach the registry the way a key sees them (the table pane).
+    compare(st.pane, "table")
+    // A browser magnet still pending in the handler flow.
+    o.svc.magnetPendingHashes = [hh("a")]
+    o.c.cursorHash = hh("a")
+    compare(o.c.registryState([]).cursorPendingMagnet, true)
+    o.svc.magnetPendingHashes = []
+    o.c.cursorHash = hh("a")
+    compare(o.c.registryState([]).cursorPendingMagnet, false)
+  }
 }

@@ -885,3 +885,64 @@ test("chartTab: points older than CHART_SPAN_SECONDS before entry.at fall outsid
   const v = I.chartTab({ points: [[tooOld, 5000, 0]], at: atMs }, 900, atMs, true);
   assert.equal(v.series.empty, true);
 });
+
+// --- trackerUrlError / peerError / hasPipe (slice 2b, Task 3; F5) ----------
+
+const SCHEME_MSG = "Use a udp://, http://, https:// or wss:// URL.";
+const SPACE_MSG = "No spaces or | in a tracker URL.";
+const LONG_MSG = "That URL is too long.";
+
+test("trackerUrlError accepts udp, http, https and wss URLs, passkeys and all", () => {
+  for (const u of [
+    "udp://tracker.example:1337/announce",
+    "http://tracker.example/announce",
+    "https://tracker.example/announce?passkey=abc123&x=1",
+    "wss://tracker.example/ws",
+    "https://user:pw@tracker.example/announce"
+  ]) assert.equal(I.trackerUrlError(u), "", u);
+});
+
+test("trackerUrlError: scheme, whitespace, | and length, in qbt's order", () => {
+  assert.equal(I.trackerUrlError(""), SCHEME_MSG);
+  assert.equal(I.trackerUrlError(undefined), SCHEME_MSG);
+  assert.equal(I.trackerUrlError("ftp://x"), SCHEME_MSG);
+  assert.equal(I.trackerUrlError("tracker.example/announce"), SCHEME_MSG);
+  assert.equal(I.trackerUrlError("HTTP://tracker.example/"), SCHEME_MSG, "qbt's scheme match is case-sensitive");
+  assert.equal(I.trackerUrlError(" udp://t.example:1/"), SCHEME_MSG, "a leading space fails the scheme first, as in qbt");
+  assert.equal(I.trackerUrlError("udp://t.example:1/a b"), SPACE_MSG);
+  assert.equal(I.trackerUrlError("udp://t.example:1/a\tb"), SPACE_MSG);
+  assert.equal(I.trackerUrlError("udp://t.example:1/a\nb"), SPACE_MSG);
+  assert.equal(I.trackerUrlError("udp://t.example:1/a|udp://u.example:1/"), SPACE_MSG);
+  const ok = "https://t.example/" + "a".repeat(2048 - "https://t.example/".length);
+  assert.equal(ok.length, 2048);
+  assert.equal(I.trackerUrlError(ok), "");
+  assert.equal(I.trackerUrlError(ok + "a"), LONG_MSG);
+  assert.equal(I.trackerUrlError("ftp://" + "a".repeat(3000)), LONG_MSG, "length is checked before the scheme");
+});
+
+test("hasPipe spots the | qBittorrent's WebUI can't address (F13)", () => {
+  assert.equal(I.hasPipe("udp://a.example/x|y"), true);
+  assert.equal(I.hasPipe("udp://a.example/x"), false);
+  assert.equal(I.hasPipe(""), false);
+  assert.equal(I.hasPipe(null), false);
+});
+
+test("peerError accepts IPv4:port and [IPv6]:port", () => {
+  for (const p of ["203.0.113.42:6881", "0.0.0.0:1", "255.255.255.255:65535", "[2001:db8::1]:6881", "[::1]:1", "[fe80::ABCD]:080", "010.001.000.009:1"]) {
+    assert.equal(I.peerError(p), "", p);
+  }
+});
+
+test("peerError rejects what qbt's valid_peer rejects", () => {
+  for (const p of [
+    "", "203.0.113.42", "203.0.113.42:", "203.0.113.42:0", "203.0.113.42:65536",
+    "256.0.0.1:1", "1.2.3:1", "1.2.3.4.5:1", "1.2.3.4:1|1.2.3.4:1", "1.2.3.4:1 ",
+    " 1.2.3.4:1", "a.b.c.d:1", "1.2.3.4:x", "1234.1.1.1:1",
+    "[2001:db8::1]", "[2001:db8::1]:0", "[2001:db8::1]:70000", "2001:db8::1:6881",
+    "[fe80::1%eth0]:1", "[::ffff:1.2.3.4]:1", "[g::1]:1", "[]:1",
+    "１.2.3.4:1", "1.2.3.4:６881", "[２001::1]:1", "1.2.3.4:1\n"
+  ]) {
+    assert.notEqual(I.peerError(p), "", JSON.stringify(p));
+  }
+  assert.equal(I.peerError("1.2.3.4"), "That isn't an ip:port.");
+});

@@ -509,4 +509,67 @@ TestCase {
     compare(spy.signalArguments[0][1], true)
     compare(spy.signalArguments[0][3], "window")
   }
+
+  // --- inspector write helpers (slice 2b, Task 3) ----------------------------
+
+  function test_inspector_helpers_run_their_qbt_argv_as_window_tickets() {
+    var o = idleService(), svc = o.svc, p = o.p
+    var spy = spyOn(svc)
+    var h = hh("a")
+    var url = "https://tracker.example/announce?passkey=abc123&x=1"
+    var cases = [
+      { call: function(opts) { return svc.reannounce(h, opts) }, argv: ["reannounce", h] },
+      { call: function(opts) { return svc.addTracker(h, url, opts) }, argv: ["tracker-add", h, url] },
+      { call: function(opts) { return svc.editTracker(h, url, "udp://t2.example:1337/announce", opts) }, argv: ["tracker-edit", h, url, "udp://t2.example:1337/announce"] },
+      { call: function(opts) { return svc.removeTracker(h, url, opts) }, argv: ["tracker-remove", h, url] },
+      { call: function(opts) { return svc.banPeer("203.0.113.42:6881", opts) }, argv: ["ban-peer", "203.0.113.42:6881"] },
+      { call: function(opts) { return svc.fetchMetadata(h, opts) }, argv: ["fetch-metadata", h] }
+    ]
+    svc.actionStatus = "widget status"
+    for (var i = 0; i < cases.length; i++) {
+      var t = cases[i].call({ origin: "window", hashes: [h] })
+      verify(t > 0, cases[i].argv[0] + " returns a ticket")
+      compare(p.command, [svc.helperPath].concat(cases[i].argv))
+      compare(svc.actionStatus, "widget status", "a window action leaves the widget's status alone")
+      finish(p, 0, "{\"ok\":true}", "")
+      compare(spy.count, i + 1)
+      compare(spy.signalArguments[i][0], t)
+      compare(spy.signalArguments[i][1], true)
+      compare(spy.signalArguments[i][3], "window")
+      compare(spy.signalArguments[i][4], [h])
+    }
+    // qbt's refusal comes back as the ticket's (sanitized) error.
+    var tf = svc.removeTracker(h, "udp://a.example/x|y", { origin: "window", hashes: [h] })
+    finish(p, 1, "", "This tracker's URL can't be edited through the WebUI API")
+    compare(spy.signalArguments[cases.length][0], tf)
+    compare(spy.signalArguments[cases.length][1], false)
+    compare(spy.signalArguments[cases.length][2], "This tracker's URL can't be edited through the WebUI API")
+  }
+
+  function test_inspector_helpers_refuse_missing_arguments_without_running() {
+    var o = idleService(), svc = o.svc, p = o.p
+    var h = hh("a")
+    var w = { origin: "window", hashes: [] }
+    compare(svc.reannounce("", w), 0)
+    compare(svc.addTracker(h, "", w), 0)
+    compare(svc.addTracker("", "udp://a.example:1/", w), 0)
+    compare(svc.editTracker(h, "", "udp://a.example:1/", w), 0)
+    compare(svc.editTracker(h, "udp://a.example:1/", "", w), 0)
+    compare(svc.removeTracker(h, "", w), 0)
+    compare(svc.banPeer("", w), 0)
+    compare(svc.fetchMetadata("", w), 0)
+    compare(p.running, false, "nothing ran")
+    compare(svc.currentAction, null)
+  }
+
+  function test_inspector_helper_queues_behind_a_running_action() {
+    var o = idleService(), svc = o.svc, p = o.p
+    var h = hh("a")
+    svc.recheckHash(h, { origin: "window", hashes: [h] })
+    var t = svc.reannounce(h, { origin: "window", hashes: [h] })
+    verify(t > 0, "a queued helper still returns its ticket")
+    compare(p.command[1], "recheck")
+    finish(p, 0, "", "")
+    compare(p.command, [svc.helperPath, "reannounce", h], "it runs once the first one ends")
+  }
 }

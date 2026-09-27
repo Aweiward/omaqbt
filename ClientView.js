@@ -482,7 +482,8 @@ function toggleStarts(rawRows) {
 // Progress copy for the status line (muted) while this window's action
 // runs. kind: start|stop|remove|delete|recheck|move|startAll|stopAll|
 // turtle|add|daemon|install|copy|copyText|prio|dropMagnet (copyText: `y`
-// on the trackers and peers tabs).
+// on the trackers and peers tabs)|reannounce|trackerAdd|trackerEdit|
+// trackerRemove|ban|fetchMeta (the inspector's actions).
 function progressText(kind, count) {
   var n = Number(count) || 0;
   var t = plural(n, "torrent", "torrents");
@@ -502,15 +503,30 @@ function progressText(kind, count) {
   if (kind === "copyText") return "Copying…";
   if (kind === "prio") return "Setting file priority…";
   if (kind === "dropMagnet") return "Dropping the magnet…";
+  if (kind === "reannounce") return "Reannouncing…";
+  if (kind === "trackerAdd") return "Adding tracker…";
+  if (kind === "trackerEdit") return "Changing tracker…";
+  if (kind === "trackerRemove") return "Removing tracker…";
+  if (kind === "ban") return "Banning peer…";
+  if (kind === "fetchMeta") return "Fetching metadata…";
   return "Working…";
 }
 
 // confirmLine(confirm) -> the CONFIRM status line, from
 // CommandRegistry.dispatch's `confirm` result {commandId, count, withFiles}.
 // {lead, strong, tail, accept}: "Delete 2 torrents" + "and their files" +
-// "from disk?", accept "delete".
+// "from disk?", accept "delete". An inspector confirm {kind, label, target}
+// names its captured row by label (a tracker's redacted host:port, never
+// its URL; a peer's ip:port).
 function confirmLine(confirm) {
   var c = confirm || {};
+  if (c.kind === "trackerRemove" || c.kind === "peerBan") {
+    var label = String(c.label !== undefined && c.label !== null ? c.label : ((c.target || {}).label || ""));
+    if (c.kind === "trackerRemove") {
+      return { lead: "Remove tracker " + label + " from this torrent?", strong: "", tail: "", accept: "remove" };
+    }
+    return { lead: "Ban " + label + " from all torrents? ", strong: "", tail: "It goes on qBittorrent's IP ban list.", accept: "ban" };
+  }
   var n = Number(c.count) || 0;
   var t = plural(n, "torrent", "torrents");
   if (c.withFiles === true) {
@@ -786,10 +802,13 @@ function targetHashes(mode, rows, cursorHash, anchorHash) {
   return indexOfHash(rows, cursorHash) !== -1 ? [String(cursorHash)] : [];
 }
 
-// dispatchState(regState, pane, state, hasCursorRow, targets) -> the state
-// handed to CommandRegistry.dispatch. selectionCount means something only
-// while mode is VISUAL (the registry contract), so it is 0 otherwise.
-function dispatchState(regState, pane, state, hasCursorRow, targets) {
+// dispatchState(regState, pane, state, hasCursorRow, targets, inspector)
+// -> the state handed to CommandRegistry.dispatch. selectionCount means
+// something only while mode is VISUAL (the registry contract), so it is 0
+// otherwise. `inspector` is inspectorDispatch's result; its five fields are
+// always written (null/false without one), so a target a previous dispatch
+// left in regState never carries over.
+function dispatchState(regState, pane, state, hasCursorRow, targets, inspector) {
   var st = {};
   var r = regState || {};
   for (var k in r) {
@@ -798,7 +817,50 @@ function dispatchState(regState, pane, state, hasCursorRow, targets) {
   st.pane = dispatchPane(pane, state);
   st.hasTorrent = state === "rows" && hasCursorRow === true;
   st.selectionCount = st.mode === "VISUAL" ? (targets || []).length : 0;
+  var i = inspector || {};
+  st.inspectorTarget = i.inspectorTarget || null;
+  st.trackersTab = i.trackersTab === true;
+  st.cursorNoMetadata = i.cursorNoMetadata === true;
+  st.cursorStopped = i.cursorStopped === true;
+  st.cursorPendingMagnet = i.cursorPendingMagnet === true;
   return st;
+}
+
+// inspectorDispatch(ctx) -> the inspector's part of the dispatch state:
+//   inspectorTarget: {kind: "tracker", value: url, label: host} for the
+//     trackers tab's cursor row, {kind: "peer", value: ipPort, label:
+//     ipPort} for the peers tab's; null on other tabs, an empty list, a
+//     cursor off the list, or when the inspector isn't the focused pane.
+//   trackersTab: the focused inspector shows the trackers tab of a cursor
+//     torrent (even with no trackers, so `a` can add the first one).
+//   cursorNoMetadata / cursorStopped / cursorPendingMagnet: the cursor
+//     torrent has no metadata (ctx.noMeta) / is stoppedDL or pausedDL
+//     (what qbt fetch-metadata accepts) / is a browser magnet still pending
+//     in the handler flow. These follow the cursor from any pane.
+// ctx: {pane, state (tableState), tab, trackers, trackerIndex, peers,
+// peerIndex, row (the cursor's raw row or null), cursorHash, noMeta,
+// pending (Service.magnetPendingHashes)}.
+function inspectorDispatch(ctx) {
+  var c = ctx || {};
+  var row = c.row || null;
+  var focused = dispatchPane(c.pane, c.state) === "inspector" && row !== null;
+  var target = null;
+  if (focused && (c.tab === "trackers" || c.tab === "peers")) {
+    var list = (c.tab === "trackers" ? c.trackers : c.peers) || [];
+    var at = Number(c.tab === "trackers" ? c.trackerIndex : c.peerIndex);
+    var r = at >= 0 && at < list.length ? list[at] : null;
+    if (r && c.tab === "trackers") target = { kind: "tracker", value: String(r.url), label: String(r.host) };
+    else if (r) target = { kind: "peer", value: String(r.ipPort), label: String(r.ipPort) };
+  }
+  var st = row ? String(row.state || "").toLowerCase() : "";
+  var hash = String(c.cursorHash || "");
+  return {
+    inspectorTarget: target,
+    trackersTab: focused && c.tab === "trackers",
+    cursorNoMetadata: row !== null && c.noMeta === true,
+    cursorStopped: st === "stoppeddl" || st === "pauseddl",
+    cursorPendingMagnet: hash !== "" && (c.pending || []).indexOf(hash) !== -1
+  };
 }
 
 // nextAnchor(nextMode, commandId, anchorHash, cursorHash) -> the VISUAL
@@ -890,6 +952,12 @@ function failureText(kind, count) {
   if (kind === "prio") return "Couldn't set the file priority";
   if (kind === "files") return "Couldn't read files";
   if (kind === "dropMagnet") return "Couldn't drop the magnet";
+  if (kind === "reannounce") return "Couldn't reannounce";
+  if (kind === "trackerAdd") return "Couldn't add the tracker";
+  if (kind === "trackerEdit") return "Couldn't change the tracker";
+  if (kind === "trackerRemove") return "Couldn't remove the tracker";
+  if (kind === "ban") return "Couldn't ban the peer";
+  if (kind === "fetchMeta") return "Couldn't fetch metadata";
   return "The action failed";
 }
 
@@ -925,7 +993,18 @@ function msgTrack(m, ticket, kind, count, hashes) {
 }
 
 // A success note for actions whose effect isn't visible in the table.
-var DONE_NOTES = { copy: "Copied magnet.", copyText: "Copied" };
+// fetchMeta has none: its ticket ending isn't the metadata arriving (the
+// window shows FETCH_META_DONE_NOTE once the torrent's size is known).
+var DONE_NOTES = {
+  copy: "Copied magnet.",
+  copyText: "Copied",
+  reannounce: "Reannounced",
+  trackerAdd: "Tracker added",
+  trackerEdit: "Tracker changed",
+  trackerRemove: "Tracker removed",
+  ban: "Peer banned"
+};
+var FETCH_META_DONE_NOTE = "Metadata received · stopped";
 
 function ownsTicket(m, ticket) {
   return !!m && !!m.tickets && Object.prototype.hasOwnProperty.call(m.tickets, String(ticket));
@@ -1321,11 +1400,15 @@ var PALETTE_MRU_SHOWN = 5;
 // deliberate: the palette always evaluates a command as if the table pane
 // were focused, regardless of the pane the window was actually in when ":"
 // was pressed.
-function paletteRunsFromTable(rows) {
+function paletteRunsFrom(rows, pane) {
   for (var i = 0; i < rows.length; i++) {
-    if (Registry.paneMatches(rows[i], "table")) return true;
+    if (Registry.paneMatches(rows[i], pane)) return true;
   }
   return false;
+}
+
+function paletteRunsFromTable(rows) {
+  return paletteRunsFrom(rows, "table");
 }
 
 // The "focus the <pane>" reason for a command whose rows never cover the
@@ -1388,19 +1471,22 @@ function paletteKeysText(rows) {
 // table pane is disabled with "focus the <pane>" it actually needs (e.g.
 // "focus the inspector" for the Files tab's file.* rows, "focus the
 // filters" for the filters pane's filter.* rows -- see
-// paletteFocusReason); otherwise a failed `needs` precondition disables it
-// with "needs a selected torrent". A row that fails both checks reports
-// the pane reason: focusing the right pane is the prerequisite for the
-// precondition mattering at all.
+// paletteFocusReason) unless the palette was opened from a pane they do
+// cover (state.pane); otherwise a failed `needs` precondition disables it
+// with Registry.needsReason ("needs a selected torrent", "focus the
+// trackers tab", "already has metadata", ...). A row that fails both
+// checks reports the pane reason: focusing the right pane is the
+// prerequisite for the precondition mattering at all.
 function paletteRowFrom(entry, state, indices) {
   var enabled = true;
   var reason = "";
-  if (!paletteRunsFromTable(entry.rows)) {
+  var pane = state && state.pane ? String(state.pane) : "table";
+  if (!paletteRunsFromTable(entry.rows) && !paletteRunsFrom(entry.rows, pane)) {
     enabled = false;
     reason = paletteFocusReason(entry.rows);
   } else if (!Registry.preconditionMet(entry.needs, state)) {
     enabled = false;
-    reason = "needs a selected torrent";
+    reason = Registry.needsReason(entry.needs, state);
   }
   return {
     kind: "command",
@@ -1490,11 +1576,14 @@ function paletteRows(query, commands, mru, state) {
   return out;
 }
 
-// paletteState(tableState, hasCursorRow) -> the dispatch state paletteRows
-// evaluates commands against: NORMAL, table pane, whatever the window's
-// actual mode and pane (the palette always evaluates as the table would).
-function paletteState(tableState, hasCursorRow) {
-  return dispatchState({ mode: "NORMAL" }, "table", tableState, hasCursorRow, []);
+// paletteState(tableState, hasCursorRow, inspector, pane) -> the dispatch
+// state paletteRows evaluates commands against: NORMAL, whatever the
+// window's actual mode. A command runnable from the table is evaluated as
+// the table would; one that only runs in `pane` (the pane the palette was
+// opened from, "table" when omitted) is evaluated there, with the
+// inspector's fields (inspectorDispatch) so its reason can name the tab.
+function paletteState(tableState, hasCursorRow, inspector, pane) {
+  return dispatchState({ mode: "NORMAL" }, pane || "table", tableState, hasCursorRow, [], inspector);
 }
 
 // paletteSegments(title, indices) -> the title split into runs of
@@ -1657,6 +1746,8 @@ if (typeof module !== "undefined" && module.exports) {
     visualRange: visualRange,
     targetHashes: targetHashes,
     dispatchState: dispatchState,
+    inspectorDispatch: inspectorDispatch,
+    FETCH_META_DONE_NOTE: FETCH_META_DONE_NOTE,
     nextAnchor: nextAnchor,
     leaveVisualState: leaveVisualState,
     BUSY_NOTE: BUSY_NOTE,

@@ -1402,3 +1402,168 @@ test("copyText (y on trackers/peers): Copying… while it runs, then the note Co
   assert.deepEqual(V.messageLine(V.msgFinish(t, 7, true, "")), { text: "Copied", tone: "muted" });
   assert.deepEqual(V.messageLine(V.msgFinish(t, 7, false, "wl-copy missing")), { text: "Couldn't copy: wl-copy missing", tone: "urgent" });
 });
+
+// --- inspector actions (slice 2b, Task 3) ------------------------------------
+
+test("progressText: the inspector actions' progress copy", () => {
+  assert.equal(V.progressText("reannounce", 1), "Reannouncing…");
+  assert.equal(V.progressText("trackerAdd", 1), "Adding tracker…");
+  assert.equal(V.progressText("trackerEdit", 1), "Changing tracker…");
+  assert.equal(V.progressText("trackerRemove", 1), "Removing tracker…");
+  assert.equal(V.progressText("ban", 0), "Banning peer…");
+  assert.equal(V.progressText("fetchMeta", 1), "Fetching metadata…");
+});
+
+test("msgFinish: the inspector actions' done notes and failures", () => {
+  const notes = { reannounce: "Reannounced", trackerAdd: "Tracker added", trackerEdit: "Tracker changed", trackerRemove: "Tracker removed", ban: "Peer banned" };
+  for (const kind of Object.keys(notes)) {
+    const m = V.msgTrack(V.emptyMessages(), 9, kind, 1, [H("a")]);
+    const done = V.msgFinish(m, 9, true, "");
+    assert.equal(done.note, notes[kind], kind);
+    assert.equal(done.progress, "", kind);
+    const failed = V.msgFinish(m, 9, false, "invalid tracker url");
+    assert.match(failed.error, /^Couldn't .+: invalid tracker url$/, kind);
+    assert.doesNotMatch(failed.error, /The action failed/, kind);
+  }
+  // fetch-metadata's ticket ending isn't "metadata received": Task 5 shows
+  // that note only once the torrent's size is known.
+  const f = V.msgTrack(V.emptyMessages(), 4, "fetchMeta", 1, [H("a")]);
+  assert.equal(V.msgFinish(f, 4, true, "").note, "");
+  assert.equal(V.msgFinish(f, 4, false, "Stop it first.").error, "Couldn't fetch metadata: Stop it first.");
+  assert.equal(V.FETCH_META_DONE_NOTE, "Metadata received · stopped");
+});
+
+test("confirmLine: tracker removal and peer ban", () => {
+  const t = V.confirmLine({ commandId: "tracker.remove", kind: "trackerRemove", label: "tracker.example:1337", target: { kind: "tracker", value: "udp://tracker.example:1337/abc123/announce", label: "tracker.example:1337" } });
+  assert.equal(t.lead + t.strong + t.tail, "Remove tracker tracker.example:1337 from this torrent?");
+  assert.equal(t.accept, "remove");
+  assert.doesNotMatch(t.lead + t.strong + t.tail, /abc123/);
+  const p = V.confirmLine({ kind: "peerBan", label: "203.0.113.42:6881" });
+  assert.equal(p.lead + p.strong + p.tail, "Ban 203.0.113.42:6881 from all torrents? It goes on qBittorrent's IP ban list.");
+  assert.equal(p.accept, "ban");
+  // the label falls back to target.label
+  const fb = V.confirmLine({ kind: "trackerRemove", target: { label: "a.example" } });
+  assert.equal(fb.lead + fb.strong + fb.tail, "Remove tracker a.example from this torrent?");
+});
+
+const TRACKERS = [{ key: "https://a.example/announce?passkey=abc123", url: "https://a.example/announce?passkey=abc123", host: "a.example" }, { key: "udp://b.example:1337/x", url: "udp://b.example:1337/x", host: "b.example:1337" }];
+const PEERS = [{ key: "203.0.113.42:6881", ipPort: "203.0.113.42:6881" }, { key: "[2001:db8::1]:51413", ipPort: "[2001:db8::1]:51413" }];
+
+function insp(overrides) {
+  return Object.assign({
+    pane: "inspector", state: "rows", tab: "trackers", trackers: TRACKERS, trackerIndex: 0, peers: PEERS, peerIndex: 0,
+    row: torrent({ hash: H("a"), state: "stoppedDL", size: 0 }), cursorHash: H("a"), noMeta: false, pending: []
+  }, overrides || {});
+}
+
+test("inspectorDispatch: the tracker or peer row under the inspector cursor is the target", () => {
+  assert.deepEqual(V.inspectorDispatch(insp()).inspectorTarget, { kind: "tracker", value: TRACKERS[0].url, label: "a.example" });
+  assert.deepEqual(V.inspectorDispatch(insp({ trackerIndex: 1 })).inspectorTarget, { kind: "tracker", value: "udp://b.example:1337/x", label: "b.example:1337" });
+  assert.deepEqual(V.inspectorDispatch(insp({ tab: "peers", peerIndex: 1 })).inspectorTarget, { kind: "peer", value: "[2001:db8::1]:51413", label: "[2001:db8::1]:51413" });
+});
+
+test("inspectorDispatch: no target on other tabs, empty lists, out-of-range cursors or another pane", () => {
+  for (const o of [
+    { tab: "info" }, { tab: "files" }, { tab: "chart" },
+    { trackers: [] }, { tab: "peers", peers: [] },
+    { trackerIndex: 5 }, { trackerIndex: -1 }, { tab: "peers", peerIndex: 2 },
+    { pane: "table" }, { pane: "filters" },
+    { state: "empty" }, { row: null },
+    { trackers: undefined }, { tab: "peers", peers: null }
+  ]) {
+    assert.equal(V.inspectorDispatch(insp(o)).inspectorTarget, null, JSON.stringify(o));
+  }
+});
+
+test("inspectorDispatch: trackersTab follows the focused trackers tab, even with no trackers", () => {
+  assert.equal(V.inspectorDispatch(insp()).trackersTab, true);
+  assert.equal(V.inspectorDispatch(insp({ trackers: [] })).trackersTab, true);
+  assert.equal(V.inspectorDispatch(insp({ tab: "peers" })).trackersTab, false);
+  assert.equal(V.inspectorDispatch(insp({ pane: "table" })).trackersTab, false);
+  assert.equal(V.inspectorDispatch(insp({ row: null })).trackersTab, false, "no torrent to add a tracker to");
+});
+
+test("inspectorDispatch: the cursor torrent's metadata, stopped and pending-magnet flags", () => {
+  const d = V.inspectorDispatch(insp({ noMeta: true }));
+  assert.equal(d.cursorNoMetadata, true);
+  assert.equal(d.cursorStopped, true);
+  assert.equal(d.cursorPendingMagnet, false);
+  assert.equal(V.inspectorDispatch(insp({ noMeta: true, row: null })).cursorNoMetadata, false);
+  assert.equal(V.inspectorDispatch(insp({ row: torrent({ state: "pausedDL" }) })).cursorStopped, true);
+  assert.equal(V.inspectorDispatch(insp({ row: torrent({ state: "metaDL" }) })).cursorStopped, false);
+  assert.equal(V.inspectorDispatch(insp({ row: torrent({ state: "stoppedUP", progress: 1 }) })).cursorStopped, false, "qbt only fetches for stoppedDL/pausedDL");
+  assert.equal(V.inspectorDispatch(insp({ pending: [H("b"), H("a")] })).cursorPendingMagnet, true);
+  assert.equal(V.inspectorDispatch(insp({ pending: [H("b")] })).cursorPendingMagnet, false);
+  assert.equal(V.inspectorDispatch(insp({ pending: undefined })).cursorPendingMagnet, false);
+  // Pane-independent: f works from any pane.
+  assert.equal(V.inspectorDispatch(insp({ pane: "table", noMeta: true })).cursorNoMetadata, true);
+  assert.equal(V.inspectorDispatch({}).cursorStopped, false);
+});
+
+test("dispatchState copies the inspector fields, and resets them when none are given", () => {
+  const extras = V.inspectorDispatch(insp({ noMeta: true, pending: [H("a")] }));
+  const st = V.dispatchState({ mode: "NORMAL" }, "inspector", "rows", true, [], extras);
+  assert.deepEqual(st.inspectorTarget, extras.inspectorTarget);
+  assert.equal(st.trackersTab, true);
+  assert.equal(st.cursorNoMetadata, true);
+  assert.equal(st.cursorStopped, true);
+  assert.equal(st.cursorPendingMagnet, true);
+  // A regState that kept a previous dispatch's target doesn't leak it.
+  const stale = V.dispatchState(st, "table", "rows", true, []);
+  assert.equal(stale.inspectorTarget, null);
+  assert.equal(stale.trackersTab, false);
+  assert.equal(stale.cursorNoMetadata, false);
+  assert.equal(stale.cursorStopped, false);
+  assert.equal(stale.cursorPendingMagnet, false);
+});
+
+// Rows shaped like Tasks 4/5's (synthetic here; paletteRows takes the table).
+const INSPECTOR_ROWS = Registry.commands.concat([
+  { id: "tracker.remove", title: "Remove tracker", group: "Torrent", keys: ["x"], modes: ["NORMAL"], panes: ["inspector"], needs: "tracker" },
+  { id: "tracker.add", title: "Add tracker", group: "Torrent", keys: ["a"], modes: ["NORMAL"], panes: ["inspector"], needs: "trackersTab" },
+  { id: "peer.ban", title: "Ban peer", group: "Torrent", keys: ["b"], modes: ["NORMAL"], panes: ["inspector"], needs: "peer" },
+  { id: "torrent.fetchMetadata", title: "Fetch metadata only", group: "Torrent", keys: ["f"], modes: ["NORMAL"], panes: ["*"], needs: "noMetadata" }
+]);
+
+function paletteRow(state, id) {
+  return V.paletteRows("", INSPECTOR_ROWS, [], state).find((r) => r.id === id);
+}
+
+test("paletteRows: inspector-only rows say focus the inspector from another pane", () => {
+  const st = V.paletteState("rows", true, V.inspectorDispatch(insp({ pane: "table" })), "table");
+  for (const id of ["tracker.remove", "tracker.add", "peer.ban"]) {
+    assert.equal(paletteRow(st, id).reason, "focus the inspector", id);
+  }
+});
+
+test("paletteRows: from the inspector, tracker/peer rows name the tab they need", () => {
+  const onPeers = V.paletteState("rows", true, V.inspectorDispatch(insp({ tab: "peers" })), "inspector");
+  assert.equal(paletteRow(onPeers, "tracker.remove").reason, "focus the trackers tab");
+  assert.equal(paletteRow(onPeers, "tracker.add").reason, "focus the trackers tab");
+  assert.equal(paletteRow(onPeers, "peer.ban").enabled, true);
+  const onTrackers = V.paletteState("rows", true, V.inspectorDispatch(insp()), "inspector");
+  assert.equal(paletteRow(onTrackers, "tracker.remove").enabled, true);
+  assert.equal(paletteRow(onTrackers, "tracker.add").enabled, true);
+  assert.equal(paletteRow(onTrackers, "peer.ban").reason, "focus the peers tab");
+  const onInfo = V.paletteState("rows", true, V.inspectorDispatch(insp({ tab: "info" })), "inspector");
+  assert.equal(paletteRow(onInfo, "tracker.remove").reason, "focus the trackers tab");
+  assert.equal(paletteRow(onInfo, "peer.ban").reason, "focus the peers tab");
+});
+
+test("paletteRows: fetch metadata says why it's dimmed", () => {
+  const has = V.paletteState("rows", true, V.inspectorDispatch(insp({ pane: "table", noMeta: false })), "table");
+  assert.equal(paletteRow(has, "torrent.fetchMetadata").reason, "already has metadata");
+  const fetching = V.paletteState("rows", true, V.inspectorDispatch(insp({ pane: "table", noMeta: true, pending: [H("a")] })), "table");
+  assert.equal(paletteRow(fetching, "torrent.fetchMetadata").reason, "already fetching metadata");
+  const ok = V.paletteState("rows", true, V.inspectorDispatch(insp({ pane: "table", noMeta: true })), "table");
+  assert.equal(paletteRow(ok, "torrent.fetchMetadata").enabled, true);
+  const none = V.paletteState("empty", false, V.inspectorDispatch(insp({ pane: "table", state: "empty", row: null })), "table");
+  assert.equal(paletteRow(none, "torrent.fetchMetadata").reason, "needs a selected torrent");
+});
+
+test("paletteState keeps evaluating from the table when opened elsewhere (the old two-argument call)", () => {
+  const st = V.paletteState("rows", true);
+  assert.equal(st.pane, "table");
+  assert.equal(st.inspectorTarget, null);
+  assert.equal(paletteRow(st, "file.cycle").reason, "focus the inspector");
+});

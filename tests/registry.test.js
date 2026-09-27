@@ -984,3 +984,168 @@ test("a delete CONFIRM still resolves y/n/Esc as before (Enter does nothing)", (
   assert.equal(enter.commandId, null);
   assert.equal(enter.state.mode, "CONFIRM");
 });
+
+// --- inspector targets (slice 2b, Task 3) ------------------------------------
+//
+// The real tracker.remove / peer.ban rows arrive with Tasks 4 and 5; until
+// then these tests add synthetic rows with the same ids (skipped once a
+// real row with that id exists) and remove them again afterwards.
+
+const TRACKER_A = { kind: "tracker", value: "https://a.example/announce?passkey=abc123", label: "a.example" };
+const TRACKER_B = { kind: "tracker", value: "udp://b.example:1337/announce", label: "b.example:1337" };
+const PEER_A = { kind: "peer", value: "203.0.113.42:6881", label: "203.0.113.42:6881" };
+
+const SYNTHETIC_ROWS = [
+  { id: "tracker.remove", title: "Remove tracker", group: "Torrent", keys: ["x"], modes: ["NORMAL"], panes: ["inspector"], needs: "tracker" },
+  { id: "tracker.add", title: "Add tracker", group: "Torrent", keys: ["a"], modes: ["NORMAL"], panes: ["inspector"], needs: "trackersTab" },
+  { id: "peer.ban", title: "Ban peer", group: "Torrent", keys: ["b"], modes: ["NORMAL"], panes: ["inspector"], needs: "peer" },
+  { id: "torrent.fetchMetadata", title: "Fetch metadata only", group: "Torrent", keys: ["f"], modes: ["NORMAL"], panes: ["*"], needs: "noMetadata" }
+];
+
+function withSyntheticRows(fn) {
+  const added = [];
+  for (const row of SYNTHETIC_ROWS) {
+    if (commands.some((r) => r.id === row.id)) continue;
+    commands.push(row);
+    added.push(row);
+  }
+  try {
+    fn();
+  } finally {
+    for (const row of added) commands.splice(commands.indexOf(row), 1);
+  }
+}
+
+function inspector(overrides) {
+  return state(Object.assign({ pane: "inspector" }, overrides || {}));
+}
+
+test("preconditionMet: tracker and peer need that kind of inspector target", () => {
+  const pm = Registry.preconditionMet;
+  assert.equal(pm("tracker", { inspectorTarget: TRACKER_A }), true);
+  assert.equal(pm("tracker", { inspectorTarget: PEER_A }), false);
+  assert.equal(pm("tracker", { inspectorTarget: null }), false);
+  assert.equal(pm("tracker", {}), false);
+  assert.equal(pm("peer", { inspectorTarget: PEER_A }), true);
+  assert.equal(pm("peer", { inspectorTarget: TRACKER_A }), false);
+  assert.equal(pm("peer", { inspectorTarget: null }), false);
+});
+
+test("preconditionMet: trackersTab needs the trackers tab, noMetadata a no-metadata torrent that isn't pending", () => {
+  const pm = Registry.preconditionMet;
+  assert.equal(pm("trackersTab", { trackersTab: true }), true);
+  assert.equal(pm("trackersTab", { trackersTab: false }), false);
+  assert.equal(pm("trackersTab", {}), false);
+  assert.equal(pm("noMetadata", { cursorNoMetadata: true, cursorPendingMagnet: false }), true);
+  assert.equal(pm("noMetadata", { cursorNoMetadata: true, cursorPendingMagnet: true }), false);
+  assert.equal(pm("noMetadata", { cursorNoMetadata: false }), false);
+  assert.equal(pm("noMetadata", {}), false);
+});
+
+test("needsReason names what an unmet need is missing", () => {
+  const nr = Registry.needsReason;
+  assert.equal(nr("tracker", { inspectorTarget: null }), "focus the trackers tab");
+  assert.equal(nr("trackersTab", { trackersTab: false }), "focus the trackers tab");
+  assert.equal(nr("peer", { inspectorTarget: TRACKER_A }), "focus the peers tab");
+  assert.equal(nr("noMetadata", { hasTorrent: true, cursorNoMetadata: false }), "already has metadata");
+  assert.equal(nr("noMetadata", { hasTorrent: true, cursorNoMetadata: true, cursorPendingMagnet: true }), "already fetching metadata");
+  assert.equal(nr("noMetadata", { hasTorrent: false }), "needs a selected torrent");
+  assert.equal(nr("torrent", { hasTorrent: false }), "needs a selected torrent");
+  assert.equal(nr("tracker", { inspectorTarget: TRACKER_A }), "", "met: no reason");
+});
+
+test("needsConfirm: tracker.remove and peer.ban confirm, like torrent remove/delete", () => {
+  assert.equal(Registry.needsConfirm("tracker.remove", {}), true);
+  assert.equal(Registry.needsConfirm("peer.ban", {}), true);
+  assert.equal(Registry.needsConfirm("torrent.remove", {}), true);
+  assert.equal(Registry.needsConfirm("tracker.add", {}), false);
+});
+
+test("x on a tracker raises a trackerRemove CONFIRM that captures the target", () => {
+  withSyntheticRows(() => {
+    const r = dispatch(inspector({ inspectorTarget: TRACKER_A }), ev("x", keyOf("x")));
+    assert.equal(r.commandId, null);
+    assert.equal(r.state.mode, "CONFIRM");
+    assert.equal(r.state.pending.kind, "trackerRemove");
+    assert.equal(r.state.pending.commandId, "tracker.remove");
+    assert.deepEqual(r.state.pending.target, TRACKER_A);
+    assert.deepEqual(r.state.pending.args, { target: TRACKER_A });
+    assert.deepEqual(r.confirm, { commandId: "tracker.remove", kind: "trackerRemove", label: "a.example", target: TRACKER_A });
+  });
+});
+
+test("b on a peer raises a peerBan CONFIRM that captures the target", () => {
+  withSyntheticRows(() => {
+    const r = dispatch(inspector({ inspectorTarget: PEER_A }), ev("b", keyOf("b")));
+    assert.equal(r.state.mode, "CONFIRM");
+    assert.equal(r.state.pending.kind, "peerBan");
+    assert.deepEqual(r.state.pending.target, PEER_A);
+    assert.deepEqual(r.confirm, { commandId: "peer.ban", kind: "peerBan", label: "203.0.113.42:6881", target: PEER_A });
+  });
+});
+
+test("y acts on the target captured at key time, even when the cursor row changed since", () => {
+  withSyntheticRows(() => {
+    const target = Object.assign({}, TRACKER_A);
+    const step = dispatch(inspector({ inspectorTarget: target }), ev("x", keyOf("x")));
+    // The captured copy is independent of the object the window passed in.
+    target.value = "mutated";
+    // The next dispatch sees whatever row now sits under the cursor.
+    const moved = Object.assign({}, step.state, { inspectorTarget: TRACKER_B });
+    const y = dispatch(moved, ev("y", keyOf("y")));
+    assert.equal(y.commandId, "tracker.remove");
+    assert.deepEqual(y.args, { target: TRACKER_A, confirmed: true });
+    assert.equal(y.state.mode, "NORMAL");
+    assert.equal(y.state.pending, null);
+  });
+});
+
+test("x / b with no matching target are silent no-ops: no CONFIRM, no command", () => {
+  withSyntheticRows(() => {
+    const cases = [
+      [inspector({ inspectorTarget: null }), "x"],
+      [inspector({ inspectorTarget: PEER_A }), "x"],
+      [inspector({ inspectorTarget: null }), "b"],
+      [inspector({ inspectorTarget: TRACKER_A }), "b"]
+    ];
+    for (const [s, k] of cases) {
+      const r = dispatch(s, ev(k, keyOf(k)));
+      assert.equal(r.commandId, null, k);
+      assert.equal(r.state.mode, "NORMAL", k);
+      assert.equal(r.state.pending, null, k);
+      assert.equal(r.confirm, undefined, k);
+      assert.ok(r.blocked, k);
+    }
+    // x in the table pane is still the torrent remove CONFIRM.
+    const t = dispatch(state({ inspectorTarget: TRACKER_A }), ev("x", keyOf("x")));
+    assert.equal(t.state.pending.kind, "remove");
+    assert.deepEqual(t.confirm, { commandId: "torrent.remove", count: 1, withFiles: false });
+  });
+});
+
+test("trackersTab and noMetadata rows run without a CONFIRM when met", () => {
+  withSyntheticRows(() => {
+    const a = dispatch(inspector({ trackersTab: true }), ev("a", keyOf("a")));
+    assert.equal(a.commandId, "tracker.add");
+    assert.equal(a.state.mode, "NORMAL");
+    assert.equal(dispatch(inspector({ trackersTab: false }), ev("a", keyOf("a"))).commandId, null);
+    const f = dispatch(state({ cursorNoMetadata: true }), ev("f", keyOf("f")));
+    assert.equal(f.commandId, "torrent.fetchMetadata");
+    const pending = dispatch(state({ cursorNoMetadata: true, cursorPendingMagnet: true }), ev("f", keyOf("f")));
+    assert.equal(pending.commandId, null);
+    assert.equal(pending.blocked, "already fetching metadata");
+  });
+});
+
+test("dispatch keeps the inspector fields through normalizeState", () => {
+  const r = dispatch(inspector({ inspectorTarget: TRACKER_A, trackersTab: true, cursorNoMetadata: true, cursorStopped: true, cursorPendingMagnet: true }), ev("", 0));
+  assert.deepEqual(r.state.inspectorTarget, TRACKER_A);
+  assert.equal(r.state.trackersTab, true);
+  assert.equal(r.state.cursorNoMetadata, true);
+  assert.equal(r.state.cursorStopped, true);
+  assert.equal(r.state.cursorPendingMagnet, true);
+  const d = dispatch(state(), ev("", 0));
+  assert.equal(d.state.inspectorTarget, null);
+  assert.equal(d.state.trackersTab, false);
+  assert.equal(d.state.cursorNoMetadata, false);
+});

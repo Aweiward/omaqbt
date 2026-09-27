@@ -638,6 +638,39 @@ Scope {
     return runAction([helperPath, "set-location", hash, path], "Moving…", opts)
   }
 
+  // The inspector's writes (slice 2b). qbt validates every argument (F5)
+  // and dies with a message the ticket's error carries; these only refuse
+  // an empty one (0, nothing runs). finishAction refreshes on success.
+  function reannounce(hash, opts) {
+    if (!hash) return 0
+    return runAction([helperPath, "reannounce", hash], "Reannouncing…", opts)
+  }
+
+  function addTracker(hash, url, opts) {
+    if (!hash || !url) return 0
+    return runAction([helperPath, "tracker-add", hash, url], "Adding tracker…", opts)
+  }
+
+  function editTracker(hash, oldUrl, newUrl, opts) {
+    if (!hash || !oldUrl || !newUrl) return 0
+    return runAction([helperPath, "tracker-edit", hash, oldUrl, newUrl], "Changing tracker…", opts)
+  }
+
+  function removeTracker(hash, url, opts) {
+    if (!hash || !url) return 0
+    return runAction([helperPath, "tracker-remove", hash, url], "Removing tracker…", opts)
+  }
+
+  function banPeer(peer, opts) {
+    if (!peer) return 0
+    return runAction([helperPath, "ban-peer", peer], "Banning peer…", opts)
+  }
+
+  function fetchMetadata(hash, opts) {
+    if (!hash) return 0
+    return runAction([helperPath, "fetch-metadata", hash], "Fetching metadata…", opts)
+  }
+
   function installMagnetHandler(opts) {
     if (!started || magnetHandlerInstalled) return 0
     magnetHandlerInstalled = true

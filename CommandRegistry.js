@@ -166,7 +166,16 @@ function normalizeState(state) {
     prefixAt: s.prefixAt || 0,
     hasTorrent: s.hasTorrent === true,
     selectionCount: typeof s.selectionCount === "number" ? s.selectionCount : 0,
-    pending: s.pending || null
+    pending: s.pending || null,
+    // The inspector's part (ClientView.inspectorDispatch): the tracker or
+    // peer row under the inspector cursor ({kind, value, label} or null),
+    // whether the trackers tab is focused, and the cursor torrent's
+    // metadata / stopped / pending-browser-magnet flags.
+    inspectorTarget: s.inspectorTarget || null,
+    trackersTab: s.trackersTab === true,
+    cursorNoMetadata: s.cursorNoMetadata === true,
+    cursorStopped: s.cursorStopped === true,
+    cursorPendingMagnet: s.cursorPendingMagnet === true
   };
 }
 
@@ -225,11 +234,39 @@ function findMatch(s, ev) {
   return null;
 }
 
+function targetKind(s) {
+  var t = s.inspectorTarget;
+  return t && typeof t === "object" ? String(t.kind || "") : "";
+}
+
+// preconditionMet(needs, s): torrent/selection need a cursor torrent (or
+// a VISUAL range); tracker/peer need that kind of row under the inspector
+// cursor (s.inspectorTarget); trackersTab needs the trackers tab focused
+// (even an empty list, so `a` can add the first tracker); noMetadata needs
+// a cursor torrent without metadata that isn't a browser magnet still
+// pending in the handler flow (that hash is already fetching).
 function preconditionMet(needs, s) {
   if (!needs || needs === "none") return true;
   if (needs === "torrent") return s.hasTorrent === true;
   if (needs === "selection") return s.hasTorrent === true || (s.mode === "VISUAL" && s.selectionCount > 0);
+  if (needs === "tracker") return targetKind(s) === "tracker";
+  if (needs === "peer") return targetKind(s) === "peer";
+  if (needs === "trackersTab") return s.trackersTab === true;
+  if (needs === "noMetadata") return s.cursorNoMetadata === true && s.cursorPendingMagnet !== true;
   return true;
+}
+
+// needsReason(needs, s) -> why an unmet `needs` blocks a command: the
+// dispatch `blocked` text and the palette's dimmed-row reason. "" when met.
+function needsReason(needs, s) {
+  if (preconditionMet(needs, s)) return "";
+  if (needs === "tracker" || needs === "trackersTab") return "focus the trackers tab";
+  if (needs === "peer") return "focus the peers tab";
+  if (needs === "noMetadata") {
+    if (s.cursorPendingMagnet === true) return "already fetching metadata";
+    if (s.hasTorrent === true) return "already has metadata";
+  }
+  return "needs a selected torrent";
 }
 
 // How many torrents a "selection"/"torrent" command targets: the VISUAL
@@ -242,14 +279,30 @@ function confirmCount(s) {
   return s.hasTorrent ? 1 : 0;
 }
 
+// Inspector commands that confirm, by id -> their pending/confirm kind.
+// Each acts on the row captured into args.target at key time.
+var TARGET_CONFIRM_KINDS = { "tracker.remove": "trackerRemove", "peer.ban": "peerBan" };
+
 function needsConfirm(id, s) {
   if (id === "torrent.delete") return true;
   if (id === "torrent.remove") return true;
+  if (Object.prototype.hasOwnProperty.call(TARGET_CONFIRM_KINDS, id)) return true;
   return false;
+}
+
+function copyTarget(t) {
+  if (!t || typeof t !== "object") return null;
+  return { kind: String(t.kind || ""), value: String(t.value === undefined || t.value === null ? "" : t.value), label: String(t.label === undefined || t.label === null ? "" : t.label) };
 }
 
 function buildArgs(row, s) {
   var args = {};
+  // A tracker/peer command acts on the row under the inspector cursor as
+  // it stood when the key was pressed (a copy: a later refresh that moves
+  // or drops the row can't change what `y` acts on).
+  if (row.needs === "tracker" || row.needs === "peer") {
+    args.target = copyTarget(s.inspectorTarget);
+  }
   if (EXTEND_IDS[row.id] === true && s.mode === "VISUAL") {
     args.extend = true;
   }
@@ -366,10 +419,20 @@ function dispatch(state, event) {
 // (the palette), so the two can never resolve a command differently.
 function resolveRow(s, row, now) {
   if (!preconditionMet(row.needs, s)) {
-    return { state: clearPrefix(s), commandId: null, blocked: "needs a selected torrent" };
+    return { state: clearPrefix(s), commandId: null, blocked: needsReason(row.needs, s) };
   }
 
   var args = buildArgs(row, s);
+
+  if (needsConfirm(row.id, s) && Object.prototype.hasOwnProperty.call(TARGET_CONFIRM_KINDS, row.id)) {
+    var kind = TARGET_CONFIRM_KINDS[row.id];
+    var tpending = { kind: kind, commandId: row.id, args: args, target: args.target };
+    return {
+      state: assign(clearPrefix(s), { mode: "CONFIRM", pending: tpending }),
+      commandId: null,
+      confirm: { commandId: row.id, kind: kind, label: args.target.label, target: args.target }
+    };
+  }
 
   if (needsConfirm(row.id, s)) {
     var count = confirmCount(s);
@@ -442,6 +505,8 @@ if (typeof module !== "undefined" && module.exports) {
     dispatchCommand: dispatchCommand,
     helpFor: helpFor,
     preconditionMet: preconditionMet,
+    needsReason: needsReason,
+    needsConfirm: needsConfirm,
     paneMatches: paneMatches
   };
 }

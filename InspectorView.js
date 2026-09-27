@@ -168,6 +168,55 @@ function urlHost(url) {
   return genericHead(s).head;
 }
 
+// --- trackerUrlError / peerError / hasPipe (F5, F13) -----------------------
+//
+// The same rules as qbt's valid_tracker_url / valid_peer, in qbt's order,
+// only so the window can show an inline message; qbt still validates.
+
+var TRACKER_URL_MAX = 2048;
+var TRACKER_SCHEME_RE = /^(udp|https?|wss):\/\//;
+
+// hasPipe(url) -> whether url has a "|": qBittorrent's WebUI joins a
+// torrent's trackers with "|", so such a tracker can't be edited or
+// removed through it (F13).
+function hasPipe(url) {
+  return String(url === undefined || url === null ? "" : url).indexOf("|") !== -1;
+}
+
+// trackerUrlError(text) -> "" for a URL qbt accepts, else the message:
+// at most 2048 characters, then udp://, http://, https:// or wss://
+// (case-sensitive, as in qbt), then no whitespace and no "|".
+function trackerUrlError(text) {
+  var s = String(text === undefined || text === null ? "" : text);
+  if (s.length > TRACKER_URL_MAX) return "That URL is too long.";
+  if (!TRACKER_SCHEME_RE.test(s)) return "Use a udp://, http://, https:// or wss:// URL.";
+  if (/\s/.test(s) || hasPipe(s)) return "No spaces or | in a tracker URL.";
+  return "";
+}
+
+function validPort(text) {
+  if (!/^[0-9]+$/.test(text)) return false;
+  var n = parseInt(text, 10);
+  return n >= 1 && n <= 65535;
+}
+
+// peerError(ipPort) -> "" for exactly one IPv4:port (each octet 0-255) or
+// [IPv6]:port (hex digits and colons only), port 1-65535; else a message.
+// ASCII only, like qbt's [[:digit:]]/[[:xdigit:]] classes.
+function peerError(ipPort) {
+  var s = String(ipPort === undefined || ipPort === null ? "" : ipPort);
+  var bad = "That isn't an ip:port.";
+  if (s === "" || /[^\x00-\x7f]/.test(s)) return bad;
+  var v6 = /^\[([0-9a-fA-F:]+)\]:([0-9]+)$/.exec(s);
+  if (v6) return validPort(v6[2]) ? "" : bad;
+  var v4 = /^([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3}):([0-9]+)$/.exec(s);
+  if (!v4) return bad;
+  for (var i = 1; i <= 4; i++) {
+    if (parseInt(v4[i], 10) > 255) return bad;
+  }
+  return validPort(v4[5]) ? "" : bad;
+}
+
 // --- trackerRows ----------------------------------------------------------
 
 var PSEUDO_TRACKER_KIND = {
@@ -807,6 +856,9 @@ function peerDetail(row) {
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     redactUrl: redactUrl,
+    trackerUrlError: trackerUrlError,
+    peerError: peerError,
+    hasPipe: hasPipe,
     trackerRows: trackerRows,
     peerRows: peerRows,
     peerSummary: peerSummary,
