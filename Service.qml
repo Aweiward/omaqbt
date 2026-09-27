@@ -2,6 +2,7 @@ import QtQuick
 import Quickshell
 import Quickshell.Io
 import "Model.js" as Model
+import "LibraryView.js" as Library
 
 // Created once by the shell as the plugin's shared service (null parent), and
 // once per bar widget as a local fallback that stays inactive while the shared
@@ -686,8 +687,9 @@ Scope {
   // and hash and dies with the message the ticket's error carries; these
   // only refuse a missing argument (0, nothing runs). "" is a real value
   // for setCategory's name (none) and setCategoryPath's path (the
-  // default). hashes is a "|" list or an array of at most Model.HASH_CHUNK
-  // (the window chunks, like setLocation's callers).
+  // default). hashes is a "|" list, an array or a QML sequence of at most
+  // Model.HASH_CHUNK (the window chunks, like setLocation's callers), read
+  // by LibraryView.hashList, the same helper movePlan uses.
   function addCategory(name, path, opts) {
     if (!name) return 0
     var cmd = [helperPath, "category-add", name]
@@ -710,7 +712,7 @@ Scope {
   }
 
   function setCategory(hashes, name, opts) {
-    var list = Array.isArray(hashes) ? hashes.join("|") : String(hashes || "")
+    var list = Library.hashList(hashes).join("|")
     if (list === "") return 0
     return runAction([helperPath, "set-category", list, String(name || "")], "Setting category…", opts)
   }
@@ -739,7 +741,7 @@ Scope {
   // changes: {add: [...], remove: [...]} (LibraryView.tagChanges); 0 when
   // there is nothing to change.
   function editTags(hashes, changes, opts) {
-    var list = Array.isArray(hashes) ? hashes.join("|") : String(hashes || "")
+    var list = Library.hashList(hashes).join("|")
     var add = (changes && changes.add) || []
     var remove = (changes && changes.remove) || []
     if (list === "" || add.length + remove.length === 0) return 0

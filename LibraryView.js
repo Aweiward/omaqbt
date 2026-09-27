@@ -30,8 +30,31 @@ function torrentsPossessive(n) {
   return n + plural(n, " torrent's", " torrents'");
 }
 
+// A list from a JS array or an array-like (a QML sequence can fail
+// Array.isArray); anything else, a string included, is empty.
 function names(list) {
-  return Array.isArray(list) ? list : [];
+  if (Array.isArray(list)) return list;
+  if (list && typeof list === "object" && typeof list.length === "number") return Array.prototype.slice.call(list);
+  return [];
+}
+
+// hashList(hashes) -> an array of hashes from a "|" list (the form window
+// actions pass), an array or an array-like, with empty entries dropped.
+// Service.qml uses it too, so the confirm and the call see the same list.
+function hashList(hashes) {
+  var list = typeof hashes === "string" ? hashes.split("|") : names(hashes);
+  var out = [];
+  for (var i = 0; i < list.length; i++) if (list[i]) out.push(String(list[i]));
+  return out;
+}
+
+// Ruling BM: category writes wait until the status carries qBittorrent's
+// default save path, since every category folder is resolved from it.
+var LIBRARY_NOT_READY = "Still reading qBittorrent's folders; try again in a moment.";
+
+// libraryReady(status) -> false while defaultSavePath is missing or empty.
+function libraryReady(status) {
+  return !!status && typeof status.defaultSavePath === "string" && status.defaultSavePath !== "";
 }
 
 // QDir::cleanPath, as qBittorrent's Path does: duplicate slashes collapse,
@@ -202,7 +225,8 @@ var RELOCATION_PREFERENCE = {
 // movePlan(action, rows, status) -> [{hash, from, to}] for the auto-managed
 // rows whose files the action would move, or []. `rows` is every torrent
 // (Service.torrents). action is one of:
-//   {kind: "setCategory", hashes: [...], name}  C (name "" = none)
+//   {kind: "setCategory", hashes, name}         C (hashes: see hashList;
+//                                               name "" = none)
 //   {kind: "rename", old, new}                  c (a merge when new exists)
 //   {kind: "remove", name}                      x
 //   {kind: "path", name, path, home?}           p (path "" = default; "~/"
@@ -212,7 +236,7 @@ function movePlan(action, rows, status) {
   if (!pref || !status || !status.relocation || status.relocation[pref] !== true) return [];
   var affects, to;
   if (action.kind === "setCategory") {
-    var hashes = names(action.hashes);
+    var hashes = hashList(action.hashes);
     affects = function(row) { return hashes.indexOf(Model.torrentId(row)) !== -1; };
     to = categorySavePath(action.name, status);
   } else if (action.kind === "rename") {
@@ -233,13 +257,18 @@ function movePlan(action, rows, status) {
     affects = function(row) { return String(row.category || "") === action.name; };
     to = p.indexOf("~/") === 0 ? p : resolveSavePath(p, String(action.name || ""), status);
   }
+  // Fail closed (ruling BM): a destination that didn't resolve to an
+  // absolute folder (no default save path yet) is "", and every managed
+  // row still counts, so a caller that skipped libraryReady still confirms.
+  // A "~/" path without home stays as typed; qbt expands it.
+  if (to.charAt(0) !== "/" && to.indexOf("~/") !== 0) to = "";
   var out = [];
   var list = rows || [];
   for (var i = 0; i < list.length; i++) {
     var row = list[i];
     if (!row || row.autoTmm !== true || !affects(row)) continue;
     var from = cleanPath(row.savePath);
-    if (from !== to) out.push({ hash: Model.torrentId(row), from: from, to: to });
+    if (to === "" || from !== to) out.push({ hash: Model.torrentId(row), from: from, to: to });
   }
   return out;
 }
@@ -249,7 +278,8 @@ function movePlan(action, rows, status) {
 function destinationText(plan) {
   var seen = [];
   for (var i = 0; i < plan.length; i++) if (seen.indexOf(plan[i].to) === -1) seen.push(plan[i].to);
-  return seen.length === 1 ? seen[0] : seen.length + " folders";
+  if (seen.length !== 1) return seen.length + " folders";
+  return seen[0] === "" ? "a folder qBittorrent picks" : seen[0];
 }
 
 // The move sentence folded into a delete, rename or path confirm: "Their
@@ -437,6 +467,9 @@ if (typeof module !== "undefined") {
     usageCount: usageCount,
     followFilter: followFilter,
     tagStates: tagStates,
+    hashList: hashList,
+    libraryReady: libraryReady,
+    LIBRARY_NOT_READY: LIBRARY_NOT_READY,
     tagChanges: tagChanges
   };
 }

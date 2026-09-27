@@ -497,3 +497,74 @@ test("tagChanges: only what changed, some stays untouched", () => {
   assert.deepEqual(L.tagChanges([], [{ name: "new", state: "all" }]), { add: ["new"], remove: [] }, "a tag new to the picker counts as none before");
   assert.deepEqual(L.tagChanges(null, null), { add: [], remove: [] });
 });
+
+// --- Fix round 1: hash forms, fail-closed destinations, tagStates on none ------
+
+test("hashList: a \"|\" string, an array or an array-like, empties dropped", () => {
+  assert.deepEqual(L.hashList(H("a") + "|" + H("b")), [H("a"), H("b")]);
+  assert.deepEqual(L.hashList("|" + H("a") + "||"), [H("a")]);
+  assert.deepEqual(L.hashList([H("a"), "", H("b")]), [H("a"), H("b")]);
+  assert.deepEqual(L.hashList({ length: 2, 0: H("a"), 1: H("b") }), [H("a"), H("b")]);
+  assert.deepEqual(L.hashList(""), []);
+  assert.deepEqual(L.hashList(null), []);
+  assert.deepEqual(L.hashList(undefined), []);
+});
+
+test("movePlan setCategory takes the \"|\" string and an array-like (a QML sequence)", () => {
+  const rows = [row({ hash: H("a") }), row({ hash: H("b") }), row({ hash: H("c") })];
+  const want = [{ hash: H("a"), from: "/dl", to: "/dl/anime" }, { hash: H("b"), from: "/dl", to: "/dl/anime" }];
+  assert.deepEqual(L.movePlan({ kind: "setCategory", hashes: H("a") + "|" + H("b"), name: "anime" }, rows, status()), want);
+  assert.deepEqual(L.movePlan({ kind: "setCategory", hashes: { length: 2, 0: H("a"), 1: H("b") }, name: "anime" }, rows, status()), want);
+});
+
+test("tagStates and usageCount read array-like tag lists", () => {
+  const seq = (arr) => Object.assign({ length: arr.length }, arr);
+  assert.deepEqual(L.tagStates(seq(["keep"]), [row({ tags: seq(["keep"]) })]), [{ name: "keep", state: "all", mark: "[x]" }]);
+  assert.equal(L.usageCount("tag", "keep", [row({ tags: seq(["keep"]) })], []), 1);
+  assert.equal(L.tagStates(["keep"], [row({ tags: "keep" })])[0].state, "none", "a string is not a tag list");
+});
+
+test("libraryReady is false until the status carries a default save path", () => {
+  assert.equal(L.libraryReady(status()), true);
+  assert.equal(L.libraryReady(status({ defaultSavePath: "" })), false);
+  assert.equal(L.libraryReady({ categoryPaths: {} }), false);
+  assert.equal(L.libraryReady(null), false);
+  assert.equal(L.LIBRARY_NOT_READY, "Still reading qBittorrent's folders; try again in a moment.");
+});
+
+test("movePlan fails closed without a default save path: every managed row, to \"\"", () => {
+  const st = status({ defaultSavePath: "" });
+  const rows = [
+    row({ hash: H("a"), category: "anime", savePath: "/dl/anime" }),
+    row({ hash: H("b"), category: "anime", savePath: "" }),
+    row({ hash: H("c"), category: "anime", savePath: "/dl/anime", autoTmm: false })
+  ];
+  assert.deepEqual(L.movePlan({ kind: "remove", name: "anime" }, rows, st), [
+    { hash: H("a"), from: "/dl/anime", to: "" },
+    { hash: H("b"), from: "", to: "" }
+  ]);
+  assert.deepEqual(L.movePlan({ kind: "setCategory", hashes: [H("a")], name: "x" }, rows, st), [{ hash: H("a"), from: "/dl/anime", to: "" }]);
+  assert.deepEqual(L.movePlan({ kind: "rename", old: "anime", new: "b" }, rows, st).map((p) => p.to), ["", ""]);
+  assert.deepEqual(L.movePlan({ kind: "path", name: "anime", path: "" }, rows, st).map((p) => p.to), ["", ""]);
+  assert.deepEqual(L.movePlan({ kind: "path", name: "anime", path: "/srv/a" }, rows, st).map((p) => p.to), ["/srv/a", "/srv/a"],
+    "an absolute path still resolves");
+  const relDefault = status({ defaultSavePath: "dl" });
+  assert.deepEqual(L.movePlan({ kind: "remove", name: "anime" }, [rows[0]], relDefault), [{ hash: H("a"), from: "/dl/anime", to: "" }],
+    "a relative default never yields a relative destination");
+});
+
+test("the confirms name an unknown destination honestly", () => {
+  const unknown = [{ hash: H("a"), from: "/x", to: "" }, { hash: H("b"), from: "/y", to: "" }];
+  assert.equal(L.moveConfirmLine(unknown), "Changes 2 torrents' category; their files move to a folder qBittorrent picks.");
+  assert.equal(L.deleteConfirmLine("category", "anime", 2, 0, unknown),
+    "Delete category anime? 2 torrents become Uncategorized. Their files move to a folder qBittorrent picks.");
+  assert.equal(L.pathConfirmLine("anime", unknown.slice(0, 1)), "Change anime's save path? 1 torrent's files move to a folder qBittorrent picks.");
+});
+
+test("tagStates with no target rows marks every tag none", () => {
+  assert.deepEqual(L.tagStates(["keep", "seedbox"], []), [
+    { name: "keep", state: "none", mark: "[ ]" },
+    { name: "seedbox", state: "none", mark: "[ ]" }
+  ]);
+  assert.deepEqual(L.tagStates(["keep"], null), [{ name: "keep", state: "none", mark: "[ ]" }]);
+});

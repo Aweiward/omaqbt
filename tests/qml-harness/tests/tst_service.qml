@@ -591,6 +591,7 @@ TestCase {
       { call: function(w) { return svc.renameCategory("anime", "animation", true, w) }, argv: ["category-rename", "anime", "animation", "--merge"] },
       { call: function(w) { return svc.setCategory(list, "anime", w) }, argv: ["set-category", list, "anime"] },
       { call: function(w) { return svc.setCategory([h, h2], "", w) }, argv: ["set-category", list, ""] },
+      { call: function(w) { return svc.setCategory("|" + h + "||" + h2 + "|", "anime", w) }, argv: ["set-category", list, "anime"] },
       { call: function(w) { return svc.addTag("anime 2026", w) }, argv: ["tag-add", "anime 2026"] },
       { call: function(w) { return svc.removeTag("seedbox", w) }, argv: ["tag-remove", "seedbox"] },
       { call: function(w) { return svc.renameTag("seedbox", "sb", false, w) }, argv: ["tag-rename", "seedbox", "sb"] },
@@ -632,6 +633,7 @@ TestCase {
     compare(svc.renameCategory("a", "", false, w), 0)
     compare(svc.setCategory("", "anime", w), 0)
     compare(svc.setCategory([], "anime", w), 0)
+    compare(svc.setCategory("||", "anime", w), 0)
     compare(svc.addTag("", w), 0)
     compare(svc.removeTag("", w), 0)
     compare(svc.renameTag("", "b", false, w), 0)
