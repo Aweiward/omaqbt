@@ -231,7 +231,7 @@ TestCase {
     enter(o)
     compare(o.c.mode, "CONFIRM")
     // Final fix wave (ruling BR): alpha is unfinished (progress 0.5).
-    compare(confirmText(o), "Changes 1 torrent's category; its files move to /dl; unfinished ones move to their download folder.")
+    compare(confirmText(o), "Changes 1 torrent's category; its files move to /dl; unfinished ones may go to their download folder instead.")
     compare(writes(o.svc).length, 0, "nothing is written before y")
     key(o.c, "n")
     compare(o.c.mode, "NORMAL")
@@ -265,7 +265,7 @@ TestCase {
     enter(o)
     compare(o.c.mode, "CONFIRM")
     // Final fix wave (ruling BR): gamma is unfinished (progress 0.5).
-    compare(confirmText(o), "Changes 2 torrents' category; 1 torrent's files move to /dl/anime; unfinished ones move to their download folder.",
+    compare(confirmText(o), "Changes 2 torrents' category; 1 torrent's files move to /dl/anime; unfinished ones may go to their download folder instead.",
       "beta is already on anime; gamma moves, delta is manual")
     compare(o.c.confirmHashes, [hh("c"), hh("d")])
     compare(writes(o.svc).length, 0)
@@ -315,7 +315,7 @@ TestCase {
     compare(catPicker(o).currentRow().title, "+ New category \"anime/new\"")
     enter(o)
     // Final fix wave (ruling BR): alpha is unfinished (progress 0.5).
-    compare(confirmText(o), "Changes 1 torrent's category; its files move to /srv/anime/new; unfinished ones move to their download folder.")
+    compare(confirmText(o), "Changes 1 torrent's category; its files move to /srv/anime/new; unfinished ones may go to their download folder instead.")
     compare(writes(o.svc).length, 0, "no category is created before y")
     key(o.c, "y")
     compare(lastCall(o.svc, "addCategory").args[0], "anime/new")

@@ -889,20 +889,20 @@ test("movePlan: an unfinished auto-managed torrent counts whenever its category 
     "a row without progress counts as finished");
 });
 
-test("the confirms say unfinished torrents move to their download folder (BR)", () => {
+test("the confirms say unfinished torrents may go to their download folder (BR)", () => {
   const same = [{ hash: H("a"), from: "/srv/x", to: "/srv/x", unfinished: true }];
   const moving = [{ hash: H("b"), from: "/dl", to: "/dl/anime" }];
   const both = moving.concat(same);
-  assert.equal(L.moveConfirmLine(same, 1), "Changes 1 torrent's category; 1 unfinished torrent's files move to its download folder.");
+  assert.equal(L.moveConfirmLine(same, 1), "Changes 1 torrent's category; 1 unfinished torrent's files may move to its download folder.");
   assert.equal(L.moveConfirmLine(same.concat([{ hash: H("c"), from: "/srv/x", to: "/srv/x", unfinished: true }]), 3),
-    "Changes 3 torrents' category; 2 unfinished torrents' files move to their download folder.");
-  assert.equal(L.moveConfirmLine(both, 2), "Changes 2 torrents' category; 1 torrent's files move to /dl/anime; unfinished ones move to their download folder.");
+    "Changes 3 torrents' category; 2 unfinished torrents' files may move to their download folder.");
+  assert.equal(L.moveConfirmLine(both, 2), "Changes 2 torrents' category; 1 torrent's files move to /dl/anime; unfinished ones may go to their download folder instead.");
   assert.equal(L.moveConfirmLine([{ hash: H("b"), from: "/dl", to: "/dl/anime", unfinished: true }], 1),
-    "Changes 1 torrent's category; its files move to /dl/anime; unfinished ones move to their download folder.");
-  assert.equal(L.renameConfirmLine("a", "c", false, 1, same), "Rename a to c? 1 unfinished torrent's files move to its download folder.");
-  assert.equal(L.renameConfirmLine("a", "c", false, 2, both), "Rename a to c? 1 torrent's files move to /dl/anime; unfinished ones move to their download folder.");
+    "Changes 1 torrent's category; its files move to /dl/anime; unfinished ones may go to their download folder instead.");
+  assert.equal(L.renameConfirmLine("a", "c", false, 1, same), "Rename a to c? 1 unfinished torrent's files may move to its download folder.");
+  assert.equal(L.renameConfirmLine("a", "c", false, 2, both), "Rename a to c? 1 torrent's files move to /dl/anime; unfinished ones may go to their download folder instead.");
   assert.equal(L.deleteConfirmLine("category", "a", 1, 0, [{ hash: H("a"), from: "/srv/x", to: "/dl", unfinished: true }]),
-    "Delete category a? 1 torrent becomes Uncategorized. Its files move to /dl; unfinished ones move to their download folder.");
+    "Delete category a? 1 torrent becomes Uncategorized. Its files move to /dl; unfinished ones may go to their download folder instead.");
 });
 
 test("libraryCopy: a/p/x failures name the action; only a rename shows qbt's sentence alone (BS, Minor 5)", () => {

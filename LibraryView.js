@@ -315,7 +315,7 @@ function movePlan(action, rows, status) {
 // --- Confirm copy (one CONFIRM per action) ------------------------------------------
 
 // Ruling BR: the rows that move to a save path, i.e. all but the unfinished
-// ones whose save path stays (those move only to their download folder).
+// ones whose save path stays (those can move only to their download folder, if at all).
 function movers(plan) {
   var out = [];
   for (var i = 0; i < plan.length; i++) if (!(plan[i].unfinished === true && plan[i].to !== "" && plan[i].from === plan[i].to)) out.push(plan[i]);
@@ -328,16 +328,18 @@ function unfinishedCount(plan) {
   return n;
 }
 
-// "; unfinished ones move to their download folder" when the plan has any.
+// "; unfinished ones may go to their download folder instead" when the
+// plan has any: qBittorrent's download-path option is off by default, and
+// then an unfinished torrent goes to its save path like the rest.
 function unfinishedClause(plan) {
-  return unfinishedCount(plan) > 0 ? "; unfinished ones move to their download folder" : "";
+  return unfinishedCount(plan) > 0 ? "; unfinished ones may go to their download folder instead" : "";
 }
 
-// When only unfinished rows move: "2 unfinished torrents' files move to
-// their download folder".
+// When only unfinished rows might move: "2 unfinished torrents' files may
+// move to their download folder" (only if the download-path option is on).
 function unfinishedOnly(plan) {
   var u = unfinishedCount(plan);
-  return u + " unfinished" + plural(u, " torrent's", " torrents'") + " files move to " + plural(u, "its", "their") + " download folder";
+  return u + " unfinished" + plural(u, " torrent's", " torrents'") + " files may move to " + plural(u, "its", "their") + " download folder";
 }
 
 function destinationText(plan) {
@@ -350,9 +352,9 @@ function destinationText(plan) {
 // The move sentence folded into a delete, rename or path confirm: "Their
 // files move to /dl." when every counted torrent moves, else "3 torrents'
 // files move to /dl." "" when nothing moves.
-// Unfinished rows (ruling BR) add "; unfinished ones move to their
-// download folder", or, when they are all that moves, "1 unfinished
-// torrent's files move to its download folder."
+// Unfinished rows (ruling BR) add "; unfinished ones may go to their
+// download folder instead", or, when they are all that might move, "1
+// unfinished torrent's files may move to its download folder."
 function moveSentence(plan, count) {
   var list = plan || [];
   if (list.length === 0) return "";

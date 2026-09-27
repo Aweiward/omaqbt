@@ -357,7 +357,7 @@ TestCase {
     type(o, "animation")
     enter(o)
     // Final fix wave (ruling BR): the fixture's torrents are unfinished (progress 0.5).
-    compare(confirmText(o), "animation already exists. Move 2 torrents into it and delete anime? Their files move to /dl/animation; unfinished ones move to their download folder.")
+    compare(confirmText(o), "animation already exists. Move 2 torrents into it and delete anime? Their files move to /dl/animation; unfinished ones may go to their download folder instead.")
     key(o.c, "y")
     compare(o.c.mode, "NORMAL", "one confirm, not two")
     compare(lastCall(o.svc, "renameCategory").args[2], true)
@@ -367,7 +367,7 @@ TestCase {
     key(o.c, "c")
     type(o, "shows")
     enter(o)
-    compare(confirmText(o), "Rename anime to shows? Their files move to /dl/shows; unfinished ones move to their download folder.")
+    compare(confirmText(o), "Rename anime to shows? Their files move to /dl/shows; unfinished ones may go to their download folder instead.")
     compare(o.c.confirm.accept, "rename")
     key(o.c, "y")
     compare(lastCall(o.svc, "renameCategory").args[1], "shows")
@@ -382,14 +382,14 @@ TestCase {
     enter(o)
     compare(o.c.confirm, null)
     compare(lastCall(o.svc, "renameCategory").args[1], "series")
-    // ...but an unfinished one moves to its download folder: confirm (BR)
+    // ...but an unfinished one may move to its download folder: confirm (BR)
     var renames = calls(o.svc, "renameCategory").length
     o.svc.torrents = [tt(hh("a"), "alpha", { category: "anime", autoTmm: true, savePath: "/srv/anime" })]
     on(o, "category", "anime")
     key(o.c, "c")
     type(o, "series")
     enter(o)
-    compare(confirmText(o), "Rename anime to series? 1 unfinished torrent's files move to its download folder.")
+    compare(confirmText(o), "Rename anime to series? 1 unfinished torrent's files may move to its download folder.")
     compare(calls(o.svc, "renameCategory").length, renames, "nothing before y")
   }
 
@@ -559,7 +559,7 @@ TestCase {
     on(o, "category", "anime/2026")
     key(o.c, "x")
     // Final fix wave (ruling BR): gamma is unfinished (progress 0.5).
-    compare(confirmText(o), "Delete category anime/2026? 1 torrent moves to anime. Its files move to /dl/anime; unfinished ones move to their download folder.")
+    compare(confirmText(o), "Delete category anime/2026? 1 torrent moves to anime. Its files move to /dl/anime; unfinished ones may go to their download folder instead.")
     key(o.c, "y")
     compare(lastCall(o.svc, "removeCategory").args[0], "anime/2026")
     finish(o, true)
@@ -573,7 +573,7 @@ TestCase {
     on(o, "category", "anime")
     key(o.c, "x")
     // Final fix wave (ruling BR): alpha and beta are unfinished (progress 0.5).
-    compare(confirmText(o), "Delete category anime? 2 torrents become Uncategorized. Their files move to /dl; unfinished ones move to their download folder.")
+    compare(confirmText(o), "Delete category anime? 2 torrents become Uncategorized. Their files move to /dl; unfinished ones may go to their download folder instead.")
   }
 
   function test_x_unused_category_still_confirms() {
