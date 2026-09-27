@@ -696,7 +696,10 @@ test("inspectorInfo: null with no row; the spec's fields in order", () => {
   });
   const info = V.inspectorInfo(row, (s) => "D" + s);
   assert.equal(info.name, "Yoroi");
-  assert.deepEqual(info.fields.map((f) => f.label), ["State", "Size", "Speed", "Peers", "Ratio", "Category", "Added", "Save path"]);
+  // Added omits from the top block (Ruling T): the approved mockup and the
+  // spec's field list for it are State, Size, Speed, Peers, Ratio,
+  // Category, Save path. Transfer (InspectorView.infoGroups) keeps Added.
+  assert.deepEqual(info.fields.map((f) => f.label), ["State", "Size", "Speed", "Peers", "Ratio", "Category", "Save path"]);
   const val = (l) => info.fields.find((f) => f.label === l).value;
   assert.equal(val("State"), "● downloading · 34%");
   assert.equal(info.fields[0].tone, "accent");
@@ -705,7 +708,6 @@ test("inspectorInfo: null with no row; the spec's fields in order", () => {
   assert.equal(val("Peers"), "14 seeds · 3 leechers");
   assert.equal(val("Ratio"), "0.03 · limit global");
   assert.equal(val("Category"), "anime");
-  assert.equal(val("Added"), "D1790000000");
   assert.equal(val("Save path"), "/home/x/anime");
   assert.deepEqual(info.keys.map((k) => k.key), ["o", "y", "m", "e"]);
 });
@@ -727,7 +729,7 @@ test("inspectorInfo: missing fields show —, errored rows say why", () => {
   assert.equal(info.name, "—");
   assert.equal(val("State"), "! missing files · 50%");
   assert.equal(info.fields[0].tone, "urgent");
-  for (const l of ["Size", "Speed", "Peers", "Ratio", "Category", "Added", "Save path"]) assert.equal(val(l), "—", l);
+  for (const l of ["Size", "Speed", "Peers", "Ratio", "Category", "Save path"]) assert.equal(val(l), "—", l);
 });
 
 test("filesView: loading, error, empty and rows", () => {

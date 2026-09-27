@@ -518,10 +518,14 @@ Item {
       Item {
         id: infoFoot
         objectName: "infoActionsFooter"
+        // Sized to the key Flow's content, not a fixed height: at the real
+        // pane width the four keys wrap to two lines, and a fixed height
+        // used to clip the second line under the divider.
+        readonly property int vPad: Style.space(7)
         anchors.left: parent.left
         anchors.right: parent.right
         anchors.bottom: parent.bottom
-        height: Style.space(28)
+        height: keyFlow.implicitHeight + 2 * vPad
         Rectangle {
           anchors.left: parent.left
           anchors.right: parent.right
@@ -530,11 +534,14 @@ Item {
           color: pane.lineColor
         }
         Flow {
+          id: keyFlow
+          objectName: "infoKeyFlow"
           anchors.left: parent.left
           anchors.leftMargin: pane.padX
           anchors.right: parent.right
           anchors.rightMargin: pane.padX
-          anchors.verticalCenter: parent.verticalCenter
+          anchors.top: parent.top
+          anchors.topMargin: infoFoot.vPad
           spacing: Style.space(14)
           Repeater {
             model: pane.info ? pane.info.keys : []

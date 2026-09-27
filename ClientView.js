@@ -1100,12 +1100,14 @@ function sameEntries(a, b) {
 // --- Inspector ------------------------------------------------------------
 
 // inspectorInfo(row, dateText, noMeta) -> the Info tab for the cursor row,
-// or null when there is no cursor row ("Select a torrent"). dateText(epochSec)
-// formats the added time (QML passes Qt.formatDateTime; keeping it an
-// argument keeps this file free of Date). Missing values show "—". noMeta
-// (InspectorView.noMetadata's result) swaps the State field's percentage
-// for "waiting for metadata" -- true for every torrent in the user's
-// library today, whose state is stopped, size unknown.
+// or null when there is no cursor row ("Select a torrent"). dateText is
+// unused here since Added moved to the Transfer group (InspectorView.
+// infoGroups, Ruling T: the approved mockup and the spec's top-block
+// field list omit it) -- kept as the second argument so noMeta stays the
+// third and Client.qml's call site doesn't need to change. Missing values
+// show "—". noMeta (InspectorView.noMetadata's result) swaps the State
+// field's percentage for "waiting for metadata" -- true for every torrent
+// in the user's library today, whose state is stopped, size unknown.
 function inspectorInfo(row, dateText, noMeta) {
   if (!row) return null;
   var r = row;
@@ -1116,8 +1118,6 @@ function inspectorInfo(row, dateText, noMeta) {
   var hasSize = isFinite(size) && size > 0;
   var ratio = Number(r.ratio);
   var hasRatio = r.ratio !== undefined && r.ratio !== null && isFinite(ratio);
-  var added = Number(r.addedOn);
-  var fmt = typeof dateText === "function" ? dateText : function(s) { return Model.formatDate(s); };
   function num(v) {
     var n = Number(v);
     return v === undefined || v === null || !isFinite(n) ? null : n;
@@ -1140,7 +1140,6 @@ function inspectorInfo(row, dateText, noMeta) {
       { label: "Peers", value: seeds === null && leechs === null ? "—" : plural(seeds || 0, "seed", "seeds") + " · " + plural(leechs || 0, "leecher", "leechers"), tone: "fg" },
       { label: "Ratio", value: hasRatio ? Math.max(0, ratio).toFixed(2) + " · limit " + Model.ratioLimitLabel(r.ratioLimit === undefined ? -2 : r.ratioLimit) : "—", tone: "fg" },
       { label: "Category", value: text(r.category), tone: "fg" },
-      { label: "Added", value: isFinite(added) && added > 0 ? String(fmt(added)) : "—", tone: "fg" },
       { label: "Save path", value: text(r.savePath), tone: "fg" }
     ],
     keys: [

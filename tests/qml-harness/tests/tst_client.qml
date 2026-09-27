@@ -1461,6 +1461,15 @@ TestCase {
   }
   // ListView delegates appear on the next polish, so let one pass first.
   function shows(c, text) { wait(30); return visibleTexts(winOf(c).contentItem).indexOf(text) >= 0 }
+  // Every visible Text item itself (not just its string), for geometry checks.
+  function textNodesIn(obj, out) {
+    out = out || []
+    if (!obj || obj.visible === false) return out
+    if (typeof obj.text === "string" && obj.font !== undefined) out.push(obj)
+    var kids = obj.children || []
+    for (var i = 0; i < kids.length; i++) textNodesIn(kids[i], out)
+    return out
+  }
   function listViewIn(obj) {
     if (!obj || obj.visible === false) return null
     if (typeof obj.itemAtIndex === "function") return obj
@@ -1773,6 +1782,10 @@ TestCase {
     verify(shows(o.c, "Torrent"))
     verify(shows(o.c, "17 of 100"), "Connections field")
     verify(shows(o.c, "hello"), "Comment field")
+    // L2: Added lives only in the Transfer group (Ruling T) -- the top
+    // (slice-1) block no longer repeats it, so the Info tab shows exactly
+    // one "Added" label.
+    compare(visibleTexts(insp).filter(function(t) { return t === "Added" }).length, 1, "exactly one Added label")
     // Sidecar down: the pieces area shows nothing, the groups show "--",
     // and there is no "Needs qbt-serve" blocker over the whole tab.
     o.svc.sidecarDown = true
@@ -1785,6 +1798,51 @@ TestCase {
     verify(!shows(o.c, "17 of 100"))
     verify(!shows(o.c, "Needs qbt-serve (slow polling)"))
     verify(shows(o.c, "alpha"), "the slice-1 block stays up")
+  }
+
+  // L1: at the real pane width the four action keys ("o open folder",
+  // "y copy magnet", "m move", "e recheck") can wrap the key Flow to two
+  // lines; a fixed-height footer used to clip the second line under the
+  // divider. The footer must size to the Flow's content instead.
+  function test_info_footer_sizes_to_its_content_and_never_clips_the_keys() {
+    var o = make()
+    o.svc.torrents = [tt(hh("a"), "alpha", { size: 5000000000 })]
+    key(o.c, "1")
+    wait(30)
+    var insp = inspectorOf(o.c)
+    compare(insp.width, 380, "the real docked inspector pane width")
+    var foot = findByName(insp, "infoActionsFooter")
+    verify(foot !== null, "the footer is in the tree")
+    var flow = findByName(insp, "infoKeyFlow")
+    verify(flow !== null, "the key Flow is in the tree")
+    // The harness stub's monospace glyphs are narrow enough that the four
+    // keys fit on one line at 380 px, unlike the live window's real body
+    // font. Narrow the Flow itself to force the two-line wrap the real
+    // pane hits, so this test exercises the actual clipping bug (a fixed
+    // 28 px footer with the Flow vertical-centered in it) rather than
+    // passing vacuously on a single line.
+    var oneLineHeight = flow.implicitHeight
+    flow.anchors.right = undefined
+    flow.width = Math.max(10, Math.round(flow.implicitWidth * 0.6))
+    wait(50)
+    verify(flow.implicitHeight > oneLineHeight,
+      "the Flow now wraps to more than one line (" + flow.implicitHeight + " vs one line's " + oneLineHeight + ")")
+    verify(foot.height >= flow.implicitHeight,
+      "footer height " + foot.height + " is at least the Flow's implicit height " + flow.implicitHeight)
+    var divider = foot.children[0]
+    verify(divider !== undefined && divider.height === 1, "the divider Rectangle is the footer's first child")
+    var dividerY = divider.mapToItem(foot, 0, 0).y
+    var keyLabels = ["o", "open folder", "y", "copy magnet", "m", "move", "e", "recheck"]
+    var nodes = textNodesIn(flow).filter(function(n) { return keyLabels.indexOf(n.text) >= 0 })
+    compare(nodes.length, keyLabels.length, "every key/label Text is visible")
+    var minY = Infinity
+    for (var i = 0; i < nodes.length; i++) {
+      var p = nodes[i].mapToItem(foot, 0, 0)
+      verify(p.y + nodes[i].height <= foot.height + 0.5,
+        "\"" + nodes[i].text + "\" (y " + p.y + ", height " + nodes[i].height + ") fits inside the footer (height " + foot.height + ")")
+      if (p.y < minY) minY = p.y
+    }
+    verify(dividerY < minY, "the divider (y " + dividerY + ") sits above the first text line (y " + minY + ")")
   }
 
   // M2: a fresh error entry never shows retained props/pieces, even
