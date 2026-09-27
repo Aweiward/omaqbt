@@ -514,6 +514,32 @@ finally:
     shutil.rmtree(stub_root, ignore_errors=True)
     Path(blocked_state.name).unlink(missing_ok=True)
 
+# 17. If the state dir itself is fine but the inbox write specifically
+#     fails (a corrupt existing inbox file, so cmd_magnet_inbox's own
+#     python script dies for a reason other than the 20-item cap), the
+#     rescue must fall through to the 0600 file and name only its path --
+#     one tier short of totally blocked (section 16 above).
+extra_env, magnet_state, raise_log, notify_log, stub_root = fetch_metadata_env(timeout=1)
+try:
+    magnet_state.mkdir(parents=True, exist_ok=True)
+    (magnet_state / "magnet-inbox.jsonl").write_text("not json\n")
+    with harness.fixture_server(extra_env=extra_env) as (port, env):
+        control_path = Path(env["QBT_FIXTURE_CONTROL"])
+        control_path.write_text(json.dumps({"add": "404"}))
+        r = run(env, "fetch-metadata", HASH_NOMETA)
+        check("fetch-metadata corrupt-inbox rescue: exit != 0", r.returncode != 0)
+        check("fetch-metadata corrupt-inbox rescue: names a lost-magnet file path", "lost-magnet-" in r.stderr)
+        check("fetch-metadata corrupt-inbox rescue: never prints the magnet", MAGNET_NOMETA not in r.stderr)
+        lost_files = list(magnet_state.glob("lost-magnet-*"))
+        check("fetch-metadata corrupt-inbox rescue: exactly one lost-magnet file", len(lost_files) == 1)
+        if lost_files:
+            mode = oct(lost_files[0].stat().st_mode & 0o777)
+            check("fetch-metadata corrupt-inbox rescue: lost-magnet file is 0600", mode == "0o600")
+            check("fetch-metadata corrupt-inbox rescue: lost-magnet file holds the magnet", lost_files[0].read_text().strip() == MAGNET_NOMETA)
+finally:
+    shutil.rmtree(magnet_state, ignore_errors=True)
+    shutil.rmtree(stub_root, ignore_errors=True)
+
 if failures:
     print(f"\n{len(failures)} check(s) failed", file=sys.stderr)
     sys.exit(1)

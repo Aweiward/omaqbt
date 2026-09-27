@@ -484,6 +484,39 @@ with harness.fixture_server(extra_env=lenv) as (lport, lenv2):
         if not ok:
             locale_failures.append(("ban-peer-nonascii-peer", p, result.stderr))
 
+    # Fix round 2, item 1: a QBT_FETCH_METADATA_TIMEOUT that's only a
+    # "digit" under this locale's collation (a fullwidth "1") must be
+    # rejected outright, before any request at all -- not silently
+    # normalized to the default and left to blow up the wait-loop
+    # arithmetic later, after the delete has already gone out.
+    HASH_NOMETA_LOCALE = "d" * 40  # tests/fixtures/server.py's HASH_NOMETA
+    fw_env = lenv2.copy()
+    fw_env["QBT_FETCH_METADATA_TIMEOUT"] = "１"
+    before = len(json.loads(Path(lenv2["QBT_FIXTURE_LOG"]).read_text() or "[]"))
+    result = subprocess.run(["./qbt", "fetch-metadata", HASH_NOMETA_LOCALE], env=fw_env, text=True, capture_output=True)
+    after = json.loads(Path(lenv2["QBT_FIXTURE_LOG"]).read_text() or "[]")
+    no_raw_bash_error = "arithmetic syntax error" not in result.stderr and "operand expected" not in result.stderr
+    ok = (
+        result.returncode != 0
+        and len(after) == before
+        and "QBT_FETCH_METADATA_TIMEOUT" in result.stderr
+        and no_raw_bash_error
+    )
+    print(("ok - " if ok else "FAIL - ") + "fetch-metadata rejects a fullwidth QBT_FETCH_METADATA_TIMEOUT under en_US.UTF-8, no request recorded")
+    if not ok:
+        locale_failures.append(("fetch-metadata-fullwidth-timeout", result.stderr))
+
+    # Fix round 2, item 2: total_size containing a locale-collated "digit"
+    # lookalike must refuse cleanly (It already has metadata.), never reach
+    # `((...))` with it and print a raw bash arithmetic error first.
+    HASH_BADSIZE_NONASCII = "7" * 40  # tests/fixtures/server.py's HASH_BADSIZE_NONASCII
+    result = subprocess.run(["./qbt", "fetch-metadata", HASH_BADSIZE_NONASCII], env=lenv2, text=True, capture_output=True)
+    no_raw_bash_error = "arithmetic syntax error" not in result.stderr and "operand expected" not in result.stderr
+    ok = result.returncode != 0 and "already has metadata" in result.stderr and no_raw_bash_error
+    print(("ok - " if ok else "FAIL - ") + "fetch-metadata refuses a non-ASCII total_size under en_US.UTF-8 with no raw bash error")
+    if not ok:
+        locale_failures.append(("fetch-metadata-nonascii-total-size", result.stderr))
+
 if locale_failures:
     print(f"\n{len(locale_failures)} locale check(s) failed: {locale_failures}", file=sys.stderr)
     sys.exit(1)

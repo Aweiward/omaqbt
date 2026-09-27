@@ -34,6 +34,7 @@ HASH_META = "e" * 40
 HASH_RUNNING = "f" * 40
 HASH_NOMAGNET = "9" * 40
 HASH_BADSIZE = "8" * 40
+HASH_BADSIZE_NONASCII = "7" * 40
 EXTRA_TORRENTS = {
     HASH_NOMETA: {
         "state": "stoppedDL",
@@ -76,6 +77,17 @@ EXTRA_TORRENTS = {
         "total_size": "unknown",
         "magnet_uri": f"magnet:?xt=urn:btih:{HASH_BADSIZE}",
         "save_path": "/home/user/Downloads/badsize",
+        "category": "",
+        "tags": "",
+    },
+    # Fix round 2, item 2: a total_size that is only a "digit" under a
+    # UTF-8 locale's collation (a fullwidth "1"), not under [:digit:]. Must
+    # refuse cleanly, never reach `((...))` with it.
+    HASH_BADSIZE_NONASCII: {
+        "state": "stoppedDL",
+        "total_size": "１",  # fullwidth "1"
+        "magnet_uri": f"magnet:?xt=urn:btih:{HASH_BADSIZE_NONASCII}",
+        "save_path": "/home/user/Downloads/badsize-nonascii",
         "category": "",
         "tags": "",
     },

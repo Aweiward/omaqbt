@@ -393,6 +393,13 @@ fetch_metadata_hash_count() {
 # $3 selects "gone" (0) or "present" (nonzero).
 fetch_metadata_wait_for() {
   local hash=$1 timeout=$2 want=$3 interval=0.2
+  # Belt and suspenders: cmd_fetch_metadata already validates timeout
+  # before calling here, but this expansion is the one that would actually
+  # blow up, so it re-checks rather than trusting every future caller to
+  # have done it first.
+  [[ $timeout =~ ^[[:digit:]]+$ ]] || timeout=5
+  (( ${#timeout} <= 3 )) || timeout=600
+  timeout=$(( 10#$timeout ))
   local deadline=$(( SECONDS + timeout ))
   local n
   while true; do
@@ -448,6 +455,40 @@ cmd_fetch_metadata() {
   [[ -n $hash ]] || die "usage: qbt fetch-metadata <hash>"
   valid_single_hash "$hash" || die "invalid hash"
 
+  # Validated, capped and arithmetic-proved before anything else -- in
+  # particular before the very first request -- so a bad
+  # QBT_FETCH_METADATA_TIMEOUT can never reach `SECONDS + timeout` inside
+  # fetch_metadata_wait_for with a raw bash arithmetic error and no rescue
+  # able to run once the delete has gone out. [:digit:] not [0-9]: under a
+  # UTF-8 locale a non-ASCII "digit"-lookalike (e.g. a fullwidth "１") can
+  # otherwise pass a [0-9] range. Unlike the refusals below (which only
+  # reject what qBittorrent's own data says), an unparseable override is a
+  # broken environment, not qBittorrent's business, so it's rejected
+  # outright rather than silently swapped for the default; a parseable but
+  # out-of-range value is merely clamped.
+  local timeout=${QBT_FETCH_METADATA_TIMEOUT:-5}
+  [[ $timeout =~ ^[[:digit:]]+$ ]] || die "invalid QBT_FETCH_METADATA_TIMEOUT"
+  # A digit string long enough to overflow bash's integer type would make
+  # `10#$timeout` wrap to an unpredictable value rather than just being
+  # "large" -- reject the length before doing that arithmetic at all, so
+  # the cap below never depends on wraparound behavior. 3 digits comfortably
+  # covers the 600 cap with room to spare.
+  if (( ${#timeout} > 3 )); then
+    timeout=600
+  else
+    timeout=$(( 10#$timeout ))
+    if (( timeout < 1 )); then
+      timeout=5
+    elif (( timeout > 600 )); then
+      timeout=600
+    fi
+  fi
+  # Exercise the exact expansion fetch_metadata_wait_for will do, here,
+  # while it's still safe to just die: if this ever fails for a reason the
+  # checks above didn't anticipate, it fails before anything has been sent.
+  local _deadline_canary
+  (( _deadline_canary = SECONDS + timeout )) || die "invalid fetch-metadata timeout"
+
   local info row count
   info=$(api GET "/api/v2/torrents/info?hashes=${hash}")
   row=$(jq -c --arg h "$hash" '[.[] | select((.hash // "" | ascii_downcase) == ($h | ascii_downcase))]' <<<"$info")
@@ -467,14 +508,14 @@ cmd_fetch_metadata() {
 
   # Fail closed: only a clean integer that's <= 0 counts as "no metadata".
   # Anything jq couldn't read as a plain integer is treated the same as
-  # "has metadata" rather than assumed safe.
-  [[ $total_size =~ ^-?[0-9]+$ ]] || die "It already has metadata."
+  # "has metadata" rather than assumed safe. [:digit:] (not [0-9], see
+  # valid_hashes above): under a UTF-8 locale a non-ASCII "digit"-lookalike
+  # can otherwise pass a [0-9] range and reach the `((...))` below with a
+  # raw bash arithmetic error on stderr before this dies cleanly.
+  [[ $total_size =~ ^-?[[:digit:]]+$ ]] || die "It already has metadata."
   (( total_size <= 0 )) || die "It already has metadata."
   [[ $state == stoppedDL || $state == pausedDL ]] || die "Stop it first."
   [[ -n $magnet ]] || die "No magnet link for this torrent."
-
-  local timeout=${QBT_FETCH_METADATA_TIMEOUT:-5}
-  [[ $timeout =~ ^[0-9]+$ ]] || timeout=5
 
   # Not a bare `api POST ...`: that runs in this shell, so `die`'s `exit`
   # would abort the whole command before any rescue ever ran (this is the
