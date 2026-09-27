@@ -38,6 +38,59 @@ valid_hashes() {
   [[ $input == all || $input =~ $re ]]
 }
 
+valid_single_hash() {
+  local input=${1:-}
+  [[ $input =~ ^([0-9a-fA-F]{40}|[0-9a-fA-F]{64})$ ]]
+}
+
+# F5: udp://, http://, https:// or wss://, at most 2048 characters, no
+# whitespace, no "|". "&" and "=" are legal (tracker URLs carry passkeys as
+# query-string params) -- the value is always @uri-encoded before it goes
+# into a form body, so it can never be split into extra fields.
+valid_tracker_url() {
+  local input=${1:-}
+  [[ -n $input ]] || return 1
+  [[ ${#input} -le 2048 ]] || return 1
+  [[ $input =~ ^(udp|https?|wss):// ]] || return 1
+  [[ $input != *[[:space:]]* ]] || return 1
+  [[ $input != *'|'* ]] || return 1
+  return 0
+}
+
+valid_port() {
+  local port=${1:-}
+  # A leading zero (e.g. "089") would make bash read the number as octal
+  # and abort on the invalid digit; force base 10.
+  [[ $port =~ ^[0-9]+$ ]] || return 1
+  (( 10#$port >= 1 && 10#$port <= 65535 ))
+}
+
+valid_ipv4() {
+  local ip=${1:-}
+  [[ $ip =~ ^([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})$ ]] || return 1
+  local o
+  for o in "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}" "${BASH_REMATCH[3]}" "${BASH_REMATCH[4]}"; do
+    (( 10#$o <= 255 )) || return 1
+  done
+  return 0
+}
+
+# A ban target is exactly one IPv4:port or [IPv6]:port (port 1-65535).
+valid_peer() {
+  local input=${1:-}
+  [[ -n $input ]] || return 1
+  if [[ $input == \[*\]:* ]]; then
+    [[ $input =~ ^\[([0-9a-fA-F:]+)\]:([0-9]+)$ ]] || return 1
+    valid_port "${BASH_REMATCH[2]}"
+    return $?
+  fi
+  local ip=${input%:*}
+  local port=${input##*:}
+  [[ $input == "$ip:$port" ]] || return 1
+  valid_ipv4 "$ip" || return 1
+  valid_port "$port"
+}
+
 ensure_state_dir() {
   local dir=$1
   [[ -n $dir ]] || return 0
@@ -264,6 +317,157 @@ cmd_delete() {
   [[ -n $hash ]] || die "usage: qbt delete <hash> [--files]"
   valid_hashes "$hash" || die "invalid hash list"
   api POST "/api/v2/torrents/delete" "hashes=${hash}&deleteFiles=${files}" >/dev/null
+  printf '%s\n' '{"ok":true}'
+}
+
+cmd_reannounce() {
+  local hash=${1:-}
+  [[ -n $hash ]] || die "usage: qbt reannounce <hash>"
+  valid_single_hash "$hash" || die "invalid hash"
+  api POST "/api/v2/torrents/reannounce" "hashes=${hash}" >/dev/null
+  printf '%s\n' '{"ok":true}'
+}
+
+cmd_tracker_add() {
+  local hash=${1:-} url=${2:-}
+  [[ -n $hash && -n $url ]] || die "usage: qbt tracker-add <hash> <url>"
+  valid_single_hash "$hash" || die "invalid hash"
+  valid_tracker_url "$url" || die "invalid tracker url"
+  api POST "/api/v2/torrents/addTrackers" "hash=${hash}&urls=$(jq -nr --arg v "$url" '$v|@uri')" >/dev/null
+  printf '%s\n' '{"ok":true}'
+}
+
+cmd_tracker_edit() {
+  local hash=${1:-} old=${2:-} new=${3:-}
+  [[ -n $hash && -n $old && -n $new ]] || die "usage: qbt tracker-edit <hash> <old-url> <new-url>"
+  valid_single_hash "$hash" || die "invalid hash"
+  # F13: qBittorrent's WebUI joins a torrent's trackers with "|"; a tracker
+  # whose own URL contains "|" can't be addressed unambiguously through
+  # editTracker/removeTrackers.
+  [[ $old != *'|'* ]] || die "This tracker's URL can't be edited through the WebUI API"
+  valid_tracker_url "$old" || die "invalid tracker url"
+  valid_tracker_url "$new" || die "invalid tracker url"
+  api POST "/api/v2/torrents/editTracker" "hash=${hash}&origUrl=$(jq -nr --arg v "$old" '$v|@uri')&newUrl=$(jq -nr --arg v "$new" '$v|@uri')" >/dev/null
+  printf '%s\n' '{"ok":true}'
+}
+
+cmd_tracker_remove() {
+  local hash=${1:-} url=${2:-}
+  [[ -n $hash && -n $url ]] || die "usage: qbt tracker-remove <hash> <url>"
+  valid_single_hash "$hash" || die "invalid hash"
+  [[ $url != *'|'* ]] || die "This tracker's URL can't be edited through the WebUI API"
+  valid_tracker_url "$url" || die "invalid tracker url"
+  api POST "/api/v2/torrents/removeTrackers" "hash=${hash}&urls=$(jq -nr --arg v "$url" '$v|@uri')" >/dev/null
+  printf '%s\n' '{"ok":true}'
+}
+
+cmd_ban_peer() {
+  local peer=${1:-}
+  [[ -n $peer ]] || die "usage: qbt ban-peer <ip:port>"
+  valid_peer "$peer" || die "invalid peer"
+  api POST "/api/v2/transfer/banPeers" "peers=$(jq -nr --arg v "$peer" '$v|@uri')" >/dev/null
+  printf '%s\n' '{"ok":true}'
+}
+
+# Number of hash-count polls that fit in $2 seconds at a 0.2s interval, used
+# by fetch-metadata below to wait for a delete to take effect and for a
+# re-add to reappear. Production default is 5s; QBT_FETCH_METADATA_TIMEOUT
+# lets tests shrink it so a deliberately-failing poll doesn't stall the
+# suite.
+fetch_metadata_hash_count() {
+  local hash=$1
+  api GET "/api/v2/torrents/info?hashes=${hash}" 2>/dev/null | jq --arg h "$hash" '[.[] | select((.hash // "" | ascii_downcase) == ($h | ascii_downcase))] | length'
+}
+
+fetch_metadata_wait_gone() {
+  local hash=$1 timeout=$2 interval=0.2
+  local iters=$(( timeout * 5 ))
+  (( iters >= 1 )) || iters=1
+  local i n
+  for (( i = 0; i < iters; i++ )); do
+    # A failed GET (dropped connection, timeout) must not read as "gone" --
+    # the pipeline would print nothing, and `[[ "" -eq 0 ]]` is true in
+    # bash, so check the assignment succeeded before trusting the count.
+    n=$(fetch_metadata_hash_count "$hash") && [[ $n == 0 ]] && return 0
+    sleep "$interval"
+  done
+  n=$(fetch_metadata_hash_count "$hash") && [[ $n == 0 ]]
+}
+
+fetch_metadata_wait_present() {
+  local hash=$1 timeout=$2 interval=0.2
+  local iters=$(( timeout * 5 ))
+  (( iters >= 1 )) || iters=1
+  local i n
+  for (( i = 0; i < iters; i++ )); do
+    n=$(fetch_metadata_hash_count "$hash") && [[ $n -ge 1 ]] && return 0
+    sleep "$interval"
+  done
+  n=$(fetch_metadata_hash_count "$hash") && [[ $n -ge 1 ]]
+}
+
+# F4, Deviation 1. Swaps a metadata-less torrent for a fresh magnet add so
+# qBittorrent goes looking for metadata again. Every refusal below happens
+# before the delete; nothing is destroyed unless we already hold the magnet,
+# save path, category and tags needed to put it back.
+cmd_fetch_metadata() {
+  local hash=${1:-}
+  [[ -n $hash ]] || die "usage: qbt fetch-metadata <hash>"
+  valid_single_hash "$hash" || die "invalid hash"
+
+  local info row count
+  info=$(api GET "/api/v2/torrents/info?hashes=${hash}")
+  row=$(jq -c --arg h "$hash" '[.[] | select((.hash // "" | ascii_downcase) == ($h | ascii_downcase))]' <<<"$info")
+  count=$(jq 'length' <<<"$row")
+  [[ $count -eq 1 ]] || die "torrent not found"
+
+  local total_size state magnet savepath category tags
+  total_size=$(jq -r '.[0].total_size // -1' <<<"$row")
+  state=$(jq -r '.[0].state // empty' <<<"$row")
+  magnet=$(jq -r '.[0].magnet_uri // empty' <<<"$row")
+  savepath=$(jq -r '.[0].save_path // empty' <<<"$row")
+  category=$(jq -r '.[0].category // empty' <<<"$row")
+  tags=$(jq -r '.[0].tags // empty' <<<"$row")
+
+  if [[ $total_size =~ ^-?[0-9]+$ ]] && (( total_size > 0 )); then
+    die "It already has metadata."
+  fi
+  [[ $state == stoppedDL || $state == pausedDL ]] || die "Stop it first."
+  [[ -n $magnet ]] || die "No magnet link for this torrent."
+
+  api POST "/api/v2/torrents/delete" "hashes=${hash}&deleteFiles=false" >/dev/null
+
+  local timeout=${QBT_FETCH_METADATA_TIMEOUT:-5}
+  fetch_metadata_wait_gone "$hash" "$timeout" || die "qBittorrent didn't remove it in time"
+
+  local add_body
+  add_body="urls=$(jq -nr --arg v "$magnet" '$v|@uri')"
+  add_body+="&savepath=$(jq -nr --arg v "$savepath" '$v|@uri')"
+  add_body+="&category=$(jq -nr --arg v "$category" '$v|@uri')"
+  add_body+="&tags=$(jq -nr --arg v "$tags" '$v|@uri')"
+  add_body+="&stopCondition=MetadataReceived&stopped=false&paused=false"
+
+  local add_ok=true add_resp
+  if ! add_resp=$(api POST "/api/v2/torrents/add" "$add_body" 2>&1); then
+    add_ok=false
+  elif [[ $add_resp != "Ok." ]]; then
+    add_ok=false
+  elif ! fetch_metadata_wait_present "$hash" "$timeout"; then
+    add_ok=false
+  fi
+
+  if [[ $add_ok != true ]]; then
+    # The torrent is already gone from qBittorrent at this point, so the
+    # magnet must not be lost too. Run the inbox in a subshell: its own
+    # `die` (e.g. inbox full) only ends that subshell, and its stdout
+    # ({"ok":true}) must not leak onto ours.
+    if (cmd_magnet_inbox "$magnet") >/dev/null 2>&1; then
+      die "Couldn't re-add it; the magnet is back in your inbox."
+    else
+      die "Couldn't re-add it and couldn't save it either; the magnet is: $magnet"
+    fi
+  fi
+
   printf '%s\n' '{"ok":true}'
 }
 
@@ -822,6 +1026,12 @@ case ${1:-} in
   recheck) shift; cmd_recheck "$@" ;;
   set-location) shift; cmd_set_location "$@" ;;
   delete) shift; cmd_delete "$@" ;;
+  reannounce) shift; cmd_reannounce "$@" ;;
+  tracker-add) shift; cmd_tracker_add "$@" ;;
+  tracker-edit) shift; cmd_tracker_edit "$@" ;;
+  tracker-remove) shift; cmd_tracker_remove "$@" ;;
+  ban-peer) shift; cmd_ban_peer "$@" ;;
+  fetch-metadata) shift; cmd_fetch_metadata "$@" ;;
   files) shift; cmd_files "$@" ;;
   prio) shift; cmd_prio "$@" ;;
   turtle) shift; cmd_turtle "$@" ;;
@@ -840,5 +1050,5 @@ case ${1:-} in
   magnet-pending-drop) shift; cmd_magnet_pending_drop "$@" ;;
   magnet-install-handler) shift; cmd_magnet_install_handler "$@" ;;
   magnet-uninstall-handler) shift; cmd_magnet_uninstall_handler "$@" ;;
-  *) die "usage: qbt status|probe|add|start|stop|recheck|set-location|delete|files|prio|turtle|limit|sequential|sharelimit|install|start-daemon|stop-daemon|magnet-paths|magnet-inbox|magnet-drain|magnet-pending-list|magnet-pending-drop|magnet-install-handler|magnet-uninstall-handler" ;;
+  *) die "usage: qbt status|probe|add|start|stop|recheck|set-location|delete|reannounce|tracker-add|tracker-edit|tracker-remove|ban-peer|fetch-metadata|files|prio|turtle|limit|sequential|sharelimit|install|start-daemon|stop-daemon|magnet-paths|magnet-inbox|magnet-drain|magnet-pending-list|magnet-pending-drop|magnet-install-handler|magnet-uninstall-handler" ;;
 esac

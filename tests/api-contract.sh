@@ -3,8 +3,11 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 python3 - <<'PY'
-import json, os, socket, subprocess, time, urllib.request
+import json, os, socket, subprocess, sys, time, urllib.request
 from pathlib import Path
+
+sys.path.insert(0, "tests/fixtures")
+import harness  # noqa: E402
 
 root = Path(".").resolve()
 log = root / "tests/fixtures/.requests.json"
@@ -347,4 +350,92 @@ assert fresh.is_dir()
 mode = oct(fresh.stat().st_mode & 0o777)
 assert mode == "0o700", mode
 print("state-dir-contract ok")
+
+# Review Focus 1: injection through qbt arguments for the Task 2 write
+# commands. Every one of these must be rejected before any HTTP call --
+# the fixture must record nothing at all.
+HASH_A = "a" * 40
+HASH_B = "b" * 40
+TRACKER_URL = "http://tracker.example.com:6969/announce"
+
+
+def _reject(env_, args, label):
+    before = len(json.loads(Path(env_["QBT_FIXTURE_LOG"]).read_text() or "[]"))
+    result = subprocess.run(["./qbt", *args], env=env_, text=True, capture_output=True)
+    after = json.loads(Path(env_["QBT_FIXTURE_LOG"]).read_text() or "[]")
+    # A leading-zero numeric argument (e.g. a port or octet) must be
+    # rejected cleanly, never via a raw bash arithmetic error leaking to
+    # stderr (bash reads a leading "0" as octal in `((...))`).
+    no_crash = "value too great for base" not in result.stderr
+    ok = result.returncode != 0 and len(after) == before and no_crash
+    print(("ok - " if ok else "FAIL - ") + label)
+    return ok, result
+
+
+rej_failures = []
+with harness.fixture_server() as (rport, renv):
+    hash_cases = [
+        ("all", "no lists/keywords accepted as a single hash"),
+        (f"{HASH_A}|{HASH_B}", "no hash list accepted as a single hash"),
+        (f"{HASH_A}&x=1", "shell/form metacharacter in hash"),
+        ("zzz", "non-hex hash"),
+    ]
+    for hash_val, why in hash_cases:
+        for args in (
+            ["reannounce", hash_val],
+            ["tracker-add", hash_val, TRACKER_URL],
+            ["tracker-edit", hash_val, TRACKER_URL, TRACKER_URL],
+            ["tracker-remove", hash_val, TRACKER_URL],
+            ["fetch-metadata", hash_val],
+        ):
+            ok, _ = _reject(renv, args, f"{args[0]} rejects hash ({why}): {hash_val!r}")
+            if not ok:
+                rej_failures.append((args[0], hash_val))
+
+    url_cases = [
+        (f"{TRACKER_URL}|evil", "pipe in tracker url"),
+        ("http://tracker.example.com/an nounce", "space in tracker url"),
+        ("http://tracker.example.com/an\nnounce", "newline in tracker url"),
+        ("ftp://tracker.example.com/announce", "disallowed scheme"),
+        ("http://" + "a" * 2050 + ".example.com/announce", "over length limit"),
+        ("not-a-url-at-all", "no scheme"),
+    ]
+    for url_val, why in url_cases:
+        ok, _ = _reject(renv, ["tracker-add", HASH_A, url_val], f"tracker-add rejects url ({why})")
+        if not ok:
+            rej_failures.append(("tracker-add-url", why))
+
+    # F13: an old tracker url containing "|" gets its own message and is
+    # refused before any HTTP call, for both edit and remove.
+    for args in (
+        ["tracker-edit", HASH_A, f"{TRACKER_URL}|evil", TRACKER_URL],
+        ["tracker-remove", HASH_A, f"{TRACKER_URL}|evil"],
+    ):
+        ok, result = _reject(renv, args, f"{args[0]} rejects a '|' old-url before any HTTP call")
+        if not ok:
+            rej_failures.append((args[0], "pipe-old-url-no-request"))
+        msg_ok = "This tracker's URL can't be edited through the WebUI API" in result.stderr
+        print(("ok - " if msg_ok else "FAIL - ") + f"{args[0]} '|' old-url gives the exact F13 message")
+        if not msg_ok:
+            rej_failures.append((args[0], "pipe-old-url-message"))
+
+    peer_cases = [
+        (f"1.2.3.4:1|{HASH_A}", "trailing garbage after ip:port"),
+        ("1.2.3.4:0", "port below range"),
+        ("1.2.3.4:65536", "port above range"),
+        ("256.1.1.1:6881", "octet above 255"),
+        ("2001:db8::1:6881", "unbracketed ipv6 is ambiguous"),
+        ("1.2.3.4", "missing port"),
+        ("1.2.3.4:", "empty port"),
+        ("1.2.3.4:099999", "leading zero plus out-of-range port must not crash as octal"),
+    ]
+    for peer_val, why in peer_cases:
+        ok, _ = _reject(renv, ["ban-peer", peer_val], f"ban-peer rejects peer ({why}): {peer_val!r}")
+        if not ok:
+            rej_failures.append(("ban-peer", peer_val))
+
+if rej_failures:
+    print(f"\n{len(rej_failures)} injection-rejection check(s) failed: {rej_failures}", file=sys.stderr)
+    sys.exit(1)
+print("injection-rejection-contract ok")
 PY

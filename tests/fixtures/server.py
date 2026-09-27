@@ -23,6 +23,51 @@ ADDED = []
 # known SID cookie opens a new session and always gets a full update.
 SESSIONS = set()
 
+# Extra torrents/info rows for the fetch-metadata (Task 2, slice 2b) tests,
+# independent of the maindata-shaped FULL/DELTA fixtures above (torrents/info
+# uses different field names, e.g. total_size not size). Keyed by lowercase
+# hash; POST torrents/delete removes the matching entry (unless the control
+# file says the delete "noop"s, simulating qBittorrent not having applied it
+# yet) and POST torrents/add can put a hash back via the regex match below.
+HASH_NOMETA = "d" * 40
+HASH_META = "e" * 40
+HASH_RUNNING = "f" * 40
+HASH_NOMAGNET = "9" * 40
+EXTRA_TORRENTS = {
+    HASH_NOMETA: {
+        "state": "stoppedDL",
+        "total_size": 0,
+        "magnet_uri": f"magnet:?xt=urn:btih:{HASH_NOMETA}&dn=nometa",
+        "save_path": "/home/user/Downloads/nometa",
+        "category": "linux",
+        "tags": "iso,nometa",
+    },
+    HASH_META: {
+        "state": "pausedDL",
+        "total_size": 123456,
+        "magnet_uri": f"magnet:?xt=urn:btih:{HASH_META}",
+        "save_path": "/home/user/Downloads/meta",
+        "category": "",
+        "tags": "",
+    },
+    HASH_RUNNING: {
+        "state": "downloading",
+        "total_size": 0,
+        "magnet_uri": f"magnet:?xt=urn:btih:{HASH_RUNNING}",
+        "save_path": "/home/user/Downloads/running",
+        "category": "",
+        "tags": "",
+    },
+    HASH_NOMAGNET: {
+        "state": "stoppedDL",
+        "total_size": 0,
+        "magnet_uri": "",
+        "save_path": "/home/user/Downloads/nomagnet",
+        "category": "",
+        "tags": "",
+    },
+}
+
 # Serving each request on its own thread (ThreadingHTTPServer, below) means
 # more than one handler can be inside record() at once, and a naive
 # read-modify-write of LOG would drop entries under that race. This lock
@@ -132,7 +177,17 @@ class Handler(BaseHTTPRequestHandler):
                 hid = h or t.get("infohash_v1") or ""
                 row["hash"] = hid
                 rows.append(row)
+            for h, t in EXTRA_TORRENTS.items():
+                row = dict(t)
+                row["hash"] = h
+                rows.append(row)
             rows.extend(ADDED)
+            hashes_param = parse_qs(parsed.query).get("hashes")
+            if hashes_param:
+                wanted = set()
+                for entry in hashes_param:
+                    wanted.update(x.lower() for x in entry.split("|") if x)
+                rows = [r for r in rows if (r.get("hash") or "").lower() in wanted]
             self._send(200, json.dumps(rows).encode())
             return
         if parsed.path == "/api/v2/app/preferences":
@@ -160,14 +215,29 @@ class Handler(BaseHTTPRequestHandler):
         record("POST", parsed.path, body, parse_qs(parsed.query))
         if parsed.path == "/api/v2/torrents/add":
             import re
+            fault = _control().get("add")
+            if fault == "404":
+                self._send(404, b"{}")
+                return
             qs = parse_qs(body)
             urls = qs.get("urls") or []
-            for raw in urls:
-                url = unquote_plus(raw)
-                m = re.search(r"xt=urn:btih:([A-Za-z0-9]+)", url, re.I)
-                if m and len(m.group(1)) == 40:
-                    h = m.group(1).lower()
-                    ADDED.append({"hash": h, "infohash_v1": h, "name": h, "size": 0})
+            if fault != "silent":
+                for raw in urls:
+                    url = unquote_plus(raw)
+                    m = re.search(r"xt=urn:btih:([A-Za-z0-9]+)", url, re.I)
+                    if m and len(m.group(1)) == 40:
+                        h = m.group(1).lower()
+                        ADDED.append({"hash": h, "infohash_v1": h, "name": h, "size": 0, "total_size": 0})
+            self._send(200, b"Ok.")
+            return
+        if parsed.path == "/api/v2/torrents/delete":
+            if _control().get("delete") != "noop":
+                qs = parse_qs(body)
+                hashes = (qs.get("hashes") or [""])[0].split("|")
+                for h in hashes:
+                    h = h.lower()
+                    EXTRA_TORRENTS.pop(h, None)
+                    ADDED[:] = [r for r in ADDED if (r.get("hash") or "").lower() != h]
             self._send(200, b"Ok.")
             return
         if parsed.path in (
@@ -175,13 +245,17 @@ class Handler(BaseHTTPRequestHandler):
             "/api/v2/torrents/stop",
             "/api/v2/torrents/recheck",
             "/api/v2/torrents/setLocation",
-            "/api/v2/torrents/delete",
             "/api/v2/torrents/filePrio",
             "/api/v2/torrents/setDownloadLimit",
             "/api/v2/torrents/setUploadLimit",
             "/api/v2/torrents/toggleSequentialDownload",
             "/api/v2/torrents/setShareLimits",
             "/api/v2/transfer/toggleSpeedLimitsMode",
+            "/api/v2/torrents/reannounce",
+            "/api/v2/torrents/addTrackers",
+            "/api/v2/torrents/editTracker",
+            "/api/v2/torrents/removeTrackers",
+            "/api/v2/transfer/banPeers",
         ):
             self._send(200, b"Ok.")
             return
