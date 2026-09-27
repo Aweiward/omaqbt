@@ -555,11 +555,13 @@ cmd_fetch_metadata() {
   add_body+="&tags=$(jq -nr --arg v "$tags" '$v|@uri')"
   add_body+="&stopCondition=MetadataReceived&stopped=false&paused=false"
 
-  local add_resp
-  if ! add_resp=$(api POST "/api/v2/torrents/add" "$add_body" 2>&1); then
+  # The add's response body is not read: qBittorrent's success body for it
+  # isn't a confirmed contract (every other add path ignores it too). The
+  # wait-for-present poll below is the proof -- a failed add never lists
+  # the hash, so it still ends in the rescue.
+  if ! (api POST "/api/v2/torrents/add" "$add_body") >/dev/null 2>&1; then
     fetch_metadata_rescue "$hash" "$magnet"
   fi
-  [[ $add_resp == "Ok." ]] || fetch_metadata_rescue "$hash" "$magnet"
   fetch_metadata_wait_for "$hash" "$timeout" present || fetch_metadata_rescue "$hash" "$magnet"
 
   printf '%s\n' '{"ok":true}'

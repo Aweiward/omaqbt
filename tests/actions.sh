@@ -461,6 +461,34 @@ finally:
     shutil.rmtree(magnet_state, ignore_errors=True)
     shutil.rmtree(stub_root, ignore_errors=True)
 
+# 14b. the add answers 200 with a body that isn't "Ok." but does add the
+#      torrent: success is proved by the wait-for-present poll, never by
+#      the add's body (its format isn't a confirmed qBittorrent contract).
+extra_env, magnet_state, raise_log, notify_log, stub_root = fetch_metadata_env(timeout=2)
+try:
+    with harness.fixture_server(extra_env=extra_env) as (port, env):
+        Path(env["QBT_FIXTURE_CONTROL"]).write_text(json.dumps({"add": "oddbody"}))
+        r = run(env, "fetch-metadata", HASH_NOMETA)
+        check("fetch-metadata add-oddbody: succeeds", r.returncode == 0 and json.loads(r.stdout or "{}") == {"ok": True})
+        inbox_path = magnet_state / "magnet-inbox.jsonl"
+        check("fetch-metadata add-oddbody: nothing inboxed", not inbox_path.exists())
+        check("fetch-metadata add-oddbody: raise stub untouched", raise_log.read_text() == "")
+finally:
+    shutil.rmtree(magnet_state, ignore_errors=True)
+    shutil.rmtree(stub_root, ignore_errors=True)
+
+# 14c. the add answers 200 "Fails." and adds nothing: the hash never comes
+#      back, so the present-poll rescues it.
+extra_env, magnet_state, raise_log, notify_log, stub_root = fetch_metadata_env(timeout=1)
+try:
+    with harness.fixture_server(extra_env=extra_env) as (port, env):
+        Path(env["QBT_FIXTURE_CONTROL"]).write_text(json.dumps({"add": "fails"}))
+        r = run(env, "fetch-metadata", HASH_NOMETA)
+        check_rescued("fetch-metadata add-fails-body", r, magnet_state, raise_log)
+finally:
+    shutil.rmtree(magnet_state, ignore_errors=True)
+    shutil.rmtree(stub_root, ignore_errors=True)
+
 # 15. the inbox cap must not apply to a rescue: with 20 unrelated magnets
 #     already queued (the ordinary cap threshold), fetch-metadata's own
 #     rescue must still land its magnet as entry 21, not fail as "inbox

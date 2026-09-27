@@ -254,14 +254,23 @@ class Handler(BaseHTTPRequestHandler):
                 return
             qs = parse_qs(body)
             urls = qs.get("urls") or []
-            if fault != "silent":
+            # "silent": answers "Ok." but never adds. "fails": answers
+            # "Fails." and never adds. "oddbody": adds, but answers 200 with
+            # a body that isn't "Ok." (qBittorrent's success body for an
+            # add isn't a confirmed contract, so qbt must not read it).
+            if fault not in ("silent", "fails"):
                 for raw in urls:
                     url = unquote_plus(raw)
                     m = re.search(r"xt=urn:btih:([A-Za-z0-9]+)", url, re.I)
                     if m and len(m.group(1)) == 40:
                         h = m.group(1).lower()
                         ADDED.append({"hash": h, "infohash_v1": h, "name": h, "size": 0, "total_size": 0})
-            self._send(200, b"Ok.")
+            if fault == "fails":
+                self._send(200, b"Fails.")
+            elif fault == "oddbody":
+                self._send(200, b'{"added":1}', content_type="application/json")
+            else:
+                self._send(200, b"Ok.")
             return
         if parsed.path == "/api/v2/torrents/delete":
             fault = _control().get("delete")
