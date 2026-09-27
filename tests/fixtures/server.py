@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
+import copy
 import json
 import os
+import re
 import sys
 import threading
 import time
@@ -99,6 +101,119 @@ EXTRA_TORRENTS = {
     },
 }
 
+# Slice 3a: category and tag state that the write routes really change.
+# Categories/tags start as maindata-full.json's, in the torrents/categories
+# shape qBittorrent 5.2.3 serves (savePath, snake_case download_path that is
+# a path, false or null, and name). QBT_FIXTURE_LIBRARY may name a JSON file
+# {"categories": {...}, "tags": [...], "torrents": {hash: {"category": "",
+# "tags": "a, b"}}} that replaces the starting categories/tags and adds
+# torrents (listed by torrents/info), so a test can seed thousands of rows.
+def _load_library():
+    categories = copy.deepcopy(FULL.get("categories") or {})
+    tags = list(FULL.get("tags") or [])
+    torrents = {}
+    path = os.environ.get("QBT_FIXTURE_LIBRARY")
+    if path:
+        data = json.loads(Path(path).read_text())
+        if "categories" in data:
+            categories = data["categories"]
+        if "tags" in data:
+            tags = list(data["tags"])
+        for h, t in (data.get("torrents") or {}).items():
+            row = {"name": h[:8], "category": "", "tags": ""}
+            row.update(t)
+            torrents[h.lower()] = row
+    for name, c in categories.items():
+        c.setdefault("name", name)
+        c.setdefault("savePath", "")
+        c.setdefault("download_path", None)
+    return categories, tags, torrents
+
+
+CATEGORIES, TAGS, LIBRARY = _load_library()
+# qBittorrent's Session::isValidCategoryName.
+_CATEGORY_RE = re.compile(r"^([^\\/]|[^\\/]([^\\/]|/(?=[^/]))*[^\\/])$")
+# Per-route call counters for "<fault>@N" (fail only the Nth call).
+_CALLS = {}
+
+
+def _write_fault(key):
+    """The slice-3a routes' fault for this call, per the control file:
+    "404", "409", "500", "409secret" (an error body carrying a passkey),
+    "noop" (answer 200 but change nothing), each optionally "@N" to hit
+    only the route's Nth call (1-based, counted per fixture process)."""
+    with _LOG_LOCK:
+        _CALLS[key] = _CALLS.get(key, 0) + 1
+        n = _CALLS[key]
+    value = _control().get(key)
+    if not isinstance(value, str):
+        return None
+    fault, _, nth = value.partition("@")
+    if nth and (not nth.isdigit() or int(nth) != n):
+        return None
+    return fault if fault in ("404", "409", "500", "409secret", "noop") else None
+
+
+def _torrent_rows():
+    """Every torrent dict torrents/info lists, keyed by lowercase hash, so
+    setCategory/addTags/removeTags change what the next info GET returns."""
+    rows = {}
+    for h, t in FULL["torrents"].items():
+        rows[(h or t.get("infohash_v1") or "").lower()] = t
+    for h, t in EXTRA_TORRENTS.items():
+        rows[h] = t
+    for t in ADDED:
+        rows[(t.get("hash") or "").lower()] = t
+    rows.update(LIBRARY)
+    return rows
+
+
+def _targets(hashes_param):
+    rows = _torrent_rows()
+    if hashes_param == "all":
+        return list(rows.values())
+    wanted = [h.lower() for h in hashes_param.split("|") if h]
+    return [rows[h] for h in wanted if h in rows]
+
+
+def _tag_list(value):
+    return [t for t in (value or "").split(", ") if t]
+
+
+def _set_tags(row, tags):
+    row["tags"] = ", ".join(sorted(set(tags)))
+
+
+def _split_tags(value):
+    # qBittorrent splits on "," (skipping empty parts) and trims each tag.
+    return [t.strip() for t in (value or "").split(",") if t.strip()]
+
+
+def _parse_bool(value):
+    if value is None:
+        return None
+    v = value.strip().lower()
+    if v in ("true", "1", "yes", "on"):
+        return True
+    if v in ("false", "0", "no", "off"):
+        return False
+    return None
+
+
+def _category_options(form):
+    """createCategory/editCategory's options, the way 5.2.3 reads them: the
+    download path is only set when downloadPathEnabled parses as a bool,
+    and editCategory without it resets the download path to null."""
+    enabled = _parse_bool((form.get("downloadPathEnabled") or [None])[0])
+    if enabled is None:
+        download = None
+    elif enabled:
+        download = (form.get("downloadPath") or [""])[0]
+    else:
+        download = False
+    return (form.get("savePath") or [""])[0], download
+
+
 # Serving each request on its own thread (ThreadingHTTPServer, below) means
 # more than one handler can be inside record() at once, and a naive
 # read-modify-write of LOG would drop entries under that race. This lock
@@ -147,6 +262,107 @@ _INSPECT_ROUTES = {
 }
 
 
+def _create_category(form):
+    name = (form.get("category") or [""])[0]
+    if not name:
+        return 400
+    if not _CATEGORY_RE.fullmatch(name) or name in CATEGORIES:
+        return 409
+    save, download = _category_options(form)
+    CATEGORIES[name] = {"name": name, "savePath": save, "download_path": download}
+    return 200
+
+
+def _edit_category(form):
+    if "category" not in form or "savePath" not in form:
+        return 400
+    name = form["category"][0]
+    if not name:
+        return 400
+    if name not in CATEGORIES:
+        return 404
+    save, download = _category_options(form)
+    CATEGORIES[name].update({"savePath": save, "download_path": download})
+    return 200
+
+
+def _remove_categories(form):
+    if "categories" not in form:
+        return 400
+    for name in form["categories"][0].split("\n"):
+        if CATEGORIES.pop(name, None) is not None:
+            for row in _torrent_rows().values():
+                if row.get("category") == name:
+                    row["category"] = ""
+    return 200
+
+
+def _set_category(form):
+    if "hashes" not in form or "category" not in form:
+        return 400
+    name = form["category"][0]
+    if name and name not in CATEGORIES:
+        return 409
+    for row in _targets(form["hashes"][0]):
+        row["category"] = name
+    return 200
+
+
+def _create_tags(form):
+    if "tags" not in form:
+        return 400
+    for tag in _split_tags(form["tags"][0]):
+        if tag not in TAGS:
+            TAGS.append(tag)
+    return 200
+
+
+def _delete_tags(form):
+    if "tags" not in form:
+        return 400
+    for tag in _split_tags(form["tags"][0]):
+        if tag in TAGS:
+            TAGS.remove(tag)
+        for row in _torrent_rows().values():
+            if tag in _tag_list(row.get("tags")):
+                _set_tags(row, [t for t in _tag_list(row.get("tags")) if t != tag])
+    return 200
+
+
+def _add_tags(form):
+    if "hashes" not in form or "tags" not in form:
+        return 400
+    tags = _split_tags(form["tags"][0])
+    for tag in tags:
+        if tag not in TAGS:
+            TAGS.append(tag)
+    for row in _targets(form["hashes"][0]):
+        _set_tags(row, _tag_list(row.get("tags")) + tags)
+    return 200
+
+
+def _remove_tags(form):
+    if "hashes" not in form:
+        return 400
+    tags = _split_tags((form.get("tags") or [""])[0])
+    for row in _targets(form["hashes"][0]):
+        # Like 5.2.3: no tags at all removes every tag from the torrents.
+        _set_tags(row, [t for t in _tag_list(row.get("tags")) if tags and t not in tags])
+    return 200
+
+
+_LIBRARY_WRITES = {
+    "/api/v2/torrents/createCategory": _create_category,
+    "/api/v2/torrents/editCategory": _edit_category,
+    "/api/v2/torrents/removeCategories": _remove_categories,
+    "/api/v2/torrents/setCategory": _set_category,
+    "/api/v2/torrents/createTags": _create_tags,
+    "/api/v2/torrents/deleteTags": _delete_tags,
+    "/api/v2/torrents/addTags": _add_tags,
+    "/api/v2/torrents/removeTags": _remove_tags,
+}
+
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
         return
@@ -180,9 +396,32 @@ class Handler(BaseHTTPRequestHandler):
         if body:
             self.wfile.write(body)
 
+    def _fault_reply(self, fault):
+        if fault == "409secret":
+            self._send(409, SECRET_ERROR_BODY, content_type="text/plain")
+        else:
+            self._send(int(fault), b"boom")
+
     def do_GET(self):
         parsed = urlparse(self.path)
+        if parsed.path == "/fixture/state":
+            # Test-only and unrecorded: the end state after a write.
+            self._send(200, json.dumps({
+                "categories": CATEGORIES,
+                "tags": TAGS,
+                "torrents": {h: {"category": t.get("category", ""), "tags": t.get("tags", "")} for h, t in LIBRARY.items()},
+            }).encode())
+            return
         record("GET", parsed.path, "", parse_qs(parsed.query), self.headers.get("Cookie") or "")
+        if parsed.path in ("/api/v2/torrents/categories", "/api/v2/torrents/tags"):
+            key = parsed.path.rsplit("/", 1)[1]
+            fault = _write_fault(key)
+            if fault and fault != "noop":
+                self._fault_reply(fault)
+                return
+            payload = CATEGORIES if key == "categories" else TAGS
+            self._send(200, json.dumps(payload).encode())
+            return
         if parsed.path == "/api/v2/sync/maindata":
             fault = _fault("maindata")
             if fault == "sleep3":
@@ -213,6 +452,11 @@ class Handler(BaseHTTPRequestHandler):
             if _control().get("info") == "409secret":
                 self._send(409, SECRET_ERROR_BODY, content_type="text/plain")
                 return
+            if "@" in str(_control().get("info") or ""):
+                fault = _write_fault("info")
+                if fault and fault != "noop":
+                    self._fault_reply(fault)
+                    return
             rows = []
             for h, t in FULL["torrents"].items():
                 row = dict(t)
@@ -224,6 +468,10 @@ class Handler(BaseHTTPRequestHandler):
                 row["hash"] = h
                 rows.append(row)
             rows.extend(ADDED)
+            for h, t in LIBRARY.items():
+                row = dict(t)
+                row["hash"] = h
+                rows.append(row)
             hashes_param = parse_qs(parsed.query).get("hashes")
             if hashes_param:
                 wanted = set()
@@ -346,6 +594,18 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(409, SECRET_ERROR_BODY, content_type="text/plain")
                 return
             self._send(200, b"Ok.")
+            return
+        if parsed.path in _LIBRARY_WRITES:
+            key = parsed.path.rsplit("/", 1)[1]
+            fault = _write_fault(key)
+            if fault == "noop":
+                self._send(200, b"")
+                return
+            if fault:
+                self._fault_reply(fault)
+                return
+            code = _LIBRARY_WRITES[parsed.path](parse_qs(body, keep_blank_values=True))
+            self._send(code, b"" if code == 200 else b"refused")
             return
         if parsed.path in ("/api/v2/torrents/pause", "/api/v2/torrents/resume"):
             self._send(404, b"gone")

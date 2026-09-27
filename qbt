@@ -1147,6 +1147,495 @@ PY
   printf '%s\n' '{"ok":true}'
 }
 
+# ---------------------------------------------------------------------------
+# Slice 3a: categories and tags. Every name, path and hash is checked before
+# any request; every value is @uri-encoded; API failures report only the
+# HTTP code (api_error_detail=code), never a body.
+# ---------------------------------------------------------------------------
+
+uri() {
+  jq -nr --arg v "$1" '$v|@uri'
+}
+
+# Leading/trailing "spaces": U+0020 plus every other character
+# qBittorrent's QString::trimmed strips that isn't already a refused
+# control character (U+0085, U+00A0, U+1680, U+2000-200A, U+2028, U+2029,
+# U+202F, U+205F, U+3000), as raw UTF-8 bytes so the prefix/suffix tests
+# below are byte-exact under any locale. Shared cases:
+# tests/fixtures/validation-cases.json "names".
+NAME_EDGE_SPACES=(
+  ' ' $'\xc2\x85' $'\xc2\xa0' $'\xe1\x9a\x80'
+  $'\xe2\x80\x80' $'\xe2\x80\x81' $'\xe2\x80\x82' $'\xe2\x80\x83' $'\xe2\x80\x84' $'\xe2\x80\x85'
+  $'\xe2\x80\x86' $'\xe2\x80\x87' $'\xe2\x80\x88' $'\xe2\x80\x89' $'\xe2\x80\x8a'
+  $'\xe2\x80\xa8' $'\xe2\x80\xa9' $'\xe2\x80\xaf' $'\xe2\x81\x9f' $'\xe3\x80\x80'
+)
+
+# The UTF-8 locale the name validator counts characters under, whatever the
+# caller's own locale is (the bar may run under C). C.UTF-8 first, then
+# en_US.UTF-8; a candidate only counts if it really makes a 2-byte "é" one
+# character.
+name_utf8_locale() {
+  local l
+  for l in C.UTF-8 en_US.UTF-8; do
+    if (LC_ALL=$l; s=$'\xc3\xa9'; [[ ${#s} == 1 ]]) 2>/dev/null; then
+      printf '%s' "$l"
+      return 0
+    fi
+  done
+  return 1
+}
+
+# Bytes 0x01-0x1F and 0x7F (argv can't carry 0x00). LC_ALL=C makes
+# [:cntrl:] exactly that byte set.
+name_has_control() {
+  local LC_ALL=C
+  [[ $1 == *[[:cntrl:]]* ]]
+}
+
+name_has_edge_space() {
+  local LC_ALL=C sp
+  for sp in "${NAME_EDGE_SPACES[@]}"; do
+    [[ $1 == "$sp"* || $1 == *"$sp" ]] && return 0
+  done
+  return 1
+}
+
+# G4/OV5: prints nothing for a valid NEW name, else the message (the same
+# strings the window's nameError gives, from validation-cases.json). $1 is
+# "category" or "tag".
+new_name_error() {
+  local kind=$1 name=$2
+  if [[ -z $name ]]; then printf 'Type a name.'; return; fi
+  if name_has_control "$name"; then printf 'No control characters in a name.'; return; fi
+  local loc
+  loc=$(name_utf8_locale) || { printf 'No UTF-8 locale is available to check the name.'; return; }
+  local count
+  count=$(
+    LC_ALL=$loc
+    # An invalid UTF-8 sequence doesn't match "." under a UTF-8 locale.
+    [[ $name =~ ^.*$ ]] || { printf 'bad'; exit 0; }
+    printf '%s' "${#name}"
+  ) 2>/dev/null
+  if [[ $count == bad ]]; then printf 'Use valid UTF-8 text in a name.'; return; fi
+  [[ $count =~ ^[[:digit:]]{1,6}$ ]] || { printf 'Use valid UTF-8 text in a name.'; return; }
+  if (( 10#$count > 64 )); then printf 'Keep it to 64 characters.'; return; fi
+  if name_has_edge_space "$name"; then printf 'No spaces at the start or end.'; return; fi
+  if [[ $kind == tag ]]; then
+    [[ $name != *,* ]] || printf 'No commas in a tag.'
+    return
+  fi
+  if [[ $name == *\\* ]]; then printf 'No backslashes in a category.'; return; fi
+  if [[ $name == /* || $name == */ ]]; then printf "A category can't start or end with /."; return; fi
+  if [[ $name == *//* ]]; then printf 'No // in a category.'; return; fi
+}
+
+# An EXISTING name (removal, a rename's old name, a tag on a torrent) only
+# has to be sendable; existence is checked against qBittorrent afterwards.
+# Tags are sent comma-separated, and removeCategories splits on newlines, so
+# a name holding either would address other names too.
+existing_name_error() {
+  local kind=$1 name=$2
+  if [[ -z $name ]]; then printf 'Type a name.'; return; fi
+  if [[ $kind == tag ]]; then
+    [[ $name != *,* ]] || printf 'No commas in a tag.'
+  elif [[ $name == *$'\n'* || $name == *$'\r'* ]]; then
+    printf "This category's name can't be sent through the WebUI API."
+  fi
+}
+
+check_new_name() {
+  local msg
+  msg=$(new_name_error "$1" "$2")
+  [[ -z $msg ]] || die "$msg"
+}
+
+check_existing_name() {
+  local msg
+  msg=$(existing_name_error "$1" "$2")
+  [[ -z $msg ]] || die "$msg"
+}
+
+# "" (qBittorrent's default) or an absolute / ~/ path, like set-location.
+# Prints the path with ~/ expanded.
+category_save_path() {
+  local path=$1
+  [[ $path == "~/"* ]] && path=$HOME/${path#\~/}
+  [[ -z $path || $path == /* ]] || die "The save path must be absolute or start with ~/."
+  printf '%s' "$path"
+}
+
+# One api call that may fail without ending the command. On success the
+# body is in API_BODY. On failure API_FAIL is "HTTP <code>" or a short
+# reason -- never a response body (api_error_detail=code in the caller makes
+# api_exec's own message the status only; this keeps just the code).
+api_try() {
+  local out rc=0
+  out=$(api "$@" 2>&1) || rc=$?
+  API_BODY="" API_FAIL=""
+  if (( rc == 0 )); then
+    API_BODY=$out
+    return 0
+  fi
+  if [[ $out =~ \(HTTP\ ([[:digit:]]{3})\) ]]; then
+    API_FAIL="HTTP ${BASH_REMATCH[1]}"
+  elif [[ $out == *"localhost auth is required"* ]]; then
+    API_FAIL="localhost auth is required"
+  else
+    API_FAIL="couldn't reach qBittorrent"
+  fi
+  return 1
+}
+
+# Like api_try, but a failure ends the command with the plain API error.
+api_or_die() {
+  api_try "$@" || die "qBittorrent refused it (${API_FAIL})"
+}
+
+# Splits a validated "|" hash list into CHUNKS of at most 1000 (1a's
+# Model.chunkHashes, OV3). "all" stays a single chunk.
+hash_chunks() {
+  local list=$1
+  CHUNKS=()
+  CHUNK_SIZES=()
+  if [[ $list == all ]]; then
+    CHUNKS=(all)
+    CHUNK_SIZES=(0)
+    return
+  fi
+  local -a all
+  IFS='|' read -r -a all <<<"$list"
+  local i
+  for (( i = 0; i < ${#all[@]}; i += 1000 )); do
+    local -a part=("${all[@]:i:1000}")
+    CHUNKS+=("$(IFS='|'; printf '%s' "${part[*]}")")
+    CHUNK_SIZES+=("${#part[@]}")
+  done
+}
+
+hash_count() {
+  local list=$1
+  [[ $list == all ]] && { printf '0'; return; }
+  local -a all
+  IFS='|' read -r -a all <<<"$list"
+  printf '%s' "${#all[@]}"
+}
+
+# torrents/categories or torrents/tags, as JSON, into NAMES_JSON; dies with
+# the plain API error (or $1-prefixed wording) when the read fails.
+read_names() {
+  local kind=$1 prefix=${2:-}
+  local route=categories
+  [[ $kind == tag ]] && route=tags
+  if ! api_try GET "/api/v2/torrents/${route}"; then
+    [[ -n $prefix ]] && die "${prefix}${API_FAIL}"
+    die "qBittorrent refused it (${API_FAIL})"
+  fi
+  NAMES_JSON=$API_BODY
+  jq -e 'type == "object" or type == "array"' <<<"$NAMES_JSON" >/dev/null 2>&1 \
+    || die "${prefix:-}qBittorrent sent something unreadable"
+}
+
+name_exists() {
+  local kind=$1 name=$2
+  if [[ $kind == tag ]]; then
+    jq -e --arg n "$name" 'index($n) != null' <<<"$NAMES_JSON" >/dev/null
+  else
+    jq -e --arg n "$name" 'has($n)' <<<"$NAMES_JSON" >/dev/null
+  fi
+}
+
+require_name() {
+  name_exists "$1" "$2" || die "$2 doesn't exist."
+}
+
+# A category's download path as qBittorrent 5.2.3 serves it
+# (download_path: a path, false = disabled, null/absent = the global
+# setting; downloadPath read too, like lib/qbtsync.py's category_paths),
+# turned into the createCategory/editCategory fields that keep it:
+# "&downloadPathEnabled=true&downloadPath=<path>", "&downloadPathEnabled=false"
+# or nothing. editCategory resets the download path when these are missing.
+category_download_fields() {
+  # A string -- even "" (enabled with an empty path, a real 5.2.3 state) --
+  # is kept as enabled; false as disabled; null or any other shape sends
+  # nothing. The rename's merge check compares these same raw values, so a
+  # copy always matches its source on a re-run.
+  local name=$1
+  jq -r --arg n "$name" '
+    .[$n] | (if has("download_path") then .download_path elif has("downloadPath") then .downloadPath else null end) as $d
+    | if ($d | type) == "string" then "&downloadPathEnabled=true&downloadPath=\($d | @uri)"
+      elif $d == false then "&downloadPathEnabled=false"
+      else "" end' <<<"$NAMES_JSON"
+}
+
+cmd_category_add() {
+  local api_error_detail=code
+  [[ $# -ge 1 && $# -le 2 ]] || die "usage: qbt category-add <name> [savepath]"
+  local name=$1 path
+  check_new_name category "$name"
+  path=$(category_save_path "${2:-}")
+  api_or_die POST "/api/v2/torrents/createCategory" "category=$(uri "$name")&savePath=$(uri "$path")"
+  printf '%s\n' '{"ok":true}'
+}
+
+cmd_category_path() {
+  local api_error_detail=code
+  [[ $# -eq 2 ]] || die "usage: qbt category-path <name> <savepath, \"\" = default>"
+  local name=$1 path
+  check_existing_name category "$name"
+  path=$(category_save_path "$2")
+  read_names category
+  require_name category "$name"
+  api_or_die POST "/api/v2/torrents/editCategory" "category=$(uri "$name")&savePath=$(uri "$path")$(category_download_fields "$name")"
+  printf '%s\n' '{"ok":true}'
+}
+
+cmd_category_remove() {
+  local api_error_detail=code
+  [[ $# -eq 1 ]] || die "usage: qbt category-remove <name>"
+  local name=$1
+  check_existing_name category "$name"
+  read_names category
+  require_name category "$name"
+  api_or_die POST "/api/v2/torrents/removeCategories" "categories=$(uri "$name")"
+  printf '%s\n' '{"ok":true}'
+}
+
+cmd_set_category() {
+  local api_error_detail=code
+  [[ $# -eq 2 ]] || die "usage: qbt set-category <hash|list> <name, \"\" = none>"
+  local hashes=$1 name=$2
+  valid_hashes "$hashes" || die "invalid hash list"
+  if [[ -n $name ]]; then
+    check_existing_name category "$name"
+    read_names category
+    require_name category "$name"
+  fi
+  hash_chunks "$hashes"
+  local total done=0 i
+  total=$(hash_count "$hashes")
+  for i in "${!CHUNKS[@]}"; do
+    if ! api_try POST "/api/v2/torrents/setCategory" "hashes=${CHUNKS[i]}&category=$(uri "$name")"; then
+      (( done == 0 )) && die "qBittorrent refused it (${API_FAIL})"
+      die "Category set on ${done} of ${total} torrents; qBittorrent refused the rest (${API_FAIL})"
+    fi
+    done=$(( done + CHUNK_SIZES[i] ))
+  done
+  printf '%s\n' '{"ok":true}'
+}
+
+cmd_tag_add() {
+  local api_error_detail=code
+  [[ $# -eq 1 ]] || die "usage: qbt tag-add <name>"
+  check_new_name tag "$1"
+  api_or_die POST "/api/v2/torrents/createTags" "tags=$(uri "$1")"
+  printf '%s\n' '{"ok":true}'
+}
+
+cmd_tag_remove() {
+  local api_error_detail=code
+  [[ $# -eq 1 ]] || die "usage: qbt tag-remove <name>"
+  check_existing_name tag "$1"
+  read_names tag
+  require_name tag "$1"
+  api_or_die POST "/api/v2/torrents/deleteTags" "tags=$(uri "$1")"
+  printf '%s\n' '{"ok":true}'
+}
+
+# True when $1 equals one of the remaining arguments.
+in_list() {
+  local needle=$1 x
+  shift
+  for x in "$@"; do
+    [[ $x == "$needle" ]] && return 0
+  done
+  return 1
+}
+
+# Joins its arguments with ", ".
+join_names() {
+  local out="" n
+  for n in "$@"; do
+    out+=${out:+, }$n
+  done
+  printf '%s' "$out"
+}
+
+# OV7: one addTags/removeTags call per changed tag (chunked), adds first.
+# Stops at the first failure and says what already happened:
+# "Tags: added keep; removing seedbox failed (HTTP 409)".
+cmd_tags() {
+  local api_error_detail=code
+  local usage="usage: qbt tags <hash|list> [--add <name>]... [--remove <name>]..."
+  [[ $# -ge 1 ]] || die "$usage"
+  local hashes=$1
+  shift
+  local -a adds=() removes=()
+  while [[ $# -gt 0 ]]; do
+    case $1 in
+      --add) [[ $# -ge 2 ]] || die "$usage"; adds+=("$2"); shift 2 ;;
+      --remove) [[ $# -ge 2 ]] || die "$usage"; removes+=("$2"); shift 2 ;;
+      *) die "$usage" ;;
+    esac
+  done
+  (( ${#adds[@]} + ${#removes[@]} > 0 )) || die "$usage"
+  valid_hashes "$hashes" || die "invalid hash list"
+  local t
+  for t in ${adds[@]+"${adds[@]}"} ${removes[@]+"${removes[@]}"}; do
+    check_existing_name tag "$t"
+  done
+  for t in ${adds[@]+"${adds[@]}"}; do
+    ! in_list "$t" ${removes[@]+"${removes[@]}"} || die "Can't add and remove $t at once."
+  done
+  read_names tag
+  for t in ${adds[@]+"${adds[@]}"} ${removes[@]+"${removes[@]}"}; do
+    require_name tag "$t"
+  done
+  hash_chunks "$hashes"
+  local -a added=() removed=()
+  local verb route i
+  for verb in add remove; do
+    local -a list=()
+    if [[ $verb == add ]]; then
+      route=addTags
+      list=(${adds[@]+"${adds[@]}"})
+    else
+      route=removeTags
+      list=(${removes[@]+"${removes[@]}"})
+    fi
+    for t in ${list[@]+"${list[@]}"}; do
+      # A repeated flag's tag is sent once.
+      in_list "$t" ${added[@]+"${added[@]}"} ${removed[@]+"${removed[@]}"} && continue
+      for i in "${!CHUNKS[@]}"; do
+        if ! api_try POST "/api/v2/torrents/${route}" "hashes=${CHUNKS[i]}&tags=$(uri "$t")"; then
+          local -a parts=()
+          (( ${#added[@]} )) && parts+=("added $(join_names "${added[@]}")")
+          (( ${#removed[@]} )) && parts+=("removed $(join_names "${removed[@]}")")
+          local doing=adding
+          [[ $verb == remove ]] && doing=removing
+          parts+=("${doing} ${t} failed (${API_FAIL})")
+          local msg="" p
+          for p in "${parts[@]}"; do msg+=${msg:+; }$p; done
+          die "Tags: ${msg}"
+        fi
+      done
+      if [[ $verb == add ]]; then added+=("$t"); else removed+=("$t"); fi
+    done
+  done
+  printf '%s\n' '{"ok":true}'
+}
+
+# Hashes (|-joined) of the torrents on category/tag $2, from a
+# torrents/info body in $3. Tags come ", "-joined; a tag never holds a comma.
+torrents_on() {
+  local kind=$1 name=$2 info=$3
+  if [[ $kind == tag ]]; then
+    jq -r --arg n "$name" '[.[] | select((.tags // "") | split(", ") | index($n) != null) | .hash] | join("|")' <<<"$info"
+  else
+    jq -r --arg n "$name" '[.[] | select((.category // "") == $n) | .hash] | join("|")' <<<"$info"
+  fi
+}
+
+# Review Focus 2, Deviation 1. Idempotent and resumable: every read happens
+# before the first write, so M is known and a failed read or create changes
+# nothing ("Rename didn't start: HTTP 409"). After that each failure names
+# how far it got, and a re-run with --merge (the target now exists) picks up
+# whatever is still on the old name. The old name is deleted only once a
+# fresh read shows nothing on it: deleting a category that still has
+# torrents un-categorizes them, which can move their files (G8).
+cmd_rename() {
+  local kind=$1
+  shift
+  local api_error_detail=code
+  local usage="usage: qbt ${kind}-rename <old> <new> [--merge]"
+  [[ $# -eq 2 || ( $# -eq 3 && $3 == --merge ) ]] || die "$usage"
+  local old=$1 new=$2 merge=false
+  [[ ${3:-} == --merge ]] && merge=true
+  check_existing_name "$kind" "$old"
+  check_new_name "$kind" "$new"
+  [[ $old != "$new" ]] || die "It already has that name."
+
+  local start="Rename didn't start: "
+  read_names "$kind" "$start"
+  require_name "$kind" "$old"
+  local exists=false
+  name_exists "$kind" "$new" && exists=true
+  if [[ $exists == true ]]; then
+    [[ $merge == true ]] || die "$new already exists."
+    if [[ $kind == category ]]; then
+      local same
+      same=$(jq -r --arg a "$old" --arg b "$new" '
+        def paths(c): [c.savePath // "", (if c | has("download_path") then c.download_path elif c | has("downloadPath") then c.downloadPath else null end)];
+        paths(.[$a]) == paths(.[$b])' <<<"$NAMES_JSON")
+      [[ $same == true ]] || die "$new already exists with a different save path."
+    fi
+  fi
+
+  api_try GET "/api/v2/torrents/info" || die "${start}${API_FAIL}"
+  local info=$API_BODY moving
+  moving=$(torrents_on "$kind" "$old" "$info") || die "${start}qBittorrent sent something unreadable"
+  # These hashes go into form bodies as-is, so they get the same check as
+  # a caller's.
+  [[ -z $moving ]] || valid_hashes "$moving" || die "${start}qBittorrent sent something unreadable"
+  local total=0
+  [[ -n $moving ]] && total=$(hash_count "$moving")
+
+  if [[ $exists == false ]]; then
+    if [[ $kind == category ]]; then
+      local save
+      save=$(jq -r --arg n "$old" '.[$n].savePath // ""' <<<"$NAMES_JSON")
+      api_try POST "/api/v2/torrents/createCategory" "category=$(uri "$new")&savePath=$(uri "$save")$(category_download_fields "$old")" \
+        || die "${start}${API_FAIL}"
+    else
+      api_try POST "/api/v2/torrents/createTags" "tags=$(uri "$new")" || die "${start}${API_FAIL}"
+    fi
+  fi
+
+  local incomplete_tail="press c on ${old} again to finish."
+  local moved=0 i
+  if [[ -n $moving ]]; then
+    hash_chunks "$moving"
+    for i in "${!CHUNKS[@]}"; do
+      if [[ $kind == category ]]; then
+        api_try POST "/api/v2/torrents/setCategory" "hashes=${CHUNKS[i]}&category=$(uri "$new")" \
+          || die "Rename incomplete (${moved} of ${total} moved); ${incomplete_tail}"
+      else
+        # A chunk counts as moved only once it has lost the old tag; a
+        # re-run's addTags on it again is harmless.
+        api_try POST "/api/v2/torrents/addTags" "hashes=${CHUNKS[i]}&tags=$(uri "$new")" \
+          || die "Rename incomplete (${moved} of ${total} moved); ${incomplete_tail}"
+        api_try POST "/api/v2/torrents/removeTags" "hashes=${CHUNKS[i]}&tags=$(uri "$old")" \
+          || die "Rename incomplete (${moved} of ${total} moved); ${incomplete_tail}"
+      fi
+      moved=$(( moved + CHUNK_SIZES[i] ))
+    done
+  fi
+
+  # Nothing may still be on the old name: a chunk qBittorrent didn't apply,
+  # or a torrent added to it meanwhile.
+  api_try GET "/api/v2/torrents/info" || die "Rename incomplete (${moved} of ${total} moved); ${incomplete_tail}"
+  local left counts
+  left=$(torrents_on "$kind" "$old" "$API_BODY") || die "Rename incomplete (${moved} of ${total} moved); ${incomplete_tail}"
+  if [[ -n $left ]]; then
+    # Of the torrents counted at the start, how many really left; anything
+    # new on the old name adds to the total.
+    counts=$(jq -rn --arg was "$moving" --arg now "$left" '
+      ($was | split("|") | map(select(. != ""))) as $w
+      | ($now | split("|") | map(select(. != ""))) as $n
+      | "\(($w - $n) | length) \(($w | length) + (($n - $w) | length))"')
+    [[ $counts =~ ^([[:digit:]]+)\ ([[:digit:]]+)$ ]] || counts="${moved} ${total}"
+    die "Rename incomplete (${counts% *} of ${counts#* } moved); ${incomplete_tail}"
+  fi
+
+  if [[ $kind == category ]]; then
+    api_try POST "/api/v2/torrents/removeCategories" "categories=$(uri "$old")" \
+      || die "Rename incomplete (${moved} of ${total} moved); ${incomplete_tail}"
+  else
+    api_try POST "/api/v2/torrents/deleteTags" "tags=$(uri "$old")" \
+      || die "Rename incomplete (${moved} of ${total} moved); ${incomplete_tail}"
+  fi
+  printf '%s\n' '{"ok":true}'
+}
+
 case ${1:-} in
   status) shift; cmd_status "$@" ;;
   probe) shift; cmd_probe "$@" ;;
@@ -1171,6 +1660,15 @@ case ${1:-} in
   install) shift; cmd_install "$@" ;;
   start-daemon) shift; cmd_start_daemon "$@" ;;
   stop-daemon) shift; cmd_stop_daemon "$@" ;;
+  category-add) shift; cmd_category_add "$@" ;;
+  category-path) shift; cmd_category_path "$@" ;;
+  category-remove) shift; cmd_category_remove "$@" ;;
+  category-rename) shift; cmd_rename category "$@" ;;
+  set-category) shift; cmd_set_category "$@" ;;
+  tag-add) shift; cmd_tag_add "$@" ;;
+  tag-remove) shift; cmd_tag_remove "$@" ;;
+  tag-rename) shift; cmd_rename tag "$@" ;;
+  tags) shift; cmd_tags "$@" ;;
   magnet-paths) shift; cmd_magnet_paths "$@" ;;
   magnet-snapshot) shift; cmd_magnet_snapshot "$@" ;;
   magnet-inbox) shift; cmd_magnet_inbox "$@" ;;
@@ -1180,5 +1678,5 @@ case ${1:-} in
   magnet-pending-drop) shift; cmd_magnet_pending_drop "$@" ;;
   magnet-install-handler) shift; cmd_magnet_install_handler "$@" ;;
   magnet-uninstall-handler) shift; cmd_magnet_uninstall_handler "$@" ;;
-  *) die "usage: qbt status|probe|add|start|stop|recheck|set-location|delete|reannounce|tracker-add|tracker-edit|tracker-remove|ban-peer|fetch-metadata|files|prio|turtle|limit|sequential|sharelimit|install|start-daemon|stop-daemon|magnet-paths|magnet-inbox|magnet-drain|magnet-pending-list|magnet-pending-drop|magnet-install-handler|magnet-uninstall-handler" ;;
+  *) die "usage: qbt status|probe|add|start|stop|recheck|set-location|delete|reannounce|tracker-add|tracker-edit|tracker-remove|ban-peer|fetch-metadata|files|prio|turtle|limit|sequential|sharelimit|category-add|category-path|category-remove|category-rename|set-category|tag-add|tag-remove|tag-rename|tags|install|start-daemon|stop-daemon|magnet-paths|magnet-inbox|magnet-drain|magnet-pending-list|magnet-pending-drop|magnet-install-handler|magnet-uninstall-handler" ;;
 esac

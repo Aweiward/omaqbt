@@ -563,6 +563,36 @@ if parity_failures:
     sys.exit(1)
 print("validation-parity-contract ok")
 
+# Slice 3a, Task 2 (G4/OV5): qbt's new-name rules accept exactly the shared
+# ok cases and give exactly the shared message for the rest, with no
+# request on a rejection. Run under en_US.UTF-8 and again under C: the
+# validator sets its own UTF-8 locale, so the bar's environment can't change
+# how characters are counted.
+name_failures = []
+cenv = os.environ.copy()
+cenv["LANG"] = "C"
+cenv["LC_ALL"] = "C"
+for label_locale, base_env in (("en_US.UTF-8", lenv), ("C", cenv)):
+    with harness.fixture_server(extra_env=base_env) as (nport, nenv):
+        for c in cases["names"]:
+            command = "category-add" if c["kind"] == "category" else "tag-add"
+            before = len(json.loads(Path(nenv["QBT_FIXTURE_LOG"]).read_text() or "[]"))
+            result = subprocess.run(["./qbt", command, c["input"]], env=nenv, text=True, capture_output=True)
+            after = len(json.loads(Path(nenv["QBT_FIXTURE_LOG"]).read_text() or "[]"))
+            if c["ok"]:
+                ok = result.returncode == 0 and after == before + 1
+            else:
+                ok = result.returncode != 0 and after == before and result.stderr.strip() == c["error"]
+            label = f"{command} name rule under {label_locale} ({'accepts' if c['ok'] else 'rejects'} {c['why']})"
+            print(("ok - " if ok else "FAIL - ") + label)
+            if not ok:
+                name_failures.append((label, result.returncode, result.stderr.strip()))
+
+if name_failures:
+    print(f"\n{len(name_failures)} name-rule check(s) failed: {name_failures}", file=sys.stderr)
+    sys.exit(1)
+print("name-rule-contract ok")
+
 # Whole-branch review CRITICAL: the localhost guard must look at the whole
 # base, not a sed-extracted "host" (userinfo, backslash tricks, a foreign
 # scheme) and must never splice an unchecked WebUI\Port from the conf.

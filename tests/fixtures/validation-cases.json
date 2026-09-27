@@ -263,5 +263,561 @@
    "ok": false,
    "why": "fullwidth digit in IPv6"
   }
+ ],
+ "_comment_names": "Shared G4/OV5 new-name cases: qbt (tests/api-contract.sh, under en_US.UTF-8 and C) and the JS nameError (Task 3) must accept exactly the ok ones and give exactly `error` for the rest. Order: empty, control (U+0000-001F, U+007F), more than 64 code points, leading/trailing space (U+0020 or any Unicode space qBittorrent's QString::trimmed strips: U+0085, U+00A0, U+1680, U+2000-200A, U+2028, U+2029, U+202F, U+205F, U+3000), then tag comma / category backslash, leading or trailing slash, //.",
+ "names": [
+  {
+   "kind": "category",
+   "input": "anime",
+   "ok": true,
+   "error": "",
+   "why": "plain"
+  },
+  {
+   "kind": "tag",
+   "input": "anime",
+   "ok": true,
+   "error": "",
+   "why": "plain"
+  },
+  {
+   "kind": "category",
+   "input": "anime 2026",
+   "ok": true,
+   "error": "",
+   "why": "inner space"
+  },
+  {
+   "kind": "tag",
+   "input": "anime 2026",
+   "ok": true,
+   "error": "",
+   "why": "inner space"
+  },
+  {
+   "kind": "category",
+   "input": "Anime-2026_(BD)",
+   "ok": true,
+   "error": "",
+   "why": "punctuation"
+  },
+  {
+   "kind": "tag",
+   "input": "Anime-2026_(BD)",
+   "ok": true,
+   "error": "",
+   "why": "punctuation"
+  },
+  {
+   "kind": "tag",
+   "input": "+seedbox",
+   "ok": true,
+   "error": "",
+   "why": "leading +"
+  },
+  {
+   "kind": "tag",
+   "input": "-old",
+   "ok": true,
+   "error": "",
+   "why": "leading -"
+  },
+  {
+   "kind": "category",
+   "input": "-old",
+   "ok": true,
+   "error": "",
+   "why": "leading - (category)"
+  },
+  {
+   "kind": "category",
+   "input": "anime/2026",
+   "ok": true,
+   "error": "",
+   "why": "subcategory"
+  },
+  {
+   "kind": "tag",
+   "input": "a/b",
+   "ok": true,
+   "error": "",
+   "why": "slash in a tag"
+  },
+  {
+   "kind": "tag",
+   "input": "/a",
+   "ok": true,
+   "error": "",
+   "why": "leading slash in a tag"
+  },
+  {
+   "kind": "tag",
+   "input": "a//b",
+   "ok": true,
+   "error": "",
+   "why": "double slash in a tag"
+  },
+  {
+   "kind": "tag",
+   "input": "a\\b",
+   "ok": true,
+   "error": "",
+   "why": "backslash in a tag"
+  },
+  {
+   "kind": "category",
+   "input": "a,b",
+   "ok": true,
+   "error": "",
+   "why": "comma in a category"
+  },
+  {
+   "kind": "category",
+   "input": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "ok": true,
+   "error": "",
+   "why": "64 ASCII characters"
+  },
+  {
+   "kind": "tag",
+   "input": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "ok": true,
+   "error": "",
+   "why": "64 ASCII characters"
+  },
+  {
+   "kind": "category",
+   "input": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "ok": false,
+   "error": "Keep it to 64 characters.",
+   "why": "65 ASCII characters"
+  },
+  {
+   "kind": "tag",
+   "input": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "ok": false,
+   "error": "Keep it to 64 characters.",
+   "why": "65 ASCII characters"
+  },
+  {
+   "kind": "category",
+   "input": "\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5",
+   "ok": true,
+   "error": "",
+   "why": "64 CJK characters (192 bytes)"
+  },
+  {
+   "kind": "tag",
+   "input": "\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5",
+   "ok": true,
+   "error": "",
+   "why": "64 CJK characters (192 bytes)"
+  },
+  {
+   "kind": "category",
+   "input": "\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5",
+   "ok": false,
+   "error": "Keep it to 64 characters.",
+   "why": "65 CJK characters"
+  },
+  {
+   "kind": "tag",
+   "input": "\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5\u65e5",
+   "ok": false,
+   "error": "Keep it to 64 characters.",
+   "why": "65 CJK characters"
+  },
+  {
+   "kind": "category",
+   "input": "\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00",
+   "ok": true,
+   "error": "",
+   "why": "64 emoji (128 UTF-16 units, 256 bytes)"
+  },
+  {
+   "kind": "tag",
+   "input": "\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00",
+   "ok": true,
+   "error": "",
+   "why": "64 emoji (128 UTF-16 units, 256 bytes)"
+  },
+  {
+   "kind": "category",
+   "input": "\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00",
+   "ok": false,
+   "error": "Keep it to 64 characters.",
+   "why": "65 emoji"
+  },
+  {
+   "kind": "tag",
+   "input": "\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00",
+   "ok": false,
+   "error": "Keep it to 64 characters.",
+   "why": "65 emoji"
+  },
+  {
+   "kind": "category",
+   "input": "e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301",
+   "ok": true,
+   "error": "",
+   "why": "32 e + combining acute = 64 code points"
+  },
+  {
+   "kind": "tag",
+   "input": "e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301",
+   "ok": true,
+   "error": "",
+   "why": "32 e + combining acute = 64 code points"
+  },
+  {
+   "kind": "category",
+   "input": "e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e",
+   "ok": false,
+   "error": "Keep it to 64 characters.",
+   "why": "65 code points with combining marks"
+  },
+  {
+   "kind": "tag",
+   "input": "e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e",
+   "ok": false,
+   "error": "Keep it to 64 characters.",
+   "why": "65 code points with combining marks"
+  },
+  {
+   "kind": "category",
+   "input": "caf\u00e9",
+   "ok": true,
+   "error": "",
+   "why": "e-acute"
+  },
+  {
+   "kind": "tag",
+   "input": "caf\u00e9",
+   "ok": true,
+   "error": "",
+   "why": "e-acute"
+  },
+  {
+   "kind": "category",
+   "input": "",
+   "ok": false,
+   "error": "Type a name.",
+   "why": "empty"
+  },
+  {
+   "kind": "tag",
+   "input": "",
+   "ok": false,
+   "error": "Type a name.",
+   "why": "empty"
+  },
+  {
+   "kind": "category",
+   "input": "a\tb",
+   "ok": false,
+   "error": "No control characters in a name.",
+   "why": "tab"
+  },
+  {
+   "kind": "tag",
+   "input": "a\tb",
+   "ok": false,
+   "error": "No control characters in a name.",
+   "why": "tab"
+  },
+  {
+   "kind": "category",
+   "input": "a\nb",
+   "ok": false,
+   "error": "No control characters in a name.",
+   "why": "newline"
+  },
+  {
+   "kind": "tag",
+   "input": "a\nb",
+   "ok": false,
+   "error": "No control characters in a name.",
+   "why": "newline"
+  },
+  {
+   "kind": "category",
+   "input": "a\rb",
+   "ok": false,
+   "error": "No control characters in a name.",
+   "why": "carriage return"
+  },
+  {
+   "kind": "tag",
+   "input": "a\rb",
+   "ok": false,
+   "error": "No control characters in a name.",
+   "why": "carriage return"
+  },
+  {
+   "kind": "category",
+   "input": "\u0001",
+   "ok": false,
+   "error": "No control characters in a name.",
+   "why": "U+0001"
+  },
+  {
+   "kind": "tag",
+   "input": "\u0001",
+   "ok": false,
+   "error": "No control characters in a name.",
+   "why": "U+0001"
+  },
+  {
+   "kind": "category",
+   "input": "a\u001fb",
+   "ok": false,
+   "error": "No control characters in a name.",
+   "why": "U+001F"
+  },
+  {
+   "kind": "tag",
+   "input": "a\u001fb",
+   "ok": false,
+   "error": "No control characters in a name.",
+   "why": "U+001F"
+  },
+  {
+   "kind": "category",
+   "input": "a\u007fb",
+   "ok": false,
+   "error": "No control characters in a name.",
+   "why": "DEL"
+  },
+  {
+   "kind": "tag",
+   "input": "a\u007fb",
+   "ok": false,
+   "error": "No control characters in a name.",
+   "why": "DEL"
+  },
+  {
+   "kind": "category",
+   "input": " anime",
+   "ok": false,
+   "error": "No spaces at the start or end.",
+   "why": "leading space"
+  },
+  {
+   "kind": "tag",
+   "input": " anime",
+   "ok": false,
+   "error": "No spaces at the start or end.",
+   "why": "leading space"
+  },
+  {
+   "kind": "category",
+   "input": "anime ",
+   "ok": false,
+   "error": "No spaces at the start or end.",
+   "why": "trailing space"
+  },
+  {
+   "kind": "tag",
+   "input": "anime ",
+   "ok": false,
+   "error": "No spaces at the start or end.",
+   "why": "trailing space"
+  },
+  {
+   "kind": "category",
+   "input": " ",
+   "ok": false,
+   "error": "No spaces at the start or end.",
+   "why": "only a space"
+  },
+  {
+   "kind": "tag",
+   "input": " ",
+   "ok": false,
+   "error": "No spaces at the start or end.",
+   "why": "only a space"
+  },
+  {
+   "kind": "category",
+   "input": "\u00a0anime",
+   "ok": false,
+   "error": "No spaces at the start or end.",
+   "why": "leading U+00A0 (qBittorrent trims it from tags)"
+  },
+  {
+   "kind": "tag",
+   "input": "\u00a0anime",
+   "ok": false,
+   "error": "No spaces at the start or end.",
+   "why": "leading U+00A0 (qBittorrent trims it from tags)"
+  },
+  {
+   "kind": "category",
+   "input": "anime\u3000",
+   "ok": false,
+   "error": "No spaces at the start or end.",
+   "why": "trailing U+3000 ideographic space"
+  },
+  {
+   "kind": "tag",
+   "input": "anime\u3000",
+   "ok": false,
+   "error": "No spaces at the start or end.",
+   "why": "trailing U+3000 ideographic space"
+  },
+  {
+   "kind": "category",
+   "input": "anime\u2007",
+   "ok": false,
+   "error": "No spaces at the start or end.",
+   "why": "trailing U+2007 figure space"
+  },
+  {
+   "kind": "tag",
+   "input": "anime\u2007",
+   "ok": false,
+   "error": "No spaces at the start or end.",
+   "why": "trailing U+2007 figure space"
+  },
+  {
+   "kind": "category",
+   "input": "\u202fanime",
+   "ok": false,
+   "error": "No spaces at the start or end.",
+   "why": "leading U+202F narrow no-break space"
+  },
+  {
+   "kind": "tag",
+   "input": "\u202fanime",
+   "ok": false,
+   "error": "No spaces at the start or end.",
+   "why": "leading U+202F narrow no-break space"
+  },
+  {
+   "kind": "category",
+   "input": "\u2028anime",
+   "ok": false,
+   "error": "No spaces at the start or end.",
+   "why": "leading U+2028 line separator"
+  },
+  {
+   "kind": "tag",
+   "input": "\u2028anime",
+   "ok": false,
+   "error": "No spaces at the start or end.",
+   "why": "leading U+2028 line separator"
+  },
+  {
+   "kind": "category",
+   "input": "anime\u0085",
+   "ok": false,
+   "error": "No spaces at the start or end.",
+   "why": "trailing U+0085 next line"
+  },
+  {
+   "kind": "tag",
+   "input": "anime\u0085",
+   "ok": false,
+   "error": "No spaces at the start or end.",
+   "why": "trailing U+0085 next line"
+  },
+  {
+   "kind": "category",
+   "input": "a\u00a0b",
+   "ok": true,
+   "error": "",
+   "why": "inner U+00A0"
+  },
+  {
+   "kind": "tag",
+   "input": "a\u00a0b",
+   "ok": true,
+   "error": "",
+   "why": "inner U+00A0"
+  },
+  {
+   "kind": "tag",
+   "input": "a,b",
+   "ok": false,
+   "error": "No commas in a tag.",
+   "why": "comma in a tag"
+  },
+  {
+   "kind": "tag",
+   "input": ",",
+   "ok": false,
+   "error": "No commas in a tag.",
+   "why": "only a comma"
+  },
+  {
+   "kind": "category",
+   "input": "a\\b",
+   "ok": false,
+   "error": "No backslashes in a category.",
+   "why": "backslash in a category"
+  },
+  {
+   "kind": "category",
+   "input": "/anime",
+   "ok": false,
+   "error": "A category can't start or end with /.",
+   "why": "leading slash"
+  },
+  {
+   "kind": "category",
+   "input": "anime/",
+   "ok": false,
+   "error": "A category can't start or end with /.",
+   "why": "trailing slash"
+  },
+  {
+   "kind": "category",
+   "input": "/",
+   "ok": false,
+   "error": "A category can't start or end with /.",
+   "why": "only a slash"
+  },
+  {
+   "kind": "category",
+   "input": "a//b",
+   "ok": false,
+   "error": "No // in a category.",
+   "why": "double slash"
+  },
+  {
+   "kind": "category",
+   "input": "a\\/b",
+   "ok": false,
+   "error": "No backslashes in a category.",
+   "why": "backslash before a slash"
+  },
+  {
+   "kind": "category",
+   "input": " /anime",
+   "ok": false,
+   "error": "No spaces at the start or end.",
+   "why": "leading space wins over leading slash"
+  },
+  {
+   "kind": "category",
+   "input": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\t",
+   "ok": false,
+   "error": "No control characters in a name.",
+   "why": "control wins over length"
+  },
+  {
+   "kind": "tag",
+   "input": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\t",
+   "ok": false,
+   "error": "No control characters in a name.",
+   "why": "control wins over length"
+  },
+  {
+   "kind": "category",
+   "input": "a//bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+   "ok": false,
+   "error": "Keep it to 64 characters.",
+   "why": "length wins over //"
+  }
  ]
 }
