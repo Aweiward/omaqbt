@@ -1,6 +1,7 @@
 import QtQuick
 import QtTest
 import "../../.."
+import "../../../LibraryView.js" as Library
 
 // Service.qml against stub Quickshell.Io processes: nothing is spawned and
 // no file is read or written.
@@ -571,5 +572,99 @@ TestCase {
     compare(p.command[1], "recheck")
     finish(p, 0, "", "")
     compare(p.command, [svc.helperPath, "reannounce", h], "it runs once the first one ends")
+  }
+
+  // --- library helpers (slice 3a, Task 3) -------------------------------------
+
+  function test_library_helpers_run_their_qbt_argv_as_window_tickets() {
+    var o = idleService(), svc = o.svc, p = o.p
+    var spy = spyOn(svc)
+    var h = hh("a"), h2 = hh("b")
+    var list = h + "|" + h2
+    var cases = [
+      { call: function(w) { return svc.addCategory("anime", "", w) }, argv: ["category-add", "anime"] },
+      { call: function(w) { return svc.addCategory("anime", "~/Videos/anime", w) }, argv: ["category-add", "anime", "~/Videos/anime"] },
+      { call: function(w) { return svc.setCategoryPath("anime", "/srv/anime", w) }, argv: ["category-path", "anime", "/srv/anime"] },
+      { call: function(w) { return svc.setCategoryPath("anime", "", w) }, argv: ["category-path", "anime", ""] },
+      { call: function(w) { return svc.removeCategory("anime/2026", w) }, argv: ["category-remove", "anime/2026"] },
+      { call: function(w) { return svc.renameCategory("anime", "animation", false, w) }, argv: ["category-rename", "anime", "animation"] },
+      { call: function(w) { return svc.renameCategory("anime", "animation", true, w) }, argv: ["category-rename", "anime", "animation", "--merge"] },
+      { call: function(w) { return svc.setCategory(list, "anime", w) }, argv: ["set-category", list, "anime"] },
+      { call: function(w) { return svc.setCategory([h, h2], "", w) }, argv: ["set-category", list, ""] },
+      { call: function(w) { return svc.addTag("anime 2026", w) }, argv: ["tag-add", "anime 2026"] },
+      { call: function(w) { return svc.removeTag("seedbox", w) }, argv: ["tag-remove", "seedbox"] },
+      { call: function(w) { return svc.renameTag("seedbox", "sb", false, w) }, argv: ["tag-rename", "seedbox", "sb"] },
+      { call: function(w) { return svc.renameTag("seedbox", "sb", true, w) }, argv: ["tag-rename", "seedbox", "sb", "--merge"] },
+      { call: function(w) { return svc.editTags(list, { add: ["keep", "new one"], remove: ["seedbox"] }, w) },
+        argv: ["tags", list, "--add", "keep", "--add", "new one", "--remove", "seedbox"] },
+      { call: function(w) { return svc.editTags(h, { add: [], remove: ["seedbox"] }, w) }, argv: ["tags", h, "--remove", "seedbox"] },
+      { call: function(w) { return svc.editTags(h, { add: ["keep"] }, w) }, argv: ["tags", h, "--add", "keep"] }
+    ]
+    svc.actionStatus = "widget status"
+    for (var i = 0; i < cases.length; i++) {
+      var t = cases[i].call({ origin: "window", hashes: [h] })
+      verify(t > 0, cases[i].argv[0] + " returns a ticket")
+      compare(p.command, [svc.helperPath].concat(cases[i].argv))
+      compare(svc.actionStatus, "widget status", "a window action leaves the widget's status alone")
+      finish(p, 0, "{\"ok\":true}", "")
+      compare(spy.count, i + 1)
+      compare(spy.signalArguments[i][0], t)
+      compare(spy.signalArguments[i][1], true)
+      compare(spy.signalArguments[i][3], "window")
+      compare(spy.signalArguments[i][4], [h])
+    }
+    // Deviation 1: an incomplete rename's own text comes back as the error.
+    var tf = svc.renameCategory("anime", "animation", false, { origin: "window", hashes: [] })
+    finish(p, 1, "", "Rename incomplete (12 of 21 moved); press c on anime again to finish.")
+    compare(spy.signalArguments[cases.length][0], tf)
+    compare(spy.signalArguments[cases.length][1], false)
+    compare(spy.signalArguments[cases.length][2], "Rename incomplete (12 of 21 moved); press c on anime again to finish.")
+  }
+
+  function test_library_helpers_refuse_missing_arguments_without_running() {
+    var o = idleService(), svc = o.svc, p = o.p
+    var h = hh("a")
+    var w = { origin: "window", hashes: [] }
+    compare(svc.addCategory("", "", w), 0)
+    compare(svc.setCategoryPath("", "/srv", w), 0)
+    compare(svc.removeCategory("", w), 0)
+    compare(svc.renameCategory("", "b", false, w), 0)
+    compare(svc.renameCategory("a", "", false, w), 0)
+    compare(svc.setCategory("", "anime", w), 0)
+    compare(svc.setCategory([], "anime", w), 0)
+    compare(svc.addTag("", w), 0)
+    compare(svc.removeTag("", w), 0)
+    compare(svc.renameTag("", "b", false, w), 0)
+    compare(svc.renameTag("a", "", false, w), 0)
+    compare(svc.editTags("", { add: ["keep"], remove: [] }, w), 0)
+    compare(svc.editTags(h, { add: [], remove: [] }, w), 0, "no change runs nothing")
+    compare(svc.editTags(h, null, w), 0)
+    compare(p.running, false, "nothing ran")
+    compare(svc.currentAction, null)
+  }
+
+  function test_library_widget_origin_sets_its_status_text() {
+    var o = idleService(), svc = o.svc, p = o.p
+    svc.renameCategory("anime", "animation", false)
+    compare(svc.actionStatus, "Renaming anime → animation…")
+    finish(p, 0, "{\"ok\":true}", "")
+    svc.removeTag("seedbox")
+    compare(svc.actionStatus, "Deleting tag…")
+    finish(p, 0, "{\"ok\":true}", "")
+  }
+
+  // LibraryView.js is node-tested; this proves QML's engine loads it and
+  // runs its code-point handling the same way.
+  function test_library_view_loads_under_qml() {
+    compare(Library.nameError("tag", "\u00a0anime", []), "No spaces at the start or end.")
+    compare(Library.nameError("category", "anime", ["anime"]), "\"anime\" already exists.")
+    var emoji = ""
+    for (var i = 0; i < 65; i++) emoji += "\ud83d\ude00"
+    compare(Library.nameError("tag", emoji, []), "Keep it to 64 characters.")
+    compare(Library.nameError("tag", "a\u0085", []), "No control characters in a name.")
+    compare(Library.movePlan({ kind: "remove", name: "anime" },
+      [{ hash: hh("a"), category: "anime", autoTmm: true, savePath: "/dl/anime" }],
+      { defaultSavePath: "/dl", categoryPaths: {}, relocation: { torrentChanged: true, categoryPathChanged: false } }),
+      [{ hash: hh("a"), from: "/dl/anime", to: "/dl" }])
   }
 }

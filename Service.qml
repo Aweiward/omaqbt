@@ -682,6 +682,73 @@ Scope {
     return runAction([helperPath, "fetch-metadata", hash], "Fetching metadata…", opts)
   }
 
+  // Categories and tags (slice 3a). qbt checks every name (G4/OV5), path
+  // and hash and dies with the message the ticket's error carries; these
+  // only refuse a missing argument (0, nothing runs). "" is a real value
+  // for setCategory's name (none) and setCategoryPath's path (the
+  // default). hashes is a "|" list or an array of at most Model.HASH_CHUNK
+  // (the window chunks, like setLocation's callers).
+  function addCategory(name, path, opts) {
+    if (!name) return 0
+    var cmd = [helperPath, "category-add", name]
+    if (path) cmd.push(path)
+    return runAction(cmd, "Adding category…", opts)
+  }
+
+  function setCategoryPath(name, path, opts) {
+    if (!name) return 0
+    return runAction([helperPath, "category-path", name, String(path || "")], "Changing save path…", opts)
+  }
+
+  function removeCategory(name, opts) {
+    if (!name) return 0
+    return runAction([helperPath, "category-remove", name], "Deleting category…", opts)
+  }
+
+  function renameCategory(oldName, newName, merge, opts) {
+    return runRename("category-rename", oldName, newName, merge, opts)
+  }
+
+  function setCategory(hashes, name, opts) {
+    var list = Array.isArray(hashes) ? hashes.join("|") : String(hashes || "")
+    if (list === "") return 0
+    return runAction([helperPath, "set-category", list, String(name || "")], "Setting category…", opts)
+  }
+
+  function addTag(name, opts) {
+    if (!name) return 0
+    return runAction([helperPath, "tag-add", name], "Adding tag…", opts)
+  }
+
+  function removeTag(name, opts) {
+    if (!name) return 0
+    return runAction([helperPath, "tag-remove", name], "Deleting tag…", opts)
+  }
+
+  function renameTag(oldName, newName, merge, opts) {
+    return runRename("tag-rename", oldName, newName, merge, opts)
+  }
+
+  function runRename(verb, oldName, newName, merge, opts) {
+    if (!oldName || !newName) return 0
+    var cmd = [helperPath, verb, oldName, newName]
+    if (merge) cmd.push("--merge")
+    return runAction(cmd, "Renaming " + oldName + " → " + newName + "…", opts)
+  }
+
+  // changes: {add: [...], remove: [...]} (LibraryView.tagChanges); 0 when
+  // there is nothing to change.
+  function editTags(hashes, changes, opts) {
+    var list = Array.isArray(hashes) ? hashes.join("|") : String(hashes || "")
+    var add = (changes && changes.add) || []
+    var remove = (changes && changes.remove) || []
+    if (list === "" || add.length + remove.length === 0) return 0
+    var cmd = [helperPath, "tags", list]
+    for (var i = 0; i < add.length; i++) cmd.push("--add", add[i])
+    for (var j = 0; j < remove.length; j++) cmd.push("--remove", remove[j])
+    return runAction(cmd, "Changing tags…", opts)
+  }
+
   function installMagnetHandler(opts) {
     if (!started || magnetHandlerInstalled) return 0
     magnetHandlerInstalled = true
