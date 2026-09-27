@@ -742,6 +742,7 @@ Item {
         message: root.statusMessage.text
         messageTone: root.statusMessage.tone
         inputPurpose: root.inputPurpose
+        inputShown: commands.trackerInput ? commands.trackerInput.shown : ""
         filterChip: View.filterChip(root.layout, root.filter)
         hints: View.modeHints(root.mode, {
           accept: root.confirm ? View.confirmLine(root.confirm).accept : "",

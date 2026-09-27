@@ -702,6 +702,17 @@ function magnetLine(ms) {
   };
 }
 
+// inputPrompt(purpose, shown) -> {prompt, placeholder} for the INSERT
+// line. `shown` is the tracker being changed, already redacted
+// (InspectorView.redactUrl): the full old URL never reaches the screen.
+var TRACKER_URL_PLACEHOLDER = "udp://, http://, https:// or wss://";
+function inputPrompt(purpose, shown) {
+  if (purpose === "move") return { prompt: "move to", placeholder: "/absolute/path" };
+  if (purpose === "trackerAdd") return { prompt: "Add tracker URL", placeholder: TRACKER_URL_PLACEHOLDER };
+  if (purpose === "trackerEdit") return { prompt: "Change " + String(shown || "") + " to:", placeholder: TRACKER_URL_PLACEHOLDER };
+  return { prompt: "/", placeholder: "filter by name, or paste a magnet" };
+}
+
 // Key hints for the status line's right side, per mode (and, in NORMAL,
 // per focused pane). ctx: {accept, purpose, pane, filesTab}.
 function modeHints(mode, ctx) {
@@ -711,6 +722,8 @@ function modeHints(mode, ctx) {
   }
   if (mode === "INSERT") {
     if (c.purpose === "move") return [{ key: "Enter", label: "move" }, { key: "Esc", label: "cancel" }];
+    if (c.purpose === "trackerAdd") return [{ key: "Enter", label: "add" }, { key: "Esc", label: "cancel" }];
+    if (c.purpose === "trackerEdit") return [{ key: "Enter", label: "change" }, { key: "Esc", label: "cancel" }];
     return [{ key: "Enter", label: "keep filter" }, { key: "Esc", label: "cancel" }];
   }
   // The palette shows its own key hints in its footer.
@@ -1760,6 +1773,7 @@ if (typeof module !== "undefined" && module.exports) {
     progressText: progressText,
     confirmLine: confirmLine,
     modeHints: modeHints,
+    inputPrompt: inputPrompt,
     vpnPart: vpnPart,
     isAbsolutePath: isAbsolutePath,
     toneColor: toneColor,

@@ -73,6 +73,11 @@ TestCase {
       property bool sidecarDown: false
       function watch(h, t) { calls.push({ name: "watch", args: [h, t] }) }
       function copyText(t, o) { return rec("copyText", [t, o]) }
+      // The inspector's write helpers (slice 2b, Task 3's argv order).
+      function reannounce(h, o) { return rec("reannounce", [h, o]) }
+      function addTracker(h, u, o) { return rec("addTracker", [h, u, o]) }
+      function editTracker(h, a, b, o) { return rec("editTracker", [h, a, b, o]) }
+      function removeTracker(h, u, o) { return rec("removeTracker", [h, u, o]) }
       function setInspect(h, tab, entry) {
         var n = ({}); for (var k in inspectByKey) n[k] = inspectByKey[k]
         var e = ({}); for (var f in entry) e[f] = entry[f]
@@ -898,7 +903,14 @@ TestCase {
     compare(p.visible, true)
     compare(p.query, "")
     verify(p.rows.length > 1)
-    compare(p.cursor, 0)
+    // The cursor starts on the first row that can run: since slice 2b the
+    // inspector's tracker rows (Add tracker, Change tracker URL) sort to
+    // the top of the Torrent group, dimmed, from the table.
+    var first = 0
+    while (!p.rows[first].enabled) first++
+    compare(p.cursor, first)
+    compare(p.rows[0].id, "tracker.add")
+    compare(p.rows[0].enabled, false)
     compare(p.matchCount, p.totalCount)
     compare(o.c.pane, "table")
   }
@@ -953,7 +965,10 @@ TestCase {
     compare(p.rows[0].id, "sort.reverse")
     compare(p.rows[1].kind, "divider")
     palKey(o.c, "down")
-    compare(p.cursor, 2, "the cursor skips the divider")
+    // It skips the divider and the dimmed tracker rows below it (slice 2b).
+    var next = 2
+    while (!p.rows[next].enabled) next++
+    compare(p.cursor, next, "the cursor skips the divider")
     palKey(o.c, "up")
     compare(p.cursor, 0)
   }
@@ -1586,7 +1601,7 @@ TestCase {
     verify(shows(o.c, "tracker.example"))
     verify(shows(o.c, "t.example:1337"))
     compare(o.c.trackersView.rows[2].host, "passkey.example", "the userinfo row's host is stripped of user:abc123@")
-    verify(shows(o.c, "j k move · y copy"))
+    verify(shows(o.c, "j k move · a add · c change · x remove · y copy · R reannounce"))
     key(o.c, "\t", 0x01000001)
     compare(o.c.pane, "inspector")
     key(o.c, "j")
@@ -2105,5 +2120,255 @@ TestCase {
     compare(o.c.mode, "NORMAL")
     compare(o.c.pane, "filters")
     verify(JSON.stringify(o.c.filterCursor) !== before, "the filters cursor moved")
+  }
+
+  // ---- the trackers tab's actions (slice 2b, Task 4) ------------------------
+
+  readonly property string passkeyUrl: "https://tracker.example/announce?passkey=abc123"
+  readonly property string pathKeyUrl: "udp://t.example:1337/abc123/announce"
+
+  // The window focused on gamma's trackers tab, cursor on the first row.
+  function onTrackers() {
+    var o = make()
+    o.svc.torrents = list3()
+    key(o.c, "2")
+    o.svc.setInspect(hh("c"), "trackers", { trackers: trackersFixture() })
+    if (o.c.pane !== "inspector") key(o.c, "\t", 0x01000001)
+    compare(o.c.pane, "inspector")
+    compare(o.c.inspectorTab, "trackers")
+    return o
+  }
+  function inputOf(c) { return findWith(winOf(c).contentItem, "setInput") }
+  function screenText(c) { wait(30); return visibleTexts(winOf(c).contentItem).join("\n") }
+  function noPasskey(c, what) {
+    var t = screenText(c)
+    verify(t.indexOf("abc123") === -1, what + ": no passkey on screen")
+    verify(t.indexOf(passkeyUrl) === -1 && t.indexOf(pathKeyUrl) === -1, what + ": no full URL on screen")
+  }
+  function callCount(svc, name) {
+    var n = 0
+    for (var i = 0; i < svc.calls.length; i++) if (svc.calls[i].name === name) n++
+    return n
+  }
+
+  function test_tracker_R_reannounces_the_cursor_torrent() {
+    var o = onTrackers()
+    key(o.c, "R", 0x52, 0x02000000)
+    var r = lastCall(o.svc, "reannounce")
+    verify(r !== null)
+    compare(r.args[0], hh("c"))
+    compare(r.args[1].origin, "window")
+    compare(r.args[1].hashes, [hh("c")])
+    compare(o.c.messageLine.text, "Reannouncing…")
+    o.svc.actionFinished(o.svc.seq, true, "", "window", [hh("c")])
+    compare(o.c.messageLine.text, "Reannounced")
+    // Only DHT/PeX/LSD: still the trackers tab, so R still reannounces.
+    o.svc.setInspect(hh("c"), "trackers", { trackers: trackersFixture().slice(0, 3) })
+    key(o.c, "R", 0x52, 0x02000000)
+    compare(callCount(o.svc, "reannounce"), 2)
+    o.svc.actionFinished(o.svc.seq, false, "HTTP 403", "window", [hh("c")])
+    compare(o.c.messageLine.text, "Couldn't reannounce: HTTP 403")
+  }
+
+  function test_tracker_a_adds_after_inline_validation() {
+    var o = onTrackers()
+    key(o.c, "a")
+    compare(o.c.mode, "INSERT")
+    compare(o.c.inputPurpose, "trackerAdd")
+    compare(inputOf(o.c).inputValue(), "", "an empty field")
+    verify(shows(o.c, "Add tracker URL"))
+    // A tick moves the table cursor while the field is open.
+    o.svc.torrents = [tt(hh("a"), "alpha", { addedOn: 1 }), tt(hh("b"), "beta", { addedOn: 2 })]
+    verify(o.c.cursorHash !== hh("c"))
+    var bad = ["ftp://x.example/announce", "udp://a b.example/announce", "udp://a.example/x|y", "tracker.example"]
+    for (var i = 0; i < bad.length; i++) {
+      inputOf(o.c).setInput(bad[i])
+      key(o.c, "\r", 0x01000004)
+      compare(o.c.mode, "INSERT", bad[i] + " keeps INSERT open")
+      verify(o.c.messageLine.text !== "", bad[i] + " says why")
+      compare(o.c.inputPurpose, "trackerAdd")
+    }
+    inputOf(o.c).setInput("ftp://x.example/announce")
+    key(o.c, "\r", 0x01000004)
+    compare(o.c.messageLine.text, "Use a udp://, http://, https:// or wss:// URL.")
+    compare(lastCall(o.svc, "addTracker"), null)
+    inputOf(o.c).setInput("https://new.example/announce?passkey=zz9")
+    key(o.c, "\r", 0x01000004)
+    compare(o.c.mode, "NORMAL")
+    compare(o.c.inputPurpose, "")
+    var a = lastCall(o.svc, "addTracker")
+    verify(a !== null)
+    compare(a.args[0], hh("c"), "the torrent the cursor was on when a was pressed")
+    compare(a.args[1], "https://new.example/announce?passkey=zz9")
+    compare(a.args[2].origin, "window")
+    compare(lastCall(o.svc, "add"), null, "a tracker URL is never added as a torrent")
+    compare(o.c.messageLine.text, "Adding tracker…")
+    o.svc.actionFinished(o.svc.seq, false, "HTTP 409", "window", [hh("c")])
+    compare(o.c.messageLine.text, "Couldn't add the tracker: HTTP 409")
+    // Esc drops it: no call.
+    o.c.setPane("table"); o.c.cursorHash = hh("b"); key(o.c, "2")
+    if (o.c.pane !== "inspector") key(o.c, "\t", 0x01000001)
+    o.svc.setInspect(hh("b"), "trackers", { trackers: trackersFixture() })
+    key(o.c, "a")
+    compare(o.c.mode, "INSERT")
+    inputOf(o.c).setInput("udp://kept.example:1/announce")
+    key(o.c, "\u001b", 0x01000000)
+    compare(o.c.mode, "NORMAL")
+    compare(callCount(o.svc, "addTracker"), 1)
+  }
+
+  function test_tracker_c_changes_the_captured_url_and_never_shows_it() {
+    var o = onTrackers()
+    key(o.c, "j")
+    compare(o.c.trackerIndex, 1)
+    key(o.c, "c")
+    compare(o.c.mode, "INSERT")
+    compare(o.c.inputPurpose, "trackerEdit")
+    compare(inputOf(o.c).inputValue(), "", "the field starts empty (the user's decision)")
+    verify(shows(o.c, "Change udp://t.example:1337/… to:"))
+    noPasskey(o.c, "the c prompt")
+    // Before Enter the list changes (the row is gone, another sits at its
+    // index) and a tick drops gamma from the table.
+    o.svc.setInspect(hh("c"), "trackers", { trackers: trackersFixture().slice(0, 4).concat([{ url: "udp://other.example:6969/announce", status: 2, tier: 0, num_seeds: 1, num_leeches: 1, msg: "" }]) })
+    o.svc.torrents = [tt(hh("a"), "alpha", { addedOn: 1 }), tt(hh("b"), "beta", { addedOn: 2 })]
+    inputOf(o.c).setInput("udp://bad example/announce")
+    key(o.c, "\r", 0x01000004)
+    compare(o.c.mode, "INSERT")
+    compare(o.c.messageLine.text, "No spaces or | in a tracker URL.")
+    verify(shows(o.c, "Change udp://t.example:1337/… to:"), "the prompt stays")
+    compare(lastCall(o.svc, "editTracker"), null)
+    inputOf(o.c).setInput("udp://t2.example:1337/abc123/announce")
+    key(o.c, "\r", 0x01000004)
+    compare(o.c.mode, "NORMAL")
+    var e = lastCall(o.svc, "editTracker")
+    verify(e !== null)
+    compare(e.args[0], hh("c"))
+    compare(e.args[1], pathKeyUrl, "the URL captured when c was pressed")
+    compare(e.args[2], "udp://t2.example:1337/abc123/announce")
+    compare(e.args[3].origin, "window")
+    compare(e.args[3].hashes, [hh("c")])
+    compare(o.c.messageLine.text, "Changing tracker…")
+    o.svc.actionFinished(o.svc.seq, true, "", "window", [hh("c")])
+    compare(o.c.messageLine.text, "Tracker changed")
+  }
+
+  function test_tracker_x_removes_the_captured_tracker_and_never_a_torrent() {
+    var o = onTrackers()
+    compare(o.c.trackerIndex, 0)
+    key(o.c, "x")
+    compare(o.c.mode, "CONFIRM")
+    compare(o.c.confirm.kind, "trackerRemove")
+    verify(shows(o.c, "Remove tracker tracker.example from this torrent?"))
+    noPasskey(o.c, "the x confirm")
+    key(o.c, "n")
+    compare(o.c.mode, "NORMAL")
+    compare(lastCall(o.svc, "removeTracker"), null)
+    key(o.c, "x")
+    compare(o.c.mode, "CONFIRM")
+    // While the question is up, the row disappears (another takes its
+    // index) and a tick drops gamma from the table.
+    o.svc.setInspect(hh("c"), "trackers", { trackers: trackersFixture().slice(0, 3).concat([trackersFixture()[4]]) })
+    o.svc.torrents = [tt(hh("a"), "alpha", { addedOn: 1 }), tt(hh("b"), "beta", { addedOn: 2 })]
+    verify(o.c.cursorHash !== hh("c"))
+    key(o.c, "y")
+    compare(o.c.mode, "NORMAL")
+    var r = lastCall(o.svc, "removeTracker")
+    verify(r !== null)
+    compare(r.args[0], hh("c"), "the torrent named when x was pressed")
+    compare(r.args[1], passkeyUrl, "the tracker named when x was pressed")
+    compare(r.args[2].origin, "window")
+    compare(r.args[2].hashes, [hh("c")])
+    compare(o.c.confirmHashes, [])
+    compare(lastCall(o.svc, "delete"), null, "x on the trackers tab never removes a torrent")
+    compare(o.c.messageLine.text, "Removing tracker…")
+    noPasskey(o.c, "the progress note")
+    o.svc.actionFinished(o.svc.seq, false, "HTTP 409", "window", [hh("c")])
+    compare(o.c.messageLine.text, "Couldn't remove the tracker: HTTP 409")
+    noPasskey(o.c, "the failure note")
+  }
+
+  function test_x_in_the_table_still_confirms_a_torrent_remove() {
+    var o = onTrackers()
+    o.c.setPane("table")
+    key(o.c, "x")
+    compare(o.c.mode, "CONFIRM")
+    compare(o.c.confirm.commandId, "torrent.remove")
+    compare(o.c.confirm.kind, undefined)
+    key(o.c, "y")
+    var d = lastCall(o.svc, "delete")
+    verify(d !== null)
+    compare(d.args[0], hh("c"))
+    compare(d.args[1], false)
+    compare(lastCall(o.svc, "removeTracker"), null)
+  }
+
+  function test_tracker_with_a_pipe_is_refused_before_insert_or_confirm() {
+    var o = make()
+    o.svc.torrents = list3()
+    key(o.c, "2")
+    o.svc.setInspect(hh("c"), "trackers", { trackers: trackersFixture().slice(0, 3).concat([{ url: "udp://p.example:1337/a|b", status: 2, tier: 0, num_seeds: 1, num_leeches: 1, msg: "" }]) })
+    if (o.c.pane !== "inspector") key(o.c, "\t", 0x01000001)
+    key(o.c, "c")
+    compare(o.c.mode, "NORMAL", "no INSERT")
+    compare(o.c.messageLine.text, "This tracker's URL can't be edited through the WebUI API.")
+    key(o.c, "x")
+    compare(o.c.mode, "NORMAL", "no CONFIRM")
+    compare(o.c.confirm, null)
+    compare(o.c.messageLine.text, "This tracker's URL can't be edited through the WebUI API.")
+    compare(lastCall(o.svc, "editTracker"), null)
+    compare(lastCall(o.svc, "removeTracker"), null)
+    compare(lastCall(o.svc, "delete"), null)
+  }
+
+  function test_tracker_keys_do_nothing_off_the_trackers_tab() {
+    var o = onTrackers()
+    var tabs = ["1", "3", "4", "5"]
+    for (var t = 0; t < tabs.length; t++) {
+      key(o.c, tabs[t])
+      if (o.c.pane !== "inspector") key(o.c, "\t", 0x01000001)
+      var before = o.svc.calls.length
+      key(o.c, "R", 0x52, 0x02000000); key(o.c, "a"); key(o.c, "c"); key(o.c, "x")
+      compare(o.c.mode, "NORMAL", "tab " + tabs[t])
+      compare(o.c.confirm, null, "tab " + tabs[t])
+      for (var i = before; i < o.svc.calls.length; i++) {
+        var n = o.svc.calls[i].name
+        verify(["reannounce", "addTracker", "editTracker", "removeTracker", "delete"].indexOf(n) === -1, "tab " + tabs[t] + " called " + n)
+      }
+    }
+  }
+
+  function test_palette_dims_and_runs_the_tracker_rows() {
+    var o = onTrackers()
+    o.c.setPane("table")
+    key(o.c, ":")
+    var p = pal(o.c)
+    p.setQuery("remove tracker")
+    compare(palRow(p, "tracker.remove").enabled, false)
+    compare(palRow(p, "tracker.remove").reason, "focus the inspector")
+    key(o.c, "", 0x01000000)
+    o.c.setPane("inspector")
+    key(o.c, "1")
+    if (o.c.pane !== "inspector") key(o.c, "\t", 0x01000001)
+    key(o.c, ":")
+    p.setQuery("reannounce")
+    compare(palRow(p, "tracker.reannounce").enabled, false)
+    compare(palRow(p, "tracker.reannounce").reason, "focus the trackers tab")
+    key(o.c, "", 0x01000000)
+    key(o.c, "2")
+    o.svc.setInspect(hh("c"), "trackers", { trackers: trackersFixture() })
+    key(o.c, ":")
+    p.setQuery("remove tracker")
+    compare(palRow(p, "tracker.remove").enabled, true)
+    p.activated(palRow(p, "tracker.remove"))
+    compare(o.c.mode, "CONFIRM")
+    compare(o.c.confirm.kind, "trackerRemove")
+    key(o.c, "y")
+    compare(lastCall(o.svc, "removeTracker").args[1], passkeyUrl)
+    compare(lastCall(o.svc, "delete"), null)
+    key(o.c, ":")
+    p.setQuery("change tracker")
+    p.activated(palRow(p, "tracker.edit"))
+    compare(o.c.mode, "INSERT")
+    compare(o.c.inputPurpose, "trackerEdit")
   }
 }

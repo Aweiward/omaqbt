@@ -152,6 +152,38 @@ QtObject {
     return m === "INSERT" ? inputLine.inputField : (m === "COMMAND" ? palette.inputField : null)
   }
 
+  // ---- trackers tab actions (slice 2b) --------------------------------------
+
+  // The torrent (and, for trackerEdit, the tracker) an open trackerAdd /
+  // trackerEdit INSERT acts on, captured when a/c was pressed: {hash,
+  // oldUrl, shown}, `shown` being the redacted form the prompt names. The
+  // commit reads only this, never the cursor or the list as they stand.
+  property var trackerInput: null
+
+  function startTrackerInput(purpose, hash, oldUrl) {
+    trackerInput = { hash: hash, oldUrl: oldUrl, shown: InspectorView.redactUrl(oldUrl) }
+    startInput(purpose, "")
+  }
+
+  // Enter on a trackerAdd / trackerEdit field: an invalid URL keeps the
+  // field open with the reason; a valid one goes to qbt, which checks it
+  // again.
+  function commitTracker(text) {
+    var c = client
+    var err = InspectorView.trackerUrlError(text)
+    if (err !== "") {
+      c.note(err, "urgent")
+      stayInInsert()
+      return
+    }
+    var t = trackerInput
+    var h = [t.hash]
+    if (c.inputPurpose === "trackerAdd") c.track(c.service.addTracker(t.hash, text, c.opts(h)), "trackerAdd", h)
+    else c.track(c.service.editTracker(t.hash, t.oldUrl, text, c.opts(h)), "trackerEdit", h)
+    trackerInput = null
+    endInput()
+  }
+
   // ---- INSERT ------------------------------------------------------------------
 
   function startInput(purpose, initial) {
@@ -176,6 +208,12 @@ QtObject {
   function commitInput() {
     var c = client
     var text = inputLine.inputValue().trim()
+    // Before the add-target check: a tracker URL is never added as a torrent.
+    if (c.inputPurpose === "trackerAdd" || c.inputPurpose === "trackerEdit") {
+      if (trackerInput) commitTracker(text)
+      else endInput()
+      return
+    }
     if (c.inputPurpose === "move") {
       if (!View.isAbsolutePath(text)) {
         c.note("Enter an absolute path to move to.", "urgent")
@@ -203,6 +241,7 @@ QtObject {
       c.rebuildRows(true)
     }
     c.moveHashes = []
+    trackerInput = null
     endInput()
   }
 
@@ -426,6 +465,39 @@ QtObject {
     case "file.cycle":
       if (c.inspectorTab !== "files" || c.filesState.state !== "rows") return
       c.cycleFile(c.fileIndex)
+      return
+
+    // The trackers tab (Deviation 4: R too). The registry only lets these
+    // through there, so targets[0] is the torrent whose trackers show.
+    case "tracker.reannounce":
+      if (targets.length === 0) return
+      c.track(c.service.reannounce(targets[0], c.opts([targets[0]])), "reannounce", [targets[0]])
+      return
+
+    case "tracker.add":
+      if (targets.length === 0) return
+      startTrackerInput("trackerAdd", targets[0], "")
+      return
+
+    case "tracker.edit":
+      if (targets.length === 0 || !args.target) return
+      if (InspectorView.hasPipe(args.target.value)) { c.note(InspectorView.PIPE_NOTE, "urgent"); return }
+      startTrackerInput("trackerEdit", targets[0], args.target.value)
+      return
+
+    case "tracker.remove":
+      // Unconfirmed only when the registry refused the CONFIRM (a "|" in
+      // the URL, F13): say why and do nothing else.
+      if (args.confirmed !== true) {
+        if (args.target && InspectorView.hasPipe(args.target.value)) c.note(InspectorView.PIPE_NOTE, "urgent")
+        return
+      }
+      // `y`: the torrent and the tracker named when x was pressed, never
+      // the cursor as it stands now.
+      hashes = c.confirmHashes
+      c.confirmHashes = []
+      if (hashes.length === 0 || !args.target) return
+      c.track(c.service.removeTracker(hashes[0], args.target.value, c.opts([hashes[0]])), "trackerRemove", [hashes[0]])
       return
 
     case "insert.commit":

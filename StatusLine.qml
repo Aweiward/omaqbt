@@ -36,8 +36,11 @@ Rectangle {
   property string messageTone: "muted"
   // [{key, label}] from View.modeHints.
   property var hints: []
-  // "filter" or "move" while mode is INSERT.
+  // "filter", "move", "trackerAdd" or "trackerEdit" while mode is INSERT.
   property string inputPurpose: ""
+  // The tracker a trackerEdit changes, redacted (View.inputPrompt).
+  property string inputShown: ""
+  readonly property var inputPrompt: View.inputPrompt(inputPurpose, inputShown)
   // The active filter while the filters pane is collapsed ("▸ Seeding",
   // View.filterChip); "" hides it.
   property string filterChip: ""
@@ -165,14 +168,14 @@ Rectangle {
       anchors.verticalCenter: parent.verticalCenter
       spacing: Style.space(8)
       Part {
-        text: line.inputPurpose === "move" ? "move to" : "/"
+        text: line.inputPrompt.prompt
         color: Color.accent
       }
       TextField {
         id: input
         width: Math.max(Style.space(160), Math.min(Style.space(560), body.width - Style.space(120)))
         verticalPadding: Style.space(2)
-        placeholderText: line.inputPurpose === "move" ? "/absolute/path" : "filter by name, or paste a magnet"
+        placeholderText: line.inputPrompt.placeholder
         onTextChanged: line.inputEdited(String(input.text || ""))
       }
       Part {

@@ -106,6 +106,15 @@ var commands = [
   { id: "file.up", title: "Previous row", group: "View", keys: ["k", "Up"], modes: ["NORMAL"], panes: ["inspector"], needs: "none" },
   { id: "file.cycle", title: "Cycle file priority", group: "Torrent", keys: ["Space"], modes: ["NORMAL"], panes: ["inspector"], needs: "torrent" },
 
+  // NORMAL, inspector pane, trackers tab only (Deviation 4: R too). a and
+  // R work on an empty list; c and x act on the tracker under the cursor,
+  // captured at key time (args.target). x means "remove this tracker" and
+  // never removes a torrent (torrent.remove is table-only).
+  { id: "tracker.reannounce", title: "Reannounce", group: "Torrent", keys: ["R"], modes: ["NORMAL"], panes: ["inspector"], needs: "trackersTab" },
+  { id: "tracker.add", title: "Add tracker", group: "Torrent", keys: ["a"], modes: ["NORMAL"], panes: ["inspector"], needs: "trackersTab" },
+  { id: "tracker.edit", title: "Change tracker URL", group: "Torrent", keys: ["c"], modes: ["NORMAL"], panes: ["inspector"], needs: "tracker" },
+  { id: "tracker.remove", title: "Remove tracker", group: "Torrent", keys: ["x"], modes: ["NORMAL"], panes: ["inspector"], needs: "tracker" },
+
   // VISUAL (j/k/Space/x/X/e reuse the NORMAL,table rows above; this is the exit)
   { id: "visual.exit", title: "Exit visual", group: "View", keys: ["Esc", "V"], modes: ["VISUAL"], panes: ["table"], needs: "none" },
 
@@ -283,6 +292,16 @@ function confirmCount(s) {
 // Each acts on the row captured into args.target at key time.
 var TARGET_CONFIRM_KINDS = { "tracker.remove": "trackerRemove", "peer.ban": "peerBan" };
 
+// confirmRefused(id, target) -> whether a target CONFIRM command can't act
+// on its captured target at all, so asking would be pointless: a tracker
+// URL with a "|" can't be removed through the WebUI API (F13). Such a
+// command comes back unconfirmed (args.confirmed unset, no CONFIRM), and
+// its handler says why and does nothing else.
+function confirmRefused(id, target) {
+  if (id === "tracker.remove") return !!target && String(target.value).indexOf("|") !== -1;
+  return false;
+}
+
 function needsConfirm(id, s) {
   if (id === "torrent.delete") return true;
   if (id === "torrent.remove") return true;
@@ -426,7 +445,7 @@ function resolveRow(s, row, now) {
 
   var args = buildArgs(row, s);
 
-  if (needsConfirm(row.id, s) && Object.prototype.hasOwnProperty.call(TARGET_CONFIRM_KINDS, row.id)) {
+  if (needsConfirm(row.id, s) && Object.prototype.hasOwnProperty.call(TARGET_CONFIRM_KINDS, row.id) && !confirmRefused(row.id, args.target)) {
     var kind = TARGET_CONFIRM_KINDS[row.id];
     var tpending = { kind: kind, commandId: row.id, args: args, target: args.target };
     return {
@@ -436,7 +455,7 @@ function resolveRow(s, row, now) {
     };
   }
 
-  if (needsConfirm(row.id, s)) {
+  if (needsConfirm(row.id, s) && !Object.prototype.hasOwnProperty.call(TARGET_CONFIRM_KINDS, row.id)) {
     var count = confirmCount(s);
     var withFiles = row.id === "torrent.delete";
     var pending = { kind: withFiles ? "delete" : "remove", commandId: row.id, args: args, count: count, withFiles: withFiles };

@@ -702,7 +702,8 @@ test("helpFor is generated straight from the commands table", () => {
 
 test("every command row has the documented shape", () => {
   const validGroups = ["Torrent", "View", "Library", "App"];
-  const validNeeds = ["none", "torrent", "selection"];
+  // tracker/peer/trackersTab/noMetadata: slice 2b (Task 3's preconditions).
+  const validNeeds = ["none", "torrent", "selection", "tracker", "peer", "trackersTab", "noMetadata"];
   for (const row of commands) {
     assert.ok(row.id === null || typeof row.id === "string");
     assert.equal(typeof row.title, "string");
@@ -987,17 +988,18 @@ test("a delete CONFIRM still resolves y/n/Esc as before (Enter does nothing)", (
 
 // --- inspector targets (slice 2b, Task 3) ------------------------------------
 //
-// The real tracker.remove / peer.ban rows arrive with Tasks 4 and 5; until
-// then these tests add synthetic rows with the same ids (skipped once a
-// real row with that id exists) and remove them again afterwards.
+// tracker.remove and tracker.add are real rows (Task 4); peer.ban and
+// torrent.fetchMetadata arrive with Task 5, so until then these tests add
+// synthetic rows with those ids (skipped once a real row with that id
+// exists) and remove them again afterwards.
 
 const TRACKER_A = { kind: "tracker", value: "https://a.example/announce?passkey=abc123", label: "a.example" };
 const TRACKER_B = { kind: "tracker", value: "udp://b.example:1337/announce", label: "b.example:1337" };
 const PEER_A = { kind: "peer", value: "203.0.113.42:6881", label: "203.0.113.42:6881" };
 
+// tracker.remove and tracker.add are real rows since Task 4; the tests
+// below exercise those. Task 5 retires the other two.
 const SYNTHETIC_ROWS = [
-  { id: "tracker.remove", title: "Remove tracker", group: "Torrent", keys: ["x"], modes: ["NORMAL"], panes: ["inspector"], needs: "tracker" },
-  { id: "tracker.add", title: "Add tracker", group: "Torrent", keys: ["a"], modes: ["NORMAL"], panes: ["inspector"], needs: "trackersTab" },
   { id: "peer.ban", title: "Ban peer", group: "Torrent", keys: ["b"], modes: ["NORMAL"], panes: ["inspector"], needs: "peer" },
   { id: "torrent.fetchMetadata", title: "Fetch metadata only", group: "Torrent", keys: ["f"], modes: ["NORMAL"], panes: ["*"], needs: "noMetadata" }
 ];
@@ -1157,4 +1159,100 @@ test("the captured target is frozen: no consumer can change what y acts on", () 
     assert.ok(Object.isFrozen(step.confirm.target));
     assert.ok(Object.isFrozen(step.state.pending.args.target));
   });
+});
+
+// --- the trackers tab's actions (slice 2b, Task 4) -------------------------
+
+const PIPE_TRACKER = { kind: "tracker", value: "udp://p.example:1337/a|b", label: "p.example:1337" };
+
+function rowsFor(id) {
+  return commands.filter((r) => r.id === id);
+}
+
+test("the trackers tab rows: R, a, c, x in NORMAL on the inspector pane only", () => {
+  const want = {
+    "tracker.reannounce": ["Reannounce", "R", "trackersTab"],
+    "tracker.add": ["Add tracker", "a", "trackersTab"],
+    "tracker.edit": ["Change tracker URL", "c", "tracker"],
+    "tracker.remove": ["Remove tracker", "x", "tracker"]
+  };
+  for (const id of Object.keys(want)) {
+    const rows = rowsFor(id);
+    assert.equal(rows.length, 1, id);
+    const r = rows[0];
+    assert.equal(r.title, want[id][0], id);
+    assert.deepEqual(r.keys, [want[id][1]], id);
+    assert.equal(r.needs, want[id][2], id);
+    assert.deepEqual(r.modes, ["NORMAL"], id);
+    assert.deepEqual(r.panes, ["inspector"], id);
+    assert.equal(r.group, "Torrent", id);
+  }
+  const help = Registry.helpFor("NORMAL", "inspector").map((r) => r.id);
+  for (const id of Object.keys(want)) assert.ok(help.includes(id), id + " in the inspector's help");
+  const tableHelp = Registry.helpFor("NORMAL", "table").map((r) => r.id);
+  for (const id of Object.keys(want)) assert.ok(!tableHelp.includes(id), id + " not in the table's help");
+});
+
+test("R and a run on the trackers tab, even with no tracker row", () => {
+  const s = inspector({ hasTorrent: true, trackersTab: true, inspectorTarget: null });
+  const R = dispatch(s, ev("R", keyOf("R")));
+  assert.equal(R.commandId, "tracker.reannounce");
+  assert.equal(R.state.mode, "NORMAL");
+  assert.equal(R.confirm, undefined);
+  const a = dispatch(s, ev("a", keyOf("a")));
+  assert.equal(a.commandId, "tracker.add");
+  assert.equal(a.state.mode, "NORMAL");
+});
+
+test("c runs with the tracker captured at key time, and no CONFIRM", () => {
+  const target = Object.assign({}, TRACKER_A);
+  const c = dispatch(inspector({ hasTorrent: true, trackersTab: true, inspectorTarget: target }), ev("c", keyOf("c")));
+  assert.equal(c.commandId, "tracker.edit");
+  assert.equal(c.state.mode, "NORMAL");
+  assert.equal(c.confirm, undefined);
+  assert.deepEqual(c.args.target, TRACKER_A);
+  target.value = "mutated";
+  assert.equal(c.args.target.value, TRACKER_A.value, "a copy");
+  assert.ok(Object.isFrozen(c.args.target));
+});
+
+test("R, a, c, x are silent no-ops off the trackers tab", () => {
+  const cases = [
+    state({ hasTorrent: true }),                                        // table: x is the torrent remove, tested below
+    inspector({ hasTorrent: true }),                                   // Info/Files/Chart
+    inspector({ hasTorrent: true, inspectorTarget: PEER_A })           // Peers
+  ];
+  for (const s of cases.slice(1)) {
+    for (const k of ["R", "a", "c", "x"]) {
+      const r = dispatch(s, ev(k, keyOf(k)));
+      assert.equal(r.commandId, null, k);
+      assert.equal(r.state.mode, "NORMAL", k);
+      assert.equal(r.state.pending, null, k);
+      assert.equal(r.confirm, undefined, k);
+      assert.equal(r.blocked, "focus the trackers tab", k);
+    }
+  }
+  // In the table R, a, c do nothing and x stays the torrent remove CONFIRM.
+  for (const k of ["R", "a", "c"]) assert.equal(dispatch(cases[0], ev(k, keyOf(k))).commandId, null, k);
+  const x = dispatch(cases[0], ev("x", keyOf("x")));
+  assert.equal(x.state.pending.kind, "remove");
+  assert.equal(x.state.pending.commandId, "torrent.remove");
+});
+
+test("x on a tracker whose URL has a | raises no CONFIRM: the command comes back unconfirmed (F13)", () => {
+  const r = dispatch(inspector({ hasTorrent: true, trackersTab: true, inspectorTarget: PIPE_TRACKER }), ev("x", keyOf("x")));
+  assert.equal(r.commandId, "tracker.remove");
+  assert.equal(r.state.mode, "NORMAL");
+  assert.equal(r.state.pending, null);
+  assert.equal(r.confirm, undefined);
+  assert.deepEqual(r.args.target, PIPE_TRACKER);
+  assert.notEqual(r.args.confirmed, true);
+  // The palette resolves it the same way.
+  const p = Registry.dispatchCommand(inspector({ hasTorrent: true, trackersTab: true, inspectorTarget: PIPE_TRACKER }), "tracker.remove");
+  assert.equal(p.commandId, "tracker.remove");
+  assert.equal(p.confirm, undefined);
+  // A plain URL still confirms.
+  const ok = Registry.dispatchCommand(inspector({ hasTorrent: true, trackersTab: true, inspectorTarget: TRACKER_A }), "tracker.remove");
+  assert.equal(ok.state.mode, "CONFIRM");
+  assert.equal(ok.confirm.kind, "trackerRemove");
 });

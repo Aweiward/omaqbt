@@ -1518,12 +1518,12 @@ test("dispatchState copies the inspector fields, and resets them when none are g
 });
 
 // Rows shaped like Tasks 4/5's (synthetic here; paletteRows takes the table).
+// The tracker rows are real since Task 4; the rest stand in until Task 5
+// (skipped once a real row with that id exists).
 const INSPECTOR_ROWS = Registry.commands.concat([
-  { id: "tracker.remove", title: "Remove tracker", group: "Torrent", keys: ["x"], modes: ["NORMAL"], panes: ["inspector"], needs: "tracker" },
-  { id: "tracker.add", title: "Add tracker", group: "Torrent", keys: ["a"], modes: ["NORMAL"], panes: ["inspector"], needs: "trackersTab" },
   { id: "peer.ban", title: "Ban peer", group: "Torrent", keys: ["b"], modes: ["NORMAL"], panes: ["inspector"], needs: "peer" },
   { id: "torrent.fetchMetadata", title: "Fetch metadata only", group: "Torrent", keys: ["f"], modes: ["NORMAL"], panes: ["*"], needs: "noMetadata" }
-]);
+].filter((row) => !Registry.commands.some((r) => r.id === row.id)));
 
 function paletteRow(state, id) {
   return V.paletteRows("", INSPECTOR_ROWS, [], state).find((r) => r.id === id);
@@ -1596,4 +1596,39 @@ test("inspectorDispatch: filesTab follows the focused Files tab", () => {
   assert.equal(V.inspectorDispatch(insp({ tab: "files", pane: "table" })).filesTab, false);
   assert.equal(V.inspectorDispatch(insp()).filesTab, false);
   assert.equal(V.sameInspectorState(V.inspectorDispatch(insp({ tab: "files", trackers: [] })), V.inspectorDispatch(insp({ tab: "info", trackers: [] }))), false);
+});
+
+// --- the trackers tab's actions (slice 2b, Task 4) -------------------------
+
+test("paletteRows: R, a, c, x dim with the pane or tab they need, and run on the trackers tab", () => {
+  const ids = ["tracker.reannounce", "tracker.add", "tracker.edit", "tracker.remove"];
+  const fromTable = V.paletteState("rows", true, V.inspectorDispatch(insp({ pane: "table" })), "table");
+  const onInfo = V.paletteState("rows", true, V.inspectorDispatch(insp({ tab: "info" })), "inspector");
+  const onTrackers = V.paletteState("rows", true, V.inspectorDispatch(insp()), "inspector");
+  const emptyTrackers = V.paletteState("rows", true, V.inspectorDispatch(insp({ trackers: [] })), "inspector");
+  for (const id of ids) {
+    assert.equal(paletteRow(fromTable, id).enabled, false, id);
+    assert.equal(paletteRow(fromTable, id).reason, "focus the inspector", id);
+    assert.equal(paletteRow(onInfo, id).enabled, false, id);
+    assert.equal(paletteRow(onInfo, id).reason, "focus the trackers tab", id);
+    assert.equal(paletteRow(onTrackers, id).enabled, true, id);
+  }
+  // No tracker row: R and a still run (the first tracker), c and x can't.
+  assert.equal(paletteRow(emptyTrackers, "tracker.reannounce").enabled, true);
+  assert.equal(paletteRow(emptyTrackers, "tracker.add").enabled, true);
+  assert.equal(paletteRow(emptyTrackers, "tracker.edit").enabled, false);
+  assert.equal(paletteRow(emptyTrackers, "tracker.remove").enabled, false);
+});
+
+test("inputPrompt: the INSERT prompt and placeholder per purpose; trackerEdit names only the redacted URL", () => {
+  assert.deepEqual(V.inputPrompt("filter", ""), { prompt: "/", placeholder: "filter by name, or paste a magnet" });
+  assert.deepEqual(V.inputPrompt("", ""), { prompt: "/", placeholder: "filter by name, or paste a magnet" });
+  assert.deepEqual(V.inputPrompt("move", ""), { prompt: "move to", placeholder: "/absolute/path" });
+  assert.deepEqual(V.inputPrompt("trackerAdd", ""), { prompt: "Add tracker URL", placeholder: "udp://, http://, https:// or wss://" });
+  assert.deepEqual(V.inputPrompt("trackerEdit", "udp://tracker.example:1337/…"), { prompt: "Change udp://tracker.example:1337/… to:", placeholder: "udp://, http://, https:// or wss://" });
+});
+
+test("modeHints: INSERT hints for adding and changing a tracker", () => {
+  assert.deepEqual(V.modeHints("INSERT", { purpose: "trackerAdd" }).map((h) => h.key + " " + h.label), ["Enter add", "Esc cancel"]);
+  assert.deepEqual(V.modeHints("INSERT", { purpose: "trackerEdit" }).map((h) => h.key + " " + h.label), ["Enter change", "Esc cancel"]);
 });

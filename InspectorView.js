@@ -179,6 +179,10 @@ var TRACKER_SCHEME_RE = /^(udp|https?|wss):\/\//;
 // hasPipe(url) -> whether url has a "|": qBittorrent's WebUI joins a
 // torrent's trackers with "|", so such a tracker can't be edited or
 // removed through it (F13).
+// What the window says instead of acting on such a tracker (qbt dies with
+// the same words).
+var PIPE_NOTE = "This tracker's URL can't be edited through the WebUI API.";
+
 function hasPipe(url) {
   return String(url === undefined || url === null ? "" : url).indexOf("|") !== -1;
 }
@@ -864,6 +868,7 @@ if (typeof module !== "undefined" && module.exports) {
     trackerUrlError: trackerUrlError,
     peerError: peerError,
     hasPipe: hasPipe,
+    PIPE_NOTE: PIPE_NOTE,
     trackerRows: trackerRows,
     peerRows: peerRows,
     peerSummary: peerSummary,

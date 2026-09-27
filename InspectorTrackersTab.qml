@@ -138,6 +138,6 @@ Item {
   InspectorFooter {
     id: trackerFoot
     visible: root.trackers.state === "rows"
-    text: "j k move · y copy"
+    text: "j k move · a add · c change · x remove · y copy · R reannounce"
   }
 }
