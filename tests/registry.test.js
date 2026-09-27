@@ -1273,3 +1273,100 @@ test("b on a peer the window refuses comes back unconfirmed, through the key and
   // A plain peer still confirms.
   assert.equal(dispatch(inspector({ inspectorTarget: PEER_A }), ev("b", keyOf("b"))).state.mode, "CONFIRM");
 });
+
+// --- PICKER mode (slice 3a Task 4: category/tag pickers, ListOverlay) ------
+
+function picker(overrides) {
+  return state(Object.assign({ mode: "PICKER", pickerQueryEmpty: true, pickerMulti: false }, overrides || {}));
+}
+
+test("Enter accepts the picker and returns to NORMAL", () => {
+  for (const e of [ev("\r", KEY.Return), ev("\r", KEY.Enter)]) {
+    const r = dispatch(picker(), e);
+    assert.equal(r.commandId, "picker.accept", JSON.stringify(e));
+    assert.equal(r.state.mode, "NORMAL");
+  }
+});
+
+test("Esc cancels the picker and returns to NORMAL, clearing any prefix", () => {
+  const r = dispatch(picker({ prefix: "g", prefixAt: 5 }), ev("\u001b", KEY.Escape));
+  assert.equal(r.commandId, "picker.cancel");
+  assert.equal(r.state.mode, "NORMAL");
+  assert.equal(r.state.prefix, null);
+});
+
+test("Up/Ctrl-p and Down/Ctrl-n move the picker cursor and stay in PICKER", () => {
+  for (const e of [ev("", KEY.Up), ev("", KEY.P, { ctrl: true })]) {
+    const r = dispatch(picker(), e);
+    assert.equal(r.commandId, "picker.up", JSON.stringify(e));
+    assert.equal(r.state.mode, "PICKER");
+  }
+  for (const e of [ev("", KEY.Down), ev("", KEY.N, { ctrl: true })]) {
+    const r = dispatch(picker(), e);
+    assert.equal(r.commandId, "picker.down", JSON.stringify(e));
+    assert.equal(r.state.mode, "PICKER");
+  }
+});
+
+test("Space toggles only with an empty query on a multi-select picker", () => {
+  const r = dispatch(picker({ pickerQueryEmpty: true, pickerMulti: true }), ev(" ", KEY.Space));
+  assert.equal(r.commandId, "picker.toggle");
+  assert.equal(r.state.mode, "PICKER");
+});
+
+test("Space is text (no command, not blocked) once the query has anything typed", () => {
+  const r = dispatch(picker({ pickerQueryEmpty: false, pickerMulti: true }), ev(" ", KEY.Space));
+  assert.equal(r.commandId, null);
+  assert.equal(r.blocked, undefined);
+  assert.equal(r.state.mode, "PICKER");
+});
+
+test("Space is text (no command, not blocked) on a single-choice picker, even with an empty query", () => {
+  const r = dispatch(picker({ pickerQueryEmpty: true, pickerMulti: false }), ev(" ", KEY.Space));
+  assert.equal(r.commandId, null);
+  assert.equal(r.blocked, undefined);
+  assert.equal(r.state.mode, "PICKER");
+});
+
+test("Tab toggles on a multi-select picker regardless of the query", () => {
+  for (const empty of [true, false]) {
+    const r = dispatch(picker({ pickerQueryEmpty: empty, pickerMulti: true }), ev("\t", KEY.Tab));
+    assert.equal(r.commandId, "picker.toggle", "queryEmpty=" + empty);
+    assert.equal(r.state.mode, "PICKER");
+  }
+});
+
+test("Tab does nothing (no command, not blocked) on a single-choice picker", () => {
+  const r = dispatch(picker({ pickerMulti: false }), ev("\t", KEY.Tab));
+  assert.equal(r.commandId, null);
+  assert.equal(r.blocked, undefined);
+  assert.equal(r.state.mode, "PICKER");
+});
+
+test("typing letters, y, n and : in PICKER is left to the TextField", () => {
+  const s = picker({ pickerMulti: true });
+  for (const e of [
+    ev("a", keyOf("a")), ev("y", keyOf("y")), ev("n", keyOf("n")), ev(":", 0x3a)
+  ]) {
+    const r = dispatch(s, e);
+    assert.equal(r.commandId, null, JSON.stringify(e));
+    assert.equal(r.blocked, undefined, JSON.stringify(e));
+    assert.equal(r.state.mode, "PICKER", JSON.stringify(e));
+  }
+});
+
+test("helpFor(PICKER, pane) lists exactly the picker keys, in every pane", () => {
+  for (const pane of ["table", "filters", "inspector"]) {
+    const ids = helpFor("PICKER", pane).map((r) => r.id);
+    assert.deepEqual(
+      ids.slice().sort(),
+      ["picker.accept", "picker.cancel", "picker.down", "picker.toggle", "picker.up"].sort(),
+      pane
+    );
+  }
+});
+
+test("unrelated state fields pass through unchanged for PICKER too", () => {
+  const r = dispatch(picker({ pickerMulti: true }), ev("", KEY.Down));
+  assert.equal(r.state.pickerMulti, true);
+});

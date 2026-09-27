@@ -1106,6 +1106,36 @@ test("paletteOwnsKey: the COMMAND keys and Shift-Tab, never typing", () => {
   assert.equal(V.paletteOwnsKey(k(0x20, " ")), false);
 });
 
+test("overlayOwnsKey(COMMAND, ...) matches paletteOwnsKey exactly", () => {
+  const k = (key, text, mods) => V.keyEvent(key, text, mods || 0, 0);
+  const cases = [
+    k(KEY.Escape, "\u001b"), k(KEY.Return, "\r"), k(KEY.Enter, "\r"), k(KEY.Up, ""),
+    k(KEY.Down, ""), k(KEY.Tab, "\t"), k(KEY.Backtab, ""), k(KEY.N, "\u000e", V.MOD.Control),
+    k(KEY.P, "\u0010", V.MOD.Control), k(KEY.N, "n"), k(0x53, "s"), k(0x3a, ":"), k(0x20, " ")
+  ];
+  for (const c of cases) {
+    assert.equal(V.overlayOwnsKey("COMMAND", c, true), V.paletteOwnsKey(c), JSON.stringify(c));
+  }
+});
+
+test("overlayOwnsKey(PICKER, ...): Tab/Enter/Esc/Up/Down/Ctrl-p/Ctrl-n always forward; Space only while empty; nothing else does", () => {
+  const k = (key, text, mods) => V.keyEvent(key, text, mods || 0, 0);
+  const always = [
+    k(KEY.Tab, "\t"), k(KEY.Backtab, ""), k(KEY.Escape, "\u001b"), k(KEY.Return, "\r"),
+    k(KEY.Enter, "\r"), k(KEY.Up, ""), k(KEY.Down, ""),
+    k(KEY.N, "\u000e", V.MOD.Control), k(KEY.P, "\u0010", V.MOD.Control)
+  ];
+  for (const c of always) {
+    assert.equal(V.overlayOwnsKey("PICKER", c, true), true, JSON.stringify(c));
+    assert.equal(V.overlayOwnsKey("PICKER", c, false), true, JSON.stringify(c));
+  }
+  assert.equal(V.overlayOwnsKey("PICKER", k(KEY.Space, " "), true), true, "Space, empty query");
+  assert.equal(V.overlayOwnsKey("PICKER", k(KEY.Space, " "), false), false, "Space, non-empty query types");
+  assert.equal(V.overlayOwnsKey("PICKER", k(KEY.N, "n"), true), false);
+  assert.equal(V.overlayOwnsKey("PICKER", k(0x53, "s"), true), false);
+  assert.equal(V.overlayOwnsKey("PICKER", k(0x3a, ":"), true), false);
+});
+
 test("palette notes and empty copy", () => {
   assert.equal(V.paletteReasonNote({ title: "Copy magnet", reason: "needs a selected torrent" }), "Copy magnet: needs a selected torrent.");
   assert.equal(V.paletteEmptyText("q"), "No command matches “q”");

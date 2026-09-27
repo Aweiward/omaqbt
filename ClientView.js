@@ -1721,17 +1721,27 @@ function paletteSegments(title, indices) {
   return out;
 }
 
+// A row is selectable when it isn't a divider and isn't disabled. Divider
+// is the one reserved `kind` (ListOverlay's contract, slice 3a Task 4):
+// this reads "not a divider" rather than "kind === 'command'" so a
+// picker's rows (whatever kind they use, or none) work with paletteFirst/
+// paletteMove/paletteCursorFor/paletteCommandCount without Task 6 having
+// to touch them.
 function paletteSelectable(row) {
-  return !!row && row.kind === "command" && row.enabled === true;
+  return !!row && row.kind !== "divider" && row.enabled === true;
+}
+
+function paletteRealRow(row) {
+  return !!row && row.kind !== "divider";
 }
 
 // paletteFirst(rows) -> where the palette cursor starts: the first enabled
-// command row, else the first command row (so Enter can still report why
-// every match is disabled), else -1.
+// row, else the first real (non-divider) row (so Enter can still report
+// why every match is disabled), else -1.
 function paletteFirst(rows) {
   var list = rows || [];
   for (var i = 0; i < list.length; i++) if (paletteSelectable(list[i])) return i;
-  for (var j = 0; j < list.length; j++) if (list[j] && list[j].kind === "command") return j;
+  for (var j = 0; j < list.length; j++) if (paletteRealRow(list[j])) return j;
   return -1;
 }
 
@@ -1758,12 +1768,12 @@ function paletteCursorFor(rows, id) {
   return paletteFirst(list);
 }
 
-// paletteCommandCount(rows) -> how many command rows (not dividers) there
-// are, for the palette's "N of M" count.
+// paletteCommandCount(rows) -> how many real rows (not dividers) there
+// are, for the palette's (or a picker's) "N of M" count.
 function paletteCommandCount(rows) {
   var n = 0;
   var list = rows || [];
-  for (var i = 0; i < list.length; i++) if (list[i] && list[i].kind === "command") n++;
+  for (var i = 0; i < list.length; i++) if (paletteRealRow(list[i])) n++;
   return n;
 }
 
@@ -1788,6 +1798,32 @@ function palettePane(commandsTable, id, pane) {
 function paletteOwnsKey(ev) {
   if (ev && ev.key === Registry.KEY.Backtab) return true;
   return Registry.dispatch({ mode: "COMMAND" }, ev).commandId !== null;
+}
+
+// overlayOwnsKey(keyMode, ev, queryEmpty) -> whether ListOverlay's field
+// hands this key back to the window (keyForwarded) instead of typing it.
+// The shared decision behind both CommandPalette and a slice 3a picker
+// (ListOverlay's own Keys.onPressed calls this, keyMode being its own
+// `keyMode` property):
+//   COMMAND -- exactly paletteOwnsKey (unchanged).
+//   PICKER  -- Tab, Backtab, Enter, Esc, Up, Down, Ctrl-p and Ctrl-n
+//   always; Space only while the field is empty (queryEmpty, read before
+//   this keystroke edits it). Whether an empty-query Space or a Tab
+//   actually *does* anything is PICKER's own dispatch rule (pickerMulti);
+//   here we only decide forward-vs-type, so a single-choice picker's
+//   empty-query Space is still forwarded (and dispatch quietly drops it)
+//   rather than typed, and Tab never falls through to a focus change.
+function overlayOwnsKey(keyMode, ev, queryEmpty) {
+  if (keyMode !== "PICKER") return paletteOwnsKey(ev);
+  if (!ev) return false;
+  var key = ev.key;
+  if (key === Registry.KEY.Backtab || key === Registry.KEY.Tab) return true;
+  if (key === Registry.KEY.Return || key === Registry.KEY.Enter) return true;
+  if (key === Registry.KEY.Escape || key === Registry.KEY.Up || key === Registry.KEY.Down) return true;
+  var mods = ev.modifiers || {};
+  if (mods.ctrl === true && (key === Registry.KEY.P || key === Registry.KEY.N)) return true;
+  if (key === Registry.KEY.Space) return queryEmpty === true;
+  return false;
 }
 
 // The status-line note for Enter (or a click) on a disabled palette row.
@@ -1906,6 +1942,7 @@ if (typeof module !== "undefined" && module.exports) {
     paletteCommandCount: paletteCommandCount,
     palettePane: palettePane,
     paletteOwnsKey: paletteOwnsKey,
+    overlayOwnsKey: overlayOwnsKey,
     paletteReasonNote: paletteReasonNote,
     paletteEmptyText: paletteEmptyText,
     MAGNET_FETCHING_NOTE: MAGNET_FETCHING_NOTE,

@@ -136,7 +136,22 @@ var commands = [
   // display-only: dispatch() resolves `y` to the pending command's own id,
   // never to this literal id.
   { id: "confirm.accept", title: "Confirm", group: "App", keys: ["y"], modes: ["CONFIRM"], panes: [PANE_ANY], needs: "none" },
-  { id: "confirm.cancel", title: "Cancel", group: "App", keys: ["n", "Esc"], modes: ["CONFIRM"], panes: [PANE_ANY], needs: "none" }
+  { id: "confirm.cancel", title: "Cancel", group: "App", keys: ["n", "Esc"], modes: ["CONFIRM"], panes: [PANE_ANY], needs: "none" },
+
+  // PICKER (slice 3a: ListOverlay in picker mode, C's category picker and
+  // T's tag picker). The overlay's TextField owns typing; these are the
+  // only keys dispatch resolves itself, mirroring COMMAND. Space and Tab
+  // both raise "picker.toggle" but only when a toggle means something:
+  // Space needs an empty query AND a multi-select picker (else it's a
+  // character to type); Tab needs only multi-select (Review Focus 5).
+  // Those two conditions can't be expressed as a plain row match, so
+  // dispatch() gates them itself, before the row ever matches (see the
+  // PICKER branch below); the rows below cover only the unconditional keys.
+  { id: "picker.accept", title: "Select", group: "App", keys: ["Enter"], modes: ["PICKER"], panes: [PANE_ANY], needs: "none" },
+  { id: "picker.cancel", title: "Cancel", group: "App", keys: ["Esc"], modes: ["PICKER"], panes: [PANE_ANY], needs: "none" },
+  { id: "picker.up", title: "Up", group: "App", keys: ["Up", "Ctrl-p"], modes: ["PICKER"], panes: [PANE_ANY], needs: "none" },
+  { id: "picker.down", title: "Down", group: "App", keys: ["Down", "Ctrl-n"], modes: ["PICKER"], panes: [PANE_ANY], needs: "none" },
+  { id: "picker.toggle", title: "Toggle", group: "App", keys: ["Space", "Tab"], modes: ["PICKER"], panes: [PANE_ANY], needs: "none" }
 ];
 
 // Commands that switch mode unconditionally when they fire.
@@ -148,7 +163,9 @@ var MODE_AFTER = {
   "insert.commit": "NORMAL",
   "palette.open": "COMMAND",
   "palette.close": "NORMAL",
-  "palette.run": "NORMAL"
+  "palette.run": "NORMAL",
+  "picker.accept": "NORMAL",
+  "picker.cancel": "NORMAL"
 };
 
 // Commands that, when they fire while mode is VISUAL, end the visual
@@ -193,7 +210,12 @@ function normalizeState(state) {
     trackersTab: s.trackersTab === true,
     cursorNoMetadata: s.cursorNoMetadata === true,
     cursorStopped: s.cursorStopped === true,
-    cursorPendingMagnet: s.cursorPendingMagnet === true
+    cursorPendingMagnet: s.cursorPendingMagnet === true,
+    // PICKER (slice 3a): the overlay's own query-empty and multi-select
+    // flags, read fresh from the caller each dispatch (ListOverlay/the
+    // picker never keep their own copy of these -- see the PICKER rows).
+    pickerQueryEmpty: s.pickerQueryEmpty === true,
+    pickerMulti: s.pickerMulti === true
   };
 }
 
@@ -415,6 +437,19 @@ function dispatch(state, event) {
   var ctrl = mods.ctrl === true;
   var text = ev.text || "";
   var now = ev.now || 0;
+
+  // PICKER's Space/Tab: a toggle only under the right condition (see the
+  // "picker.toggle" row above), otherwise it's not a match at all -- no
+  // "blocked" note, just as an ordinary typed character in COMMAND mode
+  // resolves to no command (ListOverlay's field types it instead).
+  if (s.mode === "PICKER") {
+    if (ev.key === KEY.Space && !(s.pickerQueryEmpty === true && s.pickerMulti === true)) {
+      return { state: clearPrefix(s), commandId: null };
+    }
+    if (matchLabel("Tab", ev) && s.pickerMulti !== true) {
+      return { state: clearPrefix(s), commandId: null };
+    }
+  }
 
   // Continue an active "g" prefix (cursor.top).
   if (s.prefix === "g") {
