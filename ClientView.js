@@ -875,7 +875,11 @@ function inspectorDispatch(ctx) {
     var list = (c.tab === "trackers" ? c.trackers : c.peers) || [];
     var at = Number(c.tab === "trackers" ? c.trackerIndex : c.peerIndex);
     var r = at >= 0 && at < list.length ? list[at] : null;
-    if (r && c.tab === "trackers") target = { kind: "tracker", value: String(r.url), label: String(r.host) };
+    if (r && c.tab === "trackers") {
+      target = { kind: "tracker", value: String(r.url), label: String(r.host) };
+      // InspectorView.trackerRefusal, when c and x can't act on it.
+      if (r.refusal) target.refusal = String(r.refusal);
+    }
     else if (r) target = { kind: "peer", value: String(r.ipPort), label: String(r.ipPort) };
   }
   var st = row ? String(row.state || "").toLowerCase() : "";

@@ -481,15 +481,18 @@ QtObject {
 
     case "tracker.edit":
       if (targets.length === 0 || !args.target) return
-      if (InspectorView.hasPipe(args.target.value)) { c.note(InspectorView.PIPE_NOTE, "urgent"); return }
+      var editRefusal = InspectorView.trackerRefusal(args.target.value)
+      if (editRefusal !== "") { c.note(editRefusal, "urgent"); return }
       startTrackerInput("trackerEdit", targets[0], args.target.value)
       return
 
     case "tracker.remove":
-      // Unconfirmed only when the registry refused the CONFIRM (a "|" in
-      // the URL, F13): say why and do nothing else.
+      // Unconfirmed only when the registry refused the CONFIRM (the target
+      // has a refusal: a "|" in the URL, F13, or a URL qbt would reject):
+      // say why and do nothing else.
+      var removeRefusal = args.target ? InspectorView.trackerRefusal(args.target.value) : ""
       if (args.confirmed !== true) {
-        if (args.target && InspectorView.hasPipe(args.target.value)) c.note(InspectorView.PIPE_NOTE, "urgent")
+        if (removeRefusal !== "") c.note(removeRefusal, "urgent")
         return
       }
       // `y`: the torrent and the tracker named when x was pressed, never
@@ -497,6 +500,7 @@ QtObject {
       hashes = c.confirmHashes
       c.confirmHashes = []
       if (hashes.length === 0 || !args.target) return
+      if (removeRefusal !== "") { c.note(removeRefusal, "urgent"); return }
       c.track(c.service.removeTracker(hashes[0], args.target.value, c.opts([hashes[0]])), "trackerRemove", [hashes[0]])
       return
 

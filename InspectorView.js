@@ -179,13 +179,14 @@ var TRACKER_SCHEME_RE = /^(udp|https?|wss):\/\//;
 // hasPipe(url) -> whether url has a "|": qBittorrent's WebUI joins a
 // torrent's trackers with "|", so such a tracker can't be edited or
 // removed through it (F13).
-// What the window says instead of acting on such a tracker (qbt dies with
-// the same words).
-var PIPE_NOTE = "This tracker's URL can't be edited through the WebUI API.";
-
 function hasPipe(url) {
   return String(url === undefined || url === null ? "" : url).indexOf("|") !== -1;
 }
+
+// What the window says instead of acting on such a tracker (qbt dies with
+// the same words).
+var PIPE_NOTE = "This tracker's URL can't be edited through the WebUI API.";
+var UNUSABLE_NOTE = "This tracker's URL can't be edited here.";
 
 // trackerUrlError(text) -> "" for a URL qbt accepts, else the message.
 // Checks, in qbt's order: at most 2048 characters; udp://, http://,
@@ -199,6 +200,16 @@ function trackerUrlError(text) {
   if (/[\t\n\v\f\r ]/.test(s) || hasPipe(s)) return "No spaces or | in a tracker URL.";
   if (/[^\x21-\x7e]/.test(s)) return "Use only plain ASCII characters in a tracker URL.";
   return "";
+}
+
+// trackerRefusal(url) -> "" when `c` and `x` can act on a stored tracker
+// URL, else the note the window shows instead: PIPE_NOTE for a "|" (F13),
+// UNUSABLE_NOTE for anything else qbt's tracker-edit / tracker-remove
+// would reject (trackerUrlError: an uppercase scheme, whitespace,
+// non-ASCII, too long), so nobody confirms an action that can't run.
+function trackerRefusal(url) {
+  if (hasPipe(url)) return PIPE_NOTE;
+  return trackerUrlError(url) !== "" ? UNUSABLE_NOTE : "";
 }
 
 // validPort: 1-5 ASCII digits (qbt bounds the length before any
@@ -281,6 +292,8 @@ function trackerRows(list) {
       url: url,
       host: urlHost(url),
       shownUrl: redactUrl(url),
+      // Why c and x can't act on it ("" when they can).
+      refusal: trackerRefusal(url),
       glyph: info.glyph,
       tone: info.tone,
       statusWord: info.word,
@@ -869,6 +882,8 @@ if (typeof module !== "undefined" && module.exports) {
     peerError: peerError,
     hasPipe: hasPipe,
     PIPE_NOTE: PIPE_NOTE,
+    UNUSABLE_NOTE: UNUSABLE_NOTE,
+    trackerRefusal: trackerRefusal,
     trackerRows: trackerRows,
     peerRows: peerRows,
     peerSummary: peerSummary,

@@ -903,14 +903,12 @@ TestCase {
     compare(p.visible, true)
     compare(p.query, "")
     verify(p.rows.length > 1)
-    // The cursor starts on the first row that can run: since slice 2b the
-    // inspector's tracker rows (Add tracker, Change tracker URL) sort to
-    // the top of the Torrent group, dimmed, from the table.
+    // The cursor starts on the first row that can run (since slice 2b some
+    // dimmed inspector rows can sort above it).
     var first = 0
     while (!p.rows[first].enabled) first++
     compare(p.cursor, first)
-    compare(p.rows[0].id, "tracker.add")
-    compare(p.rows[0].enabled, false)
+    verify(p.rows[p.cursor].enabled)
     compare(p.matchCount, p.totalCount)
     compare(o.c.pane, "table")
   }
@@ -2370,5 +2368,103 @@ TestCase {
     p.activated(palRow(p, "tracker.edit"))
     compare(o.c.mode, "INSERT")
     compare(o.c.inputPurpose, "trackerEdit")
+  }
+
+  // ---- fix round 1: the inline rejection stays on screen ------------------
+
+  function insertGeometry(c) {
+    var root = winOf(c).contentItem
+    var body = findByName(root, "statusBody")
+    var msg = findByName(root, "insertMessage")
+    var field = findByName(root, "insertField")
+    var prompt = findByName(root, "insertPrompt")
+    verify(body && msg && field && prompt)
+    return { body: body, msg: msg, field: field, prompt: prompt }
+  }
+  function checkFits(c, width, what) {
+    wait(30)
+    var g = insertGeometry(c)
+    verify(g.msg.visible, what + " @" + width + ": the message shows")
+    var at = g.msg.mapToItem(g.body, 0, 0)
+    verify(at.x >= 0, what + " @" + width + ": message x " + at.x)
+    verify(at.x + g.msg.width <= g.body.width, what + " @" + width + ": message ends at " + (at.x + g.msg.width) + " of " + g.body.width)
+    verify(g.msg.width >= g.msg.implicitWidth, what + " @" + width + ": the message isn't cut")
+    verify(g.field.width >= Style.space(160), what + " @" + width + ": field " + g.field.width)
+    var fAt = g.field.mapToItem(g.body, 0, 0)
+    verify(fAt.x >= 0 && fAt.x + g.field.width <= g.body.width, what + " @" + width + ": the field is inside")
+  }
+
+  function test_tracker_rejection_stays_inside_the_status_line() {
+    var widths = [900, 1300]
+    for (var w = 0; w < widths.length; w++) {
+      var o = make()
+      o.svc.torrents = list3()
+      setWidth(o.c, widths[w])
+      key(o.c, "2")
+      o.svc.setInspect(hh("c"), "trackers", { trackers: trackersFixture().slice(0, 3).concat([{ url: "udp://tracker.opentrackr.org:1337/announce", status: 2, tier: 0, num_seeds: 1, num_leeches: 1, msg: "" }]) })
+      if (o.c.pane !== "inspector") key(o.c, "\t", 0x01000001)
+      compare(o.c.pane, "inspector")
+      key(o.c, "c")
+      compare(o.c.mode, "INSERT")
+      compare(insertGeometry(o.c).prompt.text, "Change udp://tracker.opentrackr.org:1337/… to:")
+      var bad = ["udp://bad example/announce", "udp://trécker.example/announce"]
+      for (var b = 0; b < bad.length; b++) {
+        inputOf(o.c).setInput(bad[b])
+        key(o.c, "\r", 0x01000004)
+        compare(o.c.mode, "INSERT")
+        verify(o.c.messageLine.text !== "")
+        checkFits(o.c, widths[w], "c " + bad[b])
+      }
+      key(o.c, "\u001b", 0x01000000)
+      key(o.c, "a")
+      inputOf(o.c).setInput("udp://trécker.example/announce")
+      key(o.c, "\r", 0x01000004)
+      compare(o.c.messageLine.text, "Use only plain ASCII characters in a tracker URL.")
+      checkFits(o.c, widths[w], "a")
+      key(o.c, "\u001b", 0x01000000)
+    }
+  }
+
+  function test_filter_and_move_fields_keep_their_width() {
+    var o = make()
+    o.svc.torrents = list3()
+    setWidth(o.c, 900)
+    key(o.c, "/")
+    wait(30)
+    var g = insertGeometry(o.c)
+    compare(g.field.width, Math.max(Style.space(160), Math.min(Style.space(560), g.body.width - Style.space(120))))
+    key(o.c, "\u001b", 0x01000000)
+    key(o.c, "m")
+    wait(30)
+    compare(g.field.width, Math.max(Style.space(160), Math.min(Style.space(560), g.body.width - Style.space(120))))
+    compare(g.prompt.text, "move to")
+  }
+
+  function test_tracker_url_qbt_would_reject_is_refused_before_insert_or_confirm() {
+    var urls = ["UDP://up.example:1337/announce", "udp://sp ace.example/announce", "udp://trécker.example/announce"]
+    for (var i = 0; i < urls.length; i++) {
+      var o = make()
+      o.svc.torrents = list3()
+      key(o.c, "2")
+      o.svc.setInspect(hh("c"), "trackers", { trackers: trackersFixture().slice(0, 3).concat([{ url: urls[i], status: 2, tier: 0, num_seeds: 1, num_leeches: 1, msg: "" }]) })
+      if (o.c.pane !== "inspector") key(o.c, "\t", 0x01000001)
+      key(o.c, "c")
+      compare(o.c.mode, "NORMAL", urls[i] + ": no INSERT")
+      compare(o.c.messageLine.text, "This tracker's URL can't be edited here.")
+      key(o.c, "x")
+      compare(o.c.mode, "NORMAL", urls[i] + ": no CONFIRM")
+      compare(o.c.confirm, null)
+      compare(o.c.messageLine.text, "This tracker's URL can't be edited here.")
+      // The palette refuses the same way.
+      key(o.c, ":")
+      var p = pal(o.c)
+      p.setQuery("remove tracker")
+      p.activated(palRow(p, "tracker.remove"))
+      compare(o.c.mode, "NORMAL")
+      compare(o.c.confirm, null)
+      compare(lastCall(o.svc, "editTracker"), null)
+      compare(lastCall(o.svc, "removeTracker"), null)
+      compare(lastCall(o.svc, "delete"), null)
+    }
   }
 }

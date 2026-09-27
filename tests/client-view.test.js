@@ -1632,3 +1632,11 @@ test("modeHints: INSERT hints for adding and changing a tracker", () => {
   assert.deepEqual(V.modeHints("INSERT", { purpose: "trackerAdd" }).map((h) => h.key + " " + h.label), ["Enter add", "Esc cancel"]);
   assert.deepEqual(V.modeHints("INSERT", { purpose: "trackerEdit" }).map((h) => h.key + " " + h.label), ["Enter change", "Esc cancel"]);
 });
+
+test("inspectorDispatch: a tracker row's refusal rides on the target, only when set", () => {
+  const rows = [{ url: "udp://p.example/a|b", host: "p.example", refusal: "This tracker's URL can't be edited through the WebUI API." }, { url: "udp://ok.example/a", host: "ok.example", refusal: "" }];
+  const bad = V.inspectorDispatch(insp({ trackers: rows, trackerIndex: 0 })).inspectorTarget;
+  assert.equal(bad.refusal, rows[0].refusal);
+  const ok = V.inspectorDispatch(insp({ trackers: rows, trackerIndex: 1 })).inspectorTarget;
+  assert.deepEqual(ok, { kind: "tracker", value: "udp://ok.example/a", label: "ok.example" });
+});

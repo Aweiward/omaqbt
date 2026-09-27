@@ -972,3 +972,25 @@ test("trackerUrlError: anything outside printable ASCII gets the ASCII message",
   assert.equal(I.trackerUrlError("udp://t.example:1/a\x01b"), msg);
   assert.equal(I.trackerUrlError("udp://t.example:1/a b"), "No spaces or | in a tracker URL.");
 });
+
+// --- trackerRefusal (slice 2b, Task 4 fix round 1) --------------------------
+
+test("trackerRefusal: why a stored tracker URL can't be changed or removed, or \"\"", () => {
+  assert.equal(I.trackerRefusal("udp://a.example:1337/announce"), "");
+  assert.equal(I.trackerRefusal("https://a.example/announce?passkey=abc&x=1"), "");
+  assert.equal(I.trackerRefusal("udp://a.example/x|y"), I.PIPE_NOTE);
+  assert.equal(I.PIPE_NOTE, "This tracker's URL can't be edited through the WebUI API.");
+  const bad = ["UDP://a.example/announce", "udp://a example/announce", "udp://tr\u00e9cker.example/a", "udp://a.example/" + "x".repeat(2048), "ftp://a.example/", ""];
+  for (const u of bad) assert.equal(I.trackerRefusal(u), "This tracker's URL can't be edited here.", JSON.stringify(u.slice(0, 40)));
+});
+
+test("trackerRows carries each row's refusal", () => {
+  const rows = I.trackerRows([
+    { url: "udp://ok.example:1/announce", status: 2 },
+    { url: "udp://p.example/a|b", status: 2 },
+    { url: "HTTP://up.example/announce", status: 2 }
+  ]).rows;
+  assert.equal(rows[0].refusal, "");
+  assert.equal(rows[1].refusal, I.PIPE_NOTE);
+  assert.equal(rows[2].refusal, "This tracker's URL can't be edited here.");
+});

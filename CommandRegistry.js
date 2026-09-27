@@ -293,13 +293,14 @@ function confirmCount(s) {
 var TARGET_CONFIRM_KINDS = { "tracker.remove": "trackerRemove", "peer.ban": "peerBan" };
 
 // confirmRefused(id, target) -> whether a target CONFIRM command can't act
-// on its captured target at all, so asking would be pointless: a tracker
-// URL with a "|" can't be removed through the WebUI API (F13). Such a
-// command comes back unconfirmed (args.confirmed unset, no CONFIRM), and
-// its handler says why and does nothing else.
+// on its captured target at all, so asking would be pointless: the target
+// carries a `refusal` (for trackers, InspectorView.trackerRefusal: a "|"
+// in the URL, F13, or a URL qbt would reject). Such a command comes back
+// unconfirmed (args.confirmed unset, no CONFIRM); its handler says why
+// and does nothing else. The registry can't load InspectorView (node
+// requires this file as is), so the window computes the refusal.
 function confirmRefused(id, target) {
-  if (id === "tracker.remove") return !!target && String(target.value).indexOf("|") !== -1;
-  return false;
+  return Object.prototype.hasOwnProperty.call(TARGET_CONFIRM_KINDS, id) && !!target && !!target.refusal;
 }
 
 function needsConfirm(id, s) {
@@ -313,7 +314,9 @@ function copyTarget(t) {
   if (!t || typeof t !== "object") return null;
   // Frozen: pending.target, pending.args.target and confirm.target share
   // it, and none of their consumers may change what `y` acts on.
-  return Object.freeze({ kind: String(t.kind || ""), value: String(t.value === undefined || t.value === null ? "" : t.value), label: String(t.label === undefined || t.label === null ? "" : t.label) });
+  var out = { kind: String(t.kind || ""), value: String(t.value === undefined || t.value === null ? "" : t.value), label: String(t.label === undefined || t.label === null ? "" : t.label) };
+  if (t.refusal) out.refusal = String(t.refusal);
+  return Object.freeze(out);
 }
 
 function buildArgs(row, s) {

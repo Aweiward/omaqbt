@@ -129,6 +129,7 @@ Rectangle {
 
   Item {
     id: body
+    objectName: "statusBody"
     anchors.left: badge.right
     anchors.leftMargin: line.gap
     anchors.right: hintRow.left
@@ -162,23 +163,43 @@ Rectangle {
       Part { visible: line.message !== ""; text: line.message; color: line.toneColor(line.messageTone) }
     }
 
-    // INSERT: a prompt and the text field.
+    // INSERT: a prompt and the text field. A tracker prompt ("Change
+    // udp://host:port/… to:") and its rejection are long, so for those the
+    // field takes only the room left after the prompt and the message
+    // (at least 160 px), and the prompt elides before the message would:
+    // an inline rejection must always be readable. "/" and "move to" keep
+    // their fixed field width.
     Row {
+      id: insertRow
       visible: line.mode === "INSERT"
       anchors.verticalCenter: parent.verticalCenter
       spacing: Style.space(8)
+      readonly property bool fitted: line.inputPurpose === "trackerAdd" || line.inputPurpose === "trackerEdit"
+      // What the message needs, with the gap before it (0 when hidden).
+      readonly property real messageRoom: line.message !== "" ? insertMessage.implicitWidth + spacing : 0
       Part {
+        id: insertPrompt
+        objectName: "insertPrompt"
         text: line.inputPrompt.prompt
         color: Color.accent
+        elide: Text.ElideMiddle
+        width: insertRow.fitted
+          ? Math.max(0, Math.min(implicitWidth, body.width - Style.space(160) - insertRow.spacing - insertRow.messageRoom))
+          : implicitWidth
       }
       TextField {
         id: input
-        width: Math.max(Style.space(160), Math.min(Style.space(560), body.width - Style.space(120)))
+        objectName: "insertField"
+        width: insertRow.fitted
+          ? Math.max(Style.space(160), Math.min(Style.space(560), body.width - insertPrompt.width - insertRow.spacing - insertRow.messageRoom))
+          : Math.max(Style.space(160), Math.min(Style.space(560), body.width - Style.space(120)))
         verticalPadding: Style.space(2)
         placeholderText: line.inputPrompt.placeholder
         onTextChanged: line.inputEdited(String(input.text || ""))
       }
       Part {
+        id: insertMessage
+        objectName: "insertMessage"
         visible: line.message !== ""
         text: line.message
         color: line.toneColor(line.messageTone)

@@ -1163,7 +1163,7 @@ test("the captured target is frozen: no consumer can change what y acts on", () 
 
 // --- the trackers tab's actions (slice 2b, Task 4) -------------------------
 
-const PIPE_TRACKER = { kind: "tracker", value: "udp://p.example:1337/a|b", label: "p.example:1337" };
+const PIPE_TRACKER = { kind: "tracker", value: "udp://p.example:1337/a|b", label: "p.example:1337", refusal: "This tracker's URL can't be edited through the WebUI API." };
 
 function rowsFor(id) {
   return commands.filter((r) => r.id === id);
@@ -1239,7 +1239,7 @@ test("R, a, c, x are silent no-ops off the trackers tab", () => {
   assert.equal(x.state.pending.commandId, "torrent.remove");
 });
 
-test("x on a tracker whose URL has a | raises no CONFIRM: the command comes back unconfirmed (F13)", () => {
+test("x on a tracker with a refusal (a | in its URL, F13) raises no CONFIRM: the command comes back unconfirmed", () => {
   const r = dispatch(inspector({ hasTorrent: true, trackersTab: true, inspectorTarget: PIPE_TRACKER }), ev("x", keyOf("x")));
   assert.equal(r.commandId, "tracker.remove");
   assert.equal(r.state.mode, "NORMAL");
@@ -1255,4 +1255,13 @@ test("x on a tracker whose URL has a | raises no CONFIRM: the command comes back
   const ok = Registry.dispatchCommand(inspector({ hasTorrent: true, trackersTab: true, inspectorTarget: TRACKER_A }), "tracker.remove");
   assert.equal(ok.state.mode, "CONFIRM");
   assert.equal(ok.confirm.kind, "trackerRemove");
+});
+
+test("a target's refusal is copied only when set; kind/value/label stay as they were", () => {
+  const c = dispatch(inspector({ hasTorrent: true, trackersTab: true, inspectorTarget: PIPE_TRACKER }), ev("c", keyOf("c")));
+  assert.equal(c.args.target.refusal, PIPE_TRACKER.refusal);
+  assert.ok(Object.isFrozen(c.args.target));
+  const plain = dispatch(inspector({ hasTorrent: true, trackersTab: true, inspectorTarget: TRACKER_A }), ev("c", keyOf("c")));
+  assert.deepEqual(plain.args.target, TRACKER_A);
+  assert.equal("refusal" in plain.args.target, false);
 });
