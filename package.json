@@ -4,6 +4,6 @@
   "scripts": {
     "test": "node --test tests/*.test.js",
     "test:qml": "QT_QPA_PLATFORM=offscreen /usr/lib/qt6/bin/qmltestrunner -platform offscreen -import tests/qml-harness/stubs -input tests/qml-harness/tests",
-    "lint:qml": "/usr/lib/qt6/bin/qmllint -I $HOME/.local/share/omarchy/shell Service.qml Sidecar.qml Panel.qml Client.qml ClientPane.qml WmFocus.qml ClientCommands.qml CommandPalette.qml MagnetConfirm.qml TorrentTable.qml StatusLine.qml FilterPane.qml InspectorPane.qml InspectorList.qml PiecesBar.qml HelpOverlay.qml"
+    "lint:qml": "/usr/lib/qt6/bin/qmllint -I $HOME/.local/share/omarchy/shell Service.qml Sidecar.qml Panel.qml Client.qml ClientPane.qml WmFocus.qml ClientCommands.qml CommandPalette.qml MagnetConfirm.qml TorrentTable.qml StatusLine.qml FilterPane.qml InspectorPane.qml InspectorList.qml PiecesBar.qml SpeedChart.qml HelpOverlay.qml"
   }
 }

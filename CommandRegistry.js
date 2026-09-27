@@ -77,7 +77,7 @@ var commands = [
   { id: "inspector.files", title: "Files", group: "View", keys: ["4"], modes: ["NORMAL"], panes: [PANE_ANY], needs: "none" },
   { id: "inspector.trackers", title: "Trackers", group: "View", keys: ["2"], modes: ["NORMAL"], panes: [PANE_ANY], needs: "none" },
   { id: "inspector.peers", title: "Peers", group: "View", keys: ["3"], modes: ["NORMAL"], panes: [PANE_ANY], needs: "none" },
-  { id: null, title: "Reserved", group: "View", keys: ["5"], modes: ["NORMAL"], panes: [PANE_ANY], needs: "none" },
+  { id: "inspector.chart", title: "Chart", group: "View", keys: ["5"], modes: ["NORMAL"], panes: [PANE_ANY], needs: "none" },
   { id: "pane.next", title: "Next pane", group: "View", keys: ["Tab", "Ctrl-l"], modes: ["NORMAL"], panes: [PANE_ANY], needs: "none" },
   { id: "pane.prev", title: "Prev pane", group: "View", keys: ["Shift-Tab", "Ctrl-h"], modes: ["NORMAL"], panes: [PANE_ANY], needs: "none" },
   { id: "help.toggle", title: "Help", group: "App", keys: ["?"], modes: ["NORMAL"], panes: [PANE_ANY], needs: "none" },

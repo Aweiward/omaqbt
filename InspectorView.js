@@ -415,13 +415,20 @@ function speedPairText(dl, ul) {
 }
 
 // chartSeries(points, nowSec, spanSec) -> {down, up, max, maxText,
-// peakText, avgText, empty} for the SpeedChart. `points` is
-// [[t, dl, ul], …] (seconds, bytes/s); points older than the span are
-// dropped. `x` runs 0..1 across [nowSec - spanSec, nowSec]; `y` is
-// sample / max. peakText/avgText each carry both directions in one
+// peakText, avgText, nowDlText, nowUlText, empty} for the SpeedChart.
+// `points` is [[t, dl, ul], …] (seconds, bytes/s); points older than the
+// span are dropped. `x` runs 0..1 across [nowSec - spanSec, nowSec]; `y`
+// is sample / max. peakText/avgText each carry both directions in one
 // string, "↓ <dl> · ↑ <ul>" -- the peak (or mean) of down and of up over
 // the kept points, independently (the mockup's "Peak ↓ 5.8 MiB/s ·
-// ↑ 402 KiB/s" / "Average ↓ 3.6 MiB/s · ↑ 180 KiB/s").
+// ↑ 402 KiB/s" / "Average ↓ 3.6 MiB/s · ↑ 180 KiB/s"). nowDlText/
+// nowUlText are the *last* kept sample, each on its own (the legend's
+// "━ ↓ 4.1 MiB/s" accent / "━ ↑ 210 KiB/s" fg, two independently-colored
+// spans rather than peakText/avgText's combined convention). Unlike
+// maxText/peakText/avgText's "—" (no data to summarize), an idle chart's
+// legend still has a direction and a rate -- zero -- so it reads "↓ 0 B/s"
+// / "↑ 0 B/s", the mockup's "━ ↓ 0" / "━ ↑ 0" in this codebase's own
+// rate-formatting convention.
 function chartSeries(points, nowSec, spanSec) {
   var list = Array.isArray(points) ? points : [];
   var now = Number(nowSec) || 0;
@@ -447,7 +454,11 @@ function chartSeries(points, nowSec, spanSec) {
     kept.push({ x: x, dl: dl, ul: ul });
   }
   if (!anyPositive) {
-    return { down: [], up: [], max: 0, maxText: "—", peakText: "—", avgText: "—", empty: true };
+    return {
+      down: [], up: [], max: 0, maxText: "—", peakText: "—", avgText: "—",
+      nowDlText: "↓ " + Model.sizeText(0) + "/s", nowUlText: "↑ " + Model.sizeText(0) + "/s",
+      empty: true
+    };
   }
   var max = niceMax(largest);
   var down = [];
@@ -466,6 +477,7 @@ function chartSeries(points, nowSec, spanSec) {
   }
   var avgDl = kept.length > 0 ? sumDl / kept.length : 0;
   var avgUl = kept.length > 0 ? sumUl / kept.length : 0;
+  var lastKept = kept[kept.length - 1];
   return {
     down: down,
     up: up,
@@ -476,7 +488,43 @@ function chartSeries(points, nowSec, spanSec) {
     maxText: stripPointZero(Model.sizeText(max)) + "/s",
     peakText: speedPairText(peakDl, peakUl),
     avgText: speedPairText(avgDl, avgUl),
+    nowDlText: "↓ " + Model.sizeText(lastKept.dl) + "/s",
+    nowUlText: "↑ " + Model.sizeText(lastKept.ul) + "/s",
     empty: false
+  };
+}
+
+// --- chartTab -----------------------------------------------------------------
+
+// The chart tab's window: 600 s (10 min), matching the sidecar ring
+// buffer's own retention (F9's MAX_SLOTS) one-for-one, so every buffered
+// sample the chart watch can possibly deliver is always inside it.
+var CHART_SPAN_SECONDS = 600;
+
+// chartTab(entry, sinceMs, nowMs, sidecarUp) -> {state, series, error} for
+// the chart tab (InspectorPane's `chart` property). `entry` is Service's
+// inspectByKey[hash+"|chart"] ({points, error, at}) or undefined.
+//
+// Unlike listTab, the chart tab never reads as tabState's "empty": there
+// are no rows to show or not show, and SpeedChart draws its own "No
+// traffic in the last 10 minutes." straight from series.empty -- so a
+// fresh, error-free entry always reads "rows" here, however many points
+// it carries. `data` is passed as a constant non-empty placeholder;
+// tabState's error branch is checked before it ever looks at `data`.
+//
+// `nowSec` comes from entry.at, not the caller's clock: nowMs (Client's
+// inspectNow) only moves once, past the 300 ms blank window, so it can't
+// track the chart's own "now" -- entry.at, in contrast, is set fresh by
+// Service on every inspect line while chart is watched.
+function chartTab(entry, sinceMs, nowMs, sidecarUp) {
+  var probe = entry ? { at: entry.at, error: entry.error, data: [1] } : undefined;
+  var state = tabState(probe, sinceMs, nowMs, sidecarUp);
+  var points = entry && Array.isArray(entry.points) ? entry.points : [];
+  var nowSec = entry ? (Number(entry.at) || 0) / 1000 : 0;
+  return {
+    state: state,
+    series: chartSeries(points, nowSec, CHART_SPAN_SECONDS),
+    error: state === "error" ? String(entry.error) : ""
   };
 }
 
@@ -673,6 +721,8 @@ if (typeof module !== "undefined" && module.exports) {
     noMetadata: noMetadata,
     infoGroups: infoGroups,
     chartSeries: chartSeries,
+    chartTab: chartTab,
+    CHART_SPAN_SECONDS: CHART_SPAN_SECONDS,
     tabState: tabState,
     emptyCopy: emptyCopy,
     listTab: listTab,

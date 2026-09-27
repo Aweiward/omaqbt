@@ -421,6 +421,19 @@ test("chartSeries x is within 0..1 across the window", () => {
   for (const p of s.down) assert.ok(p.x >= 0 && p.x <= 1);
 });
 
+test("chartSeries nowDlText/nowUlText read the last kept sample, separately colored SpeedChart-legend style", () => {
+  const now = 1000;
+  const s = I.chartSeries([[now - 1, 1024 * 1024, 512], [now, 2 * 1024 * 1024, 1024]], now, 600);
+  assert.equal(s.nowDlText, "↓ " + Model.sizeText(2 * 1024 * 1024) + "/s");
+  assert.equal(s.nowUlText, "↑ " + Model.sizeText(1024) + "/s");
+});
+
+test("chartSeries nowDlText/nowUlText are zero (not the dash) when empty -- idle still has a direction and a rate", () => {
+  const s = I.chartSeries([], 1000, 600);
+  assert.equal(s.nowDlText, "↓ " + Model.sizeText(0) + "/s");
+  assert.equal(s.nowUlText, "↑ " + Model.sizeText(0) + "/s");
+});
+
 // --- tabState -----------------------------------------------------------------
 
 test("tabState: sidecar down wins over everything else", () => {
@@ -649,4 +662,48 @@ test("infoView: sidecar down blanks a fresh entry too", () => {
 test("infoView: has_metadata false wins even at a nonzero size", () => {
   const v = I.infoView({ props: { has_metadata: false }, pieces: [], at: 1000 }, 900, true, { size: 5000 }, fmtDate);
   assert.equal(v.noMeta, true);
+});
+
+// --- chartTab (Task 8) -------------------------------------------------------
+
+test("chartTab: no entry yet is blank, then loading, exactly like tabState", () => {
+  assert.equal(I.chartTab(undefined, 1000, 1000, true).state, "blank");
+  assert.equal(I.chartTab(undefined, 1000, 1400, true).state, "loading");
+});
+
+test("chartTab: sidecar down wins even with a fresh entry", () => {
+  const v = I.chartTab({ points: [[1, 5, 0]], at: 1000 }, 900, 1000, false);
+  assert.equal(v.state, "sidecarDown");
+});
+
+test("chartTab: a read error is 'error' and carries its text", () => {
+  const v = I.chartTab({ error: "HTTP 500", at: 1000 }, 900, 1000, true);
+  assert.equal(v.state, "error");
+  assert.equal(v.error, "HTTP 500");
+});
+
+test("chartTab: a stale entry (at < sinceMs) counts as none, same as listTab", () => {
+  const v = I.chartTab({ points: [[1, 5, 0]], at: 800 }, 1000, 1000, true);
+  assert.equal(v.state, "blank");
+});
+
+test("chartTab: an empty points array is still 'rows' -- SpeedChart draws its own idle state", () => {
+  const v = I.chartTab({ points: [], at: 1000 }, 900, 1000, true);
+  assert.equal(v.state, "rows");
+  assert.equal(v.series.empty, true);
+});
+
+test("chartTab: a fresh non-empty entry threads points through chartSeries, windowed off entry.at", () => {
+  const atMs = 1000000;
+  const v = I.chartTab({ points: [[atMs / 1000, 5000, 0]], at: atMs }, 900, atMs, true);
+  assert.equal(v.state, "rows");
+  assert.equal(v.series.empty, false);
+  assert.equal(v.series.down.length, 1);
+});
+
+test("chartTab: points older than CHART_SPAN_SECONDS before entry.at fall outside the window", () => {
+  const atMs = 1000000;
+  const tooOld = atMs / 1000 - I.CHART_SPAN_SECONDS - 1;
+  const v = I.chartTab({ points: [[tooOld, 5000, 0]], at: atMs }, 900, atMs, true);
+  assert.equal(v.series.empty, true);
 });

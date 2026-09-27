@@ -5,8 +5,8 @@ import qs.Commons
 import "ClientView.js" as View
 import "InspectorView.js" as InspectorView
 
-// The inspector pane body: tab 1 (Info), 2 (Trackers), 3 (Peers) and 4
-// (Files); 5 (chart) is listed but does nothing yet.
+// The inspector pane body: tab 1 (Info), 2 (Trackers), 3 (Peers), 4
+// (Files) and 5 (Chart, Task 8).
 //
 // Trackers and peers: InspectorView.listTab(...) from Client, drawn as a
 // state line (loading, error, sidecar down, empty) or an InspectorList
@@ -40,6 +40,12 @@ Item {
   // InspectorView.listTab(...): {state, rows, summary, title, copy}.
   property var trackers: ({ state: "blank", rows: [], summary: {}, title: "", copy: {} })
   property var peers: ({ state: "blank", rows: [], summary: {}, title: "", copy: {} })
+  // InspectorView.chartTab(...): {state, series, error}.
+  property var chart: ({
+    state: "blank",
+    series: { down: [], up: [], max: 0, maxText: "—", peakText: "—", avgText: "—", nowDlText: "—", nowUlText: "—", empty: true },
+    error: ""
+  })
   property int trackerIndex: 0
   property int peerIndex: 0
   property bool focusedPane: false
@@ -297,8 +303,7 @@ Item {
 
           MouseArea {
             anchors.fill: parent
-            // chart (5) arrives in a later task; until then it does nothing.
-            onClicked: if (tabItem.modelData.tab !== "chart") pane.tabClicked(tabItem.modelData.tab)
+            onClicked: pane.tabClicked(tabItem.modelData.tab)
           }
         }
       }
@@ -725,6 +730,30 @@ Item {
       // 8px to 10px too).
       cellSpacing: Style.space(10)
       onRowClicked: function(index) { pane.fileClicked(index) }
+    }
+
+    // ---- 5 chart ---------------------------------------------------------
+    Item {
+      visible: pane.info !== null && pane.tab === "chart"
+      anchors.fill: parent
+
+      TabMessage {
+        anchors.fill: parent
+        tabState: pane.chart.state
+        error: pane.chart.error || ""
+        noun: "chart"
+      }
+
+      SpeedChart {
+        visible: pane.chart.state === "rows"
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.top: parent.top
+        anchors.leftMargin: pane.padX
+        anchors.rightMargin: pane.padX
+        anchors.topMargin: Style.space(10)
+        series: pane.chart.series
+      }
     }
   }
 }

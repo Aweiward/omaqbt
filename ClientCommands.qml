@@ -348,6 +348,10 @@ QtObject {
       openInspectorTab("peers")
       return
 
+    case "inspector.chart":
+      openInspectorTab("chart")
+      return
+
     case "all.toggle":
       var live = Model.excludePending(c.service.torrents || [], c.service.magnetPendingHashes || [])
       hashes = []

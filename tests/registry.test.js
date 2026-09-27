@@ -198,26 +198,30 @@ test("4 opens the files tab from any pane", () => {
   assert.equal(r.commandId, "inspector.files");
 });
 
-test("5 is a reserved no-op", () => {
-  const r = dispatch(state(), ev("5", 0x35));
-  assert.equal(r.commandId, null);
-  assert.equal(r.blocked, undefined);
-  const reserved = commands.filter((c) => c.id === null);
-  assert.equal(reserved.length, 1);
-  assert.deepEqual(reserved[0].keys, ["5"]);
+test("5 opens the chart tab from every pane, with no torrent needed (Task 8: no longer reserved)", () => {
+  for (const pane of ["table", "filters", "inspector"]) {
+    const r = dispatch(state({ pane, hasTorrent: false }), ev("5", 0x35));
+    assert.equal(r.commandId, "inspector.chart", pane);
+    assert.equal(r.blocked, undefined, pane);
+  }
+  assert.equal(commands.filter((c) => c.id === null).length, 0, "no reserved rows remain");
+  assert.equal(commands.find((c) => c.id === "inspector.chart").title, "Chart");
 });
 
-test("2 opens trackers and 3 opens peers from every pane, with no torrent needed", () => {
+test("2 opens trackers, 3 opens peers and 5 opens chart from every pane, with no torrent needed", () => {
   for (const pane of ["table", "filters", "inspector"]) {
     const two = dispatch(state({ pane, hasTorrent: false }), ev("2", 0x32));
     assert.equal(two.commandId, "inspector.trackers", pane);
     assert.equal(two.blocked, undefined, pane);
     const three = dispatch(state({ pane, hasTorrent: false }), ev("3", 0x33));
     assert.equal(three.commandId, "inspector.peers", pane);
+    const five = dispatch(state({ pane, hasTorrent: false }), ev("5", 0x35));
+    assert.equal(five.commandId, "inspector.chart", pane);
   }
   const t = commands.find((c) => c.id === "inspector.trackers");
   assert.equal(t.title, "Trackers");
   assert.equal(commands.find((c) => c.id === "inspector.peers").title, "Peers");
+  assert.equal(commands.find((c) => c.id === "inspector.chart").title, "Chart");
 });
 
 test("file.down/file.up keep their ids and read as generic row moves", () => {
@@ -284,6 +288,7 @@ const ANY_PANE_ROWS = [
   { id: "refresh", evs: [ev("r", keyOf("r"))] },
   { id: "inspector.info", evs: [ev("1", 0x31)] },
   { id: "inspector.files", evs: [ev("4", 0x34)] },
+  { id: "inspector.chart", evs: [ev("5", 0x35)] },
   { id: "pane.next", evs: [ev("\t", KEY.Tab), ev("\f", KEY.L, { ctrl: true })] },
   { id: "pane.prev", evs: [ev("\t", KEY.Backtab, { shift: true }), ev("\b", KEY.H, { ctrl: true })] },
   { id: "help.toggle", evs: [ev("?", 0x3f)] },
@@ -487,9 +492,9 @@ test("Esc Esc after 600ms just clears the filter text again", () => {
   assert.notEqual(late.commandId, "filter.reset");
 });
 
-test("digit 5 is a no-op in every pane", () => {
+test("digit 5 opens the chart tab in every pane (Task 8: no longer a no-op)", () => {
   for (const pane of ["table", "filters", "inspector"]) {
-    assert.equal(dispatch(state({ pane }), ev("5", 0x35)).commandId, null, pane);
+    assert.equal(dispatch(state({ pane }), ev("5", 0x35)).commandId, "inspector.chart", pane);
   }
 });
 

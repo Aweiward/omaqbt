@@ -654,8 +654,10 @@ TestCase {
     o.svc.torrents = [tt(hh("a"), "alpha", { numSeeds: 4, numLeechs: 1, category: "linux", savePath: "/dl/iso" })]
     compare(o.c.inspectorInfo.name, "alpha")
     compare(o.c.inspectorInfo.fields[5].value, "linux")
-    // 5 does nothing (2 and 3 open trackers and peers since Task 5)
+    // 5 opens the chart tab (Task 8; 2 and 3 open trackers and peers since Task 5)
     key(o.c, "5")
+    compare(o.c.inspectorTab, "chart")
+    key(o.c, "1")
     compare(o.c.inspectorTab, "info")
     key(o.c, "4")
     compare(o.c.inspectorTab, "files")
@@ -1475,6 +1477,38 @@ TestCase {
     compare(w.args[0], "", "closing the window clears the watch")
   }
 
+  function test_chart_tab_renders_a_non_empty_series_and_an_idle_sentence() {
+    var o = make()
+    o.svc.torrents = list3()
+    key(o.c, "5")
+    compare(o.c.inspectorTab, "chart")
+    compare(lastCall(o.svc, "watch").args[1], "chart")
+    var chartComp = findByObjectName(winOf(o.c).contentItem, "speedChart")
+    verify(chartComp !== null)
+    compare(chartComp.visible, false, "no reply yet")
+
+    var now = Date.now()
+    o.svc.setInspect(hh("c"), "chart", { points: [[now / 1000, 5 * 1024 * 1024, 200 * 1024]], at: now })
+    compare(chartComp.visible, true)
+    compare(chartComp.series.empty, false)
+    verify(chartComp.paintCount > 0, "requestPaint ran for the new series")
+    verify(shows(o.c, "last 10 min"))
+    verify(!shows(o.c, "No traffic in the last 10 minutes."))
+    // the legend's current values
+    compare(findByObjectName(winOf(o.c).contentItem, "chartLegendDown").text, "━ ↓ 5.0 MiB/s")
+    compare(findByObjectName(winOf(o.c).contentItem, "chartLegendUp").text, "━ ↑ 200 KiB/s")
+    compare(findByObjectName(winOf(o.c).contentItem, "chartMaxText").text, "5 MiB/s")
+
+    var before = chartComp.paintCount
+    o.svc.setInspect(hh("c"), "chart", { points: [], at: Date.now() })
+    compare(chartComp.series.empty, true)
+    verify(chartComp.paintCount > before, "an idle reply is still a series change")
+    verify(shows(o.c, "No traffic in the last 10 minutes."))
+    compare(findByObjectName(winOf(o.c).contentItem, "chartLegendDown").text, "━ ↓ 0 B/s")
+    compare(findByObjectName(winOf(o.c).contentItem, "chartLegendUp").text, "━ ↑ 0 B/s")
+    compare(findByObjectName(winOf(o.c).contentItem, "chartMaxText").text, "—")
+  }
+
   function test_a_stale_reply_for_the_old_torrent_never_paints() {
     var o = make()
     o.svc.torrents = list3()
@@ -1652,13 +1686,19 @@ TestCase {
   // Ruling L: the watched tab's read error goes to the status line once per
   // new error; a success or a watch change re-arms it.
   function test_inspect_error_notes_the_status_line_once_per_error() {
+    // "0" stands in for the "any key ends the note" filler keypress:
+    // Task 8 binds every digit 1-5 to a real inspector.* command (5 now
+    // opens the chart tab, which would switch inspectorTab away from
+    // "trackers" and stop this test's setInspect calls from ever being
+    // read), so the harmless no-op key moved from "5" to the still-unbound
+    // "0".
     var o = make()
     o.svc.torrents = list3()
     key(o.c, "2")
     o.svc.setInspect(hh("c"), "trackers", { trackers: [], error: "HTTP 500" })
     compare(o.c.messageLine.text, "Couldn't read trackers: HTTP 500")
     compare(o.c.messageLine.tone, "urgent")
-    key(o.c, "5")   // any key ends the note
+    key(o.c, "0")   // any key ends the note
     compare(o.c.messageLine.text, "")
     o.svc.setInspect(hh("c"), "trackers", { trackers: [], error: "HTTP 500" })
     compare(o.c.messageLine.text, "", "the same error on the next tick is not noted again")
@@ -1666,10 +1706,10 @@ TestCase {
     compare(o.c.messageLine.text, "")
     o.svc.setInspect(hh("c"), "trackers", { trackers: [], error: "HTTP 500" })
     compare(o.c.messageLine.text, "Couldn't read trackers: HTTP 500", "after a success, the error notes again")
-    key(o.c, "5")
+    key(o.c, "0")
     o.svc.setInspect(hh("c"), "trackers", { trackers: [], error: "timed out" })
     compare(o.c.messageLine.text, "Couldn't read trackers: timed out", "a different error notes")
-    key(o.c, "5")
+    key(o.c, "0")
     // a watch change re-arms: back on trackers, a fresh identical error notes
     wait(5)   // a later millisecond than the stored error, as in real use
     key(o.c, "3"); key(o.c, "2")

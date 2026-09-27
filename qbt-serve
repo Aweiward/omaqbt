@@ -38,6 +38,7 @@ import time
 REPO_DIR = os.path.dirname(os.path.realpath(__file__))
 sys.path.insert(0, os.path.join(REPO_DIR, "lib"))
 import qbtsync  # noqa: E402
+import speedhist  # noqa: E402
 
 HEARTBEAT_INTERVAL = 5.0
 PROBE_INTERVAL = 10.0
@@ -157,11 +158,20 @@ def do_tick(state, force_probe=False):
         elif err:
             print(qbtsync.sanitize(err), file=sys.stderr)
 
+    now_wall = time.time()
     status, errors = qbtsync.build_status(
-        state["probe"], state["client"], state["sync"], state["slow"], time.time()
+        state["probe"], state["client"], state["sync"], state["slow"], now_wall
     )
     for message in errors:
         print(qbtsync.sanitize(message), file=sys.stderr)
+
+    if status.get("api"):
+        # Only when maindata was actually re-fetched this tick: a failed
+        # fetch leaves state["sync"].torrents exactly as it was, and
+        # feeding that stale snapshot in again would either replay old
+        # speeds as fresh samples or (read as "every torrent left
+        # maindata") wipe every buffer.
+        state["speedhist"].record(state["sync"].torrents, now_wall)
 
     out = {"type": "status"}
     out.update(status)
@@ -221,8 +231,10 @@ def read_inspect(state):
     tab = watch["tab"]
 
     if tab == "chart":
-        # Task 8 fills the series; Task 2 always answers an empty one.
-        _inspect_ok(state, {"type": "inspect", "hash": h, "tab": tab, "points": []})
+        # F9: reads state["speedhist"]'s buffer, never the network -- the
+        # buffer is fed once per tick, from maindata, in do_tick.
+        points = state["speedhist"].points(h)
+        _inspect_ok(state, {"type": "inspect", "hash": h, "tab": tab, "points": points})
         return
 
     if tab == "trackers":
@@ -424,6 +436,7 @@ def main():
         "inspect_client": inspect_client,
         "sync": qbtsync.SyncState(),
         "slow": qbtsync.SlowCache(interval=10),
+        "speedhist": speedhist.SpeedHistory(),
         "cadence_ms": DEFAULT_CADENCE_MS,
         "last_probe_at": time.monotonic(),
         "watch": None,

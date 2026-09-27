@@ -607,26 +607,53 @@ class WatchPeersTests(unittest.TestCase):
 
 
 class WatchChartTests(unittest.TestCase):
-    """Task 2 always answers the chart tab with an empty series (Task 8
-    fills it in) and makes no HTTP call at all to do it."""
+    """The chart tab reads Task 8's speedhist buffer, never the network
+    (F9): the buffer is fed from maindata in do_tick, so watching chart
+    itself makes no HTTP call at all, whichever hash it's for."""
 
-    def test_watch_chart_returns_empty_points_with_no_http_call(self):
+    def _assert_no_chart_http_calls(self, env):
+        entries = _read_log(env["QBT_FIXTURE_LOG"])
+        paths = {e["path"] for e in entries}
+        self.assertNotIn("/api/v2/torrents/properties", paths)
+        self.assertNotIn("/api/v2/torrents/pieceStates", paths)
+        self.assertNotIn("/api/v2/torrents/trackers", paths)
+        self.assertNotIn("/api/v2/sync/torrentPeers", paths)
+
+    def test_watch_chart_returns_points_for_a_torrent_with_traffic(self):
+        # "a" * 40 is maindata-full.json's debian.iso (infohash_v1), whose
+        # dlspeed (1887436, upspeed 0) is non-zero on the very first tick --
+        # so by the time this watch is answered, its buffer already holds
+        # that sample.
         with harness.fixture_server() as (port, env):
             with ServeProcess(env) as sp:
                 sp.readline()
                 h = "a" * 40
                 sp.send({"cmd": "watch", "hash": h, "tab": "chart"})
                 resp = sp.read_until(lambda o: o.get("type") == "inspect", timeout=5)
+                self.assertEqual(resp["hash"], h)
+                self.assertEqual(resp["tab"], "chart")
+                self.assertNotIn("error", resp)
+                self.assertIsInstance(resp["points"], list)
+                self.assertGreater(len(resp["points"]), 0)
+                last = resp["points"][-1]
+                self.assertEqual(last[1], 1887436)
+                self.assertEqual(last[2], 0)
+
+                self._assert_no_chart_http_calls(env)
+
+    def test_watch_chart_returns_empty_points_for_a_torrent_with_no_samples(self):
+        # Not in maindata at all, so it never gets a buffer.
+        with harness.fixture_server() as (port, env):
+            with ServeProcess(env) as sp:
+                sp.readline()
+                h = "c" * 40
+                sp.send({"cmd": "watch", "hash": h, "tab": "chart"})
+                resp = sp.read_until(lambda o: o.get("type") == "inspect", timeout=5)
                 self.assertEqual(
                     resp, {"type": "inspect", "hash": h, "tab": "chart", "points": []}
                 )
 
-                entries = _read_log(env["QBT_FIXTURE_LOG"])
-                paths = {e["path"] for e in entries}
-                self.assertNotIn("/api/v2/torrents/properties", paths)
-                self.assertNotIn("/api/v2/torrents/pieceStates", paths)
-                self.assertNotIn("/api/v2/torrents/trackers", paths)
-                self.assertNotIn("/api/v2/sync/torrentPeers", paths)
+                self._assert_no_chart_http_calls(env)
 
 
 class WatchCollapseTests(unittest.TestCase):

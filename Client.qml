@@ -141,6 +141,8 @@ Item {
   readonly property bool sidecarUp: !!service && !service.sidecarDown
   readonly property var trackersView: InspectorView.listTab("trackers", inspectorTab === "trackers" ? inspectEntry : undefined, inspectSince, inspectNow, sidecarUp, cursorRow)
   readonly property var peersView: InspectorView.listTab("peers", inspectorTab === "peers" ? inspectEntry : undefined, inspectSince, inspectNow, sidecarUp, cursorRow)
+  // InspectorView.chartTab(...): {state, series, error}.
+  readonly property var chartView: InspectorView.chartTab(inspectorTab === "chart" ? inspectEntry : undefined, inspectSince, inspectNow, sidecarUp)
   // The Info tab's pieces bar and Transfer/Torrent groups. Read from the
   // "|info" key regardless of which tab is shown, unlike inspectEntry
   // above: a switch to Files needs this torrent's no-metadata state too,
@@ -682,6 +684,7 @@ Item {
             fileIndex: root.fileIndex
             trackers: root.trackersView
             peers: root.peersView
+            chart: root.chartView
             trackerIndex: root.trackerIndex
             peerIndex: root.peerIndex
             focusedPane: root.pane === "inspector"
