@@ -521,6 +521,42 @@ finally:
     shutil.rmtree(magnet_state, ignore_errors=True)
     shutil.rmtree(stub_root, ignore_errors=True)
 
+# 14e. a signal mid-swap (TERM while blocked in a wait, after the delete
+#      went out) must still land the magnet in the inbox.
+import signal
+import time
+for fault, wait_path, why in (
+    ({"delete": "noop"}, "/api/v2/torrents/delete", "wait-for-gone"),
+    ({"add": "silent"}, "/api/v2/torrents/add", "wait-for-present"),
+):
+    extra_env, magnet_state, raise_log, notify_log, stub_root = fetch_metadata_env(timeout=30)
+    try:
+        with harness.fixture_server(extra_env=extra_env) as (port, env):
+            Path(env["QBT_FIXTURE_CONTROL"]).write_text(json.dumps(fault))
+            proc = subprocess.Popen(["./qbt", "fetch-metadata", HASH_NOMETA], env=env, text=True,
+                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            deadline = time.monotonic() + 10
+            while time.monotonic() < deadline and not any(e["path"] == wait_path for e in read_log(env)):
+                time.sleep(0.05)
+            time.sleep(0.3)
+            proc.send_signal(signal.SIGTERM)
+            try:
+                out, err = proc.communicate(timeout=15)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                out, err = proc.communicate()
+            label = f"fetch-metadata TERM during {why}"
+            check(f"{label}: exit != 0", proc.returncode != 0)
+            inbox_path = magnet_state / "magnet-inbox.jsonl"
+            check(f"{label}: inbox has the magnet", inbox_path.exists() and MAGNET_NOMETA in inbox_path.read_text())
+            check(f"{label}: never printed the magnet", MAGNET_NOMETA not in err)
+            if inbox_path.exists():
+                lines = [ln for ln in inbox_path.read_text().splitlines() if ln.strip()]
+                check(f"{label}: inboxed exactly once", len(lines) == 1)
+    finally:
+        shutil.rmtree(magnet_state, ignore_errors=True)
+        shutil.rmtree(stub_root, ignore_errors=True)
+
 # 15. the inbox cap must not apply to a rescue: with 20 unrelated magnets
 #     already queued (the ordinary cap threshold), fetch-metadata's own
 #     rescue must still land its magnet as entry 21, not fail as "inbox

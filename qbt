@@ -456,6 +456,9 @@ fetch_metadata_wait_for() {
 # path.
 fetch_metadata_rescue() {
   local hash=$1 magnet=$2
+  # Disarm the swap's signal trap first, so a second signal can't start
+  # a second rescue while this one runs.
+  trap - TERM HUP INT
   # A subshell: cmd_magnet_inbox's own `die` (e.g. some unexpected failure)
   # must only end that subshell, never this command, and its stdout
   # ({"ok":true}) must never leak onto ours.
@@ -556,6 +559,11 @@ cmd_fetch_metadata() {
   # kill the script here with the torrent already gone and no rescue).
   # Wrapping it in a command substitution runs it in a subshell instead, so
   # a `die` there only fails the assignment.
+  # From the delete on, the torrent may be gone: a TERM/HUP/INT (the
+  # window closing, a logout) must still put the magnet in the inbox.
+  # "$hash"/"$magnet" expand when the trap fires, from this function's
+  # locals. Cleared once the re-add is listed, or by the rescue itself.
+  trap 'fetch_metadata_rescue "$hash" "$magnet"; exit 1' TERM HUP INT
   local delete_resp
   if ! delete_resp=$(api POST "/api/v2/torrents/delete" "hashes=${hash}&deleteFiles=false" 2>&1); then
     fetch_metadata_rescue "$hash" "$magnet"
@@ -578,6 +586,7 @@ cmd_fetch_metadata() {
     fetch_metadata_rescue "$hash" "$magnet"
   fi
   fetch_metadata_wait_for "$hash" "$timeout" present || fetch_metadata_rescue "$hash" "$magnet"
+  trap - TERM HUP INT
 
   printf '%s\n' '{"ok":true}'
 }
