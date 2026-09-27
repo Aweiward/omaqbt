@@ -64,32 +64,39 @@ function elideHash(hash) {
 // --- redactUrl ----------------------------------------------------------
 
 // scheme://authority(/path?query#fragment)? -- authority is everything up
-// to the first /, ? or # (so a userinfo@ or :port is captured here, but
-// nothing past the authority ever is).
-var URL_RE = /^([a-zA-Z][a-zA-Z0-9+.-]*):\/\/([^\/?#]+)([\s\S]*)$/;
+// to the first /, \, ? or # (so a userinfo@ or :port is captured here, but
+// nothing past the authority ever is). "\" is included because WHATWG URL
+// parsing treats a backslash like "/" for special schemes, so
+// "udp://t.example:1337\abc123" must not leave "\abc123" inside the
+// authority.
+var URL_RE = /^([a-zA-Z][a-zA-Z0-9+.-]*):\/\/([^\/\\?#]+)([\s\S]*)$/;
 
 // stripUserinfo(authority) -> authority with any "user[:pass]@" prefix
-// removed (I1: a tracker's passkey can ride in a URL's userinfo, e.g.
+// removed, splitting at the LAST "@" in the authority (I1: a tracker's
+// passkey can ride in a URL's userinfo, e.g.
 // "https://user:abc123@t.example/announce" -- the shown host must never
-// carry it).
+// carry it). WHATWG URL parsing and qBittorrent both split userinfo at the
+// last "@" of the authority, not the first, so a password that itself
+// contains "@" (e.g. "user:abc@123@t.example") still yields the real host.
 function stripUserinfo(authority) {
-  return String(authority === undefined || authority === null ? "" : authority).replace(/^[^@]*@/, "");
+  return String(authority === undefined || authority === null ? "" : authority).replace(/^[\s\S]*@/, "");
 }
 
 // genericHead(s) -> {head, cut} for a URL that isn't scheme://authority(...)
 // (M5: schemeless, or otherwise unparseable, e.g.
 // "t.example/abc123/announce" or a bare "?passkey=abc123"): `head` is
-// everything up to the first /, ? or # with any userinfo before it
-// stripped, and `cut` is true when a delimiter was actually found (so a
-// caller can tell "nothing to redact" from "redacted down to nothing").
-// Shared by redactUrl (path/query never shown) and urlHost (the host
-// column, which must never carry a userinfo passkey either).
+// everything up to the first /, \, ? or # with any userinfo before it
+// stripped (at the last "@", same as stripUserinfo), and `cut` is true
+// when a delimiter was actually found (so a caller can tell "nothing to
+// redact" from "redacted down to nothing"). Shared by redactUrl
+// (path/query never shown) and urlHost (the host column, which must never
+// carry a userinfo passkey either).
 function genericHead(s) {
   var text = String(s === undefined || s === null ? "" : s);
   var cut = -1;
   for (var i = 0; i < text.length; i++) {
     var c = text.charAt(i);
-    if (c === "/" || c === "?" || c === "#") { cut = i; break; }
+    if (c === "/" || c === "?" || c === "#" || c === "\\") { cut = i; break; }
   }
   var head = cut === -1 ? text : text.slice(0, cut);
   var at = head.lastIndexOf("@");

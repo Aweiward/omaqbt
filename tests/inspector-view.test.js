@@ -57,6 +57,11 @@ test("redactUrl strips userinfo from the authority", () => {
   assert.equal(I.redactUrl("http://abc123@t.example:80"), "http://t.example:80");
 });
 
+test("redactUrl/urlHost regressions: IPv6 host, and an @ that's in the path (not the authority)", () => {
+  assert.equal(I.trackerRows([tracker({ url: "http://[::1]:8080/announce?pk=abc123" })]).rows[0].host, "[::1]:8080");
+  assert.equal(I.redactUrl("https://t.example/a@abc123/x"), "https://t.example/…");
+});
+
 test("trackerRows().rows[0].host never carries a URL's userinfo", () => {
   const cases = [
     "https://user:abc123@t.example/announce",
@@ -66,6 +71,49 @@ test("trackerRows().rows[0].host never carries a URL's userinfo", () => {
     const row = I.trackerRows([tracker({ url: c })]).rows[0];
     assert.ok(!row.host.includes("abc123"), c);
     assert.ok(!I.redactUrl(c).includes("abc123"), c);
+  }
+});
+
+// --- a raw "@" in the password: split at the LAST "@" of the authority ---
+// (WHATWG URL parsing and qBittorrent both split userinfo at the last "@"
+// of the authority, not the first.)
+
+test("redactUrl strips userinfo at the LAST @ when the password itself carries an @", () => {
+  assert.equal(I.redactUrl("http://user:abc@123@t.example/a"), "http://t.example/…");
+  assert.equal(I.redactUrl("http://a@b@t.example/x"), "http://t.example/…");
+});
+
+test("trackerRows().rows[0].host splits userinfo at the LAST @ too", () => {
+  const cases = [
+    { url: "http://user:abc@123@t.example/a", host: "t.example" },
+    { url: "http://a@b@t.example/x", host: "t.example" }
+  ];
+  for (const c of cases) {
+    const row = I.trackerRows([tracker({ url: c.url })]).rows[0];
+    assert.ok(!row.host.includes("abc"), c.url);
+    assert.ok(!row.host.includes("123"), c.url);
+    assert.equal(row.host, c.host, c.url);
+  }
+});
+
+// --- a backslash is a path/authority terminator too (WHATWG special
+// schemes treat "\" like "/") ------------------------------------------
+
+test("redactUrl treats a backslash as a path separator, in the scheme path", () => {
+  assert.equal(I.redactUrl("udp://t.example:1337\\abc123"), "udp://t.example:1337/…");
+  assert.equal(I.redactUrl("https://t.example\\announce?passkey=abc123"), "https://t.example/…");
+});
+
+test("trackerRows().rows[0].host never carries what follows a backslash", () => {
+  const cases = [
+    { url: "udp://t.example:1337\\abc123", host: "t.example:1337" },
+    { url: "https://t.example\\announce?passkey=abc123", host: "t.example" }
+  ];
+  for (const c of cases) {
+    const row = I.trackerRows([tracker({ url: c.url })]).rows[0];
+    assert.ok(!row.host.includes("abc"), c.url);
+    assert.ok(!row.host.includes("123"), c.url);
+    assert.equal(row.host, c.host, c.url);
   }
 });
 
