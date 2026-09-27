@@ -1192,6 +1192,51 @@ with harness.fixture_server(extra_env=library_env(lib)) as (port, env):
     r = subprocess.run(argv, env=env, capture_output=True)
     check("doesn't-exist copy for invalid UTF-8", r.returncode != 0 and r.stderr.decode("utf-8", "replace").strip() == "That tag doesn't exist.")
 
+# 28. Fix round 2: every message that shows a name which only passed the
+#     existing-name check (a legacy name may carry ESC/ANSI sequences)
+#     falls back to "that category"/"that tag". Exact stderr bytes.
+ESC_CAT = "legacy\x1b[31mFAKE\x1b[0m"
+ESC_TAG = "tag\x1b[31mFAKE\x1b[0m"
+lib = {
+    "categories": {
+        ESC_CAT: {"savePath": ""},
+        ESC_CAT + "/sub": {"savePath": ""},
+        "esc-limits\x1b[0m": {"savePath": "", "ratio_limit": 1.5},
+        "esc-move\x1b[2J": {"savePath": ""},
+    },
+    "tags": [ESC_TAG, "ok-tag"],
+    "torrents": {HASH_A: {"category": "esc-move\x1b[2J", "tags": ESC_TAG}},
+}
+with harness.fixture_server(extra_env=library_env(lib)) as (port, env):
+    def raw(*args):
+        r = subprocess.run(["./qbt", *args], env=env, capture_output=True)
+        return r.returncode, r.stderr
+    for args, want in (
+        (["category-rename", ESC_CAT, "clean"], b"That category has subcategories; rename or remove them first.\n"),
+        (["category-rename", "esc-limits\x1b[0m", "clean"], b"That category has its own share limits, which the WebUI can't copy; change them in qBittorrent first.\n"),
+        (["category-path", "esc-limits\x1b[0m", "/srv/x"], b"That category has its own share limits, which the WebUI can't copy; change them in qBittorrent first.\n"),
+    ):
+        before = len(read_log(env))
+        rc, err = raw(*args)
+        check(f"ESC name {args[0]}: exact stderr {want!r}", rc != 0 and err == want)
+        check(f"ESC name {args[0]}: no write", not posts_to(new_entries(env, before)))
+    control(env, {"setCategory": "409"})
+    rc, err = raw("category-rename", "esc-move\x1b[2J", "clean-move")
+    check("ESC name in the incomplete-rename copy: exact stderr",
+          rc != 0 and err == b"Rename incomplete (0 of 1 moved); press c on that category again to finish.\n")
+    control(env, {"removeTags": "409"})
+    rc, err = raw("tags", HASH_A, "--add", "ok-tag", "--remove", ESC_TAG)
+    check("ESC tag in the tags failure copy: exact stderr",
+          rc != 0 and err == b"Tags: added ok-tag; removing that tag failed (HTTP 409)\n")
+    control(env, {"deleteTags": "409"})
+    rc, err = raw("tag-rename", ESC_TAG, "clean-tag")
+    check("ESC tag in the incomplete tag-rename copy: exact stderr",
+          rc != 0 and err == b"Rename incomplete (1 of 1 moved); press c on that tag again to finish.\n")
+    control(env, {"removeTags": "409"})
+    rc, err = raw("tags", HASH_A, "--add", ESC_TAG, "--remove", "ok-tag")
+    check("ESC tag in the added list: exact stderr",
+          rc != 0 and err == b"Tags: added that tag; removing ok-tag failed (HTTP 409)\n")
+
 if failures:
     print(f"\n{len(failures)} check(s) failed", file=sys.stderr)
     sys.exit(1)

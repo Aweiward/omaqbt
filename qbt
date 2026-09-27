@@ -1354,6 +1354,13 @@ name_exists() {
   fi
 }
 
+# A name that only passed the existing-name check, for the middle of a
+# message: itself when name_is_printable, else "that category"/"that tag"
+# (a legacy name may carry ESC/ANSI sequences or invalid UTF-8).
+shown_name() {
+  if name_is_printable "$2"; then printf '%s' "$2"; else printf 'that %s' "$1"; fi
+}
+
 require_name() {
   name_exists "$1" "$2" && return 0
   name_is_printable "$2" && die "$2 doesn't exist."
@@ -1371,7 +1378,10 @@ require_default_share_limits() {
   own=$(jq -r --arg n "$name" '.[$n] |
     ((.ratio_limit // -2) != -2) or ((.seeding_time_limit // -2) != -2)
     or ((.inactive_seeding_time_limit // -2) != -2) or ((.share_limit_action // "Default") != "Default")' <<<"$NAMES_JSON")
-  [[ $own == false ]] || die "$name has its own share limits, which the WebUI can't copy; change them in qBittorrent first."
+  [[ $own == false ]] && return 0
+  local rest="has its own share limits, which the WebUI can't copy; change them in qBittorrent first."
+  name_is_printable "$name" && die "$name $rest"
+  die "That category $rest"
 }
 
 # A category's download path as qBittorrent 5.2.3 serves it
@@ -1478,11 +1488,11 @@ in_list() {
   return 1
 }
 
-# Joins its arguments with ", ".
-join_names() {
+# Joins tag names with ", ", each through shown_name.
+join_tag_names() {
   local out="" n
   for n in "$@"; do
-    out+=${out:+, }$n
+    out+=${out:+, }$(shown_name tag "$n")
   done
   printf '%s' "$out"
 }
@@ -1538,11 +1548,11 @@ cmd_tags() {
       for i in "${!CHUNKS[@]}"; do
         if ! api_try POST "/api/v2/torrents/${route}" "hashes=${CHUNKS[i]}&tags=$(uri "$t")"; then
           local -a parts=()
-          (( ${#added[@]} )) && parts+=("added $(join_names "${added[@]}")")
-          (( ${#removed[@]} )) && parts+=("removed $(join_names "${removed[@]}")")
+          (( ${#added[@]} )) && parts+=("added $(join_tag_names "${added[@]}")")
+          (( ${#removed[@]} )) && parts+=("removed $(join_tag_names "${removed[@]}")")
           local doing=adding
           [[ $verb == remove ]] && doing=removing
-          parts+=("${doing} ${t} failed (${API_FAIL})")
+          parts+=("${doing} $(shown_name tag "$t") failed (${API_FAIL})")
           local msg="" p
           for p in "${parts[@]}"; do msg+=${msg:+; }$p; done
           die "Tags: ${msg}"
@@ -1595,7 +1605,8 @@ cmd_rename() {
     # Same reason: deleting old would remove its subcategories and move
     # their torrents to old's parent.
     jq -e --arg p "$old/" 'any(keys[]; startswith($p))' <<<"$NAMES_JSON" >/dev/null \
-      && die "$old has subcategories; rename or remove them first."
+      && { name_is_printable "$old" && die "$old has subcategories; rename or remove them first."
+           die "That category has subcategories; rename or remove them first."; }
     require_default_share_limits "$old"
   fi
   local exists=false
@@ -1631,7 +1642,8 @@ cmd_rename() {
     fi
   fi
 
-  local incomplete_tail="press c on ${old} again to finish."
+  local incomplete_tail
+  incomplete_tail="press c on $(shown_name "$kind" "$old") again to finish."
   local moved=0 i
   if [[ -n $moving ]]; then
     hash_chunks "$moving"
