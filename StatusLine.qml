@@ -36,9 +36,12 @@ Rectangle {
   property string messageTone: "muted"
   // [{key, label}] from View.modeHints.
   property var hints: []
-  // "filter", "move", "trackerAdd" or "trackerEdit" while mode is INSERT.
+  // "filter", "move", "trackerAdd", "trackerEdit", or a filters-pane
+  // purpose ("categoryAdd", "tagAdd", "categoryRename", "tagRename",
+  // "categoryPath") while mode is INSERT.
   property string inputPurpose: ""
-  // The tracker a trackerEdit changes, redacted (View.inputPrompt).
+  // The tracker a trackerEdit changes, redacted, or the category or tag
+  // being renamed or re-pathed (View.inputPrompt).
   property string inputShown: ""
   readonly property var inputPrompt: View.inputPrompt(inputPurpose, inputShown)
   // The active filter while the filters pane is collapsed ("▸ Seeding",
@@ -164,7 +167,8 @@ Rectangle {
     }
 
     // INSERT: a prompt and the text field. A tracker prompt ("Change
-    // udp://host:port/… to:") and its rejection are long, so for those the
+    // udp://host:port/… to:"), a category or tag prompt ("Rename <a
+    // 64-character name> to") and their rejections are long, so for those the
     // field takes only the room left after the prompt and the message
     // (at least 160 px), and the prompt elides before the message would:
     // an inline rejection must always be readable. "/" and "move to" keep
@@ -174,7 +178,7 @@ Rectangle {
       visible: line.mode === "INSERT"
       anchors.verticalCenter: parent.verticalCenter
       spacing: Style.space(8)
-      readonly property bool fitted: line.inputPurpose === "trackerAdd" || line.inputPurpose === "trackerEdit"
+      readonly property bool fitted: line.inputPurpose !== "filter" && line.inputPurpose !== "move"
       // What the message needs, with the gap before it (0 when hidden).
       readonly property real messageRoom: line.message !== "" ? insertMessage.implicitWidth + spacing : 0
       Part {

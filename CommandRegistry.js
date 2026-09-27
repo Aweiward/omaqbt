@@ -99,6 +99,16 @@ var commands = [
   { id: "filter.up", title: "Up", group: "View", keys: ["k"], modes: ["NORMAL"], panes: ["filters"], needs: "none" },
   { id: "filter.apply", title: "Apply filter", group: "View", keys: ["Enter"], modes: ["NORMAL"], panes: ["filters"], needs: "none" },
 
+  // NORMAL, filters pane: manage the category or tag under the filters
+  // cursor (slice 3a; the 2b trackers-tab verbs). The row is captured at
+  // key time (args.target, from s.libraryTarget: {kind: "category"|"tag",
+  // value: name, label}); value "" is Uncategorized/Untagged, where only
+  // `a` (add to that group) applies. x always confirms.
+  { id: "library.add", title: "New category or tag", group: "Library", keys: ["a"], modes: ["NORMAL"], panes: ["filters"], needs: "libraryGroup" },
+  { id: "library.rename", title: "Rename category or tag", group: "Library", keys: ["c"], modes: ["NORMAL"], panes: ["filters"], needs: "libraryName" },
+  { id: "library.path", title: "Category save path", group: "Library", keys: ["p"], modes: ["NORMAL"], panes: ["filters"], needs: "categoryName" },
+  { id: "library.remove", title: "Delete category or tag", group: "Library", keys: ["x"], modes: ["NORMAL"], panes: ["filters"], needs: "libraryName" },
+
   // NORMAL, inspector pane: the list the current tab shows (trackers,
   // peers or files; the window ignores these on Info). Space cycles a
   // file's priority like a widget click (Files only).
@@ -211,6 +221,9 @@ function normalizeState(state) {
     cursorNoMetadata: s.cursorNoMetadata === true,
     cursorStopped: s.cursorStopped === true,
     cursorPendingMagnet: s.cursorPendingMagnet === true,
+    // The filters pane's part (ClientView.libraryTarget): the category or
+    // tag row under the filters cursor, or null.
+    libraryTarget: s.libraryTarget || null,
     // PICKER (slice 3a): the overlay's own query-empty and multi-select
     // flags, read fresh from the caller each dispatch (ListOverlay/the
     // picker never keep their own copy of these -- see the PICKER rows).
@@ -279,6 +292,21 @@ function targetKind(s) {
   return t && typeof t === "object" ? String(t.kind || "") : "";
 }
 
+// The filters cursor's category/tag row: "group" (any row of the
+// Categories or Tags group, Uncategorized/Untagged included), "name" (a
+// named category or tag), "category" (a named category), or "".
+function libraryKind(s, want) {
+  var t = s.libraryTarget;
+  if (!t || typeof t !== "object") return false;
+  var kind = String(t.kind || "");
+  if (kind !== "category" && kind !== "tag") return false;
+  if (want === "group") return true;
+  if (String(t.value === undefined || t.value === null ? "" : t.value) === "") return false;
+  return want === "name" || kind === "category";
+}
+
+var LIBRARY_NEEDS = { libraryGroup: "group", libraryName: "name", categoryName: "category" };
+
 // preconditionMet(needs, s): torrent/selection need a cursor torrent (or
 // a VISUAL range); tracker/peer need that kind of row under the inspector
 // cursor (s.inspectorTarget); trackersTab needs the trackers tab focused
@@ -293,6 +321,7 @@ function preconditionMet(needs, s) {
   if (needs === "peer") return targetKind(s) === "peer";
   if (needs === "trackersTab") return s.trackersTab === true;
   if (needs === "noMetadata") return s.cursorNoMetadata === true && s.cursorPendingMagnet !== true;
+  if (Object.prototype.hasOwnProperty.call(LIBRARY_NEEDS, needs)) return libraryKind(s, LIBRARY_NEEDS[needs]);
   return true;
 }
 
@@ -302,6 +331,8 @@ function needsReason(needs, s) {
   if (preconditionMet(needs, s)) return "";
   if (needs === "tracker" || needs === "trackersTab") return "focus the trackers tab";
   if (needs === "peer") return "focus the peers tab";
+  if (needs === "categoryName") return "focus a category";
+  if (needs === "libraryGroup" || needs === "libraryName") return "focus a category or tag";
   if (needs === "noMetadata") {
     if (s.cursorPendingMagnet === true) return "already fetching metadata";
     if (s.hasTorrent === true) return "already has metadata";
@@ -321,12 +352,13 @@ function confirmCount(s) {
 
 // Inspector commands that confirm, by id -> their pending/confirm kind.
 // Each acts on the row captured into args.target at key time.
-var TARGET_CONFIRM_KINDS = { "tracker.remove": "trackerRemove", "peer.ban": "peerBan" };
+var TARGET_CONFIRM_KINDS = { "tracker.remove": "trackerRemove", "peer.ban": "peerBan", "library.remove": "libraryRemove" };
 
 // confirmRefused(id, target) -> whether a target CONFIRM command can't act
 // on its captured target at all, so asking would be pointless: the target
 // carries a `refusal` (for trackers, InspectorView.trackerRefusal: a "|"
-// in the URL, F13, or a URL qbt would reject). Such a command comes back
+// in the URL, F13, or a URL qbt would reject; for a category,
+// LibraryView.LIBRARY_NOT_READY while its folders aren't known). Such a command comes back
 // unconfirmed (args.confirmed unset, no CONFIRM); its handler says why
 // and does nothing else. The registry can't load InspectorView (node
 // requires this file as is), so the window computes the refusal.
@@ -357,6 +389,10 @@ function buildArgs(row, s) {
   // or drops the row can't change what `y` acts on).
   if (row.needs === "tracker" || row.needs === "peer") {
     args.target = copyTarget(s.inspectorTarget);
+  }
+  // Likewise the category or tag under the filters cursor.
+  if (Object.prototype.hasOwnProperty.call(LIBRARY_NEEDS, row.needs)) {
+    args.target = copyTarget(s.libraryTarget);
   }
   if (EXTEND_IDS[row.id] === true && s.mode === "VISUAL") {
     args.extend = true;
@@ -533,6 +569,23 @@ function resolveRow(s, row, now) {
   return { state: nextState, commandId: row.id, args: args };
 }
 
+// raiseConfirm(state, commandId, kind, args) -> {state, confirm}: a CONFIRM
+// the window raises itself, after INSERT rather than on a key (c's merge
+// or move, p's move). The pending entry has resolveRow's shape, so `y`
+// resolves to commandId with a copy of args plus confirmed: true, and
+// n/Esc to confirm.cancel. args.target is the target captured when the
+// key was pressed.
+function raiseConfirm(state, commandId, kind, args) {
+  var s = clearPrefix(normalizeState(state));
+  var a = assign(args || {}, {});
+  var target = a.target || null;
+  var pending = { kind: kind, commandId: commandId, args: a, target: target };
+  return {
+    state: assign(s, { mode: "CONFIRM", pending: pending }),
+    confirm: { commandId: commandId, kind: kind, label: target ? target.label : "", target: target }
+  };
+}
+
 // dispatchCommand(state, commandId) -> the same result dispatch() gives
 // for a key bound to `commandId` in state's mode and pane (the command
 // palette runs a command by id, not by key). No row for that id in this
@@ -571,6 +624,7 @@ if (typeof module !== "undefined" && module.exports) {
     commands: commands,
     dispatch: dispatch,
     dispatchCommand: dispatchCommand,
+    raiseConfirm: raiseConfirm,
     helpFor: helpFor,
     preconditionMet: preconditionMet,
     needsReason: needsReason,

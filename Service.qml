@@ -38,6 +38,9 @@ Scope {
   // /app/preferences, read on the slow timer.
   property string defaultSavePath: ""
   property var relocation: ({ torrentChanged: false, categoryPathChanged: false })
+  // The home directory, so the window predicts where `p ~/x` puts files
+  // (qbt expands ~/ with the same $HOME; LibraryView.movePlan's home).
+  readonly property string homeDir: Quickshell.env("HOME") || ""
   property var filesByHash: ({})
   // hash -> {state: "loading"|"ok"|"error", error}: lets a view tell a
   // files load in flight, an empty list and a failed read apart.

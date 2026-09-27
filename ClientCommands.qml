@@ -5,6 +5,7 @@ import "Model.js" as Model
 import "CommandRegistry.js" as Registry
 import "ClientView.js" as View
 import "InspectorView.js" as InspectorView
+import "LibraryView.js" as Library
 
 // The window's command -> action mapping: run() turns a command id from
 // CommandRegistry into Service calls and view changes on the Client it is
@@ -184,6 +185,172 @@ QtObject {
     endInput()
   }
 
+  // ---- categories and tags (the filters pane's a/c/p/x, slice 3a) --------------
+
+  // Ruling BM: category writes wait for qBittorrent's default save path.
+  // Fed to View.inspectorDispatch, which puts LIBRARY_NOT_READY on a
+  // category target's `refusal` until then.
+  readonly property bool libraryReady: Library.libraryReady(client.service)
+  // The filters pane's footer: the keys that apply to its cursor row.
+  readonly property var footerKeys: Library.footerKeys(client.inspectorNow.libraryTarget)
+  // The name the INSERT prompt shows: a tracker's redacted URL, or the
+  // category or tag being renamed or re-pathed.
+  readonly property string inputShown: trackerInput ? trackerInput.shown : (libraryInput ? libraryInput.target.value : "")
+
+  // The row an open a/c/p INSERT acts on, captured when the key was
+  // pressed: {target} (Registry's frozen copy, {kind, value, label}). The
+  // commit reads only this, never the filters cursor as it stands.
+  property var libraryInput: null
+  // ticket -> what a filters-pane write does once it succeeds: {follow}
+  // (LibraryView.followFilter's action, OV9) or {cursor} (a's new row).
+  property var libraryWatches: ({})
+
+  function isLibraryPurpose(purpose) {
+    return ["categoryAdd", "tagAdd", "categoryRename", "tagRename", "categoryPath"].indexOf(purpose) !== -1
+  }
+
+  // a, c or p: open INSERT on the captured row, or say why not (ruling BM).
+  function startLibraryInput(commandId, target) {
+    var c = client
+    if (!target) return
+    if (target.refusal) { c.note(target.refusal, "urgent"); return }
+    libraryInput = { target: target }
+    if (commandId === "library.add") startInput(target.kind + "Add", "")
+    else if (commandId === "library.rename") startInput(target.kind + "Rename", target.value)
+    else startInput("categoryPath", Library.explicitSavePath(target.value, c.service))
+  }
+
+  function refuseInput(text) {
+    client.note(text, "urgent")
+    stayInInsert()
+  }
+
+  // Enter on a filters-pane INSERT. raw is the field exactly as typed: a
+  // name is never trimmed, so an edge space gets its message instead of
+  // being dropped silently. Counts and moves read every torrent
+  // (Service.torrents, ruling BL), never the filtered table.
+  function commitLibrary(raw) {
+    var c = client
+    var svc = c.service
+    var t = libraryInput.target
+    var purpose = c.inputPurpose
+    var names = t.kind === "tag" ? svc.tags : svc.categories
+    var err
+    if (purpose === "categoryAdd" || purpose === "tagAdd") {
+      err = Library.nameError(t.kind, raw, names)
+      if (err !== "") { refuseInput(err); return }
+      endLibraryInput()
+      var ticket = t.kind === "tag" ? svc.addTag(raw, c.opts([])) : svc.addCategory(raw, "", c.opts([]))
+      trackLibrary(ticket, Library.libraryCopy("add", t.kind, raw), { cursor: { group: t.kind, value: raw } })
+      return
+    }
+    if (purpose === "categoryPath") {
+      var path = raw.trim()
+      err = Library.savePathError(path)
+      if (err !== "") { refuseInput(err); return }
+      endLibraryInput()
+      var plan = Library.movePlan({ kind: "path", name: t.value, path: path, home: svc.homeDir }, svc.torrents, svc)
+      askOrRun("library.path", "libraryPath", { target: t, path: path }, Library.pathConfirmLine(t.value, plan), "change")
+      return
+    }
+    // A rename (ruling BG): the new-name rules first (an existing name is
+    // a merge, not a clash), then qbt's rename refusals, then one CONFIRM
+    // for the merge and/or the move (G8, G9).
+    if (raw === t.value) { endLibraryInput(); return }
+    err = Library.nameError(t.kind, raw, [])
+    if (err === "" && t.kind === "category") err = Library.renameError(t.value, raw, names)
+    if (err !== "") { refuseInput(err); return }
+    endLibraryInput()
+    var exists = Library.hasName(names, raw)
+    var count = Library.usageCount(t.kind, t.value, svc.torrents, svc.magnetPendingHashes, true)
+    var moves = t.kind === "category" ? Library.movePlan({ kind: "rename", old: t.value, new: raw }, svc.torrents, svc) : []
+    askOrRun("library.rename", "libraryRename", { target: t, newName: raw, merge: exists },
+      Library.renameConfirmLine(t.value, raw, exists, count, moves), exists ? "merge" : "rename")
+  }
+
+  function endLibraryInput() {
+    libraryInput = null
+    endInput()
+  }
+
+  // Runs a c/p write now, or first raises its one CONFIRM (`line`, from
+  // LibraryView) when it merges or moves files; `y` comes back through run
+  // with args.confirmed.
+  function askOrRun(commandId, kind, args, line, accept) {
+    var c = client
+    if (line === "") { runLibraryWrite(commandId, args); return }
+    var r = Registry.raiseConfirm(c.regState, commandId, kind, args)
+    c.regState = r.state
+    c.confirmHashes = []
+    c.confirm = withLine(r.confirm, line, accept)
+  }
+
+  function withLine(confirm, line, accept) {
+    var out = ({})
+    for (var k in confirm) out[k] = confirm[k]
+    out.line = line
+    if (accept) out.accept = accept
+    return out
+  }
+
+  // Client.dispatchWith's hook for a CONFIRM a key raised: x's delete line
+  // is built here, at key time, from the target x captured (BF: a
+  // category counts its subcategories' torrents too, and names them).
+  function describeConfirm(confirm) {
+    if (!confirm || confirm.kind !== "libraryRemove" || !confirm.target) return confirm
+    var svc = client.service
+    var t = confirm.target
+    var isCat = t.kind === "category"
+    var count = Library.usageCount(t.kind, t.value, svc.torrents, svc.magnetPendingHashes)
+    var plan = isCat ? Library.movePlan({ kind: "remove", name: t.value }, svc.torrents, svc) : []
+    return withLine(confirm, Library.deleteConfirmLine(t.kind, t.value, count, isCat ? Library.subcategoryCount(t.value, svc.categories) : 0, plan), "delete")
+  }
+
+  // The write itself (args.target is the row captured at key time).
+  function runLibraryWrite(commandId, args) {
+    var svc = client.service
+    var t = args.target
+    var o = client.opts([])
+    var tag = t.kind === "tag"
+    if (commandId === "library.rename") {
+      trackLibrary(tag ? svc.renameTag(t.value, args.newName, args.merge === true, o) : svc.renameCategory(t.value, args.newName, args.merge === true, o),
+        Library.libraryCopy("rename", t.kind, t.value, args.newName), { follow: { kind: "rename", group: t.kind, old: t.value, new: args.newName } })
+    } else if (commandId === "library.path") {
+      trackLibrary(svc.setCategoryPath(t.value, args.path, o), Library.libraryCopy("path", t.kind, t.value), null)
+    } else {
+      trackLibrary(tag ? svc.removeTag(t.value, o) : svc.removeCategory(t.value, o),
+        Library.libraryCopy("remove", t.kind, t.value), { follow: { kind: "remove", group: t.kind, name: t.value } })
+    }
+  }
+
+  function trackLibrary(ticket, copy, watch) {
+    var c = client
+    c.messages = View.msgTrack(c.messages, ticket, "library", 0, [], copy)
+    if (!(Number(ticket) > 0) || !watch) return
+    var n = ({})
+    for (var k in libraryWatches) n[k] = libraryWatches[k]
+    n[String(ticket)] = watch
+    libraryWatches = n
+  }
+
+  // Client's actionFinished: once one of these writes succeeds, the active
+  // filter and the filters cursor follow a renamed or deleted name (OV9,
+  // Review Focus 4) and view.json saves; a's cursor goes to the new row.
+  function libraryFinished(ticket, ok) {
+    var w = libraryWatches[String(ticket)]
+    if (!w) return
+    var n = ({})
+    for (var k in libraryWatches) if (k !== String(ticket)) n[k] = libraryWatches[k]
+    libraryWatches = n
+    if (ok !== true) return
+    var c = client
+    if (w.cursor) { c.setFilterCursor(w.cursor); return }
+    var f = Library.followFilter(c.filter, w.follow)
+    var fc = Library.followFilter(c.filterCursor, w.follow)
+    if (fc !== c.filterCursor) c.setFilterCursor(fc)
+    if (f !== c.filter) c.applyFilter(f)
+  }
+
   // ---- fetch metadata only (f, slice 2b) ---------------------------------------
 
   // hash -> {ticket, done, at}: this window's fetch-metadata swaps. A
@@ -268,6 +435,11 @@ QtObject {
 
   function commitInput() {
     var c = client
+    if (isLibraryPurpose(c.inputPurpose)) {
+      if (libraryInput) commitLibrary(inputLine.inputValue())
+      else endInput()
+      return
+    }
     var text = inputLine.inputValue().trim()
     // Before the add-target check: a tracker URL is never added as a torrent.
     if (c.inputPurpose === "trackerAdd" || c.inputPurpose === "trackerEdit") {
@@ -303,6 +475,7 @@ QtObject {
     }
     c.moveHashes = []
     trackerInput = null
+    libraryInput = null
     endInput()
   }
 
@@ -588,6 +761,30 @@ QtObject {
       if (!args.target) return
       if (banRefusal !== "") { c.note(banRefusal, "urgent"); return }
       c.track(c.service.banPeer(args.target.value, c.opts([])), "ban", [])
+      return
+
+    // The filters pane (slice 3a): a/c/p open INSERT on the row captured
+    // at key time; c and p come back here with args.confirmed after their
+    // CONFIRM. x comes confirmed, or unconfirmed only when the registry
+    // refused it (a category before its folders are known): say why.
+    case "library.add":
+      startLibraryInput(commandId, args.target)
+      return
+
+    case "library.rename":
+    case "library.path":
+      if (args.confirmed === true && args.target) runLibraryWrite(commandId, args)
+      else startLibraryInput(commandId, args.target)
+      return
+
+    case "library.remove":
+      c.confirmHashes = []
+      if (!args.target) return
+      if (args.confirmed !== true) {
+        if (args.target.refusal) c.note(args.target.refusal, "urgent")
+        return
+      }
+      runLibraryWrite(commandId, args)
       return
 
     case "torrent.fetchMetadata":

@@ -158,12 +158,14 @@ Item {
   property int peerIndex: 0
   onTrackersViewChanged: trackerIndex = commands.stickRow("trackers", trackersView.rows, trackerIndex)
   onPeersViewChanged: peerIndex = commands.stickRow("peers", peersView.rows, peerIndex)
-  // What x/c/b/f act on (View.inspectorDispatch), fed to every dispatch.
+  // What x/c/b/f act on (View.inspectorDispatch, with the filters pane's
+  // a/c/p/x row), fed to every dispatch.
   // inspectorState is its copy that only changes with its values, so a
   // status tick doesn't rebuild an open palette's rows.
   readonly property var inspectorNow: View.inspectorDispatch({ pane: pane, state: tableState, tab: inspectorTab,
     trackers: trackersView.rows, trackerIndex: trackerIndex, peers: peersView.rows, peerIndex: peerIndex, row: cursorRow,
-    cursorHash: cursorHash, noMeta: infoTab.noMeta, pending: service ? service.magnetPendingHashes : [] })
+    cursorHash: cursorHash, noMeta: infoTab.noMeta, pending: service ? service.magnetPendingHashes : [],
+    filterCursor: filterCursor, filterEntries: filterEntries, libraryReady: commands.libraryReady })
   property var inspectorState: View.inspectorDispatch({})
   onInspectorNowChanged: if (!View.sameInspectorState(inspectorState, inspectorNow)) inspectorState = inspectorNow
 
@@ -471,7 +473,7 @@ Item {
     regState = res.state
     anchorHash = View.nextAnchor(res.state.mode, res.commandId, anchorHash, cursorHash)
     if (res.confirm) {
-      confirm = res.confirm
+      confirm = commands.describeConfirm(res.confirm)
       confirmHashes = targets
       return
     }
@@ -528,6 +530,7 @@ Item {
       if (!root.viewTouched) root.applyViewState(root.service.viewState)
     }
     function onActionFinished(ticket, ok, error, origin, hashes) {
+      commands.libraryFinished(ticket, ok)
       // Strictly this window's own tickets (msgFinish ignores the rest): a
       // pending-magnet drop can emit extra window-origin signals that
       // carry our hashes.
@@ -628,6 +631,7 @@ Item {
             activeFilter: root.filter
             cursorFilter: root.filterCursor
             focusedPane: root.pane === "filters"
+            footerKeys: commands.footerKeys
             onItemClicked: function(group, value) {
               root.leaveInsert()
               root.setPane("filters")
@@ -746,7 +750,7 @@ Item {
         message: root.statusMessage.text
         messageTone: root.statusMessage.tone
         inputPurpose: root.inputPurpose
-        inputShown: commands.trackerInput ? commands.trackerInput.shown : ""
+        inputShown: commands.inputShown
         filterChip: View.filterChip(root.layout, root.filter)
         hints: View.modeHints(root.mode, {
           accept: root.confirm ? View.confirmLine(root.confirm).accept : "",

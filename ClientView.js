@@ -512,6 +512,10 @@ function progressText(kind, count) {
   return "Working…";
 }
 
+// The `y` hint of each library confirm; a rename that merges passes its
+// own ("merge").
+var LIBRARY_ACCEPT = { libraryRemove: "delete", libraryRename: "rename", libraryPath: "change" };
+
 // confirmLine(confirm) -> the CONFIRM status line, from
 // CommandRegistry.dispatch's `confirm` result {commandId, count, withFiles}.
 // {lead, strong, tail, accept}: "Delete 2 torrents" + "and their files" +
@@ -520,6 +524,11 @@ function progressText(kind, count) {
 // its URL; a peer's IP, without the port: the ban is IP-wide).
 function confirmLine(confirm) {
   var c = confirm || {};
+  // A filters-pane confirm (slice 3a): the window built the whole line at
+  // key time (LibraryView's delete/rename/path copy) and put it on `line`.
+  if (Object.prototype.hasOwnProperty.call(LIBRARY_ACCEPT, c.kind)) {
+    return { lead: String(c.line || ""), strong: "", tail: "", accept: c.accept ? String(c.accept) : LIBRARY_ACCEPT[c.kind] };
+  }
   if (c.kind === "trackerRemove" || c.kind === "peerBan") {
     var label = String(c.label !== undefined && c.label !== null ? c.label : ((c.target || {}).label || ""));
     if (c.kind === "trackerRemove") {
@@ -710,6 +719,12 @@ function inputPrompt(purpose, shown) {
   if (purpose === "move") return { prompt: "move to", placeholder: "/absolute/path" };
   if (purpose === "trackerAdd") return { prompt: "Add tracker URL", placeholder: TRACKER_URL_PLACEHOLDER };
   if (purpose === "trackerEdit") return { prompt: "Change " + String(shown || "") + " to:", placeholder: TRACKER_URL_PLACEHOLDER };
+  // The filters pane's categories and tags (slice 3a); `shown` is the name
+  // being renamed or re-pathed, as the status spells it.
+  if (purpose === "categoryAdd") return { prompt: "New category", placeholder: "" };
+  if (purpose === "tagAdd") return { prompt: "New tag", placeholder: "" };
+  if (purpose === "categoryRename" || purpose === "tagRename") return { prompt: "Rename " + String(shown || "") + " to", placeholder: "" };
+  if (purpose === "categoryPath") return { prompt: "Save path for " + String(shown || ""), placeholder: "empty = default" };
   return { prompt: "/", placeholder: "filter by name, or paste a magnet" };
 }
 
@@ -724,6 +739,9 @@ function modeHints(mode, ctx) {
     if (c.purpose === "move") return [{ key: "Enter", label: "move" }, { key: "Esc", label: "cancel" }];
     if (c.purpose === "trackerAdd") return [{ key: "Enter", label: "add" }, { key: "Esc", label: "cancel" }];
     if (c.purpose === "trackerEdit") return [{ key: "Enter", label: "change" }, { key: "Esc", label: "cancel" }];
+    if (c.purpose === "categoryAdd" || c.purpose === "tagAdd") return [{ key: "Enter", label: "create" }, { key: "Esc", label: "cancel" }];
+    if (c.purpose === "categoryRename" || c.purpose === "tagRename") return [{ key: "Enter", label: "rename" }, { key: "Esc", label: "cancel" }];
+    if (c.purpose === "categoryPath") return [{ key: "Enter", label: "set" }, { key: "Esc", label: "cancel" }];
     return [{ key: "Enter", label: "keep filter" }, { key: "Esc", label: "cancel" }];
   }
   // The palette shows its own key hints in its footer.
@@ -818,7 +836,7 @@ function targetHashes(mode, rows, cursorHash, anchorHash) {
 // dispatchState(regState, pane, state, hasCursorRow, targets, inspector)
 // -> the state handed to CommandRegistry.dispatch. selectionCount means
 // something only while mode is VISUAL (the registry contract), so it is 0
-// otherwise. `inspector` is inspectorDispatch's result; its five fields are
+// otherwise. `inspector` is inspectorDispatch's result; its fields are
 // always written (null/false without one), so a target a previous dispatch
 // left in regState never carries over.
 function dispatchState(regState, pane, state, hasCursorRow, targets, inspector) {
@@ -837,6 +855,7 @@ function dispatchState(regState, pane, state, hasCursorRow, targets, inspector) 
   st.cursorNoMetadata = i.cursorNoMetadata === true;
   st.cursorStopped = i.cursorStopped === true;
   st.cursorPendingMagnet = i.cursorPendingMagnet === true;
+  st.libraryTarget = i.libraryTarget || null;
   return st;
 }
 
@@ -847,7 +866,9 @@ function sameInspectorState(a, b) {
   if (!a || !b) return false;
   var ta = a.inspectorTarget, tb = b.inspectorTarget;
   var sameTarget = ta === tb || (!!ta && !!tb && ta.kind === tb.kind && ta.value === tb.value && ta.label === tb.label);
-  return sameTarget && a.trackersTab === b.trackersTab && a.filesTab === b.filesTab && a.cursorNoMetadata === b.cursorNoMetadata &&
+  var la = a.libraryTarget, lb = b.libraryTarget;
+  var sameLibrary = la === lb || (!!la && !!lb && la.kind === lb.kind && la.value === lb.value && la.refusal === lb.refusal);
+  return sameTarget && sameLibrary && a.trackersTab === b.trackersTab && a.filesTab === b.filesTab && a.cursorNoMetadata === b.cursorNoMetadata &&
     a.cursorStopped === b.cursorStopped && a.cursorPendingMagnet === b.cursorPendingMagnet;
 }
 
@@ -863,7 +884,34 @@ function peerIp(ipPort) {
   return m ? m[1] : s;
 }
 
-// inspectorDispatch(ctx) -> the inspector's part of the dispatch state:
+// Ruling BM (LibraryView.LIBRARY_NOT_READY; ClientView can't import
+// LibraryView, so the text is repeated here and pinned by a node test).
+var LIBRARY_NOT_READY = "Still reading qBittorrent's folders; try again in a moment.";
+
+// libraryTarget(ctx) -> the filters pane's part of the dispatch state: the
+// Categories or Tags row under the filters cursor, {kind: "category"|
+// "tag", value: name, label: name} (value "" for Uncategorized/Untagged),
+// or null on a Status or Trackers row, a cursor not in the list, or when
+// the filters pane isn't the one keys go to. A category carries
+// `refusal` (LIBRARY_NOT_READY) until ctx.libraryReady: every category
+// write waits for qBittorrent's default save path (ruling BM). The name
+// is the status's own spelling (a legacy name included); the pane shows
+// it as plain text.
+function libraryTarget(ctx) {
+  var c = ctx || {};
+  if (dispatchPane(c.pane, c.state) !== "filters") return null;
+  var cursor = c.filterCursor;
+  if (!cursor || (cursor.group !== "category" && cursor.group !== "tag")) return null;
+  if (filterIndex(c.filterEntries, cursor) < 0) return null;
+  var value = String(cursor.value === undefined || cursor.value === null ? "" : cursor.value);
+  var t = { kind: String(cursor.group), value: value, label: value };
+  if (t.kind === "category" && c.libraryReady !== true) t.refusal = LIBRARY_NOT_READY;
+  return t;
+}
+
+// inspectorDispatch(ctx) -> the inspector's part of the dispatch state
+// (and the filters pane's: libraryTarget, from ctx.filterCursor,
+// ctx.filterEntries and ctx.libraryReady):
 //   inspectorTarget: {kind: "tracker", value: url, label: host} for the
 //     trackers tab's cursor row, {kind: "peer", value: ipPort, label:
 //     peerIp(ipPort)} for the peers tab's (qbt bans `value`); null on other tabs, an empty list, a
@@ -906,7 +954,8 @@ function inspectorDispatch(ctx) {
     filesTab: focused && c.tab === "files",
     cursorNoMetadata: row !== null && c.noMeta === true,
     cursorStopped: st === "stoppeddl" || st === "pauseddl",
-    cursorPendingMagnet: hash !== "" && (c.pending || []).indexOf(hash) !== -1
+    cursorPendingMagnet: hash !== "" && (c.pending || []).indexOf(hash) !== -1,
+    libraryTarget: libraryTarget(c)
   };
 }
 
@@ -1017,7 +1066,11 @@ var BUSY_NOTE = "Busy, try again.";
 // (see msgFinish). A ticket <= 0 (Service refused the call because it is
 // busy), or an array with no ticket > 0, records nothing and notes
 // BUSY_NOTE.
-function msgTrack(m, ticket, kind, count, hashes) {
+// copy (optional, slice 3a): {progress, done, raw} for an action whose
+// copy names its target ("Renaming anime → animation…" / "Renamed anime →
+// animation"); raw shows the failure as the error text alone (qbt's own
+// sentence, e.g. "Rename incomplete (12 of 21 moved); …").
+function msgTrack(m, ticket, kind, count, hashes, copy) {
   var list = Array.isArray(ticket) ? ticket : [ticket];
   var ids = [];
   for (var i = 0; i < list.length; i++) {
@@ -1028,11 +1081,12 @@ function msgTrack(m, ticket, kind, count, hashes) {
   // run it is already busy (the window validates its own input first).
   if (ids.length === 0) return msgNote(m, BUSY_NOTE, "muted");
   var next = copyMessages(m);
-  var text = progressText(kind, count);
+  var cp = copy || {};
+  var text = cp.progress ? String(cp.progress) : progressText(kind, count);
   var group = ids[0];
   var own = (hashes || []).slice();
   for (var j = 0; j < ids.length; j++) {
-    next.tickets[ids[j]] = { kind: kind, count: Number(count) || 0, hashes: own, text: text, group: group };
+    next.tickets[ids[j]] = { kind: kind, count: Number(count) || 0, hashes: own, text: text, group: group, done: cp.done ? String(cp.done) : "", raw: cp.raw === true };
   }
   next.groups[group] = { left: ids.length, failed: false, error: "" };
   next.progress = text;
@@ -1146,13 +1200,15 @@ function msgFinish(m, ticket, ok, error) {
     return next;
   }
   delete next.groups[gid];
-  if (!group.failed && DONE_NOTES[entry.kind]) {
-    next.note = DONE_NOTES[entry.kind];
+  var done = entry.done || DONE_NOTES[entry.kind];
+  if (!group.failed && done) {
+    next.note = done;
     next.noteTone = "muted";
   }
   if (group.failed) {
     var err = group.error;
-    next.error = failureText(entry.kind, entry.count) + (err !== "" ? ": " + err : ".");
+    if (entry.raw === true && err !== "") next.error = err;
+    else next.error = failureText(entry.kind, entry.count) + (err !== "" ? ": " + err : ".");
     next.errorHashes = entry.hashes.slice();
   }
   return next;
@@ -1213,6 +1269,7 @@ function clipboardOutcome(text, askedAt, now) {
 // --- Filter pane ----------------------------------------------------------
 
 var FILTER_GROUP_TITLES = { status: "Status", category: "Categories", tag: "Tags", tracker: "Trackers" };
+var FILTER_EMPTY_NOTES = { category: "No categories yet", tag: "No tags yet" };
 
 function sameFilter(a, b) {
   var x = a || {};
@@ -1221,7 +1278,8 @@ function sameFilter(a, b) {
 }
 
 // filterEntries(groups) -> Model.filterGroups flattened for the pane:
-// a header entry per group, then its items. Every value is a string, a
+// a header entry per group, then its items (and, for an empty Categories
+// or Tags group, a "note" entry). Every value is a string, a
 // number or a bool so the pane can compare lists cheaply.
 function filterEntries(groups) {
   var out = [];
@@ -1229,6 +1287,8 @@ function filterEntries(groups) {
   for (var i = 0; i < g.length; i++) {
     out.push({ kind: "header", group: g[i].group, value: "", label: FILTER_GROUP_TITLES[g[i].group] || String(g[i].group), count: 0, zero: false });
     var items = g[i].items || [];
+    var named = false;
+    for (var n = 0; n < items.length; n++) if (String(items[n].value) !== "") named = true;
     for (var j = 0; j < items.length; j++) {
       var it = items[j];
       out.push({
@@ -1239,6 +1299,11 @@ function filterEntries(groups) {
         count: Number(it.count) || 0,
         zero: it.zero === true
       });
+    }
+    // Slice 3a: an empty Categories or Tags group gets a muted line under
+    // Uncategorized/Untagged (kind "note": the cursor never stops on it).
+    if (!named && FILTER_EMPTY_NOTES[g[i].group]) {
+      out.push({ kind: "note", group: g[i].group, value: "", label: FILTER_EMPTY_NOTES[g[i].group], count: 0, zero: false });
     }
   }
   return out;
@@ -1901,6 +1966,7 @@ if (typeof module !== "undefined" && module.exports) {
     targetHashes: targetHashes,
     dispatchState: dispatchState,
     inspectorDispatch: inspectorDispatch,
+    libraryTarget: libraryTarget,
     sameInspectorState: sameInspectorState,
     FETCH_META_DONE_NOTE: FETCH_META_DONE_NOTE,
     fetchMetaRefusal: fetchMetaRefusal,

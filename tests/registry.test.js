@@ -531,8 +531,9 @@ test("a VISUAL range alone satisfies 'selection' even with no cursor row", () =>
 });
 
 test("unmatched is not the same as blocked", () => {
-  // x in the filters pane: no row matches at all, so no `blocked` field.
-  const r = dispatch(state({ pane: "filters", hasTorrent: false }), ev("x", keyOf("x")));
+  // o in the filters pane: no row matches at all, so no `blocked` field.
+  // (Slice 3a binds x there to library.remove, so this uses o.)
+  const r = dispatch(state({ pane: "filters", hasTorrent: false }), ev("o", keyOf("o")));
   assert.equal(r.commandId, null);
   assert.equal(r.blocked, undefined);
 });
@@ -703,7 +704,8 @@ test("helpFor is generated straight from the commands table", () => {
 test("every command row has the documented shape", () => {
   const validGroups = ["Torrent", "View", "Library", "App"];
   // tracker/peer/trackersTab/noMetadata: slice 2b (Task 3's preconditions).
-  const validNeeds = ["none", "torrent", "selection", "tracker", "peer", "trackersTab", "noMetadata"];
+  // libraryGroup/libraryName/categoryName: slice 3a (Task 5's filters-pane rows).
+  const validNeeds = ["none", "torrent", "selection", "tracker", "peer", "trackersTab", "noMetadata", "libraryGroup", "libraryName", "categoryName"];
   for (const row of commands) {
     assert.ok(row.id === null || typeof row.id === "string");
     assert.equal(typeof row.title, "string");
@@ -1369,4 +1371,126 @@ test("helpFor(PICKER, pane) lists exactly the picker keys, in every pane", () =>
 test("unrelated state fields pass through unchanged for PICKER too", () => {
   const r = dispatch(picker({ pickerMulti: true }), ev("", KEY.Down));
   assert.equal(r.state.pickerMulti, true);
+});
+
+// --- NORMAL, filters pane: categories and tags (slice 3a, Task 5) ------------
+
+const CAT = { kind: "category", value: "anime", label: "anime" };
+const CAT_GROUP = { kind: "category", value: "", label: "" };
+const TAG = { kind: "tag", value: "seedbox", label: "seedbox" };
+const TAG_GROUP = { kind: "tag", value: "", label: "" };
+const CAT_NOT_READY = { kind: "category", value: "anime", label: "anime", refusal: "Still reading qBittorrent's folders; try again in a moment." };
+
+function filters(overrides) {
+  return state(Object.assign({ pane: "filters", hasTorrent: true }, overrides || {}));
+}
+
+test("the four library rows: a c p x, NORMAL, filters pane only, group Library", () => {
+  const want = { "library.add": ["a", "libraryGroup"], "library.rename": ["c", "libraryName"], "library.path": ["p", "categoryName"], "library.remove": ["x", "libraryName"] };
+  for (const id of Object.keys(want)) {
+    const rows = commands.filter((c) => c.id === id);
+    assert.equal(rows.length, 1, id);
+    assert.deepEqual(rows[0].keys, [want[id][0]], id);
+    assert.deepEqual(rows[0].modes, ["NORMAL"], id);
+    assert.deepEqual(rows[0].panes, ["filters"], id);
+    assert.equal(rows[0].needs, want[id][1], id);
+    assert.equal(rows[0].group, "Library", id);
+  }
+  const ids = helpFor("NORMAL", "filters").map((r) => r.id);
+  for (const id of Object.keys(want)) assert.ok(ids.includes(id), id);
+  const tableIds = helpFor("NORMAL", "table").map((r) => r.id);
+  for (const id of Object.keys(want)) assert.ok(!tableIds.includes(id), "not in the table: " + id);
+});
+
+test("library needs: a group row, a named row, a named category row", () => {
+  const pm = (needs, o) => Registry.preconditionMet(needs, filters(o));
+  assert.equal(pm("libraryGroup", { libraryTarget: CAT }), true);
+  assert.equal(pm("libraryGroup", { libraryTarget: CAT_GROUP }), true);
+  assert.equal(pm("libraryGroup", { libraryTarget: TAG_GROUP }), true);
+  assert.equal(pm("libraryGroup", { libraryTarget: null }), false);
+  assert.equal(pm("libraryGroup", { libraryTarget: { kind: "tracker", value: "x", label: "x" } }), false);
+  assert.equal(pm("libraryName", { libraryTarget: CAT }), true);
+  assert.equal(pm("libraryName", { libraryTarget: TAG }), true);
+  assert.equal(pm("libraryName", { libraryTarget: CAT_GROUP }), false, "Uncategorized can't be renamed or deleted");
+  assert.equal(pm("libraryName", { libraryTarget: TAG_GROUP }), false);
+  assert.equal(pm("categoryName", { libraryTarget: CAT }), true);
+  assert.equal(pm("categoryName", { libraryTarget: TAG }), false, "tags have no save path");
+  assert.equal(pm("categoryName", { libraryTarget: CAT_GROUP }), false);
+  const nr = (needs, o) => Registry.needsReason(needs, filters(o));
+  assert.equal(nr("libraryGroup", { libraryTarget: null }), "focus a category or tag");
+  assert.equal(nr("libraryName", { libraryTarget: CAT_GROUP }), "focus a category or tag");
+  assert.equal(nr("categoryName", { libraryTarget: TAG }), "focus a category");
+  assert.equal(nr("categoryName", { libraryTarget: CAT }), "");
+});
+
+test("a, c and p fire with the target captured at key time; a status row blocks them", () => {
+  for (const [k, id, t] of [["a", "library.add", CAT_GROUP], ["a", "library.add", TAG], ["c", "library.rename", TAG], ["p", "library.path", CAT]]) {
+    const r = dispatch(filters({ libraryTarget: t }), ev(k, keyOf(k)));
+    assert.equal(r.commandId, id, k);
+    assert.deepEqual(r.args.target, t, k);
+    assert.ok(Object.isFrozen(r.args.target), "a copy nobody can change");
+    assert.notEqual(r.args.target, t, "a copy, not the state's object");
+    assert.equal(r.state.mode, "NORMAL", "the handler opens INSERT itself");
+  }
+  for (const k of ["a", "c", "p", "x"]) {
+    const r = dispatch(filters({ libraryTarget: null }), ev(k, keyOf(k)));
+    assert.equal(r.commandId, null, k);
+    assert.equal(r.blocked, k === "p" ? "focus a category" : "focus a category or tag", k);
+  }
+  assert.equal(dispatch(filters({ libraryTarget: TAG }), ev("p", keyOf("p"))).blocked, "focus a category");
+  assert.equal(dispatch(filters({ libraryTarget: CAT_GROUP }), ev("c", keyOf("c"))).blocked, "focus a category or tag");
+});
+
+test("x on a category or tag raises a libraryRemove CONFIRM with the captured target", () => {
+  for (const t of [CAT, TAG]) {
+    const r = dispatch(filters({ libraryTarget: t }), ev("x", keyOf("x")));
+    assert.equal(r.commandId, null);
+    assert.equal(r.state.mode, "CONFIRM");
+    assert.equal(r.state.pending.kind, "libraryRemove");
+    assert.equal(r.state.pending.commandId, "library.remove");
+    assert.deepEqual(r.confirm, { commandId: "library.remove", kind: "libraryRemove", label: t.label, target: t });
+    // the cursor moving while the question is up changes nothing
+    const moved = Object.assign({}, r.state, { libraryTarget: TAG_GROUP });
+    const y = dispatch(moved, ev("y", keyOf("y")));
+    assert.equal(y.commandId, "library.remove");
+    assert.equal(y.args.confirmed, true);
+    assert.deepEqual(y.args.target, t);
+    assert.equal(y.state.mode, "NORMAL");
+  }
+});
+
+test("x on a category whose folders aren't read yet comes back unconfirmed with the refusal", () => {
+  const r = dispatch(filters({ libraryTarget: CAT_NOT_READY }), ev("x", keyOf("x")));
+  assert.equal(r.commandId, "library.remove");
+  assert.equal(r.state.mode, "NORMAL");
+  assert.equal(r.confirm, undefined);
+  assert.equal(r.args.confirmed, undefined);
+  assert.equal(r.args.target.refusal, CAT_NOT_READY.refusal);
+});
+
+test("raiseConfirm puts a window-raised CONFIRM in the shape y resolves", () => {
+  const args = { target: CAT, newName: "animation", merge: true };
+  const r = Registry.raiseConfirm(filters({ mode: "NORMAL", libraryTarget: CAT }), "library.rename", "libraryRename", args);
+  assert.equal(r.state.mode, "CONFIRM");
+  assert.equal(r.state.pending.kind, "libraryRename");
+  assert.equal(r.state.pending.commandId, "library.rename");
+  assert.deepEqual(r.state.pending.target, CAT);
+  assert.equal(r.confirm.kind, "libraryRename");
+  assert.equal(r.confirm.commandId, "library.rename");
+  assert.equal(r.confirm.label, "anime");
+  args.newName = "changed later";
+  const y = dispatch(r.state, ev("y", keyOf("y")));
+  assert.equal(y.commandId, "library.rename");
+  assert.equal(y.args.confirmed, true);
+  assert.equal(y.args.newName, "animation", "the args were copied when asked");
+  assert.equal(y.args.merge, true);
+  assert.deepEqual(y.args.target, CAT);
+  const n = dispatch(r.state, ev("n", keyOf("n")));
+  assert.equal(n.commandId, "confirm.cancel");
+  assert.equal(n.state.mode, "NORMAL");
+});
+
+test("dispatchCommand runs the library rows from the filters pane only", () => {
+  assert.equal(Registry.dispatchCommand(filters({ libraryTarget: CAT }), "library.path").commandId, "library.path");
+  assert.equal(Registry.dispatchCommand(state({ pane: "table", libraryTarget: CAT }), "library.path").commandId, null);
 });

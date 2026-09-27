@@ -568,3 +568,44 @@ test("tagStates with no target rows marks every tag none", () => {
   ]);
   assert.deepEqual(L.tagStates(["keep"], null), [{ name: "keep", state: "none", mark: "[ ]" }]);
 });
+
+// --- slice 3a, Task 5: the filters pane's copy, footer and p's path rule -------
+
+test("libraryCopy: progress and done copy per action, qbt's error shown as-is", () => {
+  assert.deepEqual(L.libraryCopy("add", "category", "anime"), { progress: "Adding category…", done: "Category added", raw: true });
+  assert.deepEqual(L.libraryCopy("add", "tag", "keep"), { progress: "Adding tag…", done: "Tag added", raw: true });
+  assert.deepEqual(L.libraryCopy("rename", "category", "anime", "animation"), { progress: "Renaming anime → animation…", done: "Renamed anime → animation", raw: true });
+  assert.deepEqual(L.libraryCopy("rename", "tag", "keep", "kept"), { progress: "Renaming keep → kept…", done: "Renamed keep → kept", raw: true });
+  assert.deepEqual(L.libraryCopy("path", "category", "anime"), { progress: "Setting anime's save path…", done: "Save path set", raw: true });
+  assert.deepEqual(L.libraryCopy("remove", "category", "anime"), { progress: "Deleting category anime…", done: "Deleted category anime", raw: true });
+  assert.deepEqual(L.libraryCopy("remove", "tag", "seedbox"), { progress: "Deleting tag seedbox…", done: "Deleted tag seedbox", raw: true });
+});
+
+test("savePathError: empty (the default), absolute or ~/ -- qbt category-path's rule and message", () => {
+  for (const ok of ["", "/srv/anime", "/", "~/Downloads/anime", "~/"]) assert.equal(L.savePathError(ok), "", JSON.stringify(ok));
+  for (const bad of ["anime", "./x", "~", "~user/x", " /srv"]) assert.equal(L.savePathError(bad), "The save path must be absolute or start with ~/.", JSON.stringify(bad));
+});
+
+test("footerKeys: only the keys that apply to the filters cursor row", () => {
+  const f = (t) => L.footerKeys(t).map((k) => k.key + " " + k.label);
+  assert.deepEqual(f({ kind: "category", value: "anime", label: "anime" }), ["a add", "c rename", "p save path", "x delete"]);
+  assert.deepEqual(f({ kind: "tag", value: "keep", label: "keep" }), ["a add", "c rename", "x delete"]);
+  assert.deepEqual(f({ kind: "category", value: "", label: "" }), ["a new category"]);
+  assert.deepEqual(f({ kind: "tag", value: "", label: "" }), ["a new tag"]);
+  assert.deepEqual(f(null), []);
+  assert.deepEqual(f({ kind: "tracker", value: "x" }), []);
+  // the not-ready refusal doesn't hide keys: the key says why
+  assert.deepEqual(f({ kind: "category", value: "anime", label: "anime", refusal: L.LIBRARY_NOT_READY }), ["a add", "c rename", "p save path", "x delete"]);
+});
+
+test("hasName and explicitSavePath: what c's merge check and p's prefill read", () => {
+  assert.equal(L.hasName(["anime", "animation"], "animation"), true);
+  assert.equal(L.hasName({ length: 1, 0: "anime" }, "anime"), true, "a QML sequence");
+  assert.equal(L.hasName(["anime"], "anim"), false);
+  assert.equal(L.hasName(null, "anime"), false);
+  const st = { categoryPaths: { anime: { savePath: "/srv/anime", downloadPath: "" }, bad: { savePath: 3 } } };
+  assert.equal(L.explicitSavePath("anime", st), "/srv/anime");
+  assert.equal(L.explicitSavePath("bad", st), "");
+  assert.equal(L.explicitSavePath("gone", st), "");
+  assert.equal(L.explicitSavePath("anime", {}), "");
+});

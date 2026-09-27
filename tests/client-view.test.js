@@ -1753,3 +1753,118 @@ test("paletteRows: Cycle file priority is dimmed on a no-metadata Files tab (Spa
   const onInfo = V.paletteState("rows", true, V.inspectorDispatch(insp({ tab: "info", noMeta: true })), "inspector");
   assert.equal(paletteRow(onInfo, "file.cycle").reason, "focus the files tab");
 });
+
+// --- slice 3a, Task 5: the filters pane's categories and tags -----------------
+
+function libEntries(categories, tags, rows) {
+  return V.filterEntries(Model.filterGroups(rows || [torrent()], categories || [], tags || []));
+}
+
+function lib(overrides) {
+  return Object.assign({
+    pane: "filters", state: "rows", filterCursor: { group: "category", value: "anime" },
+    filterEntries: libEntries(["anime"], ["seedbox"]), libraryReady: true
+  }, overrides || {});
+}
+
+test("libraryTarget: the category or tag row under the filters cursor", () => {
+  assert.deepEqual(V.inspectorDispatch(lib()).libraryTarget, { kind: "category", value: "anime", label: "anime" });
+  assert.deepEqual(V.inspectorDispatch(lib({ filterCursor: { group: "tag", value: "seedbox" } })).libraryTarget, { kind: "tag", value: "seedbox", label: "seedbox" });
+  assert.deepEqual(V.inspectorDispatch(lib({ filterCursor: { group: "category", value: "" } })).libraryTarget, { kind: "category", value: "", label: "" }, "Uncategorized: the group");
+  assert.deepEqual(V.inspectorDispatch(lib({ filterCursor: { group: "tag", value: "" } })).libraryTarget, { kind: "tag", value: "", label: "" });
+});
+
+test("libraryTarget: none on Status/Trackers rows, another pane, a blocking state, or a cursor not in the list", () => {
+  for (const o of [
+    { filterCursor: { group: "status", value: "All" } },
+    { filterCursor: { group: "tracker", value: "" } },
+    { filterCursor: { group: "category", value: "gone" } },
+    { filterCursor: null }, { filterEntries: [] }, { filterEntries: undefined },
+    { pane: "table" }, { pane: "inspector" }, { state: "empty" }, { state: "daemon" }
+  ]) {
+    assert.equal(V.inspectorDispatch(lib(o)).libraryTarget, null, JSON.stringify(o));
+  }
+  assert.notEqual(V.inspectorDispatch(lib({ state: "noMatch" })).libraryTarget, null, "a no-match filter keeps the pane");
+});
+
+test("libraryTarget: a category carries the not-ready refusal until the folders are known; a tag never does", () => {
+  const LNR = "Still reading qBittorrent's folders; try again in a moment.";
+  assert.equal(V.inspectorDispatch(lib({ libraryReady: false })).libraryTarget.refusal, LNR);
+  assert.equal(V.inspectorDispatch(lib({ libraryReady: false, filterCursor: { group: "category", value: "" } })).libraryTarget.refusal, LNR);
+  assert.equal(V.inspectorDispatch(lib({ libraryReady: false, filterCursor: { group: "tag", value: "seedbox" } })).libraryTarget.refusal, undefined);
+  assert.equal(V.inspectorDispatch(lib()).libraryTarget.refusal, undefined);
+});
+
+test("libraryTarget: a legacy name is the target exactly as the status spells it", () => {
+  const legacy = " x//" + "y".repeat(66);
+  const d = V.inspectorDispatch(lib({ filterCursor: { group: "category", value: legacy }, filterEntries: libEntries([legacy]) }));
+  assert.deepEqual(d.libraryTarget, { kind: "category", value: legacy, label: legacy });
+});
+
+test("dispatchState and paletteState carry the library target; sameInspectorState compares it", () => {
+  const i = V.inspectorDispatch(lib());
+  const st = V.dispatchState({ mode: "NORMAL" }, "filters", "rows", true, [], i);
+  assert.deepEqual(st.libraryTarget, { kind: "category", value: "anime", label: "anime" });
+  assert.equal(V.dispatchState({ mode: "NORMAL", libraryTarget: { kind: "tag" } }, "table", "rows", true, [], V.inspectorDispatch({})).libraryTarget, null, "never carried over");
+  assert.equal(Registry.dispatch(st, { text: "p", key: 0x50, modifiers: {}, now: 0 }).commandId, "library.path");
+  const pal = V.paletteState("rows", true, i, "filters");
+  assert.equal(paletteRow(pal, "library.path").enabled, true);
+  assert.equal(paletteRow(V.paletteState("rows", true, V.inspectorDispatch(lib({ filterCursor: { group: "tag", value: "seedbox" } })), "filters"), "library.path").reason, "focus a category");
+  assert.equal(paletteRow(V.paletteState("rows", true, i, "table"), "library.remove").reason, "focus the filters");
+  assert.equal(V.sameInspectorState(i, V.inspectorDispatch(lib())), true);
+  assert.equal(V.sameInspectorState(i, V.inspectorDispatch(lib({ filterCursor: { group: "tag", value: "seedbox" } }))), false);
+  assert.equal(V.sameInspectorState(i, V.inspectorDispatch(lib({ libraryReady: false }))), false);
+});
+
+test("filterEntries: a muted note under an empty Categories or Tags group, never a cursor stop", () => {
+  const e = libEntries([], []);
+  const notes = e.filter((x) => x.kind === "note");
+  assert.deepEqual(notes.map((x) => [x.group, x.label]), [["category", "No categories yet"], ["tag", "No tags yet"]]);
+  const at = e.findIndex((x) => x.kind === "note" && x.group === "category");
+  assert.equal(e[at - 1].kind, "item");
+  assert.equal(e[at - 1].label, "Uncategorized", "right under Uncategorized");
+  assert.equal(libEntries(["anime"], ["seedbox"]).some((x) => x.kind === "note"), false);
+  assert.deepEqual(libEntries(["anime"], []).filter((x) => x.kind === "note").map((x) => x.group), ["tag"]);
+  assert.deepEqual(V.moveFilterCursor(e, { group: "category", value: "" }, 1), { group: "tag", value: "" }, "j skips the note");
+  assert.equal(V.filterIndex(e, { group: "category", value: "" }) >= 0, true);
+});
+
+test("inputPrompt and modeHints for the library INSERTs", () => {
+  assert.equal(V.inputPrompt("categoryAdd", "").prompt, "New category");
+  assert.equal(V.inputPrompt("tagAdd", "").prompt, "New tag");
+  assert.equal(V.inputPrompt("categoryRename", "anime").prompt, "Rename anime to");
+  assert.equal(V.inputPrompt("tagRename", "seedbox").prompt, "Rename seedbox to");
+  assert.deepEqual(V.inputPrompt("categoryPath", "anime"), { prompt: "Save path for anime", placeholder: "empty = default" });
+  const h = (p) => V.modeHints("INSERT", { purpose: p }).map((x) => x.key + " " + x.label);
+  assert.deepEqual(h("categoryAdd"), ["Enter create", "Esc cancel"]);
+  assert.deepEqual(h("tagAdd"), ["Enter create", "Esc cancel"]);
+  assert.deepEqual(h("categoryRename"), ["Enter rename", "Esc cancel"]);
+  assert.deepEqual(h("tagRename"), ["Enter rename", "Esc cancel"]);
+  assert.deepEqual(h("categoryPath"), ["Enter set", "Esc cancel"]);
+});
+
+test("confirmLine: a library confirm shows the window's line with its own accept word", () => {
+  const d = V.confirmLine({ kind: "libraryRemove", line: "Delete tag seedbox? It's removed from 4 torrents." });
+  assert.equal(d.lead + d.strong + d.tail, "Delete tag seedbox? It's removed from 4 torrents.");
+  assert.equal(d.accept, "delete");
+  const r = V.confirmLine({ kind: "libraryRename", line: "animation already exists. Move 2 torrents into it and delete anime?", accept: "merge" });
+  assert.equal(r.accept, "merge");
+  assert.equal(r.lead, "animation already exists. Move 2 torrents into it and delete anime?");
+  assert.equal(V.confirmLine({ kind: "libraryRename", line: "x" }).accept, "rename");
+  assert.equal(V.confirmLine({ kind: "libraryPath", line: "x" }).accept, "change");
+});
+
+test("msgTrack/msgFinish: an action's own progress and done copy, and qbt's error as-is", () => {
+  const copy = { progress: "Renaming anime → animation…", done: "Renamed anime → animation", raw: true };
+  let m = V.msgTrack(V.emptyMessages(), 5, "libraryRename", 0, [], copy);
+  assert.equal(V.messageLine(m).text, "Renaming anime → animation…");
+  assert.equal(V.messageLine(V.msgFinish(m, 5, true, "")).text, "Renamed anime → animation");
+  const inc = "Rename incomplete (12 of 21 moved); press c on anime again to finish.";
+  const f = V.msgFinish(m, 5, false, inc + "\n");
+  assert.equal(V.messageLine(f).text, inc);
+  assert.equal(V.messageLine(f).tone, "urgent");
+  // an empty error still says something
+  assert.equal(V.messageLine(V.msgFinish(m, 5, false, "")).text, "The action failed.");
+  // without copy, nothing changes
+  assert.equal(V.messageLine(V.msgFinish(V.msgTrack(V.emptyMessages(), 1, "delete", 1, []), 1, false, "boom")).text, "Couldn't delete 1 torrent: boom");
+});

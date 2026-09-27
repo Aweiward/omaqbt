@@ -38,6 +38,12 @@ function names(list) {
   return [];
 }
 
+// hasName(list, name) -> whether list (a status's categories or tags, a JS
+// array or a QML sequence) has exactly name.
+function hasName(list, name) {
+  return names(list).indexOf(String(name)) !== -1;
+}
+
 // hashList(hashes) -> an array of hashes from a "|" list (the form window
 // actions pass), an array or an array-like, with empty entries dropped.
 // Service.qml uses it too, so the confirm and the call see the same list.
@@ -408,6 +414,44 @@ function followFilter(filter, action) {
   return inCategoryTree(value, name) ? { group: "category", value: parentCategoryName(name) } : filter;
 }
 
+// --- The filters pane (Task 5) --------------------------------------------------------
+
+// libraryCopy(verb, kind, name, newName) -> the status line's copy for a
+// filters-pane write (ClientView.msgTrack's `copy`): verb "add", "rename",
+// "path" or "remove"; kind "category" or "tag". raw: a failure shows
+// qbt's own message as-is (e.g. "Rename incomplete (12 of 21 moved);
+// press c on anime again to finish.").
+function libraryCopy(verb, kind, name, newName) {
+  var what = kind === "tag" ? "tag" : "category";
+  if (verb === "add") return { progress: "Adding " + what + "…", done: (what === "tag" ? "Tag" : "Category") + " added", raw: true };
+  if (verb === "rename") return { progress: "Renaming " + name + " → " + newName + "…", done: "Renamed " + name + " → " + newName, raw: true };
+  if (verb === "path") return { progress: "Setting " + name + "'s save path…", done: "Save path set", raw: true };
+  return { progress: "Deleting " + what + " " + name + "…", done: "Deleted " + what + " " + name, raw: true };
+}
+
+// savePathError(text) -> "" or why `p` can't use text: qbt category-path
+// takes "" (qBittorrent's default), an absolute path or ~/..., with this
+// same message.
+function savePathError(text) {
+  var s = String(text === undefined || text === null ? "" : text);
+  if (s === "" || s.charAt(0) === "/" || s.indexOf("~/") === 0) return "";
+  return "The save path must be absolute or start with ~/.";
+}
+
+// footerKeys(target) -> [{key, label}] for the filters pane's footer: the
+// keys that apply to the row under the filters cursor (ClientView.
+// libraryTarget). A named category: a c p x; a named tag: a c x;
+// Uncategorized/Untagged: a, to add to that group; anything else: none.
+function footerKeys(target) {
+  var t = target || {};
+  if (t.kind !== "category" && t.kind !== "tag") return [];
+  if (String(t.value || "") === "") return [{ key: "a", label: t.kind === "tag" ? "new tag" : "new category" }];
+  var keys = [{ key: "a", label: "add" }, { key: "c", label: "rename" }];
+  if (t.kind === "category") keys.push({ key: "p", label: "save path" });
+  keys.push({ key: "x", label: "delete" });
+  return keys;
+}
+
 // --- Tag picker ---------------------------------------------------------------------
 
 var TAG_MARK = { all: "[x]", some: "[~]", none: "[ ]" };
@@ -470,6 +514,11 @@ if (typeof module !== "undefined") {
     hashList: hashList,
     libraryReady: libraryReady,
     LIBRARY_NOT_READY: LIBRARY_NOT_READY,
-    tagChanges: tagChanges
+    tagChanges: tagChanges,
+    libraryCopy: libraryCopy,
+    savePathError: savePathError,
+    footerKeys: footerKeys,
+    hasName: hasName,
+    explicitSavePath: explicitSavePath
   };
 }
