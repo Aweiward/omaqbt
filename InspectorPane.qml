@@ -41,7 +41,7 @@ Item {
   // right-aligned column that mutes when skipped too (today's look).
   readonly property var filesColumns: [
     { role: "name", width: 0, tone: function(r) { return r.skipped ? "dim" : "fg" } },
-    { role: "progressText", width: Style.space(64), tone: "muted" },
+    { role: "progressText", width: Style.space(64), align: "right", tone: "muted" },
     { role: "priorityText", width: Style.space(52), align: "right", tone: function(r) { return r.skipped ? "muted" : "fg" } }
   ]
 
@@ -253,6 +253,11 @@ Item {
       columns: pane.filesColumns
       cursor: pane.fileIndex
       focusedPane: pane.focusedPane
+      // Old layout's widest gap (progress-to-priority, 10px); the column
+      // model has one spacing for the whole row, so this is as close as
+      // it gets without a per-gap concept (name-to-progress goes from
+      // 8px to 10px too).
+      cellSpacing: Style.space(10)
       onRowClicked: function(index) { pane.fileClicked(index) }
     }
   }

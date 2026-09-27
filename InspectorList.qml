@@ -24,18 +24,20 @@ Item {
   // The cursor row's index into `rows`, or -1 for none.
   property int cursor: -1
   property bool focusedPane: false
-  // columns: [{role, width, align, tone}]. `width` 0 (or omitted) is
-  // flexible -- it fills what fixed-width columns leave, and is the only
-  // one elided (Text.ElideMiddle); a positive number is a fixed pixel
-  // width. `align`: "left" (default) or "right". `tone`: a
+  // columns: [{role, width, align, tone, label}]. `width` 0 (or omitted)
+  // is flexible -- it fills what fixed-width columns leave, and is the
+  // only one elided (Text.ElideMiddle); a positive number is a fixed
+  // pixel width. `align`: "left" (default) or "right". `tone`: a
   // View.toneColor name ("accent"/"muted"/"urgent"/"fg"), "dim" (today's
   // Files dim, for a skipped file's name), or a function(row) -> one of
   // those, for a per-row tone (a skipped file's name/priority; Task 5's
-  // per-row tracker/peer tone).
+  // per-row tracker/peer tone). `label`: the header text for this column
+  // (an empty string is a real label, e.g. peers' blank first column);
+  // omitted falls back to `role`.
   property var columns: []
   // true: a fixed header row (ListView.header, so it never counts toward
-  // `count`) with each column's `role` as its label. Files doesn't use
-  // one.
+  // `count`) with each column's `label` (or `role`, with no `label`) as
+  // its header text. Files doesn't use one.
   property bool header: false
   // A Component drawn under the cursor row, inside its accent fill (the
   // fill and the row's height both grow to hold it); its root item may
@@ -47,7 +49,11 @@ Item {
   signal rowClicked(int index)
 
   readonly property int padX: Style.space(12)
-  readonly property int cellSpacing: Style.space(8)
+  // The gap between columns. A single value for the whole row (the
+  // column model has no per-gap concept); a caller whose old, per-anchor
+  // layout used a wider gap somewhere (Files' progress-to-priority 10px)
+  // can raise this to get as close to it as the model allows.
+  property int cellSpacing: Style.space(8)
 
   function positionAt(index) {
     if (index < 0 || index >= listView.count) return
@@ -61,6 +67,21 @@ Item {
 
   function toneFor(column, row) {
     return typeof column.tone === "function" ? column.tone(row) : column.tone
+  }
+
+  // cellText(row, role) -> row[role] as text, or "" for a missing/null
+  // field (Task 5's rows may leave some roles out) instead of the
+  // literal "undefined" String(undefined) would otherwise render.
+  function cellText(row, role) {
+    if (!row) return ""
+    var v = row[role]
+    return v === undefined || v === null ? "" : String(v)
+  }
+
+  // headerText(column) -> column.label, or "" is a real label (kept as
+  // given, even empty); column.role when label is omitted entirely.
+  function headerText(column) {
+    return column.label !== undefined ? column.label : column.role
   }
 
   readonly property real fixedWidth: {
@@ -142,7 +163,7 @@ Item {
             textFormat: Text.PlainText
             font.family: Style.fontFamily
             font.pixelSize: Style.font.body
-            text: rowItem.modelData ? String(rowItem.modelData[cell.modelData.role]) : ""
+            text: list.cellText(rowItem.modelData, cell.modelData.role)
             color: list.toneColor(list.toneFor(cell.modelData, rowItem.modelData))
           }
         }
@@ -156,7 +177,17 @@ Item {
         anchors.topMargin: list.rowHeight
         active: rowItem.hasDetail
         sourceComponent: list.detail
-        onLoaded: if (item) item.row = rowItem.modelData
+      }
+
+      // A live binding, not a one-shot `onLoaded` assignment: trackers
+      // and peers (Task 5) refresh `rows` every second while the cursor
+      // stays on the same key, so the loaded detail must keep seeing
+      // `rowItem.modelData` as it changes, not just its value at load.
+      Binding {
+        target: detailLoader.item
+        property: "row"
+        value: rowItem.modelData
+        when: detailLoader.status === Loader.Ready
       }
 
       MouseArea {
@@ -181,6 +212,7 @@ Item {
         Repeater {
           model: list.columns
           delegate: Text {
+            objectName: "headerCell"
             required property var modelData
             width: list.columnWidth(modelData)
             height: list.rowHeight
@@ -190,7 +222,7 @@ Item {
             font.family: Style.fontFamily
             font.pixelSize: Style.font.body
             color: Color.muted
-            text: modelData.role
+            text: list.headerText(modelData)
           }
         }
       }

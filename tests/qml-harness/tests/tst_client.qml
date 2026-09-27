@@ -88,7 +88,7 @@ TestCase {
       property var row: null
       width: parent ? parent.width : 0
       height: 20
-      Text { objectName: "detailText"; anchors.fill: parent; text: detailRoot.row ? ("detail " + detailRoot.row.key) : "" }
+      Text { objectName: "detailText"; anchors.fill: parent; text: detailRoot.row ? ("detail " + detailRoot.row.key + " " + detailRoot.row.name) : "" }
     }
   }
 
@@ -1234,20 +1234,33 @@ TestCase {
     compare(o3.c.fileIndex, 1, "a shrink clamps the cursor to the last row")
   }
 
-  function test_inspector_list_detail_and_header() {
-    function findByObjectName(obj, name) {
-      if (!obj) return null
-      if (obj.objectName === name) return obj
-      var kids = obj.children || []
-      for (var i = 0; i < kids.length; i++) { var r = findByObjectName(kids[i], name); if (r) return r }
-      return null
-    }
+  function findByObjectName(obj, name) {
+    if (!obj) return null
+    if (obj.objectName === name) return obj
+    var kids = obj.children || []
+    for (var i = 0; i < kids.length; i++) { var r = findByObjectName(kids[i], name); if (r) return r }
+    return null
+  }
 
+  function findAllByObjectName(obj, name, out) {
+    out = out || []
+    if (!obj) return out
+    if (obj.objectName === name) out.push(obj)
+    var kids = obj.children || []
+    for (var i = 0; i < kids.length; i++) findAllByObjectName(kids[i], name, out)
+    return out
+  }
+
+  function test_inspector_list_detail_and_header() {
     var list = createTemporaryObject(inspectorListComp, tc, {
       width: 300,
       height: 200,
       rows: [{ key: "a", name: "Alpha" }, { key: "b", name: "Beta" }],
-      columns: [{ role: "name", width: 0, tone: function(r) { return r.key === "b" ? "muted" : "fg" } }],
+      columns: [
+        { role: "name", width: 0, tone: function(r) { return r.key === "b" ? "muted" : "fg" } },
+        { role: "seeds", width: 40, label: "Seeds" },
+        { role: "peers", width: 40, label: "" }
+      ],
       focusedPane: true,
       cursor: 1,
       detail: detailComp,
@@ -1258,6 +1271,14 @@ TestCase {
     compare(lv.count, 2, "the header never counts toward the rows")
     verify(lv.headerItem !== null, "header:true adds a row above the list")
     verify(lv.headerItem.height > 0)
+
+    // header labels: an explicit label wins, an omitted one falls back
+    // to the role, and an empty-string label is a real (blank) label
+    var headers = findAllByObjectName(lv.headerItem, "headerCell")
+    compare(headers.length, 3)
+    compare(headers[0].text, "name", "no label falls back to the role")
+    compare(headers[1].text, "Seeds", "an explicit label wins over the role")
+    compare(headers[2].text, "", "an empty-string label is kept, not replaced by the role")
 
     var cursorItem = lv.itemAtIndex(1)
     var otherItem = lv.itemAtIndex(0)
@@ -1270,6 +1291,39 @@ TestCase {
     compare(findByObjectName(otherItem, "detailText"), null, "no detail under a non-cursor row")
     var detailText = findByObjectName(cursorItem, "detailText")
     verify(detailText !== null, "the detail shows under the cursor row")
-    compare(detailText.text, "detail b", "the detail component receives the cursor row")
+    compare(detailText.text, "detail b Beta", "the detail component receives the cursor row")
+  }
+
+  function test_inspector_list_missing_role_renders_empty() {
+    var list = createTemporaryObject(inspectorListComp, tc, {
+      width: 300,
+      height: 200,
+      rows: [{ key: "a", name: "Alpha" }],
+      columns: [{ role: "name", width: 0 }, { role: "notThere", width: 40 }]
+    })
+    var lv = findWith(list, "itemAtIndex")
+    var cells = findAllByObjectName(lv.itemAtIndex(0), "cell")
+    compare(cells.length, 2)
+    compare(cells[1].text, "", "a role missing from the row renders empty, not \"undefined\"")
+  }
+
+  function test_inspector_list_detail_rebinds_when_rows_refresh() {
+    var list = createTemporaryObject(inspectorListComp, tc, {
+      width: 300,
+      height: 200,
+      rows: [{ key: "a", name: "Alpha" }, { key: "b", name: "Beta" }],
+      columns: [{ role: "name", width: 0 }],
+      focusedPane: true,
+      cursor: 1,
+      detail: detailComp
+    })
+    var lv = findWith(list, "itemAtIndex")
+    compare(findByObjectName(lv.itemAtIndex(1), "detailText").text, "detail b Beta")
+    // a fresh array (Task 5's trackers/peers replace `rows` wholesale on
+    // every tick): the cursor stays on key "b", but its data changed --
+    // the detail must show the new data, not what it saw when it loaded
+    list.rows = [{ key: "a", name: "Alpha2" }, { key: "b", name: "Beta2" }]
+    compare(findByObjectName(lv.itemAtIndex(1), "detailText").text, "detail b Beta2",
+      "the detail re-binds to the refreshed row, not a stale snapshot from when it loaded")
   }
 }
