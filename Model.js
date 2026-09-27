@@ -1040,7 +1040,10 @@ function emptyStatus() {
     vpnIface: "",
     bindIface: "",
     categories: [],
+    categoryPaths: {},
     tags: [],
+    defaultSavePath: "",
+    relocation: { torrentChanged: false, categoryPathChanged: false },
     error: ""
   };
 }
@@ -1081,6 +1084,7 @@ function parseStatusJson(raw) {
       category: String(row.category || ""),
       tags: Array.isArray(row.tags) ? row.tags : [],
       tracker: String(row.tracker || ""),
+      autoTmm: row.autoTmm === true,
       bucket: classifyState(row.state, row.progress)
     });
   }
@@ -1097,7 +1101,13 @@ function parseStatusJson(raw) {
     vpnIface: String(parsed.vpnIface || ""),
     bindIface: String(parsed.bindIface || ""),
     categories: Array.isArray(parsed.categories) ? parsed.categories : [],
+    categoryPaths: (parsed.categoryPaths && typeof parsed.categoryPaths === "object" && !Array.isArray(parsed.categoryPaths)) ? parsed.categoryPaths : {},
     tags: Array.isArray(parsed.tags) ? parsed.tags : [],
+    defaultSavePath: String(parsed.defaultSavePath || ""),
+    relocation: {
+      torrentChanged: !!(parsed.relocation && parsed.relocation.torrentChanged === true),
+      categoryPathChanged: !!(parsed.relocation && parsed.relocation.categoryPathChanged === true)
+    },
     error: String(parsed.error || "")
   };
 }

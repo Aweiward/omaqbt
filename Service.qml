@@ -28,7 +28,15 @@ Scope {
   // Status's top-level category and tag names (zero-count ones included),
   // for the window's filter pane.
   property var categories: []
+  // Per-category {savePath, downloadPath}, keyed by name, for predicting
+  // whether a category/save-path change would move a torrent's files.
+  property var categoryPaths: ({})
   property var tags: []
+  // qBittorrent's default save path, and whether it relocates files on a
+  // torrent's category change / a category's save-path change -- both from
+  // /app/preferences, read on the slow timer.
+  property string defaultSavePath: ""
+  property var relocation: ({ torrentChanged: false, categoryPathChanged: false })
   property var filesByHash: ({})
   // hash -> {state: "loading"|"ok"|"error", error}: lets a view tell a
   // files load in flight, an empty list and a failed read apart.
@@ -219,7 +227,10 @@ Scope {
     bindIface = parsed.bindIface
     torrents = parsed.torrents
     categories = Array.isArray(parsed.categories) ? parsed.categories : []
+    categoryPaths = (parsed.categoryPaths && typeof parsed.categoryPaths === "object") ? parsed.categoryPaths : ({})
     tags = Array.isArray(parsed.tags) ? parsed.tags : []
+    defaultSavePath = parsed.defaultSavePath || ""
+    relocation = parsed.relocation || { torrentChanged: false, categoryPathChanged: false }
     lastError = Model.nextStatusError(parsed, lastError)
     if (finished.length > 0) notify(Model.completionText(finished))
     pruneInspectByKey(torrents)

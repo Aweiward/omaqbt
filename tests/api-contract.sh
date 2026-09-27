@@ -86,8 +86,17 @@ try:
     assert debian["numSeeds"] == 14
     assert debian["numLeechs"] == 3
     assert debian["addedOn"] == 1755300000
+    assert debian["autoTmm"] is True
+    assert arch["autoTmm"] is False
+    assert data["categoryPaths"] == {
+        "linux": {"savePath": "", "downloadPath": ""},
+        "os": {"savePath": "/data/os", "downloadPath": "/data/os-dl"},
+    }
+    assert data["defaultSavePath"] == "/home/user/Downloads"
+    assert data["relocation"] == {"torrentChanged": True, "categoryPathChanged": False}
 
-    # No VPN iface detected: no warning fields, and no preferences call at all.
+    # No VPN iface detected: no warning fields. Preferences is still fetched
+    # (it feeds defaultSavePath/relocation above), just not vpnIface/bindIface.
     assert data["vpnIface"] == ""
     assert data["bindIface"] == ""
 
@@ -111,9 +120,12 @@ try:
     assert data2["torrents"][0]["numSeeds"] == 14
     assert data2["torrents"][0]["addedOn"] == 1755300000
 
-    # With the VPN iface up: report where the running daemon is bound.
+    # Preferences is fetched on every poll (bash's SlowCache uses interval=0),
+    # regardless of whether a VPN interface is configured.
     reqs_before = json.loads(log.read_text())
-    assert "/api/v2/app/preferences" not in [r["path"] for r in reqs_before]
+    assert "/api/v2/app/preferences" in [r["path"] for r in reqs_before]
+
+    # With the VPN iface up: report where the running daemon is bound.
 
     venv = env.copy()
     venv["QBT_BIND_IFACE"] = "wg0-mullvad"

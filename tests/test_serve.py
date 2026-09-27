@@ -166,7 +166,8 @@ class FirstStatusLineTests(unittest.TestCase):
                     list(line.keys()),
                     ["type", "installed", "daemon", "lockHolder", "api", "altSpeed",
                      "dlSpeed", "upSpeed", "torrents", "vpnIface", "bindIface",
-                     "categories", "tags"],
+                     "categories", "categoryPaths", "tags", "defaultSavePath",
+                     "relocation"],
                 )
 
 
@@ -448,16 +449,35 @@ class HarnessSafeDefaultsTests(unittest.TestCase):
             shutil.rmtree(other, ignore_errors=True)
 
 
-class NoPreferencesCallTests(unittest.TestCase):
-    def test_no_vpn_iface_skips_preferences(self):
+class PreferencesCallTests(unittest.TestCase):
+    def test_no_vpn_iface_still_fetches_preferences_on_slow_timer_only(self):
         with harness.fixture_server() as (port, env):
             with ServeProcess(env) as sp:
                 first = sp.readline()
                 self.assertEqual(first["vpnIface"], "")
+                # preferences now feeds defaultSavePath/relocation too, so
+                # it is fetched even with no VPN interface configured...
+                self.assertEqual(first["defaultSavePath"], "/home/user/Downloads")
+                self.assertEqual(
+                    first["relocation"],
+                    {"torrentChanged": True, "categoryPathChanged": False},
+                )
                 log_path = Path(env["QBT_FIXTURE_LOG"])
                 entries = json.loads(log_path.read_text() or "[]")
-                paths = {e["path"] for e in entries}
-                self.assertNotIn("/api/v2/app/preferences", paths)
+                paths = [e["path"] for e in entries]
+                self.assertEqual(paths.count("/api/v2/app/preferences"), 1)
+                maindata_before = paths.count("/api/v2/sync/maindata")
+
+                # ...but not more than once per slow-timer interval (10s in
+                # qbt-serve): a burst of fast status ticks must not call it
+                # again, even though maindata itself keeps being polled.
+                sp.send({"cmd": "cadence", "ms": 100})
+                sp.read_until(lambda o: o.get("type") == "status")
+                sp.read_until(lambda o: o.get("type") == "status")
+                entries = json.loads(log_path.read_text() or "[]")
+                paths = [e["path"] for e in entries]
+                self.assertGreater(paths.count("/api/v2/sync/maindata"), maindata_before)
+                self.assertEqual(paths.count("/api/v2/app/preferences"), 1)
 
 
 def _stalling_socket():

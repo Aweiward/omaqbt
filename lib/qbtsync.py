@@ -211,6 +211,28 @@ def merge_tags(raw, cache):
     return sorted(tags)
 
 
+def category_paths(categories):
+    """Build the status's `categoryPaths` map from the merged category cache.
+
+    Each entry pairs a category's `savePath` with its per-category download
+    path. Which key name qBittorrent sends for the download path couldn't be
+    probed live (the probing user has no categories configured), so both
+    `download_path` and `downloadPath` are read, snake_case taking priority
+    when a (synthetic) category improbably carries both.
+    """
+    result = {}
+    for name, c in (categories or {}).items():
+        c = c or {}
+        download_path = c.get("download_path")
+        if download_path is None:
+            download_path = c.get("downloadPath")
+        result[name] = {
+            "savePath": c.get("savePath") or "",
+            "downloadPath": download_path or "",
+        }
+    return result
+
+
 def merge_maindata(raw, cache):
     """Faithful move of the inline python3 -c block from `qbt` cmd_status.
 
@@ -261,6 +283,7 @@ def merge_maindata(raw, cache):
             "category": t.get("category") or "",
             "tags": _split_tags(t.get("tags")),
             "tracker": _tracker_host(t.get("tracker")),
+            "autoTmm": t.get("auto_tmm") is True,
         })
     return torrents, rows
 
@@ -311,12 +334,23 @@ class SyncState:
 
 
 class SlowCache:
-    """Caches the speed-mode/bind-iface calls, which don't need every poll."""
+    """Caches the speed-mode/preferences calls, which don't need every poll.
 
-    def __init__(self, alt_speed=False, bind_iface="", vpn_iface_ok=False, fetched_at=None, interval=0):
+    default_save_path and the relocation_* flags come from the same
+    /app/preferences call as bind_iface, but unlike bind_iface/vpn_iface_ok
+    they are never reset on a failed call: an API error just leaves them at
+    their last known value (see build_status).
+    """
+
+    def __init__(self, alt_speed=False, bind_iface="", vpn_iface_ok=False,
+                 default_save_path="", relocation_torrent_changed=False,
+                 relocation_category_path_changed=False, fetched_at=None, interval=0):
         self.alt_speed = alt_speed
         self.bind_iface = bind_iface
         self.vpn_iface_ok = vpn_iface_ok
+        self.default_save_path = default_save_path
+        self.relocation_torrent_changed = relocation_torrent_changed
+        self.relocation_category_path_changed = relocation_category_path_changed
         self.fetched_at = fetched_at
         self.interval = interval
 
@@ -339,7 +373,10 @@ def build_status(probe, client, sync, slow, now):
     torrents = []
     bind_iface = ""
     categories = []
+    cat_paths = {}
     tags = []
+    default_save_path = ""
+    relocation = {"torrentChanged": False, "categoryPathChanged": False}
 
     if installed and daemon and lock_holder != "gui":
         try:
@@ -360,6 +397,7 @@ def build_status(probe, client, sync, slow, now):
                 sync.rid = raw.get("rid") or 0
                 torrents = rows
                 categories = sorted(sync.categories.keys())
+                cat_paths = category_paths(sync.categories)
                 tags = list(sync.tags)
                 server_state = raw.get("server_state") or {}
                 dl_speed = server_state.get("dl_info_speed") or 0
@@ -373,26 +411,40 @@ def build_status(probe, client, sync, slow, now):
         except ApiError as exc:
             slow.alt_speed = False
             errors.append(exc.message)
-        if vpn_iface:
-            try:
-                body = client.get("/api/v2/app/preferences")
-            except ApiError as exc:
+        # Read on every slow-timer tick now, not only when a VPN interface is
+        # configured: defaultSavePath and relocation come from this same
+        # response for every setup. bind_iface/vpn_iface_ok keep resetting
+        # to ""/False on failure exactly as before; default_save_path and
+        # the relocation flags simply keep their last known value instead,
+        # since a stale relocation preference is still meaningful while a
+        # stale bind iface is not.
+        try:
+            body = client.get("/api/v2/app/preferences")
+        except ApiError as exc:
+            slow.bind_iface = ""
+            slow.vpn_iface_ok = False
+            errors.append(exc.message)
+        else:
+            prefs = _try_json_object(body)
+            if prefs is None:
                 slow.bind_iface = ""
                 slow.vpn_iface_ok = False
-                errors.append(exc.message)
+                errors.append("invalid preferences response")
             else:
-                prefs = _try_json_object(body)
-                if prefs is None:
-                    slow.bind_iface = ""
-                    slow.vpn_iface_ok = False
-                    errors.append("invalid preferences response")
-                else:
-                    slow.bind_iface = prefs.get("current_network_interface") or ""
-                    slow.vpn_iface_ok = True
+                slow.bind_iface = prefs.get("current_network_interface") or ""
+                slow.vpn_iface_ok = True
+                slow.default_save_path = prefs.get("save_path") or ""
+                slow.relocation_torrent_changed = bool(prefs.get("torrent_changed_tmm_enabled"))
+                slow.relocation_category_path_changed = bool(prefs.get("category_changed_tmm_enabled"))
         slow.fetched_at = now
 
     if api:
         alt_speed = slow.alt_speed
+        default_save_path = slow.default_save_path
+        relocation = {
+            "torrentChanged": slow.relocation_torrent_changed,
+            "categoryPathChanged": slow.relocation_category_path_changed,
+        }
         if vpn_iface:
             bind_iface = slow.bind_iface
             if not slow.vpn_iface_ok:
@@ -410,7 +462,10 @@ def build_status(probe, client, sync, slow, now):
         "vpnIface": vpn_iface,
         "bindIface": bind_iface,
         "categories": categories,
+        "categoryPaths": cat_paths,
         "tags": tags,
+        "defaultSavePath": default_save_path,
+        "relocation": relocation,
     }
     return status, errors
 

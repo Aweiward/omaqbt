@@ -205,6 +205,48 @@ test("parseStatusJson copies top-level categories and tags with safe defaults", 
   assert.deepEqual(missing.tags, []);
 });
 
+test("parseStatusJson copies autoTmm per row with a false default", () => {
+  const parsed = Model.parseStatusJson(JSON.stringify({
+    installed: true, daemon: true, api: true,
+    torrents: [
+      { hash: "a", name: "x", state: "downloading", autoTmm: true },
+      { hash: "b", name: "y", state: "downloading" }
+    ]
+  }));
+  assert.equal(parsed.torrents[0].autoTmm, true);
+  assert.equal(parsed.torrents[1].autoTmm, false);
+});
+
+test("parseStatusJson copies categoryPaths, defaultSavePath and relocation with safe defaults", () => {
+  const parsed = Model.parseStatusJson(JSON.stringify({
+    installed: true, daemon: true, api: true,
+    torrents: [],
+    categoryPaths: { linux: { savePath: "/data/linux", downloadPath: "/data/linux-dl" } },
+    defaultSavePath: "/home/user/Downloads",
+    relocation: { torrentChanged: true, categoryPathChanged: false }
+  }));
+  assert.deepEqual(parsed.categoryPaths, { linux: { savePath: "/data/linux", downloadPath: "/data/linux-dl" } });
+  assert.equal(parsed.defaultSavePath, "/home/user/Downloads");
+  assert.deepEqual(parsed.relocation, { torrentChanged: true, categoryPathChanged: false });
+
+  const missing = Model.parseStatusJson(JSON.stringify({ installed: true, torrents: [] }));
+  assert.deepEqual(missing.categoryPaths, {});
+  assert.equal(missing.defaultSavePath, "");
+  assert.deepEqual(missing.relocation, { torrentChanged: false, categoryPathChanged: false });
+
+  const garbage = Model.parseStatusJson("nope");
+  assert.deepEqual(garbage.categoryPaths, {});
+  assert.equal(garbage.defaultSavePath, "");
+  assert.deepEqual(garbage.relocation, { torrentChanged: false, categoryPathChanged: false });
+});
+
+test("parseStatusJson ignores a non-object categoryPaths", () => {
+  const parsed = Model.parseStatusJson(JSON.stringify({
+    installed: true, daemon: true, api: true, torrents: [], categoryPaths: ["not", "a", "map"]
+  }));
+  assert.deepEqual(parsed.categoryPaths, {});
+});
+
 test("sanitizeError strips SID cookies and password fields", () => {
   const cleaned = Model.sanitizeError("fail SID=abc+def/12; password=secret leftover");
   assert.equal(/SID=/i.test(cleaned), false);

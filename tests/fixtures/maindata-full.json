@@ -4,7 +4,7 @@
   "server_state": { "dl_info_speed": 2202009, "up_info_speed": 143360 },
   "categories": {
     "linux": { "name": "linux", "savePath": "" },
-    "os": { "name": "os", "savePath": "" }
+    "os": { "name": "os", "savePath": "/data/os", "download_path": "/data/os-dl" }
   },
   "tags": ["iso", "linux", "extra"],
   "torrents": {
@@ -30,7 +30,8 @@
       "infohash_v1": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "category": "linux",
       "tags": "iso, linux",
-      "tracker": "https://tracker.example.com:6969/announce"
+      "tracker": "https://tracker.example.com:6969/announce",
+      "auto_tmm": true
     },
     "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb": {
       "name": "arch.iso",

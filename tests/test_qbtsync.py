@@ -218,6 +218,31 @@ class MergeMaindataTests(unittest.TestCase):
         _, rows = qbtsync.merge_maindata(raw, {})
         self.assertEqual(rows[0]["tracker"], "")
 
+    def test_row_auto_tmm_true(self):
+        raw = {
+            "full_update": True,
+            "torrents": {
+                "6" * 40: {"name": "managed", "auto_tmm": True},
+            },
+        }
+        _, rows = qbtsync.merge_maindata(raw, {})
+        self.assertIs(rows[0]["autoTmm"], True)
+
+    def test_row_auto_tmm_missing_defaults_false(self):
+        raw = {
+            "full_update": True,
+            "torrents": {"7" * 40: {"name": "unmanaged"}},
+        }
+        _, rows = qbtsync.merge_maindata(raw, {})
+        self.assertIs(rows[0]["autoTmm"], False)
+
+    def test_row_auto_tmm_survives_delta_that_does_not_resend_it(self):
+        cache_map, _ = qbtsync.merge_maindata(self.full, {})
+        _, rows = qbtsync.merge_maindata(self.delta, cache_map)
+        debian_hash = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        row = next(r for r in rows if r["hash"] == debian_hash)
+        self.assertIs(row["autoTmm"], True)
+
 
 class MergeCategoriesTests(unittest.TestCase):
     def test_full_update_replaces_cache(self):
@@ -240,6 +265,41 @@ class MergeCategoriesTests(unittest.TestCase):
         raw = {"full_update": False, "categories_removed": ["os"]}
         merged = qbtsync.merge_categories(raw, cache)
         self.assertEqual(merged, {"linux": {"name": "linux"}})
+
+
+class CategoryPathsTests(unittest.TestCase):
+    """category_paths() builds the status's `categoryPaths` map from the
+    merged category cache. The download-path key name couldn't be probed
+    live (the probing user has no categories), so both spellings are read."""
+
+    def test_reads_save_path_and_snake_case_download_path(self):
+        paths = qbtsync.category_paths({
+            "os": {"name": "os", "savePath": "/data/os", "download_path": "/data/os-dl"},
+        })
+        self.assertEqual(paths, {"os": {"savePath": "/data/os", "downloadPath": "/data/os-dl"}})
+
+    def test_reads_camel_case_download_path_fallback(self):
+        paths = qbtsync.category_paths({
+            "os": {"name": "os", "savePath": "/data/os", "downloadPath": "/data/os-dl2"},
+        })
+        self.assertEqual(paths["os"]["downloadPath"], "/data/os-dl2")
+
+    def test_snake_case_download_path_wins_when_both_present(self):
+        paths = qbtsync.category_paths({
+            "os": {"savePath": "/data/os", "download_path": "/snake", "downloadPath": "/camel"},
+        })
+        self.assertEqual(paths["os"]["downloadPath"], "/snake")
+
+    def test_missing_download_path_defaults_empty(self):
+        paths = qbtsync.category_paths({"linux": {"name": "linux", "savePath": ""}})
+        self.assertEqual(paths, {"linux": {"savePath": "", "downloadPath": ""}})
+
+    def test_missing_save_path_defaults_empty(self):
+        paths = qbtsync.category_paths({"linux": {"name": "linux"}})
+        self.assertEqual(paths["linux"]["savePath"], "")
+
+    def test_empty_categories_is_empty_map(self):
+        self.assertEqual(qbtsync.category_paths({}), {})
 
 
 class MergeTagsTests(unittest.TestCase):
@@ -544,6 +604,9 @@ class BuildStatusTests(unittest.TestCase):
         self.assertEqual(status["torrents"], [])
         self.assertEqual(status["categories"], [])
         self.assertEqual(status["tags"], [])
+        self.assertEqual(status["categoryPaths"], {})
+        self.assertEqual(status["defaultSavePath"], "")
+        self.assertEqual(status["relocation"], {"torrentChanged": False, "categoryPathChanged": False})
         self.assertEqual(errors, [])
         self.assertEqual(client.calls, [])
 
@@ -562,6 +625,11 @@ class BuildStatusTests(unittest.TestCase):
         client = self.FakeClient({
             "/api/v2/sync/maindata?rid=0": json.dumps(full),
             "/api/v2/transfer/speedLimitsMode": "1",
+            "/api/v2/app/preferences": json.dumps({
+                "save_path": "/home/user/Downloads",
+                "torrent_changed_tmm_enabled": True,
+                "category_changed_tmm_enabled": False,
+            }),
         })
         sync = qbtsync.SyncState()
         slow = qbtsync.SlowCache(interval=0)
@@ -572,12 +640,19 @@ class BuildStatusTests(unittest.TestCase):
         self.assertTrue(status["altSpeed"])
         self.assertEqual(errors, [])
         self.assertEqual(sync.rid, 1)
-        # no VPN iface configured: no preferences call at all
-        self.assertNotIn("/api/v2/app/preferences", client.calls)
+        # preferences is fetched on the slow timer even with no VPN iface
+        # configured -- only the vpnIface/bindIface fields stay gated on it.
+        self.assertIn("/api/v2/app/preferences", client.calls)
         self.assertEqual(status["vpnIface"], "")
         self.assertEqual(status["bindIface"], "")
         self.assertEqual(status["categories"], ["linux", "os"])
         self.assertEqual(status["tags"], ["extra", "iso", "linux"])
+        self.assertEqual(status["categoryPaths"], {
+            "linux": {"savePath": "", "downloadPath": ""},
+            "os": {"savePath": "/data/os", "downloadPath": "/data/os-dl"},
+        })
+        self.assertEqual(status["defaultSavePath"], "/home/user/Downloads")
+        self.assertEqual(status["relocation"], {"torrentChanged": True, "categoryPathChanged": False})
 
     def test_categories_and_tags_honour_delta_removed_semantics(self):
         full = json.loads((FIXTURES / "maindata-full.json").read_text())
@@ -587,17 +662,23 @@ class BuildStatusTests(unittest.TestCase):
             "/api/v2/sync/maindata?rid=0": json.dumps(full),
             "/api/v2/sync/maindata?rid=1": json.dumps(delta),
             "/api/v2/transfer/speedLimitsMode": "1",
+            "/api/v2/app/preferences": json.dumps({"save_path": "/home/user/Downloads"}),
         })
         sync = qbtsync.SyncState()
         slow = qbtsync.SlowCache(interval=0)
         first, _ = qbtsync.build_status(probe, client, sync, slow, 1000.0)
         self.assertEqual(first["categories"], ["linux", "os"])
         self.assertEqual(first["tags"], ["extra", "iso", "linux"])
+        self.assertEqual(first["categoryPaths"], {
+            "linux": {"savePath": "", "downloadPath": ""},
+            "os": {"savePath": "/data/os", "downloadPath": "/data/os-dl"},
+        })
 
         second, _ = qbtsync.build_status(probe, client, sync, slow, 1001.0)
         # the delta's categories_removed/tags_removed prune the survivors.
         self.assertEqual(second["categories"], ["linux"])
         self.assertEqual(second["tags"], ["iso", "linux"])
+        self.assertEqual(second["categoryPaths"], {"linux": {"savePath": "", "downloadPath": ""}})
 
     def test_maindata_failure_leaves_api_false_and_reports_error(self):
         probe = self.base_probe()
@@ -654,6 +735,66 @@ class BuildStatusTests(unittest.TestCase):
         status, errors = qbtsync.build_status(probe, client, sync, slow, 1000.0)
         self.assertEqual(status["vpnIface"], "")
         self.assertEqual(status["bindIface"], "")
+        self.assertIn("connection refused", errors)
+
+    def test_preferences_fetched_even_with_no_vpn_iface_configured(self):
+        # Preferences now feeds defaultSavePath/relocation too, so it is
+        # fetched on the slow timer regardless of whether a VPN interface
+        # is configured; only vpnIface/bindIface stay gated on vpn_iface.
+        full = json.loads((FIXTURES / "maindata-full.json").read_text())
+        probe = self.base_probe(vpnIface="")
+        client = self.FakeClient({
+            "/api/v2/sync/maindata?rid=0": json.dumps(full),
+            "/api/v2/transfer/speedLimitsMode": "1",
+            "/api/v2/app/preferences": json.dumps({
+                "save_path": "/home/user/Downloads",
+                "torrent_changed_tmm_enabled": True,
+                "category_changed_tmm_enabled": False,
+            }),
+        })
+        sync = qbtsync.SyncState()
+        slow = qbtsync.SlowCache(interval=0)
+        status, errors = qbtsync.build_status(probe, client, sync, slow, 1000.0)
+        self.assertIn("/api/v2/app/preferences", client.calls)
+        self.assertEqual(status["vpnIface"], "")
+        self.assertEqual(status["bindIface"], "")
+        self.assertEqual(status["defaultSavePath"], "/home/user/Downloads")
+        self.assertEqual(status["relocation"], {"torrentChanged": True, "categoryPathChanged": False})
+        self.assertEqual(errors, [])
+
+    def test_preferences_failure_keeps_last_known_default_save_path_and_relocation(self):
+        full = json.loads((FIXTURES / "maindata-full.json").read_text())
+        probe = self.base_probe(vpnIface="wg0-mullvad")
+        sync = qbtsync.SyncState()
+        slow = qbtsync.SlowCache(interval=0)
+
+        client1 = self.FakeClient({
+            "/api/v2/sync/maindata?rid=0": json.dumps(full),
+            "/api/v2/transfer/speedLimitsMode": "1",
+            "/api/v2/app/preferences": json.dumps({
+                "current_network_interface": "wg0-mullvad",
+                "save_path": "/home/user/Downloads",
+                "torrent_changed_tmm_enabled": True,
+                "category_changed_tmm_enabled": False,
+            }),
+        })
+        first, _ = qbtsync.build_status(probe, client1, sync, slow, 1000.0)
+        self.assertEqual(first["defaultSavePath"], "/home/user/Downloads")
+        self.assertEqual(first["relocation"], {"torrentChanged": True, "categoryPathChanged": False})
+
+        client2 = self.FakeClient({
+            "/api/v2/sync/maindata?rid=1": json.dumps(full),
+            "/api/v2/transfer/speedLimitsMode": "1",
+            "/api/v2/app/preferences": qbtsync.ApiError(None, "connection refused"),
+        })
+        second, errors = qbtsync.build_status(probe, client2, sync, slow, 1001.0)
+        # the API error is reported and vpnIface/bindIface reset (unchanged
+        # behaviour), but the new fields keep their last known values rather
+        # than resetting to empty/false.
+        self.assertEqual(second["vpnIface"], "")
+        self.assertEqual(second["bindIface"], "")
+        self.assertEqual(second["defaultSavePath"], "/home/user/Downloads")
+        self.assertEqual(second["relocation"], {"torrentChanged": True, "categoryPathChanged": False})
         self.assertIn("connection refused", errors)
 
     def test_maindata_non_json_body_is_treated_as_failed_call(self):
@@ -728,7 +869,8 @@ class BuildStatusTests(unittest.TestCase):
         self.assertEqual(
             list(status.keys()),
             ["installed", "daemon", "lockHolder", "api", "altSpeed", "dlSpeed",
-             "upSpeed", "torrents", "vpnIface", "bindIface", "categories", "tags"],
+             "upSpeed", "torrents", "vpnIface", "bindIface", "categories",
+             "categoryPaths", "tags", "defaultSavePath", "relocation"],
         )
 
 

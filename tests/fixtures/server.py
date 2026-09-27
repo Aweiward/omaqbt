@@ -11,6 +11,9 @@ from urllib.parse import parse_qs, unquote_plus, urlparse
 ROOT = Path(__file__).resolve().parent
 LOG = Path(os.environ["QBT_FIXTURE_LOG"])
 COOKIE = "SID=leaked-secret-value"
+# /app/preferences' fixed save_path/relocation defaults, matching the shape
+# (not the values) live-probed against qBittorrent 5.2.3 on 2026-09-27.
+DEFAULT_SAVE_PATH = "/home/user/Downloads"
 FULL = json.loads((ROOT / "maindata-full.json").read_text())
 DELTA = json.loads((ROOT / "maindata-delta.json").read_text())
 FILES = json.loads((ROOT / "files.json").read_text())
@@ -234,7 +237,12 @@ class Handler(BaseHTTPRequestHandler):
             bind_file = os.environ.get("QBT_FIXTURE_BIND_FILE")
             if bind_file and Path(bind_file).exists():
                 bind = Path(bind_file).read_text().strip()
-            self._send(200, json.dumps({"current_network_interface": bind}).encode())
+            self._send(200, json.dumps({
+                "current_network_interface": bind,
+                "save_path": DEFAULT_SAVE_PATH,
+                "torrent_changed_tmm_enabled": True,
+                "category_changed_tmm_enabled": False,
+            }).encode())
             return
         if parsed.path in _INSPECT_ROUTES:
             control_key, payload = _INSPECT_ROUTES[parsed.path]
