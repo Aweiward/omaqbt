@@ -25,6 +25,10 @@ Item {
   property string tab: "info"
   // View.inspectorInfo(...), or null when there is no cursor row.
   property var info: null
+  // The raw cursor row (Client.cursorRow), for InspectorView.emptyCopy's
+  // row argument -- distinct from `info`, which is already the rendered
+  // Info tab, not row-shaped.
+  property var row: null
   // InspectorView.infoView(...)'s pieces bar and Transfer/Torrent groups.
   property var pieces: []
   property string piecesLegend: ""
@@ -469,10 +473,16 @@ Item {
                     }
                     Text {
                       id: gvalue
+                      objectName: "groupValue_" + gfield.modelData.label
                       width: gfield.width - Style.space(96) - (gnote.visible ? gnote.implicitWidth : 0)
                       text: gfield.modelData.value
                       textFormat: Text.PlainText
                       wrapMode: Text.WrapAnywhere
+                      // Comment is the one field the spec caps: at most 3
+                      // lines, then "…" (a save path or a long hash still
+                      // wraps in full).
+                      maximumLineCount: gfield.modelData.label === "Comment" ? 3 : 0
+                      elide: gfield.modelData.label === "Comment" ? Text.ElideRight : Text.ElideNone
                       font.family: Style.fontFamily
                       font.pixelSize: Style.font.body
                       color: pane.toneColor(gfield.modelData.tone)
@@ -672,7 +682,7 @@ Item {
     Column {
       id: filesNoMetaCopy
       visible: pane.info !== null && pane.tab === "files" && pane.files.state === "empty" && pane.noMeta
-      readonly property var copy: InspectorView.emptyCopy("files", null)
+      readonly property var copy: InspectorView.emptyCopy("files", pane.row)
       anchors.left: parent.left
       anchors.leftMargin: pane.padX
       anchors.right: parent.right

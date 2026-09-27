@@ -662,6 +662,7 @@ Item {
             anchors.fill: parent
             tab: root.inspectorTab
             info: root.inspectorInfo
+            row: root.cursorRow
             pieces: root.infoTab.cells
             piecesLegend: root.infoTab.legend
             noMeta: root.infoTab.noMeta

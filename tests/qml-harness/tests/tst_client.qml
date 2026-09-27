@@ -1684,6 +1684,28 @@ TestCase {
     verify(shows(o.c, "alpha"), "the slice-1 block stays up")
   }
 
+  function test_info_comment_field_caps_at_3_lines_and_empty_shows_dash() {
+    var o = make()
+    o.svc.torrents = [tt(hh("a"), "alpha", { size: 5000000000 })]
+    key(o.c, "1")
+    var longComment = "line one is fairly long and should wrap on its own, " +
+      "line two is also fairly long and should wrap too, " +
+      "line three keeps going, and this trailing bit should never be reached at all"
+    o.svc.setInspect(hh("a"), "info", { props: propsFixture({ comment: longComment }), pieces: [2, 2, 0, 0] })
+    wait(30)
+    var insp = inspectorOf(o.c)
+    var val = findByName(insp, "groupValue_Comment")
+    verify(val !== null, "the Comment value Text is in the tree")
+    verify(val.lineCount <= 3, "lineCount " + val.lineCount)
+    verify(val.truncated === true, "a comment this long must be truncated, not just wrapped")
+    // An empty comment shows "--" (InspectorView.infoGroups), never capped.
+    o.svc.setInspect(hh("a"), "info", { props: propsFixture({ comment: "" }), pieces: [2, 2, 0, 0] })
+    wait(30)
+    val = findByName(insp, "groupValue_Comment")
+    compare(val.text, "—")
+    compare(val.truncated, false)
+  }
+
   function test_info_no_metadata_shows_muted_line_and_no_bar_and_state_text() {
     var o = make()
     o.svc.torrents = [tt(hh("a"), "alpha", { size: -1, state: "stoppedDL", progress: 0 })]
