@@ -183,19 +183,24 @@ function hasPipe(url) {
   return String(url === undefined || url === null ? "" : url).indexOf("|") !== -1;
 }
 
-// trackerUrlError(text) -> "" for a URL qbt accepts, else the message:
-// at most 2048 characters, then udp://, http://, https:// or wss://
-// (case-sensitive, as in qbt), then no whitespace and no "|".
+// trackerUrlError(text) -> "" for a URL qbt accepts, else the message.
+// Checks, in qbt's order: at most 2048 characters; udp://, http://,
+// https:// or wss:// (case-sensitive, as in qbt); printable ASCII only
+// (0x21-0x7E, Ruling AE: so characters and bytes agree with qbt's LC_ALL=C
+// count, and no Unicode space slips through); no "|".
 function trackerUrlError(text) {
   var s = String(text === undefined || text === null ? "" : text);
   if (s.length > TRACKER_URL_MAX) return "That URL is too long.";
   if (!TRACKER_SCHEME_RE.test(s)) return "Use a udp://, http://, https:// or wss:// URL.";
-  if (/\s/.test(s) || hasPipe(s)) return "No spaces or | in a tracker URL.";
+  if (/[\t\n\v\f\r ]/.test(s) || hasPipe(s)) return "No spaces or | in a tracker URL.";
+  if (/[^\x21-\x7e]/.test(s)) return "Use only plain ASCII characters in a tracker URL.";
   return "";
 }
 
+// validPort: 1-5 ASCII digits (qbt bounds the length before any
+// arithmetic, so a huge port can't wrap), value 1-65535.
 function validPort(text) {
-  if (!/^[0-9]+$/.test(text)) return false;
+  if (!/^[0-9]{1,5}$/.test(text)) return false;
   var n = parseInt(text, 10);
   return n >= 1 && n <= 65535;
 }

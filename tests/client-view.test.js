@@ -1579,3 +1579,21 @@ test("sameInspectorState: equal fields and target compare equal, any difference 
   assert.equal(V.sameInspectorState(V.inspectorDispatch({}), V.inspectorDispatch({})), true);
   assert.equal(V.sameInspectorState(null, a), false);
 });
+
+test("paletteRows: from the inspector, Cycle file priority says focus the files tab unless Files shows", () => {
+  const onPeers = V.paletteState("rows", true, V.inspectorDispatch(insp({ tab: "peers" })), "inspector");
+  assert.equal(paletteRow(onPeers, "file.cycle").enabled, false);
+  assert.equal(paletteRow(onPeers, "file.cycle").reason, "focus the files tab");
+  assert.equal(paletteRow(onPeers, "file.down").enabled, true, "j/k move the peers list");
+  const onFiles = V.paletteState("rows", true, V.inspectorDispatch(insp({ tab: "files" })), "inspector");
+  assert.equal(paletteRow(onFiles, "file.cycle").enabled, true);
+  const fromTable = V.paletteState("rows", true, V.inspectorDispatch(insp({ tab: "files", pane: "table" })), "table");
+  assert.equal(paletteRow(fromTable, "file.cycle").reason, "focus the inspector");
+});
+
+test("inspectorDispatch: filesTab follows the focused Files tab", () => {
+  assert.equal(V.inspectorDispatch(insp({ tab: "files" })).filesTab, true);
+  assert.equal(V.inspectorDispatch(insp({ tab: "files", pane: "table" })).filesTab, false);
+  assert.equal(V.inspectorDispatch(insp()).filesTab, false);
+  assert.equal(V.sameInspectorState(V.inspectorDispatch(insp({ tab: "files", trackers: [] })), V.inspectorDispatch(insp({ tab: "info", trackers: [] }))), false);
+});

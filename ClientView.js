@@ -820,6 +820,7 @@ function dispatchState(regState, pane, state, hasCursorRow, targets, inspector) 
   var i = inspector || {};
   st.inspectorTarget = i.inspectorTarget || null;
   st.trackersTab = i.trackersTab === true;
+  st.filesTab = i.filesTab === true;
   st.cursorNoMetadata = i.cursorNoMetadata === true;
   st.cursorStopped = i.cursorStopped === true;
   st.cursorPendingMagnet = i.cursorPendingMagnet === true;
@@ -833,7 +834,7 @@ function sameInspectorState(a, b) {
   if (!a || !b) return false;
   var ta = a.inspectorTarget, tb = b.inspectorTarget;
   var sameTarget = ta === tb || (!!ta && !!tb && ta.kind === tb.kind && ta.value === tb.value && ta.label === tb.label);
-  return sameTarget && a.trackersTab === b.trackersTab && a.cursorNoMetadata === b.cursorNoMetadata &&
+  return sameTarget && a.trackersTab === b.trackersTab && a.filesTab === b.filesTab && a.cursorNoMetadata === b.cursorNoMetadata &&
     a.cursorStopped === b.cursorStopped && a.cursorPendingMagnet === b.cursorPendingMagnet;
 }
 
@@ -844,6 +845,7 @@ function sameInspectorState(a, b) {
 //     cursor off the list, or when the inspector isn't the focused pane.
 //   trackersTab: the focused inspector shows the trackers tab of a cursor
 //     torrent (even with no trackers, so `a` can add the first one).
+//   filesTab: likewise for the Files tab (the palette's file.cycle reason).
 //   cursorNoMetadata / cursorStopped / cursorPendingMagnet: the cursor
 //     torrent has no metadata (ctx.noMeta) / is stoppedDL or pausedDL
 //     (what qbt fetch-metadata accepts) / is a browser magnet still pending
@@ -868,6 +870,7 @@ function inspectorDispatch(ctx) {
   return {
     inspectorTarget: target,
     trackersTab: focused && c.tab === "trackers",
+    filesTab: focused && c.tab === "files",
     cursorNoMetadata: row !== null && c.noMeta === true,
     cursorStopped: st === "stoppeddl" || st === "pauseddl",
     cursorPendingMagnet: hash !== "" && (c.pending || []).indexOf(hash) !== -1
@@ -1405,12 +1408,13 @@ function mruPush(mru, id) {
 var PALETTE_GROUPS = HELP_GROUPS;
 var PALETTE_MRU_SHOWN = 5;
 
-// A row that "runs from the table": at least one of its commands-table
-// rows has panes covering "table" (directly, or via the any-pane wildcard).
-// Evaluating this way (rather than through dispatch/findMatch) is
-// deliberate: the palette always evaluates a command as if the table pane
-// were focused, regardless of the pane the window was actually in when ":"
-// was pressed.
+// paletteRunsFrom(rows, pane): at least one of a command's commands-table
+// rows has panes covering `pane` (directly, or via the any-pane wildcard).
+// The palette evaluates a command from the table when it runs there, else
+// from the pane the window was in when ":" was pressed (state.pane); a
+// command covering neither is dimmed with the pane it needs. Checked on
+// the rows (rather than through dispatch/findMatch), so the key's own
+// match order doesn't matter.
 function paletteRunsFrom(rows, pane) {
   for (var i = 0; i < rows.length; i++) {
     if (Registry.paneMatches(rows[i], pane)) return true;
@@ -1498,6 +1502,11 @@ function paletteRowFrom(entry, state, indices) {
   } else if (!Registry.preconditionMet(entry.needs, state)) {
     enabled = false;
     reason = Registry.needsReason(entry.needs, state);
+  } else if (entry.id === "file.cycle" && !(state && state.filesTab === true)) {
+    // Space only cycles a priority on the Files tab (elsewhere the
+    // handler ignores it), so the palette doesn't offer it enabled but inert.
+    enabled = false;
+    reason = "focus the files tab";
   }
   return {
     kind: "command",

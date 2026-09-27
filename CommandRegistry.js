@@ -292,7 +292,9 @@ function needsConfirm(id, s) {
 
 function copyTarget(t) {
   if (!t || typeof t !== "object") return null;
-  return { kind: String(t.kind || ""), value: String(t.value === undefined || t.value === null ? "" : t.value), label: String(t.label === undefined || t.label === null ? "" : t.label) };
+  // Frozen: pending.target, pending.args.target and confirm.target share
+  // it, and none of their consumers may change what `y` acts on.
+  return Object.freeze({ kind: String(t.kind || ""), value: String(t.value === undefined || t.value === null ? "" : t.value), label: String(t.label === undefined || t.label === null ? "" : t.label) });
 }
 
 function buildArgs(row, s) {

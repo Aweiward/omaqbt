@@ -1149,3 +1149,12 @@ test("dispatch keeps the inspector fields through normalizeState", () => {
   assert.equal(d.state.trackersTab, false);
   assert.equal(d.state.cursorNoMetadata, false);
 });
+
+test("the captured target is frozen: no consumer can change what y acts on", () => {
+  withSyntheticRows(() => {
+    const step = dispatch(inspector({ inspectorTarget: TRACKER_A }), ev("x", keyOf("x")));
+    assert.ok(Object.isFrozen(step.state.pending.target));
+    assert.ok(Object.isFrozen(step.confirm.target));
+    assert.ok(Object.isFrozen(step.state.pending.args.target));
+  });
+});

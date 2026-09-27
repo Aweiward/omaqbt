@@ -946,3 +946,29 @@ test("peerError rejects what qbt's valid_peer rejects", () => {
   }
   assert.equal(I.peerError("1.2.3.4"), "That isn't an ip:port.");
 });
+
+// --- F5 parity with qbt (Task 3 fix round 1, Ruling AE) ---------------------
+// tests/api-contract.sh runs the same cases through qbt under en_US.UTF-8.
+
+const CASES = JSON.parse(fs.readFileSync(path.join(__dirname, "fixtures", "validation-cases.json"), "utf8"));
+
+test("trackerUrlError accepts exactly the shared ok cases (parity with qbt)", () => {
+  for (const c of CASES.trackerUrls) {
+    assert.equal(I.trackerUrlError(c.input) === "", c.ok, c.why);
+  }
+});
+
+test("peerError accepts exactly the shared ok cases (parity with qbt)", () => {
+  for (const c of CASES.peers) {
+    assert.equal(I.peerError(c.input) === "", c.ok, c.why);
+  }
+});
+
+test("trackerUrlError: anything outside printable ASCII gets the ASCII message", () => {
+  const msg = "Use only plain ASCII characters in a tracker URL.";
+  assert.equal(I.trackerUrlError("udp://t.example:1/café"), msg);
+  assert.equal(I.trackerUrlError("udp://t.example:1/a b"), msg);
+  assert.equal(I.trackerUrlError("udp://t.example:1/a﻿b"), msg);
+  assert.equal(I.trackerUrlError("udp://t.example:1/a\x01b"), msg);
+  assert.equal(I.trackerUrlError("udp://t.example:1/a b"), "No spaces or | in a tracker URL.");
+});

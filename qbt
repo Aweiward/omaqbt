@@ -50,16 +50,21 @@ valid_single_hash() {
   [[ $input =~ ^([[:xdigit:]]{40}|[[:xdigit:]]{64})$ ]]
 }
 
-# F5: udp://, http://, https:// or wss://, at most 2048 characters, no
-# whitespace, no "|". "&" and "=" are legal (tracker URLs carry passkeys as
+# F5: udp://, http://, https:// or wss://, at most 2048 characters,
+# printable ASCII only (0x21-0x7E: no whitespace, no control or non-ASCII
+# character), no "|". "&" and "=" are legal (tracker URLs carry passkeys as
 # query-string params) -- the value is always @uri-encoded before it goes
-# into a form body, so it can never be split into extra fields.
+# into a form body, so it can never be split into extra fields. LC_ALL=C
+# (local to this function) makes ${#input} count bytes and [!-~] a byte
+# range, so the checks match InspectorView.trackerUrlError exactly (Ruling
+# AE; shared cases in tests/fixtures/validation-cases.json).
 valid_tracker_url() {
   local input=${1:-}
+  local LC_ALL=C
   [[ -n $input ]] || return 1
   [[ ${#input} -le 2048 ]] || return 1
   [[ $input =~ ^(udp|https?|wss):// ]] || return 1
-  [[ $input != *[[:space:]]* ]] || return 1
+  [[ $input =~ ^[!-~]+$ ]] || return 1
   [[ $input != *'|'* ]] || return 1
   return 0
 }
@@ -70,7 +75,9 @@ valid_port() {
   # locale-collated digit-lookalike can't slip through here either -- and a
   # leading zero (e.g. "089") would make bash read the number as octal and
   # abort on the invalid digit, so force base 10 too.
-  [[ $port =~ ^[[:digit:]]+$ ]] || return 1
+  # At most 5 digits before any arithmetic: a longer string could wrap a
+  # 64-bit integer back into range (18446744073709551617 is 1).
+  [[ $port =~ ^[[:digit:]]{1,5}$ ]] || return 1
   (( 10#$port >= 1 && 10#$port <= 65535 ))
 }
 

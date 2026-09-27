@@ -521,4 +521,33 @@ if locale_failures:
     print(f"\n{len(locale_failures)} locale check(s) failed: {locale_failures}", file=sys.stderr)
     sys.exit(1)
 print("locale-contract ok")
+
+# Task 3 fix round 1 (Ruling AE): qbt and InspectorView accept exactly the
+# same tracker URLs and peers. tests/inspector-view.test.js runs the same
+# shared cases through InspectorView.trackerUrlError / peerError.
+parity_failures = []
+cases = json.loads(Path("tests/fixtures/validation-cases.json").read_text())
+with harness.fixture_server(extra_env=lenv) as (pport, penv):
+    def _parity(args, want_ok, label):
+        before = len(json.loads(Path(penv["QBT_FIXTURE_LOG"]).read_text() or "[]"))
+        result = subprocess.run(["./qbt", *args], env=penv, text=True, capture_output=True)
+        after = len(json.loads(Path(penv["QBT_FIXTURE_LOG"]).read_text() or "[]"))
+        raw_bash = any(t in result.stderr for t in ("value too great for base", "invalid integer constant", "arithmetic syntax error", "operand expected"))
+        if want_ok:
+            ok = result.returncode == 0 and after > before
+        else:
+            ok = result.returncode != 0 and after == before and not raw_bash
+        print(("ok - " if ok else "FAIL - ") + label)
+        if not ok:
+            parity_failures.append((label, result.returncode, result.stderr.strip()))
+
+    for c in cases["trackerUrls"]:
+        _parity(["tracker-add", HASH_A, c["input"]], c["ok"], f"tracker-add parity ({'accepts' if c['ok'] else 'rejects'} {c['why']})")
+    for c in cases["peers"]:
+        _parity(["ban-peer", c["input"]], c["ok"], f"ban-peer parity ({'accepts' if c['ok'] else 'rejects'} {c['why']}): {c['input']!r}")
+
+if parity_failures:
+    print(f"\n{len(parity_failures)} validation parity check(s) failed: {parity_failures}", file=sys.stderr)
+    sys.exit(1)
+print("validation-parity-contract ok")
 PY

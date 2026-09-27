@@ -2049,4 +2049,61 @@ TestCase {
     key(o.c, "j")
     compare(pal(o.c).evalState.inspectorTarget.value, "10.0.0.1:6881")
   }
+
+  // ---- palette rows for another pane (Task 3 fix round 1, Ruling AC) --------
+
+  function palRow(p, id) {
+    for (var i = 0; i < p.rows.length; i++) if (p.rows[i].id === id) return p.rows[i]
+    return null
+  }
+
+  function test_palette_runs_an_inspector_row_from_the_inspector() {
+    var o = make()
+    o.svc.torrents = list3()
+    key(o.c, "3")
+    o.svc.setInspect(hh("c"), "peers", { peers: peersWith(3, function(i) { return 1000 + i }) })
+    if (o.c.pane !== "inspector") key(o.c, "\t", 0x01000001)
+    compare(o.c.pane, "inspector")
+    compare(o.c.peerIndex, 0)
+    key(o.c, ":")
+    var p = pal(o.c)
+    p.setQuery("next row")
+    var row = palRow(p, "file.down")
+    verify(row !== null)
+    compare(row.enabled, true)
+    compare(palRow(p, "file.cycle"), null, "the query only matches Next row")
+    p.setQuery("cycle file")
+    compare(palRow(p, "file.cycle").enabled, false, "not on the peers tab")
+    compare(palRow(p, "file.cycle").reason, "focus the files tab")
+    p.setQuery("next row")
+    p.activated(palRow(p, "file.down"))
+    compare(o.c.mode, "NORMAL")
+    compare(o.c.pane, "inspector", "an inspector row runs where the palette was opened")
+    compare(o.c.peerIndex, 1)
+    // A table-only row from the inspector palette moves to the table (1b).
+    key(o.c, ":")
+    p.setQuery("pause")
+    compare(palRow(p, "torrent.toggle").enabled, true)
+    p.activated(palRow(p, "torrent.toggle"))
+    compare(o.c.pane, "table")
+    compare(lastCall(o.svc, "stop").args[0], hh("c"))
+  }
+
+  function test_palette_runs_a_filters_row_from_the_filters_pane() {
+    var o = make()
+    o.svc.torrents = list3()
+    key(o.c, "", 0x01000002)    // Shift-Tab: table -> filters
+    compare(o.c.pane, "filters")
+    var before = JSON.stringify(o.c.filterCursor)
+    key(o.c, ":")
+    var p = pal(o.c)
+    p.setQuery("down")
+    var row = palRow(p, "filter.down")
+    verify(row !== null)
+    compare(row.enabled, true)
+    p.activated(row)
+    compare(o.c.mode, "NORMAL")
+    compare(o.c.pane, "filters")
+    verify(JSON.stringify(o.c.filterCursor) !== before, "the filters cursor moved")
+  }
 }
