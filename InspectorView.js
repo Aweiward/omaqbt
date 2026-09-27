@@ -64,72 +64,108 @@ function elideHash(hash) {
 // --- redactUrl ----------------------------------------------------------
 
 // scheme://authority(/path?query#fragment)? -- authority is everything up
-// to the first /, \, ? or # (so a userinfo@ or :port is captured here, but
-// nothing past the authority ever is). "\" is included because WHATWG URL
-// parsing treats a backslash like "/" for special schemes, so
-// "udp://t.example:1337\abc123" must not leave "\abc123" inside the
-// authority.
-var URL_RE = /^([a-zA-Z][a-zA-Z0-9+.-]*):\/\/([^\/\\?#]+)([\s\S]*)$/;
+// to the first /, ? or # (never "\" itself here -- see splitAuthoritySpan;
+// this regex only finds the outer span that "\" is judged inside).
+var URL_RE = /^([a-zA-Z][a-zA-Z0-9+.-]*):\/\/([^\/?#]+)([\s\S]*)$/;
 
 // stripUserinfo(authority) -> authority with any "user[:pass]@" prefix
-// removed, splitting at the LAST "@" in the authority (I1: a tracker's
-// passkey can ride in a URL's userinfo, e.g.
-// "https://user:abc123@t.example/announce" -- the shown host must never
-// carry it). WHATWG URL parsing and qBittorrent both split userinfo at the
-// last "@" of the authority, not the first, so a password that itself
+// removed, splitting at the LAST "@" (I1: a tracker's passkey can ride in
+// a URL's userinfo, e.g. "https://user:abc123@t.example/announce" -- the
+// shown host must never carry it). WHATWG URL parsing and qBittorrent both
+// split userinfo at the last "@", not the first, so a password that itself
 // contains "@" (e.g. "user:abc@123@t.example") still yields the real host.
+// Used by splitAuthoritySpan once "\" has been ruled out or resolved.
 function stripUserinfo(authority) {
   return String(authority === undefined || authority === null ? "" : authority).replace(/^[\s\S]*@/, "");
 }
 
-// genericHead(s) -> {head, cut} for a URL that isn't scheme://authority(...)
-// (M5: schemeless, or otherwise unparseable, e.g.
+// splitAuthoritySpan(span) -> {ambiguous: true} | {ambiguous: false, host,
+// tail}. `span` is the authority candidate up to the first "/", "?" or "#"
+// (never itself split on "\") -- i.e. what libtorrent would treat as the
+// whole authority. WHATWG URL parsing treats "\" like "/" inside a
+// special-scheme authority; libtorrent does not and reads it as a literal
+// userinfo/host character. When `span` contains both "\" and "@" it is
+// genuinely ambiguous which parser qBittorrent's tracker is using --
+// stopping at "\" (WHATWG) can turn part of the real userinfo into a fake
+// "host" that gets shown ("us\SEC@t.example/x" would read host "us",
+// leaking the "us" prefix of what is actually the username "us\SEC").
+// Ruling V: redact the whole authority as "…" in that case, showing
+// nothing. With "\" and no "@", there is nothing for the backslash to be
+// ambiguous WITH, so it still terminates the authority (WHATWG's rule:
+// "udp://t.example:1337\abc123" still reads host "t.example:1337"). With
+// "@" and no "\", split at the last "@" as stripUserinfo always has.
+function splitAuthoritySpan(span) {
+  var s = String(span === undefined || span === null ? "" : span);
+  var hasBackslash = s.indexOf("\\") !== -1;
+  var hasAt = s.indexOf("@") !== -1;
+  if (hasBackslash && hasAt) return { ambiguous: true };
+  if (hasBackslash) {
+    var cut = s.indexOf("\\");
+    return { ambiguous: false, host: s.slice(0, cut), tail: s.slice(cut) };
+  }
+  return { ambiguous: false, host: stripUserinfo(s), tail: "" };
+}
+
+// genericHead(s) -> {head, cut, ambiguous} for a URL that isn't
+// scheme://authority(...) (M5: schemeless, or otherwise unparseable, e.g.
 // "t.example/abc123/announce" or a bare "?passkey=abc123"): `head` is
-// everything up to the first /, \, ? or # with any userinfo before it
-// stripped (at the last "@", same as stripUserinfo), and `cut` is true
-// when a delimiter was actually found (so a caller can tell "nothing to
-// redact" from "redacted down to nothing"). Shared by redactUrl
-// (path/query never shown) and urlHost (the host column, which must never
-// carry a userinfo passkey either).
+// everything up to the first /, ? or # with any userinfo resolved via
+// splitAuthoritySpan (never carrying a userinfo passkey, and "…" alone
+// when the span is Ruling-V ambiguous), and `cut` is true when there is
+// something past the shown host to redact (a delimiter was found, or a
+// non-ambiguous "\" inside the span itself hid content) -- so a caller can
+// tell "nothing to redact" from "redacted down to nothing". `ambiguous`
+// means `head` is already the complete, scheme-less redacted output ("…"),
+// never to be suffixed with "/…". Shared by redactUrl (path/query never
+// shown) and urlHost (the host column, which must never carry a userinfo
+// passkey either).
 function genericHead(s) {
   var text = String(s === undefined || s === null ? "" : s);
-  var cut = -1;
+  var delim = -1;
   for (var i = 0; i < text.length; i++) {
     var c = text.charAt(i);
-    if (c === "/" || c === "?" || c === "#" || c === "\\") { cut = i; break; }
+    if (c === "/" || c === "?" || c === "#") { delim = i; break; }
   }
-  var head = cut === -1 ? text : text.slice(0, cut);
-  var at = head.lastIndexOf("@");
-  if (at !== -1) head = head.slice(at + 1);
-  return { head: head, cut: cut !== -1 };
+  var span = delim === -1 ? text : text.slice(0, delim);
+  var split = splitAuthoritySpan(span);
+  if (split.ambiguous) return { head: "…", cut: true, ambiguous: true };
+  return { head: split.host, cut: delim !== -1 || split.tail !== "" };
 }
 
 // redactUrl(url) -> "scheme://host[:port]/…" when there is a path or query
-// beyond "/", "scheme://host[:port]" when there is neither, or (M5)
-// genericHead's cut-and-append for anything that doesn't parse as
-// scheme://authority(...). Never returns any part of a path, query or
-// userinfo.
+// beyond "/", "scheme://host[:port]" when there is neither, "scheme://…"
+// when splitAuthoritySpan finds Ruling-V's "\" + "@" ambiguity (nothing
+// from the authority shown at all), or (M5) genericHead's cut-and-append
+// for anything that doesn't parse as scheme://authority(...). Never
+// returns any part of a path, query or userinfo.
 function redactUrl(url) {
   var s = String(url === undefined || url === null ? "" : url);
   var m = URL_RE.exec(s);
   if (m) {
-    var host = stripUserinfo(m[2]);
-    var rest = m[3] || "";
-    if (rest === "" || rest === "/") return m[1] + "://" + host;
-    return m[1] + "://" + host + "/…";
+    var split = splitAuthoritySpan(m[2]);
+    if (split.ambiguous) return m[1] + "://…";
+    var rest = split.tail + (m[3] || "");
+    if (rest === "" || rest === "/") return m[1] + "://" + split.host;
+    return m[1] + "://" + split.host + "/…";
   }
   var g = genericHead(s);
+  if (g.ambiguous) return g.head;
   return g.cut ? g.head + "/…" : g.head;
 }
 
 // urlHost(url) -> the "host[:port]" authority redactUrl also uses (never
-// its userinfo), or genericHead's head for a URL that doesn't parse as
+// its userinfo), "…" when splitAuthoritySpan finds Ruling-V's ambiguity,
+// or genericHead's head for a URL that doesn't parse as
 // scheme://authority(...) -- so the host column can never carry a
 // passkey either, scheme or not.
 function urlHost(url) {
   var s = String(url === undefined || url === null ? "" : url);
   var m = URL_RE.exec(s);
-  return m ? stripUserinfo(m[2]) : genericHead(s).head;
+  if (m) {
+    var split = splitAuthoritySpan(m[2]);
+    return split.ambiguous ? "…" : split.host;
+  }
+  return genericHead(s).head;
 }
 
 // --- trackerRows ----------------------------------------------------------

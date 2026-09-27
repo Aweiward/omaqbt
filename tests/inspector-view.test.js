@@ -117,6 +117,60 @@ test("trackerRows().rows[0].host never carries what follows a backslash", () => 
   }
 });
 
+// --- Ruling V: "\" AND "@" together in the authority span is ambiguous ---
+// (WHATWG treats "\" like "/" and stops the authority there; libtorrent
+// does not and reads "\" as a literal userinfo/host character. When both
+// are present it's genuinely unclear which side of the "\" is userinfo
+// and which is host, so the whole authority is hidden as "…" rather than
+// risk showing a fragment of the real userinfo as a fake "host".)
+
+test("redactUrl: a backslash AND an @ together in the authority is ambiguous -- hide it all as scheme://…", () => {
+  assert.equal(I.redactUrl("http://us\\SEC@t.example/x"), "http://…");
+  assert.equal(I.redactUrl("http://user:SE\\C@t.example/"), "http://…");
+  assert.equal(I.redactUrl("http://t.example\\SEC@x"), "http://…");
+});
+
+test("urlHost (via trackerRows) never carries any part of an ambiguous \\+@ authority", () => {
+  const cases = ["http://us\\SEC@t.example/x", "http://user:SE\\C@t.example/", "http://t.example\\SEC@x"];
+  for (const c of cases) {
+    const row = I.trackerRows([tracker({ url: c })]).rows[0];
+    assert.equal(row.host, "…", c);
+    assert.ok(!row.host.includes("SEC"), c);
+    assert.ok(!row.host.includes("us"), c);
+    assert.ok(!row.host.includes("t.example"), c);
+  }
+});
+
+test("redactUrl: the same ambiguity, schemeless -- collapses to a bare '…', not '…/…'", () => {
+  assert.equal(I.redactUrl("us\\SEC@t.example/x"), "…");
+});
+
+test("trackerRows().rows[0].host: the schemeless ambiguity too", () => {
+  const row = I.trackerRows([tracker({ url: "us\\SEC@t.example/x" })]).rows[0];
+  assert.equal(row.host, "…");
+  assert.ok(!row.host.includes("SEC"));
+});
+
+test("Ruling V regressions: \\ with no @ still terminates the authority", () => {
+  assert.equal(I.redactUrl("udp://t.example:1337\\abc123"), "udp://t.example:1337/…");
+  assert.equal(I.trackerRows([tracker({ url: "udp://t.example:1337\\abc123" })]).rows[0].host, "t.example:1337");
+  assert.equal(I.redactUrl("https://t.example\\announce?passkey=abc123"), "https://t.example/…");
+});
+
+test("Ruling V regressions: @ with no \\ still splits at the last @", () => {
+  assert.equal(I.redactUrl("http://user:abc@123@t.example/a"), "http://t.example/…");
+  assert.equal(I.trackerRows([tracker({ url: "http://user:abc@123@t.example/a" })]).rows[0].host, "t.example");
+  assert.equal(I.redactUrl("https://user:abc123@t.example/announce"), "https://t.example/…");
+});
+
+test("Ruling V regressions: IPv6 with and without userinfo, @ in path, %40 in password, empty userinfo", () => {
+  assert.equal(I.trackerRows([tracker({ url: "http://[::1]:8080/announce?pk=abc123" })]).rows[0].host, "[::1]:8080");
+  assert.equal(I.trackerRows([tracker({ url: "http://user:abc123@[::1]:8080/a" })]).rows[0].host, "[::1]:8080");
+  assert.equal(I.redactUrl("https://t.example/a@abc123/x"), "https://t.example/…");
+  assert.equal(I.trackerRows([tracker({ url: "http://user:abc123%40x@t.example/a" })]).rows[0].host, "t.example");
+  assert.equal(I.trackerRows([tracker({ url: "http://@t.example/x" })]).rows[0].host, "t.example");
+});
+
 // --- M5: a schemeless or otherwise unparseable URL is cut too -------------
 
 test("redactUrl cuts a schemeless URL at its first /, ? or #", () => {
