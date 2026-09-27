@@ -1145,6 +1145,16 @@ TestCase {
     compare(o.c.inspectorTab, "info")
   }
 
+  function test_narrow_5_opens_the_collapsed_inspector_on_chart() {
+    var o = narrow(850)
+    var inspector = paneTitled(o.c, "Inspector")
+    compare(inspector.visible, false)
+    key(o.c, "5")
+    compare(o.c.pane, "inspector", "5 opens the overlay, same as 1-4")
+    compare(o.c.inspectorTab, "chart")
+    compare(inspector.visible, true)
+  }
+
   function test_narrow_tab_opens_each_overlay_in_turn() {
     var o = narrow(850)
     var filters = paneTitled(o.c, "Filters")
