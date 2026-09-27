@@ -890,7 +890,7 @@
    "why": "U+00A1, just past the C1 block"
   }
  ],
- "_comment_limits": "Shared D5 limit cases (slice 3b): qbt (tests/api-contract.sh, under en_US.UTF-8 and C: share-limits --ratio/--seed-time) and the window's limit parser must accept exactly the ok ones as canonical values on the wire. Ratio: -2, -1, or 0-9998 with at most 2 decimals (9998 itself is the top: 9998.01 is refused). Seed time: whole minutes, -2, -1 or 0-525600. No leading zeros, signs, spaces or exponents.",
+ "_comment_limits": "Shared D5 limit cases (slice 3b): qbt (tests/api-contract.sh, under en_US.UTF-8 and C: share-limits --ratio/--seed-time, limit) and the window's limit parser must accept exactly the ok ones as canonical values on the wire. Ratio: -2, -1, or 0-9998 with at most 2 decimals (9998 itself is the top: 9998.01 is refused). Seed time: whole minutes, -2, -1 or 0-525600. Speed: whole bytes/s, 0-2147483647 (0 = unlimited). No leading zeros, signs, spaces or exponents.",
  "ratios": [
   {
    "input": "-2",
@@ -1158,6 +1158,103 @@
    "input": "+1",
    "ok": false,
    "why": "plus sign"
+  }
+ ],
+ "speeds": [
+  {
+   "input": "0",
+   "ok": true,
+   "why": "unlimited"
+  },
+  {
+   "input": "1",
+   "ok": true,
+   "why": "one byte/s"
+  },
+  {
+   "input": "262144",
+   "ok": true,
+   "why": "256 KiB/s"
+  },
+  {
+   "input": "1048576",
+   "ok": true,
+   "why": "1 MiB/s"
+  },
+  {
+   "input": "8388608",
+   "ok": true,
+   "why": "8 MiB/s"
+  },
+  {
+   "input": "2147483647",
+   "ok": true,
+   "why": "the top (INT_MAX)"
+  },
+  {
+   "input": "",
+   "ok": false,
+   "why": "empty"
+  },
+  {
+   "input": "-1",
+   "ok": false,
+   "why": "negative"
+  },
+  {
+   "input": "2147483648",
+   "ok": false,
+   "why": "just over the top"
+  },
+  {
+   "input": "3145728000",
+   "ok": false,
+   "why": "3000 MiB/s"
+  },
+  {
+   "input": "99999999999",
+   "ok": false,
+   "why": "eleven digits"
+  },
+  {
+   "input": "01",
+   "ok": false,
+   "why": "leading zero"
+  },
+  {
+   "input": "1.5",
+   "ok": false,
+   "why": "decimal"
+  },
+  {
+   "input": "1K",
+   "ok": false,
+   "why": "unit suffix"
+  },
+  {
+   "input": "\uff11",
+   "ok": false,
+   "why": "fullwidth digit"
+  },
+  {
+   "input": "18446744073709551617",
+   "ok": false,
+   "why": "wraps a 64-bit integer to 1"
+  },
+  {
+   "input": " 1",
+   "ok": false,
+   "why": "leading space"
+  },
+  {
+   "input": "+1",
+   "ok": false,
+   "why": "plus sign"
+  },
+  {
+   "input": "1e3",
+   "ok": false,
+   "why": "exponent"
   }
  ]
 }

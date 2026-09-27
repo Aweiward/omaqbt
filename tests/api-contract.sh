@@ -602,6 +602,7 @@ limit_failures = []
 LIMIT_COMMANDS = {
     "ratios": lambda v: ["share-limits", HASH_A, "--ratio", v],
     "seedTimes": lambda v: ["share-limits", HASH_A, "--seed-time", v],
+    "speeds": lambda v: ["limit", HASH_A, "up", v],
 }
 for label_locale, base_env in (("en_US.UTF-8", lenv), ("C", cenv)):
     with harness.fixture_server(extra_env=base_env) as (lport, lenv_):

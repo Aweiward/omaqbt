@@ -108,10 +108,16 @@ valid_peer() {
 }
 
 # Slice 3b (D5): the canonical limit values on the wire. The boundaries are
-# pinned in tests/fixtures/validation-cases.json ("ratios", "seedTimes"),
-# which the window's parser is tested against too. Every regex caps the
-# length before any 10# arithmetic, so a long digit string can't wrap a
-# 64-bit integer back into range; no leading zeros.
+# pinned in tests/fixtures/validation-cases.json ("speeds", "ratios",
+# "seedTimes"), which the window's parser is tested against too. Every
+# regex caps the length before any 10# arithmetic, so a long digit string
+# can't wrap a 64-bit integer back into range; no leading zeros.
+# Speed: bytes/s, 0-2147483647 (0 = unlimited).
+valid_speed() {
+  local input=${1:-} LC_ALL=C
+  [[ $input =~ ^(0|[1-9][[:digit:]]{0,9})$ ]] || return 1
+  (( 10#$input <= 2147483647 ))
+}
 
 # Ratio: -2 (default), -1 (none), or 0-9998 with at most 2 decimals.
 valid_ratio() {
@@ -622,20 +628,68 @@ cmd_turtle() {
 
 cmd_limit() {
   local hash=${1:-} kind=${2:-} bytes=${3:-}
-  [[ -n $hash && -n $bytes && ( $kind == dl || $kind == up ) ]] || die "usage: qbt limit <hash|all> <dl|up> <bytes-per-sec, 0 = unlimited>"
+  local api_error_detail=code
+  [[ $# -eq 3 && -n $hash && -n $bytes && ( $kind == dl || $kind == up ) ]] || die "usage: qbt limit <hash|all> <dl|up> <bytes-per-sec, 0-2147483647, 0 = unlimited>"
   valid_hashes "$hash" || die "invalid hash list"
+  valid_speed "$bytes" || die "invalid speed limit"
   local endpoint=setDownloadLimit
   [[ $kind == up ]] && endpoint=setUploadLimit
   api POST "/api/v2/torrents/${endpoint}" "hashes=${hash}&limit=${bytes}" >/dev/null
   printf '%s\n' '{"ok":true}'
 }
 
+# D4 (slice 3b). `sequential <hashes> on|off` and `first-last <hashes>
+# on|off`: 5.2.3 only has toggle endpoints, so read each target's current
+# value and toggle only the ones that differ, in one POST; when none differ
+# nothing is sent. A double press stays where it was asked to be.
+cmd_toggle_to() {
+  local label=$1 field=$2 route=$3 hashes=$4 want=$5
+  local api_error_detail=code
+  valid_hashes "$hashes" || die "invalid hash list"
+  local query=""
+  [[ $hashes == all ]] || query="?hashes=${hashes}"
+  api_or_die GET "/api/v2/torrents/info${query}"
+  local plan
+  plan=$(printf '%s\n' "$API_BODY" | jq -c --arg want "$hashes" --arg field "$field" --argjson on "$([[ $want == on ]] && echo true || echo false)" "$TARGETS_JQ"'
+    try (
+      targets($want)
+      | [.[] | select(has("missing"))] as $missing
+      | if ($missing | length) > 0 then {missing: ($missing | length)}
+        else {hashes: ([.[] | if (.[$field] | type) != "boolean" then error("unreadable") else . end
+                         | select(.[$field] != $on) | .hash] | join("|"))}
+        end
+    ) catch {unreadable: true}' 2>/dev/null) || die "qBittorrent sent something unreadable"
+  [[ $(jq -r '.unreadable // false' <<<"$plan") == false ]] || die "qBittorrent sent something unreadable"
+  local missing
+  missing=$(jq -r '.missing // 0' <<<"$plan")
+  (( missing == 0 )) || die_gone "$missing"
+  local differ
+  differ=$(jq -r '.hashes' <<<"$plan")
+  if [[ -n $differ ]]; then
+    valid_hashes "$differ" && [[ $differ != all ]] || die "qBittorrent sent something unreadable"
+    api_or_die POST "/api/v2/torrents/${route}" "hashes=${differ}"
+  fi
+  printf '%s\n' '{"ok":true}'
+}
+
 cmd_sequential() {
-  local hash=${1:-}
-  [[ -n $hash ]] || die "usage: qbt sequential <hash>"
+  local usage="usage: qbt sequential <hash|list|all> [on|off]; without one it toggles"
+  local api_error_detail=code
+  [[ $# -eq 1 || ( $# -eq 2 && ( $2 == on || $2 == off ) ) ]] || die "$usage"
+  local hash=$1
+  [[ -n $hash ]] || die "$usage"
+  if [[ $# -eq 2 ]]; then
+    cmd_toggle_to sequential seq_dl toggleSequentialDownload "$hash" "$2"
+    return
+  fi
   valid_hashes "$hash" || die "invalid hash list"
   api POST "/api/v2/torrents/toggleSequentialDownload" "hashes=${hash}" >/dev/null
   printf '%s\n' '{"ok":true}'
+}
+
+cmd_first_last() {
+  [[ $# -eq 2 && -n $1 && ( $2 == on || $2 == off ) ]] || die "usage: qbt first-last <hash|list|all> <on|off>"
+  cmd_toggle_to first-last f_l_piece_prio toggleFirstLastPiecePrio "$1" "$2"
 }
 
 # The widget's ratio row: share-limits with only --ratio.
@@ -1894,6 +1948,7 @@ case ${1:-} in
   turtle) shift; cmd_turtle "$@" ;;
   limit) shift; cmd_limit "$@" ;;
   sequential) shift; cmd_sequential "$@" ;;
+  first-last) shift; cmd_first_last "$@" ;;
   sharelimit) shift; cmd_sharelimit "$@" ;;
   share-limits) shift; cmd_share_limits "$@" ;;
   install) shift; cmd_install "$@" ;;
@@ -1917,5 +1972,5 @@ case ${1:-} in
   magnet-pending-drop) shift; cmd_magnet_pending_drop "$@" ;;
   magnet-install-handler) shift; cmd_magnet_install_handler "$@" ;;
   magnet-uninstall-handler) shift; cmd_magnet_uninstall_handler "$@" ;;
-  *) die "usage: qbt status|probe|add|start|stop|recheck|set-location|delete|reannounce|tracker-add|tracker-edit|tracker-remove|ban-peer|fetch-metadata|files|prio|turtle|limit|sequential|sharelimit|share-limits|category-add|category-path|category-remove|category-rename|set-category|tag-add|tag-remove|tag-rename|tags|install|start-daemon|stop-daemon|magnet-paths|magnet-inbox|magnet-drain|magnet-pending-list|magnet-pending-drop|magnet-install-handler|magnet-uninstall-handler" ;;
+  *) die "usage: qbt status|probe|add|start|stop|recheck|set-location|delete|reannounce|tracker-add|tracker-edit|tracker-remove|ban-peer|fetch-metadata|files|prio|turtle|limit|sequential|first-last|sharelimit|share-limits|category-add|category-path|category-remove|category-rename|set-category|tag-add|tag-remove|tag-rename|tags|install|start-daemon|stop-daemon|magnet-paths|magnet-inbox|magnet-drain|magnet-pending-list|magnet-pending-drop|magnet-install-handler|magnet-uninstall-handler" ;;
 esac

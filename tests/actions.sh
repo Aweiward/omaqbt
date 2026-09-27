@@ -1576,6 +1576,74 @@ for label, prefs, rows in (
         check(f"share-limits fails closed on {label}",
               r.returncode != 0 and r.stderr.strip() == "qBittorrent sent something unreadable" and not posts_to(new_entries(env, before)))
 
+
+# 33. D4: `sequential|first-last <hashes> on|off` read fresh state and
+#     toggle only the targets that differ; nothing to change sends nothing.
+#     The bare `sequential <hash>` stays the old single toggle.
+for command, field, route in (("sequential", "seq_dl", "toggleSequentialDownload"),
+                              ("first-last", "f_l_piece_prio", "toggleFirstLastPiecePrio")):
+    rows = {sl_hash(50): {field: True}, sl_hash(51): {field: False}, sl_hash(52): {}}
+    targets = "|".join(rows)
+    with harness.fixture_server(extra_env=sl_library(rows)) as (port, env):
+        def toggles(args):
+            before = len(read_log(env))
+            r = run(env, *args)
+            e = new_entries(env, before)
+            return r, e, posts_to(e, route)
+
+        r, e, posts = toggles([command, targets, "on"])
+        check(f"{command} on: succeeds", r.returncode == 0 and r.stdout.strip() == '{"ok":true}')
+        check(f"{command} on: reads info for the targets first", e[0]["path"] == "/api/v2/torrents/info" and e[0]["query"] == {"hashes": [targets]})
+        check(f"{command} on: toggles only the two that were off, in one POST", [x["body"] for x in posts] == [f"hashes={sl_hash(51)}|{sl_hash(52)}"])
+        check(f"{command} on: every target is on", all(state(port)["limits"][h][field] is True for h in rows))
+        r, e, posts = toggles([command, targets, "on"])
+        check(f"{command} on twice: no write the second time", r.returncode == 0 and not posts)
+        check(f"{command} on twice: still on", all(state(port)["limits"][h][field] is True for h in rows))
+        r, e, posts = toggles([command, sl_hash(50), "off"])
+        check(f"{command} off: one POST for the one target", r.returncode == 0 and [x["body"] for x in posts] == [f"hashes={sl_hash(50)}"])
+        r, e, posts = toggles([command, targets, "off"])
+        check(f"{command} off over a mixed range converges", r.returncode == 0 and [x["body"] for x in posts] == [f"hashes={sl_hash(51)}|{sl_hash(52)}"]
+              and all(state(port)["limits"][h][field] is False for h in rows))
+        r, e, posts = toggles([command, "all", "on"])
+        check(f"{command} all on: info unfiltered, hashes listed, never hashes=all",
+              r.returncode == 0 and e[0]["query"] == {} and posts and all("hashes=all" not in x["body"] for x in posts)
+              and all(v[field] is True for v in state(port)["limits"].values()))
+        for args, want in (
+            ([command, HASH_NOTFOUND, "on"], "That torrent is gone."),
+            ([command, f"{HASH_NOTFOUND}|{'1' * 40}", "off"], "2 of those torrents are gone."),
+        ):
+            r, e, posts = toggles(args)
+            check(f"{command} {want!r}", r.returncode != 0 and r.stderr.strip() == want and not posts)
+        control(env, {route: "409secret"})
+        r, e, posts = toggles([command, sl_hash(50), "off"])
+        check(f"{command}: a refused toggle gives the HTTP code only", r.returncode != 0 and r.stderr.strip() == "qBittorrent refused it (HTTP 409)")
+        control(env, {"info": "409secret"})
+        r, e, posts = toggles([command, sl_hash(50), "off"])
+        check(f"{command}: an info failure gives the HTTP code only, and no write",
+              r.returncode != 0 and r.stderr.strip() == "qBittorrent refused it (HTTP 409)" and not posts)
+        control(env, {})
+        bad = [[command, sl_hash(50), "maybe"], [command, sl_hash(50), "on", "extra"], [command, "nothex", "on"], [command]]
+        if command == "first-last":
+            bad.append([command, sl_hash(50)])
+        for args in bad:
+            before = len(read_log(env))
+            r = run(env, *args)
+            check(f"{command} refuses {args[1:]!r} with no request", r.returncode != 0 and len(read_log(env)) == before)
+
+    with harness.fixture_server(extra_env=sl_library({sl_hash(53): {field: "yes"}})) as (port, env):
+        before = len(read_log(env))
+        r = run(env, command, sl_hash(53), "on")
+        check(f"{command} fails closed on a {field} that isn't a boolean",
+              r.returncode != 0 and r.stderr.strip() == "qBittorrent sent something unreadable" and not posts_to(new_entries(env, before)))
+
+with harness.fixture_server(extra_env=sl_library({sl_hash(54): {"seq_dl": True}})) as (port, env):
+    before = len(read_log(env))
+    r = run(env, "sequential", sl_hash(54))
+    e = new_entries(env, before)
+    check("bare sequential: the old toggle, one POST and no read",
+          r.returncode == 0 and [(x["method"], x["path"], x["body"]) for x in e] == [("POST", "/api/v2/torrents/toggleSequentialDownload", f"hashes={sl_hash(54)}")])
+    check("bare sequential: flips", state(port)["limits"][sl_hash(54)]["seq_dl"] is False)
+
 if failures:
     print(f"\n{len(failures)} check(s) failed", file=sys.stderr)
     sys.exit(1)
