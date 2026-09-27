@@ -34,7 +34,7 @@ test("redactUrl with no path or query keeps the bare authority", () => {
   assert.equal(I.redactUrl("udp://t.example:1337"), "udp://t.example:1337");
 });
 
-test("redactUrl returns unparseable input unchanged", () => {
+test("redactUrl returns unparseable input unchanged when there is nothing to cut", () => {
   assert.equal(I.redactUrl("not a url"), "not a url");
 });
 
@@ -47,6 +47,50 @@ test("redactUrl never leaks the passkey/path in any case", () => {
   ];
   for (const c of cases) {
     assert.ok(!I.redactUrl(c).includes("abc123"), c);
+  }
+});
+
+// --- I1: userinfo (a passkey riding as user:pass@host) never renders ------
+
+test("redactUrl strips userinfo from the authority", () => {
+  assert.equal(I.redactUrl("https://user:abc123@t.example/announce"), "https://t.example/…");
+  assert.equal(I.redactUrl("http://abc123@t.example:80"), "http://t.example:80");
+});
+
+test("trackerRows().rows[0].host never carries a URL's userinfo", () => {
+  const cases = [
+    "https://user:abc123@t.example/announce",
+    "http://abc123@t.example:80"
+  ];
+  for (const c of cases) {
+    const row = I.trackerRows([tracker({ url: c })]).rows[0];
+    assert.ok(!row.host.includes("abc123"), c);
+    assert.ok(!I.redactUrl(c).includes("abc123"), c);
+  }
+});
+
+// --- M5: a schemeless or otherwise unparseable URL is cut too -------------
+
+test("redactUrl cuts a schemeless URL at its first /, ? or #", () => {
+  assert.equal(I.redactUrl("t.example/abc123/announce"), "t.example/…");
+  assert.equal(I.redactUrl("?passkey=abc123").includes("abc123"), false);
+  assert.equal(I.redactUrl("t.example?passkey=abc123"), "t.example/…");
+  assert.equal(I.redactUrl("t.example#abc123"), "t.example/…");
+});
+
+test("redactUrl strips userinfo from a schemeless URL too", () => {
+  assert.equal(I.redactUrl("user:abc123@t.example/announce"), "t.example/…");
+});
+
+test("trackerRows().rows[0].host is cut too for a schemeless/unparseable URL (the host column, not just the detail line)", () => {
+  const cases = [
+    "t.example/abc123/announce",
+    "user:abc123@t.example/announce"
+  ];
+  for (const c of cases) {
+    const row = I.trackerRows([tracker({ url: c })]).rows[0];
+    assert.ok(!row.host.includes("abc123"), c);
+    assert.equal(row.host, "t.example", c);
   }
 });
 
@@ -662,6 +706,38 @@ test("infoView: sidecar down blanks a fresh entry too", () => {
 test("infoView: has_metadata false wins even at a nonzero size", () => {
   const v = I.infoView({ props: { has_metadata: false }, pieces: [], at: 1000 }, 900, true, { size: 5000 }, fmtDate);
   assert.equal(v.noMeta, true);
+});
+
+// --- M2: a fresh error entry shows nothing retained -------------------------
+
+test("infoView: a fresh error entry drops retained props/pieces -- groups all —, no pieces area", () => {
+  const props = { has_metadata: true, total_downloaded: 1073741824 };
+  const pieces = [2, 2, 0, 0];
+  const v = I.infoView({ props: props, pieces: pieces, error: "HTTP 500", at: 1000 }, 900, true, { size: 5000 }, fmtDate);
+  assert.equal(v.errored, true);
+  assert.equal(v.noMeta, false, "the row still has a size, so noMeta keeps its ordinary meaning");
+  assert.deepEqual(v.cells, [], "no pieces bar either");
+  for (const g of v.groups) for (const f of g.fields) assert.equal(f.value, "—");
+});
+
+test("infoView: a fresh error on a no-metadata torrent still reports noMeta true (State keeps 'waiting for metadata', Files keeps its no-metadata copy) -- errored only blanks the pieces area", () => {
+  const props = { has_metadata: true };
+  const v = I.infoView({ props: props, pieces: [2, 2], error: "HTTP 500", at: 1000 }, 900, true, { size: -1 }, fmtDate);
+  assert.equal(v.errored, true);
+  assert.equal(v.noMeta, true, "props is dropped on error, so the row's own size (-1) wins the fallback, same as stale/sidecar-down");
+  assert.deepEqual(v.cells, []);
+});
+
+test("infoView: no error at all reports errored false", () => {
+  const v = I.infoView({ props: { has_metadata: true }, pieces: [2, 2], at: 1000 }, 900, true, { size: 5000 }, fmtDate);
+  assert.equal(v.errored, false);
+});
+
+test("infoView: a stale error (at < sinceMs) is not fresh, so the row-size fallback still runs", () => {
+  const props = { has_metadata: true, total_downloaded: 1073741824 };
+  const v = I.infoView({ props: props, pieces: [2, 2], error: "HTTP 500", at: 800 }, 900, true, { size: 5000 }, fmtDate);
+  assert.deepEqual(v.cells, [], "stale either way (at < sinceMs)");
+  assert.equal(v.noMeta, false, "not fresh, so error is ignored too -- the row's own size (5000) wins the fallback");
 });
 
 // --- chartTab (Task 8) -------------------------------------------------------

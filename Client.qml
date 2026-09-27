@@ -679,6 +679,7 @@ Item {
             pieces: root.infoTab.cells
             piecesLegend: root.infoTab.legend
             noMeta: root.infoTab.noMeta
+            infoErrored: root.infoTab.errored
             groups: root.infoTab.groups
             files: root.filesState
             fileIndex: root.fileIndex

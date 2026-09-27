@@ -33,6 +33,12 @@ Item {
   property var pieces: []
   property string piecesLegend: ""
   property bool noMeta: false
+  // M2: true for a fresh Info-tab error. `noMeta` keeps its usual
+  // row-size meaning (State's "waiting for metadata" and Files' "No file
+  // list yet" copy must survive an unrelated info-read failure); this
+  // instead gates only the Info tab's own "no metadata yet" line, so a
+  // transient error blanks the pieces area without a stale line.
+  property bool infoErrored: false
   property var groups: []
   // View.filesView(...): {state: "loading"|"error"|"empty"|"rows", rows}.
   property var files: ({ state: "loading", rows: [] })
@@ -390,7 +396,7 @@ Item {
           }
 
           Text {
-            visible: pane.noMeta
+            visible: pane.noMeta && !pane.infoErrored
             x: pane.padX
             width: infoColumn.width - 2 * pane.padX
             text: "no metadata yet · pieces and files appear once it's fetched"
@@ -561,8 +567,16 @@ Item {
       visible: pane.info !== null && pane.tab === "trackers"
       anchors.fill: parent
 
+      // M3: the summary line ("DHT on · PeX on · LSD on · N seeds · N
+      // peers") still shows with no real trackers -- it's the only place
+      // DHT/PeX/LSD state is visible, and "No trackers" alone would hide
+      // it. The empty-state message is anchored below it instead of
+      // centered over the whole tab, so the two never overlap.
       TabMessage {
-        anchors.fill: parent
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.top: pane.trackers.state === "empty" ? summaryLine.bottom : parent.top
+        anchors.bottom: parent.bottom
         tabState: pane.trackers.state
         error: pane.trackers.error || ""
         noun: "trackers"
@@ -571,7 +585,7 @@ Item {
 
       Item {
         id: summaryLine
-        visible: pane.trackers.state === "rows"
+        visible: pane.trackers.state === "rows" || pane.trackers.state === "empty"
         anchors.left: parent.left
         anchors.right: parent.right
         anchors.top: parent.top

@@ -63,19 +63,46 @@ Item {
   // can raise this to get as close to it as the model allows.
   property int cellSpacing: Style.space(8)
 
-  // Grows or shrinks `slots` at the end to rows.length.
+  // Grows or shrinks `slots` at the end to rows.length. Growing is
+  // immediate -- a newly-added index was never incubating before it
+  // existed. Shrinking is deferred one turn through a 0ms Timer: the
+  // ListView can still be asynchronously incubating a delegate near the
+  // end of a big scroll jump (e.g. a direct `contentY` set) when `rows`
+  // drops to fewer entries (or to [], e.g. the service going away while
+  // this list is still mounted), and removing that index's slot out from
+  // under it makes the incubator resolve against an already-shrunk cache,
+  // warning "DelegateModel::cancel: index out range". Deferring past the
+  // current turn lets any in-flight incubation settle first. The Timer is
+  // a child of `list`, so destroying `list` tears it down with it and it
+  // never fires into a dead object.
   function syncSlots() {
     var n = (rows || []).length
+    if (slots.count < n) {
+      var add = []
+      for (var i = slots.count; i < n; i++) add.push({ slot: 0 })
+      slots.append(add)
+    } else if (slots.count > n) {
+      shrinkTimer.restart()
+    }
+  }
+
+  // Re-reads `rows` fresh rather than closing over a captured target
+  // count, since more changes may have landed before this fires.
+  function shrinkSlots() {
+    var n = (rows || []).length
     if (slots.count > n) slots.remove(n, slots.count - n)
-    var add = []
-    for (var i = slots.count; i < n; i++) add.push({ slot: 0 })
-    if (add.length > 0) slots.append(add)
   }
 
   onRowsChanged: syncSlots()
   Component.onCompleted: syncSlots()
 
   ListModel { id: slots }
+
+  Timer {
+    id: shrinkTimer
+    interval: 0
+    onTriggered: list.shrinkSlots()
+  }
 
   function positionAt(index) {
     if (index < 0 || index >= listView.count) return

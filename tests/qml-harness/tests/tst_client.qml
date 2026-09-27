@@ -1417,8 +1417,13 @@ TestCase {
     compare(lv.contentY, y, "a refresh leaves the scroll position alone")
     verify(lv.itemAtIndex(20) === before, "the delegate is reused, not rebuilt")
     compare(findAllByObjectName(lv.itemAtIndex(20), "cell")[1].text, "980", "the reused delegate shows the new data")
-    // fewer rows, then more: count follows, the view is not reset to the top
+    // fewer rows, then more: count follows, the view is not reset to the
+    // top. A shrink is deferred a turn (InspectorList.syncSlots, M1: it
+    // lets any in-flight incubation from the contentY jump above settle
+    // before slots are removed out from under it), so wait(0) once for
+    // the Timer before checking count.
     list.rows = rowsWith(function(i) { return i }).slice(0, 30)
+    wait(0)
     compare(lv.count, 30)
     compare(lv.contentY, y)
     list.rows = rowsWith(function(i) { return i })
@@ -1558,13 +1563,20 @@ TestCase {
     var o = make()
     o.svc.torrents = list3()
     key(o.c, "2")
-    o.svc.setInspect(hh("c"), "trackers", { trackers: trackersFixture() })
-    verify(shows(o.c, "2 trackers"), "pane title right side")
+    // I1: a passkey can also ride in a URL's userinfo (not only its path
+    // or query), e.g. "https://user:abc123@host/announce" -- add a row
+    // with one alongside the query- and path-passkey rows already here.
+    var trackers = trackersFixture().concat([
+      { url: "https://user:abc123@passkey.example/announce", status: 2, tier: 2, num_seeds: 1, num_leeches: 1, msg: "" }
+    ])
+    o.svc.setInspect(hh("c"), "trackers", { trackers: trackers })
+    verify(shows(o.c, "3 trackers"), "pane title right side")
     verify(shows(o.c, "DHT "))
-    verify(shows(o.c, "  ·  14 seeds · 3 peers"))
+    verify(shows(o.c, "  ·  15 seeds · 4 peers"))
     verify(shows(o.c, "Tracker")); verify(shows(o.c, "Seeds")); verify(shows(o.c, "Peers"))
     verify(shows(o.c, "tracker.example"))
     verify(shows(o.c, "t.example:1337"))
+    compare(o.c.trackersView.rows[2].host, "passkey.example", "the userinfo row's host is stripped of user:abc123@")
     verify(shows(o.c, "j k move · y copy"))
     key(o.c, "\t", 0x01000001)
     compare(o.c.pane, "inspector")
@@ -1658,6 +1670,9 @@ TestCase {
     o.svc.setInspect(hh("c"), "trackers", { trackers: trackersFixture().slice(0, 3) })
     verify(shows(o.c, "No trackers"))
     verify(shows(o.c, "This torrent only finds peers through DHT and PeX."))
+    // M3: the DHT/PeX/LSD summary line still shows with no real trackers
+    verify(shows(o.c, "DHT "), "the summary line still shows for an empty trackers list")
+    verify(shows(o.c, "  ·  0 seeds · 0 peers"))
     o.svc.sidecarDown = true
     verify(shows(o.c, "Needs qbt-serve (slow polling)"))
     o.svc.sidecarDown = false
@@ -1770,6 +1785,58 @@ TestCase {
     verify(!shows(o.c, "17 of 100"))
     verify(!shows(o.c, "Needs qbt-serve (slow polling)"))
     verify(shows(o.c, "alpha"), "the slice-1 block stays up")
+  }
+
+  // M2: a fresh error entry never shows retained props/pieces, even
+  // though Service keeps them for a transient failure -- the states table
+  // says Info's Error column stays "—" throughout, and the slice-1
+  // label/value block (read from the row, not the inspect reply) stays up.
+  function test_info_error_entry_shows_nothing_retained() {
+    var o = make()
+    o.svc.torrents = [tt(hh("a"), "alpha", { size: 5000000000 })]
+    key(o.c, "1")
+    o.svc.setInspect(hh("a"), "info", { props: propsFixture(), pieces: [2, 2, 0, 0] })
+    wait(30)
+    verify(shows(o.c, "pieces 2 of 4 · █ have ▓ partial ░ missing"))
+    verify(shows(o.c, "17 of 100"), "Connections field")
+    // Service keeps the prior props/pieces around for a transient read
+    // failure -- infoView must still drop them once entry.error is set.
+    o.svc.setInspect(hh("a"), "info", { props: propsFixture(), pieces: [2, 2, 0, 0], error: "HTTP 500" })
+    wait(30)
+    verify(!shows(o.c, "pieces 2 of 4 · █ have ▓ partial ░ missing"))
+    verify(!shows(o.c, "pieces 0 of 0 · █ have ▓ partial ░ missing"), "no bar with an all-missing legend either")
+    verify(!shows(o.c, "17 of 100"), "Connections reads — like every other group value")
+    verify(!shows(o.c, "no metadata yet · pieces and files appear once it's fetched"), "the pieces area shows nothing, not the no-metadata line")
+    var insp = inspectorOf(o.c)
+    var bar = findWith(insp, "markup")
+    verify(bar !== null && bar.visible === false, "the pieces bar itself is hidden")
+    verify(shows(o.c, "alpha"), "the slice-1 block stays up")
+    compare(o.c.messageLine.text, "Couldn't read info: HTTP 500", "the status line carries the error")
+  }
+
+  // M2 (regression guard): an info-tab error on a torrent that genuinely
+  // has no metadata must still read "waiting for metadata" in State and
+  // "No file list yet" in Files -- those come from the row and from
+  // Files, not from the erroring info reply, so `noMeta` keeps its
+  // ordinary row-size meaning through the error; only the Info tab's own
+  // pieces area (gated on `errored` instead) goes blank.
+  function test_info_error_on_a_no_metadata_torrent_keeps_state_and_files_copy() {
+    var o = make()
+    o.svc.torrents = [tt(hh("a"), "alpha", { size: -1, state: "stoppedDL", progress: 0 })]
+    key(o.c, "1")
+    wait(30)
+    verify(shows(o.c, "‖ stopped · waiting for metadata"))
+    verify(shows(o.c, "no metadata yet · pieces and files appear once it's fetched"))
+    // Service retains a stale props/pieces reply alongside the error, as
+    // it does for a transient failure -- this must not flip noMeta false.
+    o.svc.setInspect(hh("a"), "info", { props: propsFixture(), pieces: [2, 2, 0, 0], error: "HTTP 500" })
+    wait(30)
+    verify(shows(o.c, "‖ stopped · waiting for metadata"), "State still reads waiting-for-metadata through the error")
+    verify(!shows(o.c, "no metadata yet · pieces and files appear once it's fetched"), "the pieces area blanks on the error, not the no-metadata line")
+    key(o.c, "4")
+    o.svc.setFilesFor(hh("a"), [])
+    o.svc.setFilesStatus(hh("a"), "ok", "")
+    verify(shows(o.c, "No file list yet"), "Files keeps its no-metadata copy through the info-tab error")
   }
 
   function test_info_comment_field_caps_at_3_lines_and_empty_shows_dash() {

@@ -64,29 +64,65 @@ function elideHash(hash) {
 // --- redactUrl ----------------------------------------------------------
 
 // scheme://authority(/path?query#fragment)? -- authority is everything up
-// to the first /, ? or # (so a userinfo@ or :port stays in the shown
-// host, but nothing past it ever does).
+// to the first /, ? or # (so a userinfo@ or :port is captured here, but
+// nothing past the authority ever is).
 var URL_RE = /^([a-zA-Z][a-zA-Z0-9+.-]*):\/\/([^\/?#]+)([\s\S]*)$/;
 
+// stripUserinfo(authority) -> authority with any "user[:pass]@" prefix
+// removed (I1: a tracker's passkey can ride in a URL's userinfo, e.g.
+// "https://user:abc123@t.example/announce" -- the shown host must never
+// carry it).
+function stripUserinfo(authority) {
+  return String(authority === undefined || authority === null ? "" : authority).replace(/^[^@]*@/, "");
+}
+
+// genericHead(s) -> {head, cut} for a URL that isn't scheme://authority(...)
+// (M5: schemeless, or otherwise unparseable, e.g.
+// "t.example/abc123/announce" or a bare "?passkey=abc123"): `head` is
+// everything up to the first /, ? or # with any userinfo before it
+// stripped, and `cut` is true when a delimiter was actually found (so a
+// caller can tell "nothing to redact" from "redacted down to nothing").
+// Shared by redactUrl (path/query never shown) and urlHost (the host
+// column, which must never carry a userinfo passkey either).
+function genericHead(s) {
+  var text = String(s === undefined || s === null ? "" : s);
+  var cut = -1;
+  for (var i = 0; i < text.length; i++) {
+    var c = text.charAt(i);
+    if (c === "/" || c === "?" || c === "#") { cut = i; break; }
+  }
+  var head = cut === -1 ? text : text.slice(0, cut);
+  var at = head.lastIndexOf("@");
+  if (at !== -1) head = head.slice(at + 1);
+  return { head: head, cut: cut !== -1 };
+}
+
 // redactUrl(url) -> "scheme://host[:port]/…" when there is a path or query
-// beyond "/", "scheme://host[:port]" when there is neither, or the input
-// unchanged when it doesn't parse as scheme://authority(...). Never
-// returns any part of the path or query.
+// beyond "/", "scheme://host[:port]" when there is neither, or (M5)
+// genericHead's cut-and-append for anything that doesn't parse as
+// scheme://authority(...). Never returns any part of a path, query or
+// userinfo.
 function redactUrl(url) {
   var s = String(url === undefined || url === null ? "" : url);
   var m = URL_RE.exec(s);
-  if (!m) return s;
-  var rest = m[3] || "";
-  if (rest === "" || rest === "/") return m[1] + "://" + m[2];
-  return m[1] + "://" + m[2] + "/…";
+  if (m) {
+    var host = stripUserinfo(m[2]);
+    var rest = m[3] || "";
+    if (rest === "" || rest === "/") return m[1] + "://" + host;
+    return m[1] + "://" + host + "/…";
+  }
+  var g = genericHead(s);
+  return g.cut ? g.head + "/…" : g.head;
 }
 
-// urlHost(url) -> the "host[:port]" authority redactUrl also uses, or the
-// input unchanged when it doesn't parse.
+// urlHost(url) -> the "host[:port]" authority redactUrl also uses (never
+// its userinfo), or genericHead's head for a URL that doesn't parse as
+// scheme://authority(...) -- so the host column can never carry a
+// passkey either, scheme or not.
 function urlHost(url) {
   var s = String(url === undefined || url === null ? "" : url);
   var m = URL_RE.exec(s);
-  return m ? m[2] : s;
+  return m ? stripUserinfo(m[2]) : genericHead(s).head;
 }
 
 // --- trackerRows ----------------------------------------------------------
@@ -679,13 +715,29 @@ var PIECES_CELLS = 48;
 // (noMetadata's fallback) -- exactly right for a torrent whose Info tab
 // hasn't been read yet, and for the primary case, every stopped magnet in
 // the user's library today.
+//
+// M2: a fresh entry carrying `error` never hands its retained props or
+// pieces onward, even though Service keeps them around for a transient
+// failure -- the states table says "Values stay '—'; the status line
+// shows the error" for Info's Error column. `props` drops to null exactly
+// like the stale/sidecar-down paths, so `noMeta` still runs its normal
+// row-size fallback (a real no-metadata torrent keeps reading
+// "waiting for metadata" and "No file list yet" through an unrelated
+// info-read error, since those come from the row and from Files, not
+// from this reply) -- `errored` is returned separately so the pane can
+// blank only the pieces area (InspectorPane: no bar, and the
+// "no metadata yet" line suppressed by `errored`, not by `noMeta`). The
+// slice-1 label/value block (read from the row, not from this) is
+// unaffected either way.
 function infoView(entry, sinceMs, sidecarUp, row, fmtDate) {
   var since = Number(sinceMs) || 0;
   var fresh = sidecarUp !== false && !!entry && Number(entry.at) >= since;
-  var props = fresh && entry.props ? entry.props : null;
-  var pieces = fresh && Array.isArray(entry.pieces) ? entry.pieces : [];
+  var errored = fresh && !!entry.error;
+  var props = fresh && !errored && entry.props ? entry.props : null;
+  var pieces = fresh && !errored && Array.isArray(entry.pieces) ? entry.pieces : [];
   return {
     noMeta: noMetadata(row, props),
+    errored: errored,
     cells: binPieces(pieces, PIECES_CELLS),
     legend: piecesLegend(pieces),
     groups: infoGroups(props, fmtDate)
