@@ -845,6 +845,9 @@ with harness.fixture_server(extra_env=UTF8_ENV) as (port, env):
         (["tag-rename", "iso", "a,b"], "No commas in a tag."),
         (["tag-rename", "a,b", "x"], "No commas in a tag."),
         (["tag-rename", "iso", " iso"], "No spaces at the start or end."),
+        (["tag-add", "a\u0085b"], "No control characters in a name."),
+        (["category-rename", "os", "os/sub"], "Can't rename os into its own subcategory."),
+        (["category-rename", "os", "os/sub/deeper", "--merge"], "Can't rename os into its own subcategory."),
     ]
     for args, want in REJECTS:
         before = len(read_log(env))
@@ -1101,6 +1104,93 @@ with harness.fixture_server(extra_env=library_env(lib)) as (port, env):
         r = run(env, *args)
         check(f"{args[0]} move error: no body", r.returncode != 0 and not any(w in r.stderr for w in CAT_SECRET_WORDS)
               and "SECRET" not in r.stderr)
+
+# 27. Fix round 1: qBittorrent 5.2.3's removeCategory also removes every
+#     "name/..." subcategory and moves their torrents to the parent, and
+#     createCategory/editCategory can't carry share limits.
+LIMITED = {
+    "ratio": {"savePath": "", "ratio_limit": 2.0},
+    "seed-time": {"savePath": "", "seeding_time_limit": 60},
+    "idle-time": {"savePath": "", "inactive_seeding_time_limit": 0},
+    "action": {"savePath": "", "share_limit_action": "Stop"},
+}
+lib = {
+    "categories": dict({
+        "anime": {"savePath": "/srv/anime"},
+        "anime/2026": {"savePath": ""},
+        "anime/2026/deep": {"savePath": ""},
+        "a": {"savePath": ""},
+        "a/b": {"savePath": ""},
+        "a/b/c": {"savePath": ""},
+        "defaults": {"savePath": "", "ratio_limit": -2, "seeding_time_limit": -2,
+                     "inactive_seeding_time_limit": -2, "share_limit_action": "Default"},
+    }, **LIMITED),
+    "tags": [],
+    "torrents": {
+        HASH_A: {"category": "anime"},
+        HASH_B: {"category": "anime/2026"},
+        "1" * 40: {"category": "a/b"},
+        "2" * 40: {"category": "a/b/c"},
+        "3" * 40: {"category": "ratio"},
+    },
+}
+with harness.fixture_server(extra_env=library_env(lib)) as (port, env):
+    for args, want in (
+        (["category-rename", "anime", "animation"], "anime has subcategories; rename or remove them first."),
+        (["category-rename", "anime", "animation", "--merge"], "anime has subcategories; rename or remove them first."),
+    ) + tuple(
+        (["category-rename", name, name + "-2"], f"{name} has its own share limits, which the WebUI can't copy; change them in qBittorrent first.")
+        for name in LIMITED
+    ) + tuple(
+        (["category-path", name, "/srv/x"], f"{name} has its own share limits, which the WebUI can't copy; change them in qBittorrent first.")
+        for name in LIMITED
+    ):
+        before = len(read_log(env))
+        r = run(env, *args)
+        e = new_entries(env, before)
+        check(f"refuses {args!r}: {want!r}", r.returncode != 0 and r.stderr.strip() == want)
+        check(f"refuses {args!r}: no write", not posts_to(e))
+    st = state(port)
+    check("refusals left anime and its subcategories alone",
+          all(n in st["categories"] for n in ("anime", "anime/2026", "anime/2026/deep"))
+          and st["torrents"][HASH_A]["category"] == "anime" and st["torrents"][HASH_B]["category"] == "anime/2026")
+
+    r = run(env, "category-rename", "defaults", "defaults-2")
+    check("share limits spelled out as the defaults don't block a rename", r.returncode == 0)
+    r = run(env, "category-path", "defaults-2", "/srv/d")
+    check("…nor a save path change", r.returncode == 0)
+
+    r = run(env, "category-rename", "anime/2026/deep", "deep")
+    check("a leaf subcategory renames fine", r.returncode == 0 and "anime/2026/deep" not in state(port)["categories"])
+
+    r = run(env, "category-remove", "a/b")
+    st = state(port)
+    check("category-remove a/b: succeeds", r.returncode == 0)
+    check("category-remove a/b: its torrents (and a/b/c's) move to a",
+          st["torrents"]["1" * 40]["category"] == "a" and st["torrents"]["2" * 40]["category"] == "a")
+    check("category-remove a/b: a/b and a/b/c are gone, a stays",
+          "a/b" not in st["categories"] and "a/b/c" not in st["categories"] and "a" in st["categories"])
+
+    r = run(env, "category-add", "new-parent/child")
+    st = state(port)
+    check("category-add of x/y also creates the missing parent x (addCategory)",
+          r.returncode == 0 and "new-parent" in st["categories"] and "new-parent/child" in st["categories"])
+
+    # "Doesn't exist" only echoes a name that is safe to print.
+    for args, want in (
+        (["category-remove", "nosuch\x1b[31m"], "That category doesn't exist."),
+        (["category-remove", "no\u0085such"], "That category doesn't exist."),
+        (["set-category", HASH_A, "nosuch\x07"], "That category doesn't exist."),
+        (["tag-remove", "no\x1bsuch"], "That tag doesn't exist."),
+        (["tags", HASH_A, "--add", "no\u009bsuch"], "That tag doesn't exist."),
+        (["category-rename", "gone\x1b", "x"], "That category doesn't exist."),
+        (["category-remove", "nosuch é"], "nosuch é doesn't exist."),
+    ):
+        r = run(env, *args)
+        check(f"doesn't-exist copy for {args[1:]!r}: {want!r}", r.returncode != 0 and r.stderr.strip() == want)
+    argv = [a.encode("utf-8", "surrogateescape") for a in ["./qbt", "tag-remove", "bad\udcffutf8"]]
+    r = subprocess.run(argv, env=env, capture_output=True)
+    check("doesn't-exist copy for invalid UTF-8", r.returncode != 0 and r.stderr.decode("utf-8", "replace").strip() == "That tag doesn't exist.")
 
 if failures:
     print(f"\n{len(failures)} check(s) failed", file=sys.stderr)

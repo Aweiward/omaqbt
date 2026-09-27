@@ -1159,12 +1159,12 @@ uri() {
 
 # Leading/trailing "spaces": U+0020 plus every other character
 # qBittorrent's QString::trimmed strips that isn't already a refused
-# control character (U+0085, U+00A0, U+1680, U+2000-200A, U+2028, U+2029,
+# control character (U+00A0, U+1680, U+2000-200A, U+2028, U+2029,
 # U+202F, U+205F, U+3000), as raw UTF-8 bytes so the prefix/suffix tests
 # below are byte-exact under any locale. Shared cases:
 # tests/fixtures/validation-cases.json "names".
 NAME_EDGE_SPACES=(
-  ' ' $'\xc2\x85' $'\xc2\xa0' $'\xe1\x9a\x80'
+  ' ' $'\xc2\xa0' $'\xe1\x9a\x80'
   $'\xe2\x80\x80' $'\xe2\x80\x81' $'\xe2\x80\x82' $'\xe2\x80\x83' $'\xe2\x80\x84' $'\xe2\x80\x85'
   $'\xe2\x80\x86' $'\xe2\x80\x87' $'\xe2\x80\x88' $'\xe2\x80\x89' $'\xe2\x80\x8a'
   $'\xe2\x80\xa8' $'\xe2\x80\xa9' $'\xe2\x80\xaf' $'\xe2\x81\x9f' $'\xe3\x80\x80'
@@ -1185,11 +1185,21 @@ name_utf8_locale() {
   return 1
 }
 
-# Bytes 0x01-0x1F and 0x7F (argv can't carry 0x00). LC_ALL=C makes
-# [:cntrl:] exactly that byte set.
+# Bytes 0x01-0x1F and 0x7F (argv can't carry 0x00; LC_ALL=C makes
+# [:cntrl:] exactly that byte set), plus the C1 controls U+0080-009F, whose
+# UTF-8 form is 0xC2 followed by 0x80-0x9F (a byte range under LC_ALL=C).
 name_has_control() {
   local LC_ALL=C
-  [[ $1 == *[[:cntrl:]]* ]]
+  [[ $1 == *[[:cntrl:]]* || $1 == *$'\xc2'[$'\x80'-$'\x9f']* ]]
+}
+
+# True when a name can be echoed in a message: valid UTF-8 with no control
+# character. A name that only has to exist was never checked against either.
+name_is_printable() {
+  name_has_control "$1" && return 1
+  local loc
+  loc=$(name_utf8_locale) || return 1
+  (LC_ALL=$loc; [[ $1 =~ ^.*$ ]]) 2>/dev/null
 }
 
 name_has_edge_space() {
@@ -1345,7 +1355,23 @@ name_exists() {
 }
 
 require_name() {
-  name_exists "$1" "$2" || die "$2 doesn't exist."
+  name_exists "$1" "$2" && return 0
+  name_is_printable "$2" && die "$2 doesn't exist."
+  die "That $1 doesn't exist."
+}
+
+# 5.2.3's createCategory/editCategory take only the save and download paths;
+# every other option (the share limits: ratio_limit, seeding_time_limit,
+# inactive_seeding_time_limit, share_limit_action) starts over at "use
+# global" (-2, -2, -2, "Default"). So a category with its own limits can't
+# be renamed (the copy would lose them) or have its path changed (editCategory
+# would reset them). Missing fields count as the defaults.
+require_default_share_limits() {
+  local name=$1 own
+  own=$(jq -r --arg n "$name" '.[$n] |
+    ((.ratio_limit // -2) != -2) or ((.seeding_time_limit // -2) != -2)
+    or ((.inactive_seeding_time_limit // -2) != -2) or ((.share_limit_action // "Default") != "Default")' <<<"$NAMES_JSON")
+  [[ $own == false ]] || die "$name has its own share limits, which the WebUI can't copy; change them in qBittorrent first."
 }
 
 # A category's download path as qBittorrent 5.2.3 serves it
@@ -1385,6 +1411,7 @@ cmd_category_path() {
   path=$(category_save_path "$2")
   read_names category
   require_name category "$name"
+  require_default_share_limits "$name"
   api_or_die POST "/api/v2/torrents/editCategory" "category=$(uri "$name")&savePath=$(uri "$path")$(category_download_fields "$name")"
   printf '%s\n' '{"ok":true}'
 }
@@ -1484,7 +1511,10 @@ cmd_tags() {
     check_existing_name tag "$t"
   done
   for t in ${adds[@]+"${adds[@]}"}; do
-    ! in_list "$t" ${removes[@]+"${removes[@]}"} || die "Can't add and remove $t at once."
+    if in_list "$t" ${removes[@]+"${removes[@]}"}; then
+      name_is_printable "$t" && die "Can't add and remove $t at once."
+      die "Can't add and remove the same tag at once."
+    fi
   done
   read_names tag
   for t in ${adds[@]+"${adds[@]}"} ${removes[@]+"${removes[@]}"}; do
@@ -1553,10 +1583,21 @@ cmd_rename() {
   check_existing_name "$kind" "$old"
   check_new_name "$kind" "$new"
   [[ $old != "$new" ]] || die "It already has that name."
+  # 5.2.3's removeCategory also removes every "old/..." category, so the
+  # final delete would take the new one with it. (new passed the new-name
+  # rules, so its "old/" prefix is safe to echo.)
+  [[ $kind == category && $new == "$old/"* ]] && die "Can't rename $old into its own subcategory."
 
   local start="Rename didn't start: "
   read_names "$kind" "$start"
   require_name "$kind" "$old"
+  if [[ $kind == category ]]; then
+    # Same reason: deleting old would remove its subcategories and move
+    # their torrents to old's parent.
+    jq -e --arg p "$old/" 'any(keys[]; startswith($p))' <<<"$NAMES_JSON" >/dev/null \
+      && die "$old has subcategories; rename or remove them first."
+    require_default_share_limits "$old"
+  fi
   local exists=false
   name_exists "$kind" "$new" && exists=true
   if [[ $exists == true ]]; then
@@ -1626,6 +1667,8 @@ cmd_rename() {
     die "Rename incomplete (${counts% *} of ${counts#* } moved); ${incomplete_tail}"
   fi
 
+  # Unavoidable race: a torrent put on old between that read and this delete
+  # moves to old's parent category (qBittorrent's removeCategory).
   if [[ $kind == category ]]; then
     api_try POST "/api/v2/torrents/removeCategories" "categories=$(uri "$old")" \
       || die "Rename incomplete (${moved} of ${total} moved); ${incomplete_tail}"

@@ -108,6 +108,19 @@ EXTRA_TORRENTS = {
 # {"categories": {...}, "tags": [...], "torrents": {hash: {"category": "",
 # "tags": "a, b"}}} that replaces the starting categories/tags and adds
 # torrents (listed by torrents/info), so a test can seed thousands of rows.
+def _category_defaults():
+    """A fresh CategoryOptions as 5.2.3's toJSON shows it: no save path, the
+    global download path, and every share limit on "use global"."""
+    return {
+        "savePath": "",
+        "download_path": None,
+        "ratio_limit": -2,
+        "seeding_time_limit": -2,
+        "inactive_seeding_time_limit": -2,
+        "share_limit_action": "Default",
+    }
+
+
 def _load_library():
     categories = copy.deepcopy(FULL.get("categories") or {})
     tags = list(FULL.get("tags") or [])
@@ -125,8 +138,8 @@ def _load_library():
             torrents[h.lower()] = row
     for name, c in categories.items():
         c.setdefault("name", name)
-        c.setdefault("savePath", "")
-        c.setdefault("download_path", None)
+        for key, value in _category_defaults().items():
+            c.setdefault(key, value)
     return categories, tags, torrents
 
 
@@ -268,8 +281,15 @@ def _create_category(form):
         return 400
     if not _CATEGORY_RE.fullmatch(name) or name in CATEGORIES:
         return 409
+    # Like SessionImpl::addCategory: missing parents ("a" for "a/b") are
+    # created too, with default options.
+    parts = name.split("/")
+    for i in range(1, len(parts)):
+        parent = "/".join(parts[:i])
+        if parent not in CATEGORIES:
+            CATEGORIES[parent] = dict(_category_defaults(), name=parent)
     save, download = _category_options(form)
-    CATEGORIES[name] = {"name": name, "savePath": save, "download_path": download}
+    CATEGORIES[name] = dict(_category_defaults(), name=name, savePath=save, download_path=download)
     return 200
 
 
@@ -281,19 +301,27 @@ def _edit_category(form):
         return 400
     if name not in CATEGORIES:
         return 404
+    # setCategoryOptions replaces the whole options: share limits too.
     save, download = _category_options(form)
-    CATEGORIES[name].update({"savePath": save, "download_path": download})
+    CATEGORIES[name] = dict(_category_defaults(), name=name, savePath=save, download_path=download)
     return 200
 
 
 def _remove_categories(form):
     if "categories" not in form:
         return 400
+    # Like SessionImpl::removeCategory: every torrent on the name or any
+    # "name/..." subcategory moves to the parent category ("" at the top),
+    # and the subcategories go too.
     for name in form["categories"][0].split("\n"):
-        if CATEGORIES.pop(name, None) is not None:
-            for row in _torrent_rows().values():
-                if row.get("category") == name:
-                    row["category"] = ""
+        parent = name.rsplit("/", 1)[0] if "/" in name else ""
+        sub = name + "/"
+        for row in _torrent_rows().values():
+            cat = row.get("category") or ""
+            if cat == name or cat.startswith(sub):
+                row["category"] = parent
+        for key in [k for k in CATEGORIES if k == name or k.startswith(sub)]:
+            del CATEGORIES[key]
     return 200
 
 

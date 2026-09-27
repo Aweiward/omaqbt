@@ -264,7 +264,7 @@
    "why": "fullwidth digit in IPv6"
   }
  ],
- "_comment_names": "Shared G4/OV5 new-name cases: qbt (tests/api-contract.sh, under en_US.UTF-8 and C) and the JS nameError (Task 3) must accept exactly the ok ones and give exactly `error` for the rest. Order: empty, control (U+0000-001F, U+007F), more than 64 code points, leading/trailing space (U+0020 or any Unicode space qBittorrent's QString::trimmed strips: U+0085, U+00A0, U+1680, U+2000-200A, U+2028, U+2029, U+202F, U+205F, U+3000), then tag comma / category backslash, leading or trailing slash, //.",
+ "_comment_names": "Shared G4/OV5 new-name cases: qbt (tests/api-contract.sh, under en_US.UTF-8 and C) and the JS nameError (Task 3) must accept exactly the ok ones and give exactly `error` for the rest. Order: empty, control (U+0000-001F, U+007F, and the C1 block U+0080-009F), more than 64 code points, leading/trailing space (U+0020 or any Unicode space qBittorrent's QString::trimmed strips: U+00A0, U+1680, U+2000-200A, U+2028, U+2029, U+202F, U+205F, U+3000), then tag comma / category backslash, leading or trailing slash, //.",
  "names": [
   {
    "kind": "category",
@@ -711,15 +711,15 @@
    "kind": "category",
    "input": "anime\u0085",
    "ok": false,
-   "error": "No spaces at the start or end.",
-   "why": "trailing U+0085 next line"
+   "error": "No control characters in a name.",
+   "why": "trailing U+0085 (a C1 control)"
   },
   {
    "kind": "tag",
    "input": "anime\u0085",
    "ok": false,
-   "error": "No spaces at the start or end.",
-   "why": "trailing U+0085 next line"
+   "error": "No control characters in a name.",
+   "why": "trailing U+0085 (a C1 control)"
   },
   {
    "kind": "category",
@@ -818,6 +818,76 @@
    "ok": false,
    "error": "Keep it to 64 characters.",
    "why": "length wins over //"
+  },
+  {
+   "kind": "category",
+   "input": "a\u0085b",
+   "ok": false,
+   "error": "No control characters in a name.",
+   "why": "U+0085 (C1) inside"
+  },
+  {
+   "kind": "tag",
+   "input": "a\u0085b",
+   "ok": false,
+   "error": "No control characters in a name.",
+   "why": "U+0085 (C1) inside"
+  },
+  {
+   "kind": "category",
+   "input": "a\u0080b",
+   "ok": false,
+   "error": "No control characters in a name.",
+   "why": "U+0080 (C1)"
+  },
+  {
+   "kind": "tag",
+   "input": "a\u0080b",
+   "ok": false,
+   "error": "No control characters in a name.",
+   "why": "U+0080 (C1)"
+  },
+  {
+   "kind": "category",
+   "input": "a\u009fb",
+   "ok": false,
+   "error": "No control characters in a name.",
+   "why": "U+009F (C1)"
+  },
+  {
+   "kind": "tag",
+   "input": "a\u009fb",
+   "ok": false,
+   "error": "No control characters in a name.",
+   "why": "U+009F (C1)"
+  },
+  {
+   "kind": "category",
+   "input": "\u009b31m",
+   "ok": false,
+   "error": "No control characters in a name.",
+   "why": "U+009B CSI (C1)"
+  },
+  {
+   "kind": "tag",
+   "input": "\u009b31m",
+   "ok": false,
+   "error": "No control characters in a name.",
+   "why": "U+009B CSI (C1)"
+  },
+  {
+   "kind": "category",
+   "input": "a\u00a1b",
+   "ok": true,
+   "error": "",
+   "why": "U+00A1, just past the C1 block"
+  },
+  {
+   "kind": "tag",
+   "input": "a\u00a1b",
+   "ok": true,
+   "error": "",
+   "why": "U+00A1, just past the C1 block"
   }
  ]
 }
