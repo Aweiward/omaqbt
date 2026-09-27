@@ -489,6 +489,38 @@ finally:
     shutil.rmtree(magnet_state, ignore_errors=True)
     shutil.rmtree(stub_root, ignore_errors=True)
 
+# 14d. F12: when qBittorrent refuses one of the slice-2b commands, qbt
+#      reports the HTTP status only -- never the error body (it can carry a
+#      tracker URL or passkey) nor any argument.
+extra_env, magnet_state, raise_log, notify_log, stub_root = fetch_metadata_env(timeout=1)
+try:
+    with harness.fixture_server(extra_env=extra_env) as (port, env):
+        control_path = Path(env["QBT_FIXTURE_CONTROL"])
+        control_path.write_text(json.dumps({"writes": "409secret"}))
+        secret_url = "udp://tracker.example:1337/SECRETPASSKEY123/announce"
+        for args in (
+            ["reannounce", HASH_A],
+            ["tracker-add", HASH_A, secret_url],
+            ["tracker-edit", HASH_A, secret_url, TRACKER_URL2],
+            ["tracker-remove", HASH_A, secret_url],
+            ["ban-peer", PEER],
+        ):
+            r = run(env, *args)
+            label = f"F12 {args[0]} error"
+            check(f"{label}: exit != 0", r.returncode != 0)
+            check(f"{label}: names the HTTP status", "qBittorrent refused it (HTTP 409)" in r.stderr)
+            check(f"{label}: no error body", "SECRETPASSKEY123" not in r.stderr and "Conflict" not in r.stderr and "tracker.example" not in r.stderr)
+            check(f"{label}: no argument echoed", all(a not in r.stderr for a in args[1:]))
+        control_path.write_text(json.dumps({"info": "409secret"}))
+        r = run(env, "fetch-metadata", HASH_NOMETA)
+        check("F12 fetch-metadata info error: exit != 0", r.returncode != 0)
+        check("F12 fetch-metadata info error: names the HTTP status", "qBittorrent refused it (HTTP 409)" in r.stderr)
+        check("F12 fetch-metadata info error: no error body", "SECRETPASSKEY123" not in r.stderr and "Conflict" not in r.stderr)
+        check("F12 fetch-metadata info error: no hash echoed", HASH_NOMETA not in r.stderr)
+finally:
+    shutil.rmtree(magnet_state, ignore_errors=True)
+    shutil.rmtree(stub_root, ignore_errors=True)
+
 # 15. the inbox cap must not apply to a rescue: with 20 unrelated magnets
 #     already queued (the ordinary cap threshold), fetch-metadata's own
 #     rescue must still land its magnet as entry 21, not fail as "inbox

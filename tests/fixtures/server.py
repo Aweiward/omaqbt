@@ -19,6 +19,9 @@ PIECESTATES = json.loads((ROOT / "piecestates.json").read_text())
 TRACKERS = json.loads((ROOT / "trackers.json").read_text())
 PEERS = json.loads((ROOT / "peers.json").read_text())
 ADDED = []
+# An error body carrying a tracker URL with a passkey, for the F12 tests:
+# nothing in it may ever reach qbt's stderr.
+SECRET_ERROR_BODY = b"Conflict: udp://tracker.example:1337/SECRETPASSKEY123/announce 203.0.113.9:6881"
 # Real qBittorrent keeps sync rid state per WebUI session: a request without a
 # known SID cookie opens a new session and always gets a full update.
 SESSIONS = set()
@@ -204,6 +207,9 @@ class Handler(BaseHTTPRequestHandler):
             if _control().get("info") == "500" and "hashes=" in parsed.query:
                 self._send(500, b"boom")
                 return
+            if _control().get("info") == "409secret":
+                self._send(409, SECRET_ERROR_BODY, content_type="text/plain")
+                return
             rows = []
             for h, t in FULL["torrents"].items():
                 row = dict(t)
@@ -315,12 +321,22 @@ class Handler(BaseHTTPRequestHandler):
             "/api/v2/torrents/toggleSequentialDownload",
             "/api/v2/torrents/setShareLimits",
             "/api/v2/transfer/toggleSpeedLimitsMode",
+        ):
+            self._send(200, b"Ok.")
+            return
+        if parsed.path in (
             "/api/v2/torrents/reannounce",
             "/api/v2/torrents/addTrackers",
             "/api/v2/torrents/editTracker",
             "/api/v2/torrents/removeTrackers",
             "/api/v2/transfer/banPeers",
         ):
+            # {"writes": "409secret"}: the slice-2b write routes refuse with
+            # an error body that carries a tracker URL and passkey, which qbt
+            # must never pass on (F12).
+            if _control().get("writes") == "409secret":
+                self._send(409, SECRET_ERROR_BODY, content_type="text/plain")
+                return
             self._send(200, b"Ok.")
             return
         if parsed.path in ("/api/v2/torrents/pause", "/api/v2/torrents/resume"):

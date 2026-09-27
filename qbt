@@ -211,6 +211,15 @@ api_exec() {
     die "localhost auth is required"
   fi
   if [[ $code != 200 && $code != 204 ]]; then
+    # F12: a command that sets `local api_error_detail=code` (the slice-2b
+    # tracker/peer/fetch-metadata commands) reports the status only. The
+    # body can carry a tracker URL or passkey, and sanitize only scrubs
+    # SID/password. Locals are dynamically scoped, so this reaches here
+    # through api()'s subshell and any $(...) around it.
+    if [[ ${api_error_detail:-full} == code ]]; then
+      [[ $code =~ ^[[:digit:]]{3}$ && $code != 000 ]] || die "Couldn't reach qBittorrent."
+      die "qBittorrent refused it (HTTP $code)"
+    fi
     die "HTTP $code $(printf '%s' "$resp" | sanitize)"
   fi
   printf '%s' "$resp"
@@ -348,6 +357,7 @@ cmd_delete() {
 
 cmd_reannounce() {
   local hash=${1:-}
+  local api_error_detail=code
   [[ -n $hash ]] || die "usage: qbt reannounce <hash>"
   valid_single_hash "$hash" || die "invalid hash"
   api POST "/api/v2/torrents/reannounce" "hashes=${hash}" >/dev/null
@@ -356,6 +366,7 @@ cmd_reannounce() {
 
 cmd_tracker_add() {
   local hash=${1:-} url=${2:-}
+  local api_error_detail=code
   [[ -n $hash && -n $url ]] || die "usage: qbt tracker-add <hash> <url>"
   valid_single_hash "$hash" || die "invalid hash"
   valid_tracker_url "$url" || die "invalid tracker url"
@@ -365,6 +376,7 @@ cmd_tracker_add() {
 
 cmd_tracker_edit() {
   local hash=${1:-} old=${2:-} new=${3:-}
+  local api_error_detail=code
   [[ -n $hash && -n $old && -n $new ]] || die "usage: qbt tracker-edit <hash> <old-url> <new-url>"
   valid_single_hash "$hash" || die "invalid hash"
   # F13: qBittorrent's WebUI joins a torrent's trackers with "|"; a tracker
@@ -379,6 +391,7 @@ cmd_tracker_edit() {
 
 cmd_tracker_remove() {
   local hash=${1:-} url=${2:-}
+  local api_error_detail=code
   [[ -n $hash && -n $url ]] || die "usage: qbt tracker-remove <hash> <url>"
   valid_single_hash "$hash" || die "invalid hash"
   [[ $url != *'|'* ]] || die "This tracker's URL can't be edited through the WebUI API"
@@ -389,6 +402,7 @@ cmd_tracker_remove() {
 
 cmd_ban_peer() {
   local peer=${1:-}
+  local api_error_detail=code
   [[ -n $peer ]] || die "usage: qbt ban-peer <ip:port>"
   valid_peer "$peer" || die "invalid peer"
   api POST "/api/v2/transfer/banPeers" "peers=$(jq -nr --arg v "$peer" '$v|@uri')" >/dev/null
@@ -469,6 +483,7 @@ fetch_metadata_rescue() {
 # same rescue rather than ever claiming the torrent is still safe.
 cmd_fetch_metadata() {
   local hash=${1:-}
+  local api_error_detail=code
   [[ -n $hash ]] || die "usage: qbt fetch-metadata <hash>"
   valid_single_hash "$hash" || die "invalid hash"
 
