@@ -2326,11 +2326,8 @@ test("palette: Settings is disabled, with a reason, while Settings is open", () 
 
 // PREF_SENTENCES is copied by hand from qbt's pref-set sentences: each must
 // still be in qbt, or a failure would lose its bare sentence.
-// Slice 4b: Task 2's qbt sentences (task-2-report.md) land with lane-4b-t2.
-// In this lane's qbt they don't exist yet, so each is skipped only while
-// qbt lacks it: once the lanes merge, the check is strict for them too.
-// Delete PENDING_T2 after the merge.
-const PENDING_T2 = [
+// Slice 4b: Task 2's qbt sentences, pinned below as shown unchanged.
+const TASK2_SENTENCES = [
   "OmaqBT keeps this read-only: it has no effect while the Web UI only listens on 127.0.0.1.",
   "Send this password with --stdin, never as an argument.",
   "Only the proxy, Dynamic DNS and SMTP passwords take --stdin or --clear.",
@@ -2345,7 +2342,6 @@ test("PREF_SENTENCES: every sentence is still one qbt says", () => {
   assert.ok(Array.isArray(V.PREF_SENTENCES) && V.PREF_SENTENCES.length > 0);
   assert.equal(new Set(V.PREF_SENTENCES).size, V.PREF_SENTENCES.length, "no duplicates");
   for (const s of V.PREF_SENTENCES) {
-    if (PENDING_T2.includes(s) && !qbt.includes(s)) continue;
     assert.ok(qbt.includes(s), "qbt still says: " + s);
   }
 });
@@ -2353,7 +2349,7 @@ test("PREF_SENTENCES: every sentence is still one qbt says", () => {
 test("4b PREF_SENTENCES: the 4a stand-ins are retired and Task 2's sentences show as they are", () => {
   assert.ok(!V.PREF_SENTENCES.includes("OmaqBT doesn't change secrets yet."));
   assert.ok(!V.PREF_SENTENCES.includes("Editing multi-line settings arrives in 4b."));
-  for (const s of PENDING_T2) {
+  for (const s of TASK2_SENTENCES) {
     assert.ok(V.PREF_SENTENCES.includes(s), s);
     assert.equal(V.settingFailure("Banned IPs", s), s);
   }
