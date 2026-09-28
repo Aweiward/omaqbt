@@ -506,13 +506,15 @@ TestCase {
     verify(shows(o, "All results"))
     verify(shows(o, "other"), "the other bucket")
     key(o.c, "j")
-    compare(sp(o).shownKeys, ["h:" + hh("c")], "j filters to The Pirate Bay")
+    compare(sp(o).shownKeys.length, 3, "review 7: the filter waits for the keys to pause")
+    tryCompare(sp(o), "shownKeys", ["h:" + hh("c")], 1000, "j filters to The Pirate Bay")
     key(o.c, "j")
-    compare(sp(o).shownKeys, ["h:" + hh("d")], "EZTV (off, but it has results)")
+    tryCompare(sp(o), "shownKeys", ["h:" + hh("d")], 1000, "EZTV (off, but it has results)")
     key(o.c, "j")
-    compare(sp(o).shownKeys, ["h:" + hh("e")], "other")
+    tryCompare(sp(o), "shownKeys", ["h:" + hh("e")], 1000, "other")
     key(o.c, "k"); key(o.c, "k"); key(o.c, "k")
-    compare(sp(o).shownKeys.length, 3, "All results")
+    compare(sp(o).shownKeys, ["h:" + hh("e")], "held keys don't rebuild on every row")
+    tryVerify(function() { return sp(o).shownKeys.length === 3 }, 1000, "All results")
   }
 
   function test_category_picker_lists_what_enabled_plugins_support() {
@@ -623,6 +625,9 @@ TestCase {
   function test_torrent_keys_never_reach_the_torrents_from_search() {
     var o = make()
     streaming(o)
+    // Review 1: what the torrents hold before, not just the calls.
+    var before = JSON.stringify({ vs: o.svc.viewState, pane: o.c.pane, cursor: o.c.cursorHash, filter: o.c.filter,
+      tab: o.c.inspectorTab, sort: o.c.sortMode, desc: o.c.sortDesc, query: o.c.textQuery })
     var keys = ["t", "z", "r", "1", "2", "3", "4", "5", "q", "f", "V", ",", "e", "o", "m", "C", "T", "X", "G", "x", "p", "a", "u"]
     for (var i = 0; i < keys.length; i++) {
       key(o.c, keys[i])
@@ -636,12 +641,20 @@ TestCase {
     for (var j = 0; j < torrentCalls.length; j++) compare(calls(o.svc, torrentCalls[j]).length, 0, torrentCalls[j])
     compare(o.c.activeView, "search")
     verify(o.c.opened)
+    compare(JSON.stringify({ vs: o.svc.viewState, pane: o.c.pane, cursor: o.c.cursorHash, filter: o.c.filter,
+      tab: o.c.inspectorTab, sort: o.c.sortMode, desc: o.c.sortDesc, query: o.c.textQuery }), before, "the torrent view is as it was")
+    esc(o)
+    esc(o)
+    compare(o.c.activeView, "torrents", "Esc stops the search, then leaves")
+    compare(JSON.stringify({ vs: o.svc.viewState, pane: o.c.pane, cursor: o.c.cursorHash, filter: o.c.filter,
+      tab: o.c.inspectorTab, sort: o.c.sortMode, desc: o.c.sortDesc, query: o.c.textQuery }), before, "and still is after leaving")
   }
 
   function test_every_text_is_plain_text() {
     var o = make()
     var list = plugins()
     list[0].fullName = "<b>Pirate</b>"
+    list[0].supportedCategories = [{ id: "movies", name: "<i>Movies</i>" }]
     openSearch(o, list)
     startSearch(o, "<i>q</i>")
     reply(o, { total: 2, rows: [row("c", { fileName: "<a href='x'>evil</a>‮", engineName: "piratebay" }), row("d", { engineName: "<u>e</u>" })] })
@@ -670,6 +683,13 @@ TestCase {
     wait(30)
     compare(richTexts().length, 0, JSON.stringify(richTexts()))
     esc(o)
+    // Review 6: the category picker, with a markup category name.
+    key(o.c, "c")
+    compare(o.c.mode, "PICKER")
+    wait(30)
+    compare(sp(o).picker.rows[1].title, "<i>Movies</i>")
+    compare(richTexts().length, 0, JSON.stringify(richTexts()))
+    esc(o)
     verify(shows(o, "<a href='x'>evil</a>"), "shown as text, the bidi override stripped")
   }
 
@@ -684,17 +704,155 @@ TestCase {
     verify(!findName(content(o), "searchPluginsPane").visible, "the column is a chip")
     verify(shows(o, "All results ▾"))
     verify(!shows(o, "Published") && !shows(o, "Peers"), "Published and Peers hide first")
-    verify(shows(o, "Plugin"))
+    verify(shows(o, "Plugin"), "700 px still shows Plugin")
     tab(o)
     compare(o.c.keyPane, "searchPlugins")
     verify(findName(content(o), "searchPluginsPane").visible, "Tab opens it as an overlay")
     esc(o)
     compare(o.c.keyPane, "searchResults")
     compare(o.c.activeView, "search")
-    var n = make(520)
+    // The 640 px minimum window reaches it (Ruling FD): below 700 px.
+    var n = make(660)
     openSearch(n)
     startSearch(n, "debian")
     reply(n, { total: 1, rows: [row("c")] })
     verify(!shows(n, "Plugin"), "then Plugin")
+  }
+
+  // ---- fix round 1 ---------------------------------------------------------------------------------------
+
+  function test_no_plugins_explains_what_plugins_are() {
+    var o = make()
+    openSearch(o, [])
+    verify(showsIn(o, "searchResultsPane", "qBittorrent searches through plugins it runs with Python on this machine. P manages them; i installs one from an https URL."))
+  }
+
+  function test_a_close_while_starting_never_deletes_the_next_job() {
+    var o = make()
+    openSearch(o)
+    slash(o); line(o).setInput("one"); enter(o)
+    var first = last(o.svc, "searchStart")
+    o.c.close()
+    o.c.open("")
+    shifted(o, "F")
+    finishCall(o, "searchPluginList", true, "", plugins())
+    slash(o); line(o).setInput("two"); enter(o)
+    var second = last(o.svc, "searchStart")
+    verify(second.ticket !== first.ticket)
+    o.svc.searchFinished(first.ticket, true, "", { id: 3 })
+    compare(last(o.svc, "searchDelete").args, [3], "the orphaned start's job is deleted")
+    o.svc.searchFinished(second.ticket, true, "", { id: 4 })
+    compare(calls(o.svc, "searchDelete").length, 1, "the new job is kept")
+    compare(last(o.svc, "searchWatch").args, [4, 0])
+    verify(shows(o, "searching… · 0 results"))
+  }
+
+  function test_sidecar_down_says_nothing_arrives_and_esc_deletes_the_job() {
+    var o = make()
+    streaming(o)
+    verify(!findName(content(o), "searchStalled").visible, "a quiet search says nothing")
+    wait(200)
+    verify(!findName(content(o), "searchStalled").visible)
+    o.svc.sidecarState = "down"
+    verify(findName(content(o), "searchStalled").visible)
+    verify(shows(o, "No results are arriving; press Esc and try again."))
+    esc(o)
+    compare(calls(o.svc, "searchStop").length, 0)
+    compare(last(o.svc, "searchDelete").args, [7], "review 4: deleted at once")
+    verify(!findName(content(o), "searchStalled").visible, "stopped")
+    verify(shows(o, "stopped · 2 results"))
+  }
+
+  function test_a_magnet_that_never_arrives_is_reported() {
+    var o = make()
+    streaming(o)
+    sp(o).addConfirmMs = 300
+    enter(o)
+    key(o.c, "y")
+    finishCall(o, "searchAdd", true, "", { ok: true, via: "add" })
+    tryVerify(function() { return o.c.statusMessage.text === "Couldn't confirm result c was added." }, 3000, o.c.statusMessage.text)
+    o.svc.torrents = o.svc.torrents.concat([tt(hh("c"), "late")])
+    wait(50)
+    verify(o.c.statusMessage.text.indexOf("Added") === -1, "reported once")
+  }
+
+  function test_an_empty_engine_name_is_the_plugin_with_that_site() {
+    var o = make()
+    var list = plugins()
+    list.push({ name: "linuxtracker", fullName: "Linux Tracker", version: "1.0", enabled: true, url: "https://linuxtracker.org", supportedCategories: [] })
+    openSearch(o, list)
+    startSearch(o, "debian")
+    reply(o, { total: 2, rows: [row("c", { engineName: "", siteUrl: "https://linuxtracker.org", fileUrl: "https://linuxtracker.org/dl/1" }),
+      row("d", { engineName: "", siteUrl: "https://unknown.example" })] })
+    var col = sp(o).columnRows
+    var lt = col.filter(function(r) { return r.engine === "linuxtracker" })[0]
+    compare(lt.count, 1, "counted under its plugin")
+    compare(col.filter(function(r) { return r.engine === "" })[0].count, 1, "the rest is other")
+    verify(shows(o, "Linux Tracker"))
+    enter(o)
+    compare(confirmText(o), "Add result c (1.0 KiB) from linuxtracker.org?")
+    key(o.c, "y")
+    compare(last(o.svc, "searchAdd").args, ["https://linuxtracker.org/dl/1", "linuxtracker"], "and qbt search add gets its name")
+  }
+
+  function test_rows_before_the_plugin_list_are_mapped_when_it_arrives() {
+    var o = make()
+    openSearch(o)
+    startSearch(o, "debian")
+    reply(o, { total: 1, rows: [row("c", { engineName: "", siteUrl: "https://linuxtracker.org" })] })
+    compare(sp(o).columnRows.filter(function(r) { return r.engine === "" })[0].count, 1)
+    var list = plugins()
+    list.push({ name: "linuxtracker", fullName: "Linux Tracker", version: "1.0", enabled: true, url: "https://linuxtracker.org", supportedCategories: [] })
+    sp(o).setPlugins(list)
+    compare(sp(o).columnRows.filter(function(r) { return r.engine === "linuxtracker" })[0].count, 1)
+    compare(sp(o).currentResult.engine, "linuxtracker")
+  }
+
+  function test_enter_on_a_recent_row_searches_it_again() {
+    var o = make()
+    streaming(o)
+    reply(o, { status: "Stopped", total: 2, offset: 2, rows: [] })
+    slash(o); line(o).setInput("ubuntu"); enter(o)
+    finishCall(o, "searchStart", true, "", { id: 8 })
+    key(o.c, "h")
+    var col = sp(o).columnRows
+    var at = -1
+    for (var i = 0; i < col.length; i++) if (col[i].kind === "recent" && col[i].query === "debian") at = i
+    verify(at > 0, "Recent rows are in the column")
+    for (var j = 0; j < at; j++) key(o.c, "j")
+    compare(sp(o).columnIndex, at)
+    wait(250)
+    compare(sp(o).pluginFilter, null, "a Recent row doesn't filter")
+    key(o.c, "l")
+    compare(o.c.keyPane, "searchResults", "l only moves to the results")
+    compare(last(o.svc, "searchStart").args[0], "ubuntu")
+    key(o.c, "h")
+    enter(o)
+    compare(last(o.svc, "searchStart").args, ["debian", "all"], "Enter searches it again")
+    compare(o.c.keyPane, "searchResults")
+  }
+
+  function test_a_filter_with_no_rows_says_so() {
+    var o = make()
+    openSearch(o)
+    startSearch(o, "debian")
+    reply(o, { total: 1, rows: [row("c", { engineName: "eztv" })] })
+    key(o.c, "h")
+    key(o.c, "j")
+    tryCompare(sp(o), "pluginFilter", "piratebay", 1000)
+    verify(showsIn(o, "searchResultsPane", "No results from The Pirate Bay."))
+  }
+
+  function test_the_pattern_trims_like_qt() {
+    var o = make()
+    openSearch(o)
+    slash(o)
+    line(o).setInput("\u3000\u00a0\u2028")
+    enter(o)
+    compare(o.c.mode, "INSERT")
+    compare(statusText(o), "Type something to search for.")
+    line(o).setInput("\u3000debian\u00a0")
+    enter(o)
+    compare(last(o.svc, "searchStart").args, ["debian", "all"])
   }
 }

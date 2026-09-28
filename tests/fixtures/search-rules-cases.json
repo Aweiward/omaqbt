@@ -153,6 +153,8 @@
     {"kind": "pattern", "input": "   ", "ok": false, "message": "Type something to search for.", "why": "only spaces"},
     {"kind": "pattern", "input": "debian\n13", "ok": false, "message": "Use a search without control characters.", "why": "a newline"},
     {"kind": "pattern", "input": "debian\u0000", "ok": false, "message": "Use a search without control characters.", "why": "a NUL"},
+    {"kind": "pattern", "input": "\ufeff", "ok": true, "why": "U+FEFF isn't a space to Qt's QChar::isSpace, so it is not trimmed away (Ruling FE)"},
+    {"kind": "pattern", "input": "\u00a0\u1680\u2003\u200a\u202f\u205f\u3000\u2028\u2029 ", "ok": false, "message": "Type something to search for.", "why": "only Qt's spaces (Zs, Zl, Zp and U+00A0): empty after QString::trimmed (Ruling FE)"},
     {"kind": "category", "input": "all", "ok": true, "why": "one of qBittorrent's categories"},
     {"kind": "category", "input": "anime", "ok": true, "why": "one of qBittorrent's categories"},
     {"kind": "category", "input": "books", "ok": true, "why": "one of qBittorrent's categories"},
@@ -218,6 +220,14 @@
     "capped": "showing 2000 of <n>",
     "noPlugins": "No search plugins yet",
     "noResultsYet": "No results yet",
-    "noResults": "No results for \"<q>\". Try fewer words, or check which plugins are on (P)."
+    "noResults": "No results for \"<q>\". Try fewer words, or check which plugins are on (P).",
+    "noPluginsHelp": "qBittorrent searches through plugins it runs with Python on this machine. P manages them; i installs one from an https URL.",
+    "stalled": "No results are arriving; press Esc and try again.",
+    "addUnconfirmed": "Couldn't confirm <name> was added.",
+    "noPluginResults": "No results from <plugin>.",
+    "installing": "installing…",
+    "updating": "updating…",
+    "uninstalling": "uninstalling…",
+    "saving": "saving…"
   }
 }

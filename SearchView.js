@@ -43,7 +43,15 @@ var WINDOW = {
   capped: "showing 2000 of <n>",
   noPlugins: "No search plugins yet",
   noResultsYet: "No results yet",
-  noResults: "No results for \"<q>\". Try fewer words, or check which plugins are on (P)."
+  noResults: "No results for \"<q>\". Try fewer words, or check which plugins are on (P).",
+  noPluginsHelp: "qBittorrent searches through plugins it runs with Python on this machine. P manages them; i installs one from an https URL.",
+  stalled: "No results are arriving; press Esc and try again.",
+  addUnconfirmed: "Couldn't confirm <name> was added.",
+  noPluginResults: "No results from <plugin>.",
+  installing: "installing…",
+  updating: "updating…",
+  uninstalling: "uninstalling…",
+  saving: "saving…"
 };
 
 var SENTENCES = {
@@ -352,10 +360,23 @@ function checkPluginName(input) {
   return typeof input === "string" && NAME_RULE.test(input) ? { ok: true } : refuse(MSG.pluginName);
 }
 
+// Qt's QChar::isSpace (what QString::trimmed strips, Ruling FE): Zs, Zl,
+// Zp, U+0009-U+000D, U+0085 and U+00A0; not U+FEFF, which
+// String.prototype.trim would also strip.
+var QT_SPACE = /[\u0009-\u000d\u0020\u0085\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]/;
+
+function qtTrim(text) {
+  var s = typeof text === "string" ? text : "";
+  var start = 0, end = s.length;
+  while (start < end && QT_SPACE.test(s.charAt(start))) start++;
+  while (end > start && QT_SPACE.test(s.charAt(end - 1))) end--;
+  return s.slice(start, end);
+}
+
 function checkPattern(input) {
   var s = typeof input === "string" ? input : "";
   if (CONTROL.test(s)) return refuse(MSG.patternControl);
-  if (s.trim() === "") return refuse(MSG.patternEmpty);
+  if (qtTrim(s) === "") return refuse(MSG.patternEmpty);
   return { ok: true };
 }
 
@@ -400,15 +421,41 @@ function plainText(value) {
   return typeof value === "string" ? value : "";
 }
 
-// resultFrom(raw, seq) -> the window's row: the sanitised fields, the raw
-// links (checked only when used), the plugin (engineName; "" is the other
-// bucket), the infohashes and the merge key. seq is its arrival order.
-function resultFrom(raw, seq) {
+// engineFor(engine, siteUrl, plugins) -> the plugin a result belongs to:
+// its engineName, or, when that is empty, the installed plugin whose url
+// is the result's siteUrl (Ruling FF); "" (the other bucket) otherwise.
+function engineFor(engine, siteUrl, plugins) {
+  if (engine !== "") return engine;
+  var list = plugins || [];
+  for (var i = 0; i < list.length; i++) {
+    var p = list[i];
+    if (p && typeof p.name === "string" && p.name !== "" && typeof p.url === "string" && p.url !== "" && p.url === siteUrl) return p.name;
+  }
+  return OTHER;
+}
+
+function enginesOf(sources, plugins) {
+  var out = [];
+  for (var i = 0; i < sources.length; i++) {
+    var e = engineFor(sources[i].engine, sources[i].site, plugins);
+    if (out.indexOf(e) === -1) out.push(e);
+  }
+  return out;
+}
+
+// resultFrom(raw, seq, plugins) -> the window's row: the sanitised
+// fields, the raw links (checked only when used), the plugin (engine: the
+// first of engines; "" is the other bucket), where each plugin's copy came
+// from (sources), the infohashes and the merge key. seq is its arrival
+// order.
+function resultFrom(raw, seq, plugins) {
   var r = raw && typeof raw === "object" ? raw : {};
   var shown = sanitizeRow(r);
   var link = plainText(r.fileUrl);
   var hash = magnetHash(link);
-  var engine = plainText(r.engineName);
+  var site = plainText(r.siteUrl);
+  var sources = [{ engine: plainText(r.engineName), site: site }];
+  var engines = enginesOf(sources, plugins);
   var key = hash ? "h:" + (hash.v1 || hash.v2) : (link !== "" ? "u:" + link : "s:" + seq);
   return {
     key: key,
@@ -420,21 +467,31 @@ function resultFrom(raw, seq) {
     published: shown.published,
     fileUrl: link,
     descrLink: plainText(r.descrLink),
-    siteUrl: plainText(r.siteUrl),
-    engine: engine,
-    engines: [engine],
+    siteUrl: site,
+    engine: engines[0],
+    engines: engines,
+    sources: sources,
     v1: hash ? hash.v1 : null,
     v2: hash ? hash.v2 : null
   };
 }
 
-// mergeResults(held, raws, firstSeq) -> {rows, added, updated}: held (the
-// rows so far, not changed) plus raws. A raw row whose key (its infohash,
-// else its link) is already held adds its plugin to that row instead
-// (OV11: rows from different plugins with the same hash are merged).
-// added: the new rows, in order; updated: the keys of held rows that
-// gained a plugin.
-function mergeResults(held, raws, firstSeq) {
+function withSources(row, sources, plugins) {
+  var copy = {};
+  for (var k in row) copy[k] = row[k];
+  copy.sources = sources;
+  copy.engines = enginesOf(sources, plugins);
+  copy.engine = copy.engines[0];
+  return copy;
+}
+
+// mergeResults(held, raws, firstSeq, plugins) -> {rows, added, updated}:
+// held (the rows so far, not changed) plus raws. A raw row whose key (its
+// infohash, else its link) is already held adds its plugin to that row
+// instead (OV11: rows from different plugins with the same hash are
+// merged). added: the new rows, in order; updated: the keys of held rows
+// that gained a plugin.
+function mergeResults(held, raws, firstSeq, plugins) {
   var rows = (held || []).slice();
   var at = {};
   for (var i = 0; i < rows.length; i++) at[rows[i].key] = i;
@@ -442,15 +499,12 @@ function mergeResults(held, raws, firstSeq) {
   var addedKeys = [], updated = [];
   var list = raws || [];
   for (var j = 0; j < list.length; j++) {
-    var r = resultFrom(list[j], (Number(firstSeq) || 0) + j);
+    var r = resultFrom(list[j], (Number(firstSeq) || 0) + j, plugins);
     if (Object.prototype.hasOwnProperty.call(at, r.key)) {
       var idx = at[r.key];
       var cur = rows[idx];
       if (cur.engines.indexOf(r.engine) !== -1) continue;
-      var copy = {};
-      for (var k in cur) copy[k] = cur[k];
-      copy.engines = cur.engines.concat([r.engine]);
-      rows[idx] = copy;
+      rows[idx] = withSources(cur, cur.sources.concat(r.sources), plugins);
       if (idx < heldCount && updated.indexOf(r.key) === -1) updated.push(r.key);
       continue;
     }
@@ -460,6 +514,12 @@ function mergeResults(held, raws, firstSeq) {
   }
   var added = addedKeys.map(function(key) { return rows[at[key]]; });
   return { rows: rows, added: added, updated: updated };
+}
+
+// remapEngines(rows, plugins) -> the rows with each plugin worked out
+// again from the current plugin list (it may arrive after the rows).
+function remapEngines(rows, plugins) {
+  return (rows || []).map(function(r) { return withSources(r, r.sources || [{ engine: r.engine, site: r.siteUrl }], plugins); });
 }
 
 // pluginCounts(rows) -> {engine: n}: how many rows each plugin found ("" is
@@ -492,7 +552,7 @@ function pluginLabel(engine, plugins) {
 // All results first, then each enabled plugin and each plugin with
 // results (installed order, then the rest), then the other bucket when it
 // has any. {kind: "all"|"plugin", engine, label, count}.
-function pluginColumn(plugins, counts, total) {
+function pluginColumn(plugins, counts, total, recent) {
   var c = counts || {};
   var out = [{ kind: "all", engine: null, label: "All results", count: Number(total) || 0 }];
   var seen = {};
@@ -507,6 +567,9 @@ function pluginColumn(plugins, counts, total) {
   var rest = Object.keys(c).filter(function(e) { return e !== OTHER && !seen[e]; }).sort();
   for (var j = 0; j < rest.length; j++) out.push({ kind: "plugin", engine: rest[j], label: pluginLabel(rest[j], list), count: c[rest[j]] });
   if (c[OTHER]) out.push({ kind: "plugin", engine: OTHER, label: OTHER_LABEL, count: c[OTHER] });
+  // Recent (Ruling FF): cursor rows too; Enter on one searches it again.
+  var rq = recent || [];
+  for (var r = 0; r < rq.length; r++) out.push({ kind: "recent", engine: null, label: String(rq[r]), query: String(rq[r]), count: null });
   return out;
 }
 
@@ -609,12 +672,17 @@ function cappedText(capped, total) {
 }
 
 // emptyText(c) -> the results area's empty state, or "" when rows show.
-// c: {pluginsLoaded, pluginCount, state, query, rows}.
+// c: {pluginsLoaded, pluginCount, state, query, rows, visible, filter}:
+// rows is every result, visible those the Plugins column's filter shows,
+// filter that plugin's label (a filter that hides every row says so).
 function emptyText(c) {
   var x = c || {};
-  if ((Number(x.rows) || 0) > 0) return "";
+  if ((Number(x.rows) || 0) > 0) {
+    if (x.visible !== undefined && (Number(x.visible) || 0) === 0 && x.filter) return fill(WINDOW.noPluginResults, { plugin: x.filter });
+    return "";
+  }
   if (x.pluginsLoaded === true && (Number(x.pluginCount) || 0) === 0 && (x.state === "none" || x.state === "failed" || !x.state)) return WINDOW.noPlugins;
-  if (x.state === "done" || x.state === "stopped" || x.state === "gone") return fill(WINDOW.noResults, { q: String(x.query || "").trim() });
+  if (x.state === "done" || x.state === "stopped" || x.state === "gone") return fill(WINDOW.noResults, { q: qtTrim(String(x.query || "")) });
   return WINDOW.noResultsYet;
 }
 
@@ -673,7 +741,7 @@ function categoryName(id, plugins) {
 
 // recentPush(list, query) -> Recent with query first, once, at most 8.
 function recentPush(list, query) {
-  var q = String(query || "").trim();
+  var q = qtTrim(String(query || ""));
   var out = q === "" ? [] : [q];
   var l = list || [];
   for (var i = 0; i < l.length && out.length < RECENT_MAX; i++) if (l[i] !== q) out.push(l[i]);
@@ -811,6 +879,9 @@ if (typeof module !== "undefined") {
     effectiveCategory: effectiveCategory,
     categoryName: categoryName,
     recentPush: recentPush,
+    qtTrim: qtTrim,
+    engineFor: engineFor,
+    remapEngines: remapEngines,
     resultHost: resultHost,
     addPlan: addPlan,
     copyableLink: copyableLink,

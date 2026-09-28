@@ -144,7 +144,6 @@ Item {
   property int jobId: 0
   property int startTicket: 0
   property bool stopWanted: false
-  property bool closedWhileStarting: false
   property string query: ""
   // The raw rows received (the offset the window owns, OV7), qBittorrent's
   // total, and whether it's past the sidecar's 2000 (OV15).
@@ -177,7 +176,20 @@ Item {
   readonly property int cursorIndex: shownKeys.indexOf(cursorKey)
   property var currentResult: null
   readonly property var counts: SearchView.pluginCounts(allRows)
-  readonly property var columnRows: SearchView.pluginColumn(pluginList, counts, allRows.length)
+  // The Plugins column: All results, the plugins, then Recent (Ruling FF:
+  // cursor rows; Enter on one searches it again).
+  readonly property var columnRows: SearchView.pluginColumn(pluginList, counts, allRows.length, recent)
+  // j/k in the column move at once; the filter follows after a short pause
+  // so holding j doesn't rebuild the results on every row (review 7).
+  property var pendingFilter: null
+  // How long a magnet has to show up in the library before "Couldn't
+  // confirm <name> was added." (Ruling FD; tests shorten it).
+  property int addConfirmMs: 30000
+  // The sidecar streams the results; while it isn't up nothing arrives.
+  readonly property bool sidecarUp: !service || service.sidecarState === undefined || service.sidecarState === "up"
+  // Ruling FD: only while Running with the sidecar not up, never on a
+  // quiet search.
+  readonly property bool stalled: jobState === "running" && !sidecarUp
   // The library's ids (SearchView.librarySet), for "in library" (OV11).
   property var libSet: ({})
 
@@ -242,7 +254,9 @@ Item {
     return id !== "search.open" && (id.indexOf("search.") === 0 || id.indexOf("plugin.") === 0)
   }
 
-  function run(commandId, args) {
+  // ev: the key event when a key ran it (the Client passes it), else
+  // undefined (the palette).
+  function run(commandId, args, ev) {
     if (!open) return
     var a = args || ({})
     switch (commandId) {
@@ -252,6 +266,15 @@ Item {
     case "search.focusPlugins":
     case "search.pluginsOverlay": column = "searchPlugins"; return
     case "search.focusResults":
+      // Enter on a Recent row searches it again (Ruling FF).
+      if (column === "searchPlugins" && ev && (ev.key === 0x01000004 || ev.key === 0x01000005) && columnRows[columnIndex] && columnRows[columnIndex].kind === "recent") {
+        var q = columnRows[columnIndex].query
+        column = "searchResults"
+        cmds.rerun(q)
+        return
+      }
+      column = "searchResults"
+      return
     case "search.pluginsClose": column = "searchResults"; return
     case "search.plugins": overlayFrom = column; column = "searchPluginList"; return
     case "plugin.close": column = overlayFrom; return
@@ -337,8 +360,18 @@ Item {
     pluginsLoaded = true
     pluginListIndex = Math.max(0, Math.min(pluginListIndex, out.length - 1))
     category = SearchView.effectiveCategory(category, out)
+    // Rows that came before the list: their plugin again (Ruling FF).
+    if (allRows.length > 0) {
+      var rows = SearchView.remapEngines(allRows, out)
+      var byKey = ({})
+      for (var r = 0; r < rows.length; r++) byKey[rows[r].key] = rows[r]
+      allRows = rows
+      rowByKey = byKey
+      syncCurrent()
+    }
     syncColumn()
-    refreshLabels()
+    if (pluginFilter !== null) rebuild()
+    else refreshLabels()
   }
 
   function movePlugin(delta) {
@@ -364,8 +397,8 @@ Item {
     return parts.join(" · ")
   }
 
-  readonly property string busyText: busyKind === "install" ? "installing…" : busyKind === "update" ? "updating…"
-    : busyKind === "uninstall" ? "uninstalling…" : busyKind === "toggle" ? "saving…" : ""
+  readonly property string busyText: busyKind === "install" ? SearchView.WINDOW.installing : busyKind === "update" ? SearchView.WINDOW.updating
+    : busyKind === "uninstall" ? SearchView.WINDOW.uninstalling : busyKind === "toggle" ? SearchView.WINDOW.saving : ""
 
   // ---- results -----------------------------------------------------------------------
 
@@ -378,6 +411,8 @@ Item {
     capped = false
     cursorKey = ""
     pluginFilter = null
+    pendingFilter = null
+    filterTimer.stop()
     columnIndex = 0
     resultModel.clear()
     syncCurrent()
@@ -407,7 +442,7 @@ Item {
   // New raw rows from a reply (already checked against the offset):
   // merged, and those that are new and pass the filter are appended.
   function appendRaw(raws) {
-    var m = SearchView.mergeResults(allRows, raws, held)
+    var m = SearchView.mergeResults(allRows, raws, held, pluginList)
     held = held + raws.length
     var byKey = ({})
     for (var k in rowByKey) byKey[k] = rowByKey[k]
@@ -469,11 +504,11 @@ Item {
       var n = columnRows.length
       if (n === 0) return
       columnIndex = Math.max(0, Math.min(n - 1, columnIndex + delta))
-      var engine = columnRows[columnIndex].engine
-      if (engine !== pluginFilter) {
-        pluginFilter = engine
-        rebuild()
-      }
+      var row = columnRows[columnIndex]
+      // A Recent row keeps the filter as it is.
+      if (row.kind === "recent") { filterTimer.stop(); return }
+      pendingFilter = row.engine
+      filterTimer.restart()
       return
     }
     if (shownKeys.length === 0) return
@@ -485,7 +520,9 @@ Item {
 
   // The column's cursor follows the filter when the rows move under it.
   function syncColumn() {
-    for (var i = 0; i < columnRows.length; i++) if (columnRows[i].engine === pluginFilter) { columnIndex = i; return }
+    var cur = columnRows[columnIndex]
+    if (cur && cur.kind === "recent") return
+    for (var i = 0; i < columnRows.length; i++) if (columnRows[i].kind !== "recent" && columnRows[i].engine === pluginFilter) { columnIndex = i; return }
     columnIndex = 0
     if (pluginFilter !== null) { pluginFilter = null; rebuild() }
   }
@@ -496,7 +533,16 @@ Item {
   }
 
   onColumnRowsChanged: {
-    for (var i = 0; i < columnRows.length; i++) if (columnRows[i].engine === pluginFilter) { columnIndex = i; return }
+    var cur = columnRows[columnIndex]
+    if (cur && cur.kind === "recent") return
+    if (filterTimer.running) return
+    for (var i = 0; i < columnRows.length; i++) if (columnRows[i].kind !== "recent" && columnRows[i].engine === pluginFilter) { columnIndex = i; return }
+  }
+
+  function applyFilter() {
+    if (pendingFilter === pluginFilter) return
+    pluginFilter = pendingFilter
+    rebuild()
   }
   onServiceChanged: syncLibrary()
 
@@ -509,6 +555,13 @@ Item {
     target: search.service
     ignoreUnknownSignals: true
     function onTorrentsChanged() { search.syncLibrary() }
+  }
+
+  Timer {
+    id: filterTimer
+    interval: 150
+    repeat: false
+    onTriggered: search.applyFilter()
   }
 
   Timer {
@@ -642,7 +695,7 @@ Item {
         Text {
           id: pluginsChipText
           anchors.centerIn: parent
-          text: search.narrow ? (search.columnRows[search.columnIndex] ? search.columnRows[search.columnIndex].label : "All results") + " ▾"
+          text: search.narrow ? (search.pluginFilter === null ? "All results" : SearchView.pluginLabel(search.pluginFilter, search.pluginList)) + " ▾"
             : "plugins " + (search.plugins === 0 ? "none" : (search.pluginFilter === null ? "All" : SearchView.pluginLabel(search.pluginFilter, search.pluginList))
               + " (" + search.enabledPlugins + ")")
           textFormat: Text.PlainText
@@ -749,82 +802,74 @@ Item {
             required property var modelData
             required property int index
             readonly property bool current: index === search.columnIndex
+            readonly property bool isRecent: modelData.kind === "recent"
+            // The first Recent row carries the "Recent" heading above it.
+            readonly property bool heads: isRecent && (index === 0 || search.columnRows[index - 1].kind !== "recent")
             width: pluginColumn.width
-            height: search.rowHeight
+            height: search.rowHeight + (heads ? recentHead.implicitHeight + Style.space(12) : 0)
 
-            Rectangle {
-              visible: colItem.current
-              anchors.fill: parent
-              color: Style.selectedAccentFill
-            }
-            Rectangle {
-              visible: colItem.current && pluginsPane.focusedPane
-              width: Style.space(3)
-              height: parent.height
-              color: Color.accent
-            }
             Text {
-              anchors.left: parent.left
-              anchors.leftMargin: search.padX
-              anchors.right: colCount.left
-              anchors.rightMargin: Style.space(8)
-              anchors.verticalCenter: parent.verticalCenter
-              elide: Text.ElideRight
-              text: colItem.modelData.label
+              id: recentHead
+              visible: colItem.heads
+              x: search.padX
+              y: Style.space(8)
+              text: "Recent"
               textFormat: Text.PlainText
               font.family: Style.fontFamily
-              font.pixelSize: Style.font.body
-              color: colItem.current ? Color.accent : Color.foreground
-            }
-            Text {
-              id: colCount
-              anchors.right: parent.right
-              anchors.rightMargin: search.padX
-              anchors.verticalCenter: parent.verticalCenter
-              text: String(colItem.modelData.count)
-              textFormat: Text.PlainText
-              font.family: Style.fontFamily
-              font.pixelSize: Style.font.bodySmall
+              font.pixelSize: Style.font.caption
+              font.capitalization: Font.AllUppercase
               color: Color.muted
             }
-            MouseArea {
-              anchors.fill: parent
-              onClicked: {
-                search.column = "searchPlugins"
-                search.move(colItem.index - search.columnIndex)
+            Item {
+              anchors.left: parent.left
+              anchors.right: parent.right
+              anchors.bottom: parent.bottom
+              height: search.rowHeight
+
+              Rectangle {
+                visible: colItem.current
+                anchors.fill: parent
+                color: Style.selectedAccentFill
+              }
+              Rectangle {
+                visible: colItem.current && pluginsPane.focusedPane
+                width: Style.space(3)
+                height: parent.height
+                color: Color.accent
+              }
+              Text {
+                anchors.left: parent.left
+                anchors.leftMargin: search.padX
+                anchors.right: colCount.left
+                anchors.rightMargin: Style.space(8)
+                anchors.verticalCenter: parent.verticalCenter
+                elide: Text.ElideRight
+                text: colItem.modelData.label
+                textFormat: Text.PlainText
+                font.family: Style.fontFamily
+                font.pixelSize: Style.font.body
+                color: colItem.current ? Color.accent : (colItem.isRecent ? search.dimColor : Color.foreground)
+              }
+              Text {
+                id: colCount
+                visible: !colItem.isRecent
+                anchors.right: parent.right
+                anchors.rightMargin: search.padX
+                anchors.verticalCenter: parent.verticalCenter
+                text: colItem.isRecent ? "" : String(colItem.modelData.count)
+                textFormat: Text.PlainText
+                font.family: Style.fontFamily
+                font.pixelSize: Style.font.bodySmall
+                color: Color.muted
+              }
+              MouseArea {
+                anchors.fill: parent
+                onClicked: {
+                  search.column = "searchPlugins"
+                  search.move(colItem.index - search.columnIndex)
+                }
               }
             }
-          }
-        }
-
-        Text {
-          visible: search.recent.length > 0
-          leftPadding: search.padX
-          topPadding: Style.space(12)
-          bottomPadding: Style.space(4)
-          text: "Recent"
-          textFormat: Text.PlainText
-          font.family: Style.fontFamily
-          font.pixelSize: Style.font.caption
-          font.capitalization: Font.AllUppercase
-          color: Color.muted
-        }
-
-        Repeater {
-          model: search.recent
-          delegate: Text {
-            required property var modelData
-            width: pluginColumn.width
-            height: search.rowHeight
-            leftPadding: search.padX
-            rightPadding: search.padX
-            verticalAlignment: Text.AlignVCenter
-            elide: Text.ElideRight
-            text: String(modelData)
-            textFormat: Text.PlainText
-            font.family: Style.fontFamily
-            font.pixelSize: Style.font.body
-            color: search.dimColor
           }
         }
       }
@@ -856,7 +901,10 @@ Item {
     // then Plugin.
     readonly property bool hidePublished: search.narrow
     readonly property bool hidePeers: search.narrow
-    readonly property bool hidePlugin: search.narrow && width < Style.space(560)
+    // Plugin hides below ClientView's LAYOUT_NARROW (700 px of window,
+    // the width the torrent table drops its columns at): 640-699 px, which
+    // the 640 px minimum window reaches.
+    readonly property bool hidePlugin: search.narrow && search.width > 0 && search.width < 700
     readonly property int numWidth: Style.space(64)
     readonly property int sizeWidth: Style.space(84)
     readonly property int pluginWidth: Style.space(140)
@@ -864,11 +912,31 @@ Item {
     readonly property int nameWidth: Math.max(0, width - 2 * search.padX - sizeWidth - numWidth - (hidePeers ? 0 : numWidth)
       - (hidePlugin ? 0 : pluginWidth) - (hidePublished ? 0 : dateWidth))
 
+    // Ruling FD: a Running search while the sidecar isn't up.
+    Text {
+      id: stalledLine
+      objectName: "searchStalled"
+      visible: search.stalled
+      anchors.left: parent.left
+      anchors.right: parent.right
+      anchors.top: parent.top
+      height: visible ? Style.space(30) : 0
+      leftPadding: search.padX
+      rightPadding: search.padX
+      verticalAlignment: Text.AlignVCenter
+      elide: Text.ElideRight
+      text: SearchView.WINDOW.stalled
+      textFormat: Text.PlainText
+      font.family: Style.fontFamily
+      font.pixelSize: Style.font.body
+      color: Color.urgent
+    }
+
     Item {
       id: header
       anchors.left: parent.left
       anchors.right: parent.right
-      anchors.top: parent.top
+      anchors.top: stalledLine.bottom
       height: Style.space(26)
       visible: resultModel.count > 0
 
@@ -998,21 +1066,41 @@ Item {
 
     // The empty states (the design's States table, as OV1/OV8 amend it).
     Text {
+      id: emptyLine
       objectName: "searchEmpty"
       visible: text !== ""
       anchors.left: parent.left
       anchors.right: parent.right
-      anchors.top: parent.top
+      anchors.top: stalledLine.bottom
       anchors.topMargin: Style.space(24)
       leftPadding: Style.space(16)
       rightPadding: Style.space(16)
       wrapMode: Text.Wrap
       text: SearchView.emptyText({ pluginsLoaded: search.pluginsLoaded, pluginCount: search.plugins, state: search.jobState,
-        query: search.query, rows: search.allRows.length > 0 ? Math.max(1, resultModel.count) : 0 })
+        query: search.query, rows: search.allRows.length, visible: search.shownKeys.length,
+        filter: search.pluginFilter === null ? "" : SearchView.pluginLabel(search.pluginFilter, search.pluginList) })
       textFormat: Text.PlainText
       font.family: Style.fontFamily
       font.pixelSize: Style.font.subtitle
       color: text === SearchView.WINDOW.noPlugins ? Color.accent : Color.muted
+    }
+
+    // Ruling FD: what plugins are, under "No search plugins yet".
+    Text {
+      objectName: "searchNoPluginsHelp"
+      visible: emptyLine.text === SearchView.WINDOW.noPlugins
+      anchors.left: parent.left
+      anchors.right: parent.right
+      anchors.top: emptyLine.bottom
+      anchors.topMargin: Style.space(10)
+      leftPadding: Style.space(16)
+      rightPadding: Style.space(16)
+      wrapMode: Text.Wrap
+      text: SearchView.WINDOW.noPluginsHelp
+      textFormat: Text.PlainText
+      font.family: Style.fontFamily
+      font.pixelSize: Style.font.body
+      color: Color.muted
     }
 
     // The cursor row's help line: name · host · size · plugin.

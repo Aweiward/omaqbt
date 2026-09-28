@@ -214,3 +214,41 @@ test("replies: stale ids dropped, a wrong offset re-sent, gone, and the final ru
   assert.equal(S.isFinal(r({ status: "Stopped", total: 5000, offset: 2000, rows: [] })), true, "the cap");
   assert.equal(S.isFinal(r({ status: "Stopped", total: 0, offset: 0, rows: [] })), true, "an empty final reply");
 });
+
+// ---- fix round 1 (Rulings FD, FE, FF) ----------------------------------------------------------------
+
+test("FE: the pattern trims with Qt's isSpace set, not String.prototype.trim", () => {
+  const spaces = "\t\n\u000b\f\r \u0085         　";
+  assert.equal(S.qtTrim(spaces + "deb ian" + spaces), "deb ian");
+  assert.equal(S.qtTrim("﻿x﻿"), "﻿x﻿", "U+FEFF isn't a space to Qt");
+  assert.equal(S.qtTrim("​x"), "​x", "nor a zero-width space (Cf)");
+  assert.equal(S.checkPattern("﻿").ok, true);
+  assert.equal(S.checkPattern(" 　 ").message, "Type something to search for.");
+  assert.deepEqual(S.recentPush([], "　debian "), ["debian"]);
+});
+
+test("FF: an empty engineName is the plugin whose url is the row's siteUrl, else other", () => {
+  const plugins = [{ name: "linuxtracker", fullName: "Linux Tracker", url: "https://linuxtracker.org", enabled: true }];
+  const a = S.resultFrom(raw({ engineName: "", siteUrl: "https://linuxtracker.org" }), 0, plugins);
+  assert.equal(a.engine, "linuxtracker");
+  assert.equal(S.resultFrom(raw({ engineName: "", siteUrl: "https://linuxtracker.org/" }), 0, plugins).engine, "", "exactly equal only");
+  assert.equal(S.resultFrom(raw({ engineName: "", siteUrl: "" }), 0, [{ name: "x", url: "" }]).engine, "", "an empty url never matches");
+  const rows = S.mergeResults([], [raw({ engineName: "", siteUrl: "https://linuxtracker.org", fileUrl: "https://lt.example/d/1" })], 0, []).rows;
+  assert.deepEqual(S.pluginCounts(rows), { "": 1 }, "before the plugin list arrives: other");
+  const again = S.remapEngines(rows, plugins);
+  assert.deepEqual(S.pluginCounts(again), { linuxtracker: 1 });
+  const plan = S.addPlan(again[0], "1 B", {});
+  assert.equal(plan.plugin, "linuxtracker", "the mapped name goes to qbt search add");
+  assert.equal(plan.via, "plugin");
+});
+
+test("FF: Recent rows follow the plugins in the column", () => {
+  const col = S.pluginColumn([], {}, 0, ["ubuntu", "debian"]);
+  assert.deepEqual(col.map((r) => [r.kind, r.label]), [["all", "All results"], ["recent", "ubuntu"], ["recent", "debian"]]);
+  assert.equal(col[1].query, "ubuntu");
+});
+
+test("FD: a filter that hides every row says so", () => {
+  assert.equal(S.emptyText({ pluginsLoaded: true, pluginCount: 1, state: "running", rows: 3, visible: 0, filter: "EZTV" }), "No results from EZTV.");
+  assert.equal(S.emptyText({ pluginsLoaded: true, pluginCount: 1, state: "running", rows: 3, visible: 2, filter: "EZTV" }), "");
+});

@@ -45,8 +45,13 @@ QtObject {
   // ticket -> {kind, ...}: this window's qbt search runs still going.
   property var tickets: ({})
   // Magnets added (via "add") whose hash isn't in the library yet:
-  // [{v1, v2, name}]; "Added <name>." shows once it is.
+  // [{v1, v2, name, until}]; "Added <name>." shows once it is, and
+  // "Couldn't confirm <name> was added." once `until` (ms) passes (FD).
   property var awaiting: []
+  // Starts the window gave up on while they ran (it closed): their job is
+  // deleted as soon as its id arrives (review 3: by ticket, so a later
+  // start is never touched).
+  property var orphanStarts: []
 
   readonly property var client: view.client
   readonly property var service: view.service
@@ -170,7 +175,19 @@ QtObject {
       note(why.charAt(0).toUpperCase() + why.slice(1) + ".", "muted")
       return
     }
-    startSearch(String(text).trim())
+    startSearch(SearchView.qtTrim(String(text)))
+  }
+
+  // Enter on a Recent row (Ruling FF): the same checks as `/`.
+  function rerun(query) {
+    var r = SearchView.checkPattern(query)
+    if (!r.ok) { note(r.message, "urgent"); return }
+    if (view.enabledPlugins === 0) {
+      var why = view.plugins > 0 ? Registry.SEARCH_REASONS.allOff : Registry.SEARCH_REASONS.noPlugins
+      note(why.charAt(0).toUpperCase() + why.slice(1) + ".", "muted")
+      return
+    }
+    startSearch(SearchView.qtTrim(String(query)))
   }
 
   function startSearch(query) {
@@ -211,14 +228,11 @@ QtObject {
       fail(SearchView.SENTENCES.unreadable)
       return
     }
-    if (v.closedWhileStarting) {
-      v.closedWhileStarting = false
-      if (svcHas("searchDelete")) service.searchDelete(id)
-      return
-    }
     v.jobId = id
     if (v.stopWanted) {
       v.stopWanted = false
+      // Esc came before the id: stop it now (or delete it, sidecar down).
+      if (!v.sidecarUp) { dropJob(); return }
       if (svcHas("searchStop")) remember(service.searchStop(id), { kind: "stop" })
     } else {
       v.jobState = "running"
@@ -232,11 +246,23 @@ QtObject {
     if (v.jobState !== "starting" && v.jobState !== "running") return false
     v.jobState = "stopped"
     if (v.jobId > 0) {
-      if (svcHas("searchStop")) remember(service.searchStop(v.jobId), { kind: "stop" })
+      // No sidecar, no final reply to wait for: the job goes now (review 4).
+      if (!v.sidecarUp) dropJob()
+      else if (svcHas("searchStop")) remember(service.searchStop(v.jobId), { kind: "stop" })
     } else {
       v.stopWanted = true
     }
     return true
+  }
+
+  // The job goes without a final read: unwatched and deleted.
+  function dropJob() {
+    var v = view
+    var id = v.jobId
+    v.jobId = 0
+    if (id <= 0) return
+    if (svcHas("searchUnwatch")) service.searchUnwatch()
+    if (svcHas("searchDelete")) service.searchDelete(id)
   }
 
   // The sidecar's reply (OV7, Ruling FB).
@@ -277,7 +303,8 @@ QtObject {
   function closeJob() {
     var v = view
     if (v.jobState === "starting" || v.jobState === "running") v.jobState = "stopped"
-    if (v.startTicket > 0) v.closedWhileStarting = true
+    if (v.startTicket > 0) orphanStarts = orphanStarts.concat([v.startTicket])
+    v.startTicket = 0
     v.stopWanted = false
     if (v.jobId > 0) {
       if (svcHas("searchUnwatch")) service.searchUnwatch()
@@ -310,7 +337,7 @@ QtObject {
     var via = data && typeof data === "object" && (data.via === "add" || data.via === "plugin") ? data.via : e.via
     var text = SearchView.addedNote(via, e.link, e.name)
     if (text !== null) { note(text, "muted"); return }
-    awaiting = awaiting.concat([{ v1: e.v1, v2: e.v2, name: e.name }])
+    awaiting = awaiting.concat([{ v1: e.v1, v2: e.v2, name: e.name, until: Date.now() + view.addConfirmMs }])
     checkAwaiting()
   }
 
@@ -318,9 +345,11 @@ QtObject {
   function checkAwaiting() {
     if (awaiting.length === 0) return
     var keep = []
+    var now = Date.now()
     for (var i = 0; i < awaiting.length; i++) {
       var a = awaiting[i]
       if (SearchView.inLibrary(a.v1, a.v2, view.libSet)) note(SearchView.addedText(a.name), "muted")
+      else if (now >= a.until) note(SearchView.fill(SearchView.WINDOW.addUnconfirmed, { name: a.name }), "urgent")
       else keep.push(a)
     }
     awaiting = keep
@@ -354,7 +383,17 @@ QtObject {
     var e = take(ticket)
     if (!e) return
     var v = view
-    if (e.kind === "start") { started(ticket, ok, error, data); return }
+    if (e.kind === "start") {
+      var at = orphanStarts.indexOf(Number(ticket))
+      if (at !== -1) {
+        orphanStarts = orphanStarts.slice(0, at).concat(orphanStarts.slice(at + 1))
+        var oid = ok && data && typeof data === "object" ? data.id : undefined
+        if (typeof oid === "number" && SearchView.checkSearchId(String(oid)).ok && svcHas("searchDelete")) service.searchDelete(oid)
+        return
+      }
+      started(ticket, ok, error, data)
+      return
+    }
     if (e.kind === "list") {
       v.pluginsReading = false
       if (!ok) { if (v.tableState === "rows" || v.tableState === "empty") fail(error); return }
@@ -377,6 +416,14 @@ QtObject {
       if (!ok) fail(error)
       loadPlugins()
     }
+  }
+
+  // The magnets still waiting for the library, checked each second.
+  property Timer awaitTimer: Timer {
+    interval: 1000
+    repeat: true
+    running: cmds.awaiting.length > 0
+    onTriggered: cmds.checkAwaiting()
   }
 
   property Connections serviceLink: Connections {

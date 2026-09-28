@@ -25,7 +25,8 @@ Scope {
   // route(text): a search reply goes to searchLine, anything else to line.
   function route(text) {
     var t = String(text)
-    if (t.indexOf("\"search\"") !== -1) {
+    // qbt-serve writes compact JSON (separators ",", ":").
+    if (t.indexOf("\"type\":\"search\"") !== -1) {
       var obj = null
       try { obj = JSON.parse(t) } catch (e) { obj = null }
       if (obj && typeof obj === "object" && !Array.isArray(obj) && obj.type === "search") {
