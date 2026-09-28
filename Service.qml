@@ -58,6 +58,10 @@ Scope {
   property string actionStatus: ""
   property string clipboardText: ""
   property var actionQueue: []
+  // Callbacks waiting for their own readPrefs run: overlapping calls are
+  // queued (never coalesced), so a caller mid-flight when another call
+  // comes in still gets its own answer -- see readPrefs.
+  property var prefsQueue: []
   // Tickets are 1-based so a method can return 0 for "nothing queued".
   property int actionTicketSeq: 0
   property var currentAction: null
@@ -424,7 +428,11 @@ Scope {
       if (done) actionFinished(done.ticket, false, err, done.origin, done.hashes)
       return
     }
-    refresh()
+    // A successful setPref gets its preferences re-read (refreshSlow),
+    // never the plain refresh() every other action gets -- a torrent-list
+    // refresh wouldn't pick up a preferences change at all.
+    if (kind === "pref-set") refreshSlow()
+    else refresh()
     loadMagnetSnapshot()
     pumpActionQueue()
     if (done) actionFinished(done.ticket, true, "", done.origin, done.hashes)
@@ -460,10 +468,109 @@ Scope {
     statusProcess.running = true
   }
 
+  // Called after every successful setPref (Task 3): a plain refresh only
+  // re-ticks the torrent list, which never picks up a preferences change,
+  // so a write asks for a preferences reread instead -- refresh-slow to
+  // the sidecar when it's up, or refresh()'s existing bash statusProcess
+  // fallback when it's down (or still starting, where refresh() is
+  // already a no-op, same as it is for every other action).
+  function refreshSlow() {
+    if (!started) return
+    if (sidecarState === "up") {
+      sidecar.send({ cmd: "refresh-slow" })
+      return
+    }
+    refresh()
+  }
+
   function readClipboard() {
     clipboardText = ""
     clipProcess.command = ["wl-paste", "--no-newline"]
     clipProcess.running = true
+  }
+
+  // The last non-blank line of a (possibly multi-line) stderr blob. `qbt
+  // prefs`'s own failure contract is a single line, but this is defensive
+  // against any trailing blank line (or noise ahead of it) the same way a
+  // human reading a terminal would just look at the last thing printed.
+  function lastStderrLine(text) {
+    var lines = String(text || "").split("\n")
+    for (var i = lines.length - 1; i >= 0; i--) {
+      var line = lines[i].trim()
+      if (line !== "") return line
+    }
+    return ""
+  }
+
+  // Answers cb, asynchronously (Qt.callLater), with the same "not running"
+  // error readPrefs, pumpPrefsQueue and stop() all use for a Service that
+  // isn't started: never called synchronously out of readPrefs itself, so
+  // a caller can always assume its callback fires on a later tick, never
+  // reentrantly within the call that asked for it.
+  function answerPrefsNotRunning(cb) {
+    Qt.callLater(function() { cb({ ok: false, error: "qBittorrent isn't running." }) })
+  }
+
+  // Settings (Task 3): reads `qbt prefs` in its own Process, never the
+  // ticketed action queue (it's a read, not a write). cb is called with
+  // {ok:true, prefs} or {ok:false, error}; a qBittorrent-down failure is
+  // just another {ok:false, error} -- the Settings view is the one that
+  // decides to show the api-down screen for it. Overlapping calls are
+  // queued rather than coalesced: a caller who asks while another read is
+  // still in flight gets its own fresh run and its own answer once its
+  // turn comes, so nobody's callback is ever silently dropped. An
+  // inactive/stopped Service starts no Process at all (Ruling DK, same
+  // invariant the file header documents for every other Process here);
+  // its callback still always fires, just with that error instead.
+  function readPrefs(cb) {
+    if (!started) {
+      answerPrefsNotRunning(cb)
+      return
+    }
+    // prefsProcess.cb !== null also counts: in the failed-start window
+    // (running already false, no exited yet -- see prefsProcess's
+    // onRunningChanged below) a call landing here must still queue behind
+    // the pending callback rather than overwrite it, the same reasoning
+    // runAction's currentAction !== null check applies to actionProcess.
+    if (prefsProcess.running || prefsProcess.cb !== null) {
+      prefsQueue = Model.enqueueAction(prefsQueue, cb)
+      return
+    }
+    startPrefsRead(cb)
+  }
+
+  function startPrefsRead(cb) {
+    prefsProcess.cb = cb
+    prefsProcess.command = [helperPath, "prefs"]
+    prefsProcess.running = true
+  }
+
+  // Started from prefsProcess.onExited (a real run just finished) and,
+  // defensively, from anywhere else that might find prefsQueue non-empty
+  // after the Service has stopped: stop() itself already drains the queue
+  // synchronously, so in practice this only ever sees !started if a run
+  // that was already in flight when stop() was called exits afterward.
+  // Either way, no new Process starts once stopped, and the callback is
+  // still answered rather than dropped.
+  function pumpPrefsQueue() {
+    var next = Model.shiftAction(prefsQueue)
+    prefsQueue = next.rest
+    if (!next.item) return
+    if (!started) {
+      answerPrefsNotRunning(next.item)
+      return
+    }
+    startPrefsRead(next.item)
+  }
+
+  // Settings (Task 3): a normal ticketed write, `qbt pref-set <key> --
+  // <value>`. A composite's key is the composite's own key and its value
+  // is "HH:MM" -- passed through as a plain string like everything else
+  // here, since qbt is the one that knows how to split it. finishAction
+  // reads its every success as a preferences change (refreshSlow above).
+  function setPref(key, value, opts) {
+    if (!key) return 0
+    return runAction([helperPath, "pref-set", String(key), "--", String(value)], "Saving setting…", opts)
   }
 
   function addTarget(target, stopped, savePath, opts) {
@@ -947,6 +1054,14 @@ Scope {
     // and inspectByKey stays exactly as it was.
     lastSentWatch = null
     sidecar.stop()
+    // Ruling DK: every readPrefs call still queued behind an in-flight (or
+    // already-finished) run is answered now, rather than left to time out
+    // whenever (if ever) pumpPrefsQueue next runs -- a run already in
+    // flight on prefsProcess itself is left alone and still answers its
+    // own caller for real once it exits.
+    var queued = prefsQueue
+    prefsQueue = []
+    for (var i = 0; i < queued.length; i++) answerPrefsNotRunning(queued[i])
   }
 
   function activate() {
@@ -1273,6 +1388,54 @@ Scope {
       // A queued load keeps its origin: replaying it bare would make a
       // window load's failure land in the widget's lastError.
       if (next !== "" && next !== done) root.loadFiles(next, Model.filesReplayOpts(root.filesQuietHashes, next))
+    }
+  }
+
+  // Settings (Task 3): `qbt prefs`, its own one-shot Process rather than
+  // the ticketed actionQueue -- a read, run and answered independently of
+  // whatever write may already be in flight.
+  Process {
+    id: prefsProcess
+    property var cb: null
+    running: false
+    command: []
+    stdout: StdioCollector { id: prefsOut; waitForEnd: true }
+    stderr: StdioCollector { id: prefsErr; waitForEnd: true }
+    // A helper that can't even start (missing, not executable) emits no
+    // exited at all, only running going false -- the same case
+    // actionProcess guards against below. Deferred a turn so a normal
+    // exit (which already cleared cb, and may already have started the
+    // next queued run) is never double-reported.
+    onRunningChanged: {
+      if (running || prefsProcess.cb === null) return
+      var pending = prefsProcess.cb
+      Qt.callLater(function() {
+        if (prefsProcess.running || prefsProcess.cb !== pending) return
+        prefsProcess.cb = null
+        pending({ ok: false, error: "Could not run the qbt helper" })
+        root.pumpPrefsQueue()
+      })
+    }
+    onExited: function(exitCode) {
+      var cb = prefsProcess.cb
+      prefsProcess.cb = null
+      var result
+      if (exitCode !== 0) {
+        result = { ok: false, error: Model.sanitizeError(root.lastStderrLine(prefsErr.text) || "Could not read preferences") }
+      } else {
+        var text = String(prefsOut.text || "").trim()
+        var prefs = null
+        if (text !== "") {
+          try { prefs = JSON.parse(text) } catch (e) { prefs = null }
+        }
+        if (!prefs || typeof prefs !== "object" || Array.isArray(prefs)) {
+          result = { ok: false, error: "Could not read preferences" }
+        } else {
+          result = { ok: true, prefs: prefs }
+        }
+      }
+      if (cb) cb(result)
+      root.pumpPrefsQueue()
     }
   }
 

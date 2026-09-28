@@ -19,6 +19,14 @@ TestCase {
     }
     return null
   }
+  // Service Task 3: the readPrefs one-shot Process (unique property: cb).
+  function prefsProc(svc) {
+    for (var i = 0; i < svc.data.length; i++) {
+      var o = svc.data[i]
+      if (o && o.cb !== undefined) return o
+    }
+    return null
+  }
   function finish(p, code, out, err) {
     p.stdout.text = out || ""
     p.stderr.text = err || ""
@@ -312,6 +320,19 @@ TestCase {
       try {
         var obj = JSON.parse(w[i])
         if (obj && obj.cmd === "watch") out.push(obj)
+      } catch (e) {}
+    }
+    return out
+  }
+  // Every object written to the wire whose cmd matches `name`, in order
+  // (watchWrites above is the "watch"-only special case of this).
+  function wireCmds(wire, name) {
+    var out = []
+    var w = (wire && wire.writes) || []
+    for (var i = 0; i < w.length; i++) {
+      try {
+        var obj = JSON.parse(w[i])
+        if (obj && obj.cmd === name) out.push(obj)
       } catch (e) {}
     }
     return out
@@ -783,5 +804,290 @@ TestCase {
     compare(p.command, [svc.helperPath, "sequential", h, "off"])
     compare(svc.actionStatus, "Setting sequential download…", "without the argument, today's text")
     finish(p, 0, "{\"ok\":true}", "")
+  }
+
+  // ---- slice 4a, Task 3: Service reads and writes preferences -----------
+
+  function test_readPrefs_success_calls_back_with_the_parsed_object() {
+    var svc = createTemporaryObject(serviceComp, tc)
+    var p = prefsProc(svc)
+    verify(p !== null)
+    var got = null
+    svc.readPrefs(function(result) { got = result })
+    compare(p.running, true)
+    compare(p.command, [svc.helperPath, "prefs"])
+    finish(p, 0, "{\"save_path\":\"/x\",\"web_ui_api_key\":{\"set\":true}}", "")
+    verify(got !== null)
+    compare(got.ok, true)
+    compare(got.prefs.save_path, "/x")
+    compare(got.prefs.web_ui_api_key, { set: true })
+  }
+
+  function test_readPrefs_nonzero_exit_uses_the_stderr_last_line() {
+    var svc = createTemporaryObject(serviceComp, tc)
+    var p = prefsProc(svc)
+    var got = null
+    svc.readPrefs(function(result) { got = result })
+    finish(p, 1, "", "some warning on the way out\nqBittorrent is not reachable\n")
+    compare(got.ok, false)
+    compare(got.error, "qBittorrent is not reachable")
+  }
+
+  function test_readPrefs_malformed_stdout_is_a_read_error() {
+    var svc = createTemporaryObject(serviceComp, tc)
+    var p = prefsProc(svc)
+    var got = null
+    svc.readPrefs(function(result) { got = result })
+    finish(p, 0, "not json", "")
+    compare(got.ok, false)
+    verify(got.error.length > 0)
+  }
+
+  function test_readPrefs_empty_stdout_is_a_read_error() {
+    var svc = createTemporaryObject(serviceComp, tc)
+    var p = prefsProc(svc)
+    var got = null
+    svc.readPrefs(function(result) { got = result })
+    finish(p, 0, "", "")
+    compare(got.ok, false)
+    verify(got.error.length > 0)
+  }
+
+  // Overlapping calls: readPrefs queues rather than coalesces, so a second
+  // caller who asks while the first is still in flight still gets its own
+  // answer once its own run finishes (nobody's callback is ever dropped).
+  function test_readPrefs_overlapping_calls_are_each_answered_in_turn() {
+    var svc = createTemporaryObject(serviceComp, tc)
+    var p = prefsProc(svc)
+    var first = null, second = null
+    var firstCalls = 0, secondCalls = 0
+    svc.readPrefs(function(result) { first = result; firstCalls++ })
+    svc.readPrefs(function(result) { second = result; secondCalls++ })
+    compare(p.running, true, "only one run is in flight")
+    finish(p, 0, "{\"save_path\":\"/one\"}", "")
+    verify(first !== null, "the first caller is answered once its run ends")
+    compare(first.prefs.save_path, "/one")
+    verify(second === null, "the second caller's run hasn't happened yet")
+    compare(p.running, true, "the queued call started its own run")
+    compare(p.command, [svc.helperPath, "prefs"])
+    finish(p, 0, "{\"save_path\":\"/two\"}", "")
+    verify(second !== null)
+    compare(second.prefs.save_path, "/two")
+    // finish() flips running false (arming the failed-start guard's
+    // Qt.callLater) immediately before exited fires; drain the event loop
+    // and confirm that guard never fires a second, stale answer for
+    // either caller once the real exit has already handled it.
+    wait(0)
+    compare(firstCalls, 1, "a normal exit's failed-start guard never double-fires")
+    compare(secondCalls, 1, "a normal exit's failed-start guard never double-fires")
+  }
+
+  // The helper itself can't start at all (missing, not executable): no
+  // exited, only running going false. Mirrors
+  // test_failed_start_finishes_a_widget_action_and_pumps for actionProcess.
+  function test_readPrefs_failed_start_answers_could_not_run_and_starts_the_next_queued_call() {
+    var svc = createTemporaryObject(serviceComp, tc)
+    var p = prefsProc(svc)
+    var first = null, second = null
+    svc.readPrefs(function(result) { first = result })
+    svc.readPrefs(function(result) { second = result })  // queued behind the first
+    p.running = false                      // no exited: the helper never ran
+    tryCompare(p, "running", true, 5000)   // the queued call starts once the guard finishes the first
+    verify(first !== null)
+    compare(first.ok, false)
+    compare(first.error, "Could not run the qbt helper")
+    verify(second === null, "the queued call hasn't finished yet")
+    compare(p.command, [svc.helperPath, "prefs"])
+    finish(p, 0, "{\"save_path\":\"/two\"}", "")
+    verify(second !== null)
+    compare(second.prefs.save_path, "/two")
+  }
+
+  // Fix round 1, the critical race: readPrefs's overlap guard checked only
+  // prefsProcess.running, which is already false during the failed-start
+  // window (running false, cb still set, no exited yet -- the same window
+  // test_readPrefs_failed_start_answers_could_not_run_and_starts_the_next_queued_call
+  // exercises from the other end). A second call landing in that exact
+  // window used to see running === false and start directly, silently
+  // overwriting prefsProcess.cb and losing the first caller's answer for
+  // good. The fix also guards on prefsProcess.cb !== null.
+  function test_readPrefs_second_call_in_the_failed_start_window_does_not_drop_the_first() {
+    var svc = createTemporaryObject(serviceComp, tc)
+    var p = prefsProc(svc)
+    var first = null, second = null
+    var firstCalls = 0, secondCalls = 0
+    svc.readPrefs(function(result) { first = result; firstCalls++ })
+    p.running = false                       // no exited: the helper never ran
+    // Before the fix this call would see p.running already false and call
+    // startPrefsRead(cb2) directly, clobbering prefsProcess.cb (still the
+    // first caller's callback, pending its own deferred guard) and running
+    // its own command over it -- the first caller's callback then never
+    // fires at all.
+    svc.readPrefs(function(result) { second = result; secondCalls++ })
+    compare(p.command, [svc.helperPath, "prefs"], "not yet overwritten by the second call")
+    wait(0)
+    compare(firstCalls, 1, "the first caller is still answered exactly once")
+    compare(first.ok, false)
+    compare(first.error, "Could not run the qbt helper")
+    compare(secondCalls, 0, "the second caller's own run has only just started")
+    compare(p.running, true, "the queued second call started its own run once the first was answered")
+    finish(p, 0, "{\"save_path\":\"/two\"}", "")
+    compare(secondCalls, 1, "the second caller is answered exactly once, from its own run")
+    compare(second.ok, true)
+    compare(second.prefs.save_path, "/two")
+  }
+
+  // ---- Fix round 1, Ruling DK: readPrefs across the Service lifecycle ---
+
+  // An inactive Service (the local-fallback case, Service.qml's own header
+  // comment) starts no Process at all, for readPrefs same as every other
+  // one-shot read here -- but unlike a fire-and-forget bash refresh, a
+  // callback-based read must still always answer, just with this error
+  // instead, asynchronously so a caller never sees it called reentrantly.
+  function test_readPrefs_on_an_inactive_service_answers_without_starting_a_process() {
+    var svc = createTemporaryObject(serviceComp, tc, { active: false })
+    compare(svc.started, false)
+    var p = prefsProc(svc)
+    var got = null, calls = 0
+    svc.readPrefs(function(result) { got = result; calls++ })
+    compare(p.running, false, "an inactive Service starts no Process at all")
+    compare(calls, 0, "the callback is deferred, never called synchronously")
+    wait(0)
+    compare(calls, 1)
+    compare(got.ok, false)
+    compare(got.error, "qBittorrent isn't running.")
+    compare(p.running, false, "still no Process, even once answered")
+  }
+
+  // stop() drains prefsQueue: a call already queued behind an in-flight
+  // run when the Service stops must not be left waiting on a pump that
+  // may never come (or, worse, resolve stale once memory later starts a
+  // fresh service and calls pump). The run already in flight on
+  // prefsProcess itself is untouched by stop() and still answers for real
+  // once it exits, same as any other in-flight bash Process here.
+  function test_stop_drains_the_prefs_queue_with_the_not_running_error() {
+    var svc = createTemporaryObject(serviceComp, tc)
+    var p = prefsProc(svc)
+    var first = null, second = null
+    svc.readPrefs(function(result) { first = result })    // starts a run
+    svc.readPrefs(function(result) { second = result })   // queued behind it
+    compare(p.running, true)
+    svc.stop()
+    compare(svc.prefsQueue.length, 0, "the queue is drained synchronously by stop()")
+    verify(second === null, "answered asynchronously, not yet")
+    wait(0)
+    verify(second !== null)
+    compare(second.ok, false)
+    compare(second.error, "qBittorrent isn't running.")
+    verify(first === null, "the run already in flight when stop() was called is untouched")
+    finish(p, 0, "{\"save_path\":\"/x\"}", "")
+    verify(first !== null, "and still answers for real once it exits")
+    compare(first.ok, true)
+    compare(first.prefs.save_path, "/x")
+  }
+
+  // Defensive belt for the same invariant, exercised directly: whatever
+  // reaches pumpPrefsQueue while stopped (stop() itself already drains the
+  // queue, so this only matters if something else ever leaves it
+  // non-empty) starts no new Process, and still answers rather than drops
+  // the callback.
+  function test_pumpPrefsQueue_starts_no_new_run_once_stopped() {
+    var svc = createTemporaryObject(serviceComp, tc)
+    var p = prefsProc(svc)
+    svc.stop()
+    var got = null
+    svc.prefsQueue = [function(result) { got = result }]
+    svc.pumpPrefsQueue()
+    compare(p.running, false, "no new run starts once stopped")
+    wait(0)
+    verify(got !== null, "the callback is still answered, never dropped")
+    compare(got.ok, false)
+    compare(got.error, "qBittorrent isn't running.")
+  }
+
+  function test_setPref_runs_a_ticketed_pref_set_with_dash_dash() {
+    var o = idleService(), svc = o.svc, p = o.p
+    var spy = spyOn(svc)
+    var t = svc.setPref("listen_port", "6881", { origin: "window", hashes: [] })
+    verify(t > 0)
+    compare(p.command, [svc.helperPath, "pref-set", "listen_port", "--", "6881"])
+    finish(p, 0, "{\"ok\":true}", "")
+    compare(spy.count, 1)
+    compare(spy.signalArguments[0][0], t)
+    compare(spy.signalArguments[0][1], true)
+    compare(spy.signalArguments[0][3], "window")
+  }
+
+  function test_setPref_shows_saving_status_for_the_widget() {
+    var o = idleService(), svc = o.svc, p = o.p
+    svc.setPref("scan_dirs", "{}")
+    compare(p.command, [svc.helperPath, "pref-set", "scan_dirs", "--", "{}"])
+    compare(svc.actionStatus, "Saving setting…")
+    finish(p, 0, "{\"ok\":true}", "")
+  }
+
+  function test_setPref_passes_a_composite_HHMM_value_through_as_a_string() {
+    var o = idleService(), svc = o.svc, p = o.p
+    svc.setPref("schedule_from", "23:30")
+    compare(p.command, [svc.helperPath, "pref-set", "schedule_from", "--", "23:30"])
+    finish(p, 0, "{\"ok\":true}", "")
+  }
+
+  function test_setPref_reports_qbts_refusal_as_the_tickets_error() {
+    var o = idleService(), svc = o.svc, p = o.p
+    var spy = spyOn(svc)
+    var t = svc.setPref("web_ui_port", "9090", { origin: "window", hashes: [] })
+    finish(p, 1, "", "qBittorrent ignored Listening port")
+    compare(spy.signalArguments[0][0], t)
+    compare(spy.signalArguments[0][1], false)
+    compare(spy.signalArguments[0][2], "qBittorrent ignored Listening port")
+  }
+
+  function test_setPref_refuses_an_empty_key_without_running() {
+    var o = idleService(), svc = o.svc, p = o.p
+    compare(svc.setPref("", "1"), 0)
+    compare(p.running, false)
+    compare(svc.currentAction, null)
+  }
+
+  // After every successful setPref, Service asks for a fresh preferences
+  // read: refresh-slow to the sidecar when it's up, the existing bash
+  // status refresh when it's down.
+  function test_setPref_success_sends_refresh_slow_when_the_sidecar_is_up() {
+    var o = idleService(), svc = o.svc, p = o.p
+    var wire = sidecarWire(svc)
+    var h = hh("a")
+    svc.handleSidecarLine(statusLine([h]))
+    compare(svc.sidecarState, "up")
+    var before = wireCmds(wire, "refresh-slow").length
+    svc.setPref("listen_port", "6881")
+    finish(p, 0, "{\"ok\":true}", "")
+    var sent = wireCmds(wire, "refresh-slow")
+    compare(sent.length, before + 1, "a refresh-slow is sent once the write succeeds")
+    compare(wireCmds(wire, "refresh").length, 0, "not the plain refresh a sidecar-up write would otherwise get")
+  }
+
+  function test_setPref_success_runs_bash_status_when_the_sidecar_is_down() {
+    var o = idleService(), svc = o.svc, p = o.p
+    // "down" is a plain property here; driving it there for real (5 failed
+    // handleSidecarExit calls) is exercised by the sidecar-lifecycle tests
+    // above and would only add an unrelated "gave up" warning to this one.
+    svc.sidecarState = "down"
+    svc.setPref("listen_port", "6881", { origin: "window", hashes: [] })
+    compare(p.command, [svc.helperPath, "pref-set", "listen_port", "--", "6881"])
+    finish(p, 0, "{\"ok\":true}", "")
+    var sp = actionProc(svc, "status")
+    verify(sp !== null, "the bash status refresh ran")
+    compare(sp.running, true)
+  }
+
+  function test_setPref_failure_sends_no_refresh_slow() {
+    var o = idleService(), svc = o.svc, p = o.p
+    var wire = sidecarWire(svc)
+    var h = hh("a")
+    svc.handleSidecarLine(statusLine([h]))
+    svc.setPref("listen_port", "6881")
+    finish(p, 1, "", "qBittorrent ignored Listening port")
+    compare(wireCmds(wire, "refresh-slow").length, 0, "a failed write asks for nothing fresh")
   }
 }

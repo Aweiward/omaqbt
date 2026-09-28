@@ -182,6 +182,50 @@ class RefreshTests(unittest.TestCase):
                 self.assertEqual(second["dlSpeed"], 100)
 
 
+class RefreshSlowTests(unittest.TestCase):
+    """`{"cmd":"refresh-slow"}` (Task 3, slice 4a): resets the SlowCache so
+    the very next tick re-reads /app/preferences, and triggers that tick
+    right away rather than waiting out the 10s SlowCache interval -- the
+    way Service asks for a fresh read right after a setPref write lands."""
+
+    def test_refresh_slow_rereads_preferences_ahead_of_the_cache_interval(self):
+        with harness.fixture_server() as (port, env):
+            with ServeProcess(env) as sp:
+                sp.readline()  # first status: also the first preferences fetch
+                before = _read_log(env["QBT_FIXTURE_LOG"])
+                prefs_before = [e for e in before if e["path"] == "/api/v2/app/preferences"]
+                self.assertEqual(len(prefs_before), 1)
+
+                sp.send({"cmd": "refresh-slow"})
+                sp.read_until(lambda o: o.get("type") == "status", timeout=5)
+
+                after = _read_log(env["QBT_FIXTURE_LOG"])
+                prefs_after = [e for e in after if e["path"] == "/api/v2/app/preferences"]
+                self.assertGreaterEqual(
+                    len(prefs_after), len(prefs_before) + 1,
+                    "refresh-slow should re-fetch /app/preferences without waiting 10s",
+                )
+
+    def test_refresh_slow_emits_no_reply_of_its_own(self):
+        with harness.fixture_server() as (port, env):
+            with ServeProcess(env) as sp:
+                sp.readline()
+                sp.send({"cmd": "refresh-slow"})
+                # Collect every line up to (and including) the status line
+                # refresh-slow's own tick produces -- like cadence and a
+                # hash-clearing watch, it must not ack with an "error" (the
+                # "bad command" path a stray typo would hit) or anything
+                # else of its own along the way.
+                seen = []
+                while True:
+                    line = sp.readline(timeout=5)
+                    seen.append(line)
+                    if line.get("type") == "status":
+                        break
+                types = [line.get("type") for line in seen]
+                self.assertNotIn("error", types, f"unexpected reply on the wire: {seen}")
+
+
 class CadenceTests(unittest.TestCase):
     def test_cadence_speeds_up_ticks(self):
         with harness.fixture_server() as (port, env):
