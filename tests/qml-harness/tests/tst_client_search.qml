@@ -644,20 +644,32 @@ TestCase {
     list[0].fullName = "<b>Pirate</b>"
     openSearch(o, list)
     startSearch(o, "<i>q</i>")
-    reply(o, { total: 1, rows: [row("c", { fileName: "<a href='x'>evil</a>‮", engineName: "<u>e</u>" })] })
+    reply(o, { total: 2, rows: [row("c", { fileName: "<a href='x'>evil</a>‮", engineName: "piratebay" }), row("d", { engineName: "<u>e</u>" })] })
+    // Every Text in Search and the status line (its CONFIRM and notes),
+    // with the add confirm up, then with the plugins overlay up. A text
+    // field and its placeholder are typed into or ours, never markup.
+    function richTexts() {
+      var rich = []
+      var walk = function(obj) {
+        if (!obj) return
+        if (typeof obj.text === "string" && obj.font !== undefined && obj.textFormat !== undefined && obj.textFormat !== Text.PlainText
+          && obj.cursorPosition === undefined && !(obj.parent && obj.parent.cursorPosition !== undefined)) rich.push(String(obj) + ": " + obj.text)
+        var kids = obj.children || []
+        for (var i = 0; i < kids.length; i++) walk(kids[i])
+      }
+      walk(sp(o))
+      walk(line(o))
+      return rich
+    }
+    enter(o)
+    compare(o.c.mode, "CONFIRM")
+    wait(30)
+    compare(richTexts().length, 0, JSON.stringify(richTexts()))
+    key(o.c, "n")
     shifted(o, "P")
     wait(30)
-    var rich = []
-    ;(function walk(obj) {
-      if (!obj) return
-      if (typeof obj.text === "string" && obj.font !== undefined && obj.textFormat !== undefined && obj.textFormat !== Text.PlainText
-        && obj.cursorPosition === undefined && !(obj.parent && obj.parent.cursorPosition !== undefined)) rich.push(String(obj) + ": " + obj.text)
-      var kids = obj.children || []
-      for (var i = 0; i < kids.length; i++) walk(kids[i])
-      if (obj.contentItem && obj.contentItem !== obj) walk(obj.contentItem)
-    })(sp(o))
-    // (A text field and its placeholder are typed into or ours, never markup.)
-    compare(rich.length, 0, JSON.stringify(rich))
+    compare(richTexts().length, 0, JSON.stringify(richTexts()))
+    esc(o)
     verify(shows(o, "<a href='x'>evil</a>"), "shown as text, the bidi override stripped")
   }
 
