@@ -282,6 +282,21 @@ TestCase {
     compare(o.c.keyPane, "table")
   }
 
+  function test_closing_the_window_mid_search_leaves_no_search_field_behind() {
+    var o = make()
+    openOn(o, "Speed")
+    key(o.c, "/", 0x2f)
+    compare(o.c.inputPurpose, "settingsSearch")
+    line(o).setInput("port")
+    o.c.close()
+    o.c.open("")
+    verify(!view(o).open)
+    compare(o.c.mode, "NORMAL")
+    compare(o.c.inputPurpose, "")
+    verify(!view(o).searching)
+    compare(o.c.keyPane, "table")
+  }
+
   function test_a_late_answer_after_leaving_is_ignored() {
     var o = make()
     comma(o)

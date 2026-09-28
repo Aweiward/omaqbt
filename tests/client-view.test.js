@@ -2179,7 +2179,7 @@ test("palettePane: from Settings, : and ? stay in Settings and every other comma
 
 test("modeHints: the Settings columns and the search field have their own hints", () => {
   assert.deepEqual(V.modeHints("NORMAL", { pane: "settingsSections" }).map((h) => h.key + " " + h.label),
-    ["j/k section", "l settings", "/ search all", "Esc back", "? keys"]);
+    ["j/k section", "l keys", "/ search all", "Esc back", "? keys"]);
   assert.deepEqual(V.modeHints("NORMAL", { pane: "settingsKeys" }).map((h) => h.key + " " + h.label),
     ["j/k move", "h sections", "/ search", "Esc back", "? keys"]);
   assert.deepEqual(V.modeHints("NORMAL", { pane: "settingsKeys", searching: true }).map((h) => h.key + " " + h.label),
@@ -2224,7 +2224,7 @@ test("settingsTitle: a section names its count; a search names its query and mat
 
 test("settingsFooterKeys: each column lists the keys that apply there", () => {
   const f = (col, s) => V.settingsFooterKeys(col, s).map((h) => h.key + " " + h.label);
-  assert.deepEqual(f("settingsSections", false), ["j/k section", "l settings", "/ search all", "Esc back"]);
+  assert.deepEqual(f("settingsSections", false), ["j/k section", "l keys", "/ search all", "Esc back"]);
   assert.deepEqual(f("settingsKeys", false), ["j/k move", "h sections", "/ search", "Esc back"]);
   assert.deepEqual(f("settingsKeys", true), ["j/k move", "h sections", "/ search", "Esc clear search"]);
 });

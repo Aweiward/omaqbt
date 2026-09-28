@@ -825,7 +825,7 @@ function modeHints(mode, ctx) {
 // Esc clears it first. Task 6 adds Enter and Space for the editors.
 function settingsFooterKeys(column, searching) {
   if (column === "settingsSections") {
-    return [{ key: "j/k", label: "section" }, { key: "l", label: "settings" }, { key: "/", label: "search all" }, { key: "Esc", label: "back" }];
+    return [{ key: "j/k", label: "section" }, { key: "l", label: "keys" }, { key: "/", label: "search all" }, { key: "Esc", label: "back" }];
   }
   return [{ key: "j/k", label: "move" }, { key: "h", label: "sections" }, { key: "/", label: "search" },
     { key: "Esc", label: searching === true ? "clear search" : "back" }];

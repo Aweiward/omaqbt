@@ -243,7 +243,9 @@ Item {
     if (closing) return
     closing = true
     // An open palette/picker would lose its field focus; reopening lands on the torrents.
-    if (mode === "COMMAND") commands.closePalette(); else if (mode === "PICKER") commands.closePicker(); settingsView.closeView()
+    if (mode === "COMMAND") commands.closePalette(); else if (mode === "PICKER") commands.closePicker()
+    if (mode === "INSERT" && inputPurpose === "settingsSearch") leaveInsert()
+    settingsView.closeView()
     opened = false
     window.visible = false
     if (service) service.windowOpen = false
@@ -749,7 +751,6 @@ Item {
         service: root.service
         tableState: root.tableState
       }
-
       StatusLine {
         id: statusLine
         anchors.left: parent.left
