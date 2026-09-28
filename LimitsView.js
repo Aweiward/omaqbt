@@ -1,23 +1,22 @@
 .pragma library
-.import "Model.js" as Model
 
 // Pure rules for per-torrent limits (slice 3b): the input parsers, the Info
 // tab's six Limits rows, the effective share limits and action, the D8
 // share-limit confirm and the done notes. No I/O, no Date, no Qt objects:
 // everything comes in through arguments, so tests/limits-view.test.js can
-// run it in node. Imports only Model.js.
+// run it in node. It imports nothing.
 //
-// The `.pragma library` / `.import` lines above are QML-only. The node
-// test strips them and runs this file in a vm context with `Model`
-// supplied (see the test's loader), because node can't parse them and QML
-// can't `require`.
+// The `.pragma library` line above is QML-only. The node test strips it
+// and runs this file in a vm context (see the test's loader), because node
+// can't parse it and QML can't `require`.
 //
 // Input rules (D5, D12). Every parser takes the text exactly as typed: no
 // trimming, ASCII digits only, no signs other than a literal -2/-1, no
 // leading zeros ("01"), no exponents. Letters are case-insensitive.
 // - Speed: a number with an optional K (KiB/s) or M (MiB/s); a bare number
 //   is KiB/s. Up to 2 decimals ("1.5M", "0.5K"), rounded to the nearest
-//   whole byte. "0" (in any unit) or "u" is 0, unlimited. At most exactly
+//   whole byte; more decimals get "Use at most 2 decimals.", as for the
+//   ratio. "0" (in any unit) or "u" is 0, unlimited. At most exactly
 //   2047 MiB/s (2146435072 bytes/s), as the message says, which stays under
 //   qBittorrent's INT_MAX bytes/s; "2047.01M" is refused.
 // - Ratio: 0-9998 with at most 2 decimals; "g" (or -2) is default, "n" (or
@@ -26,6 +25,9 @@
 // - Seed time: a whole number with an optional m, h or d; a bare number is
 //   minutes, as on the wire. At most 525600 minutes (365d). "g"/"n" as for
 //   the ratio. No decimals and no compound forms ("2h30m").
+// - For both the ratio and the seed time, the literal text "-2" and "-1"
+//   is accepted too, as the same -2 (default) and -1 (none) as "g"/"n";
+//   no other signed text is.
 //
 // Effective values. -2 (a limit) and "Default" (the action) resolve like
 // qBittorrent 5.2.3 and qbt's share-limits jq: the torrent's own value, else
@@ -77,7 +79,8 @@ var SPEED_ERROR = "Use a number with K or M, or 0.";
 var SPEED_CAP_ERROR = "Use at most 2047 MiB/s.";
 var SPEED_CAP_BYTES = 2047 * 1048576;
 var RATIO_ERROR = "Use a ratio like 1.5, g for default or n for none.";
-var RATIO_DECIMALS_ERROR = "Use at most 2 decimals.";
+var DECIMALS_ERROR = "Use at most 2 decimals.";
+var RATIO_DECIMALS_ERROR = DECIMALS_ERROR;
 var RATIO_CAP_ERROR = "Use at most 9998.";
 var RATIO_CAP = 9998;
 var SEED_ERROR = "Use a time like 90m, 2h or 3d, g for default or n for none.";
@@ -92,8 +95,9 @@ function textOf(text) {
 function parseSpeed(text) {
   var s = textOf(text);
   if (s === "u" || s === "U") return { bytes: 0 };
-  var m = /^(0|[1-9][0-9]*)(?:\.([0-9]{1,2}))?([kKmM])?$/.exec(s);
+  var m = /^(0|[1-9][0-9]*)(?:\.([0-9]+))?([kKmM])?$/.exec(s);
   if (!m) return { error: SPEED_ERROR };
+  if (m[2] !== undefined && m[2].length > 2) return { error: DECIMALS_ERROR };
   var unit = m[3] === "m" || m[3] === "M" ? 1048576 : 1024;
   var frac = m[2] === undefined ? 0 : Number((m[2] + "0").slice(0, 2));
   var hundredths = Number(m[1]) * 100 + frac;
@@ -271,7 +275,7 @@ function row6(key, label, value, muted, toggle) {
 
 function speedRow(key, label, bytes) {
   var n = Number(bytes);
-  return row6(key, label, Model.limitLabel(n), !(n > 0), false);
+  return row6(key, label, formatSpeed(n), !(n > 0), false);
 }
 
 // limitRows(row, status) -> the Info tab's six Limits rows,
@@ -355,9 +359,10 @@ function editText(key, row) {
 
 // --- shareConfirm (D8) ------------------------------------------------------------------
 
-// Outcomes from mildest to worst. Remove and RemoveWithContent share a
-// slot: any RemoveWithContent reads "with their files", as qbt's refusal does.
-var OUTCOME_ORDER = ["Stop", "EnableSuperSeeding", "Remove"];
+// Outcomes from worst to mildest (Ruling CI). Remove and RemoveWithContent
+// share a slot: any RemoveWithContent reads "with their files", as qbt's
+// refusal does.
+var OUTCOME_ORDER = ["Remove", "EnableSuperSeeding", "Stop"];
 
 function outcomeKind(action) {
   if (action === "EnableSuperSeeding") return "EnableSuperSeeding";
@@ -365,7 +370,7 @@ function outcomeKind(action) {
   return "Stop";
 }
 
-// "be stopped", "switch to super seeding", "be removed with their files",
+// "be removed with their files", "switch to super seeding", "be stopped",
 // with consecutive "be" phrases sharing one "be", joined with commas and a
 // final "or".
 function outcomeText(kinds, files, count) {
@@ -401,9 +406,10 @@ function outcomeText(kinds, files, count) {
 // The head names each changed value ("to 1.5", "to default", "to none",
 // "to 2h"). "already meet it" becomes "already meet a share limit" when
 // both limits change or a counted target meets only the kept one. The tail
-// names every outcome among the counted targets, mildest first: "be
-// stopped", "switch to super seeding", "be removed", "be removed with
-// their files" (e.g. "will be stopped or removed with their files").
+// names every outcome among the counted targets, worst first: "be removed
+// with their files" (or "be removed"), "switch to super seeding", "be
+// stopped" (e.g. "will be removed with their files, switch to super
+// seeding or be stopped").
 // force is true when any counted target's effective action is Remove or
 // RemoveWithContent: qbt refuses that write without --force.
 function shareConfirm(action, rows, status) {

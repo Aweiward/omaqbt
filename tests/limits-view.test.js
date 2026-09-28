@@ -3,12 +3,10 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
-const Model = require("../Model.js");
 
-// LimitsView.js starts with QML-only `.pragma library` / `.import
-// "Model.js" as Model` lines, which node can't parse. Strip them and run
-// the rest as a function body in this realm, with `Model` supplied exactly
-// as QML would (tests/library-view.test.js's loader, copied).
+// LimitsView.js starts with a QML-only `.pragma library` line, which node
+// can't parse. Strip it and run the rest as a function body in this realm
+// (tests/library-view.test.js's loader, copied; LimitsView imports nothing).
 function loadLimitsView() {
   const file = path.join(__dirname, "..", "LimitsView.js");
   const src = fs.readFileSync(file, "utf8")
@@ -16,7 +14,7 @@ function loadLimitsView() {
     .map((line) => (/^\s*\.(import|pragma)\b/.test(line) ? "" : line))
     .join("\n");
   const mod = { exports: {} };
-  vm.compileFunction(src, ["module", "Model"], { filename: file })(mod, Model);
+  vm.compileFunction(src, ["module"], { filename: file })(mod);
   return mod.exports;
 }
 
@@ -93,7 +91,9 @@ test("parseSpeed: up to 2 decimals, rounded to a whole byte", () => {
   assert.deepEqual(V.parseSpeed("0.01K"), { bytes: 10 }, "10.24 rounds to 10");
   assert.deepEqual(V.parseSpeed("0.3K"), { bytes: 307 }, "307.2 rounds to 307");
   assert.deepEqual(V.parseSpeed("1.25M"), { bytes: 1310720 });
-  assert.equal(V.parseSpeed("1.234M").error, V.SPEED_ERROR);
+  assert.equal(V.parseSpeed("1.234M").error, "Use at most 2 decimals.", "the same message as the ratio's");
+  assert.equal(V.parseSpeed("0.001").error, "Use at most 2 decimals.");
+  assert.equal(V.parseSpeed("1.").error, V.SPEED_ERROR);
 });
 
 test("parseSpeed: the cap is 2047 MiB/s, whatever the unit", () => {
@@ -103,7 +103,7 @@ test("parseSpeed: the cap is 2047 MiB/s, whatever the unit", () => {
   // Exactly 2047 MiB/s, as the message says, although qbt takes up to INT_MAX.
   for (const s of ["2047.01M", "2047.99M", "2096129K", "2097151K", "2048M", "3000M", "2097152K", "2097152", "99999999999", "18446744073709551617", "2047.999M"]) {
     const r = V.parseSpeed(s);
-    assert.equal(r.error, s === "2047.999M" ? V.SPEED_ERROR : "Use at most 2047 MiB/s.", s);
+    assert.equal(r.error, s === "2047.999M" ? "Use at most 2 decimals." : "Use at most 2047 MiB/s.", s);
     assert.equal(r.bytes, undefined, s);
   }
   assert.equal(V.SPEED_CAP_ERROR, "Use at most 2047 MiB/s.");
@@ -380,14 +380,20 @@ test("limitRows: six rows in order, keyed by the status fields", () => {
   for (const r of rows) assert.deepEqual(Object.keys(r).sort(), ["key", "label", "muted", "toggle", "value"]);
 });
 
-test("limitRows: speeds use Model.limitLabel; an unlimited speed is muted", () => {
+test("limitRows: speeds read like the done notes (formatSpeed); unlimited is the word, muted (Ruling CH)", () => {
   const rows = V.limitRows(row({ dlLimit: 512000, upLimit: 0 }), status());
-  assert.equal(rows[0].value, Model.limitLabel(512000));
-  assert.equal(rows[0].value, "500K/s");
-  assert.equal(rows[0].muted, false);
-  assert.equal(rows[1].value, Model.limitLabel(0));
-  assert.equal(rows[1].muted, true);
-  assert.equal(V.limitRows(row({ dlLimit: 1572864 }), status())[0].value, "1.5M/s");
+  assert.deepEqual([rows[0].value, rows[0].muted], ["500 KiB/s", false]);
+  assert.deepEqual([rows[1].value, rows[1].muted], ["unlimited", true]);
+  const speed = (b) => V.limitRows(row({ dlLimit: b }), status())[0].value;
+  assert.equal(speed(1572864), "1.5 MiB/s");
+  assert.equal(speed(10), "10 B/s", "not 0K/s");
+  assert.equal(speed(2146435072), "2047 MiB/s", "not 2047.0M/s");
+  assert.equal(speed(-1), "unlimited");
+  for (const b of [0, 10, 1536, 512000, 1572864, 2146435072]) {
+    assert.equal(speed(b), V.formatSpeed(b));
+    assert.ok(!speed(b).includes("∞"));
+    assert.equal(V.doneNote("dlLimit", b, row()), "↓ limit set to " + speed(b), "rows agree with doneNote");
+  }
 });
 
 test("limitRows: own ratio and seed time show plainly; -1 is none", () => {
@@ -502,19 +508,19 @@ test("shareConfirm: singular, and each action's wording", () => {
   assert.equal(two.line, "Set the ratio limit to 0.5? 2 torrents already meet it and will be removed with their files.");
 });
 
-test("shareConfirm: a mix names every outcome, mildest first, in one sentence", () => {
+test("shareConfirm: a mix names every outcome, worst first, in one sentence (Ruling CI)", () => {
   const mix = (actions) => V.shareConfirm({ ratio: 0 }, actions.map((a) => row({ shareLimitAction: a })), status());
   assert.deepEqual(mix(["Stop", "RemoveWithContent"]), {
-    line: "Set the ratio limit to 0? 2 torrents already meet it and will be stopped or removed with their files.",
+    line: "Set the ratio limit to 0? 2 torrents already meet it and will be removed with their files or stopped.",
     force: true
   });
   assert.equal(mix(["Remove", "RemoveWithContent", "Remove"]).line,
     "Set the ratio limit to 0? 3 torrents already meet it and will be removed with their files.", "qbt's precedent: any files means with their files");
-  assert.equal(mix(["Stop", "Remove"]).line, "Set the ratio limit to 0? 2 torrents already meet it and will be stopped or removed.");
-  assert.equal(mix(["EnableSuperSeeding", "Stop"]).line, "Set the ratio limit to 0? 2 torrents already meet it and will be stopped or switch to super seeding.");
-  assert.equal(mix(["EnableSuperSeeding", "Remove"]).line, "Set the ratio limit to 0? 2 torrents already meet it and will switch to super seeding or be removed.");
+  assert.equal(mix(["Stop", "Remove"]).line, "Set the ratio limit to 0? 2 torrents already meet it and will be removed or stopped.");
+  assert.equal(mix(["EnableSuperSeeding", "Stop"]).line, "Set the ratio limit to 0? 2 torrents already meet it and will switch to super seeding or be stopped.");
+  assert.equal(mix(["EnableSuperSeeding", "Remove"]).line, "Set the ratio limit to 0? 2 torrents already meet it and will be removed or switch to super seeding.");
   assert.equal(mix(["RemoveWithContent", "EnableSuperSeeding", "Stop"]).line,
-    "Set the ratio limit to 0? 3 torrents already meet it and will be stopped, switch to super seeding or be removed with their files.");
+    "Set the ratio limit to 0? 3 torrents already meet it and will be removed with their files, switch to super seeding or be stopped.");
   assert.equal(mix(["EnableSuperSeeding", "Stop"]).force, false);
   assert.equal(mix(["Stop", "Remove"]).force, true);
 });
@@ -583,7 +589,7 @@ test("shareConfirm: a VISUAL range counts only the finished, met targets", () =>
     row({ ratio: 2, shareLimitAction: "Remove" })
   ];
   assert.deepEqual(V.shareConfirm({ ratio: 2 }, rows, status()), {
-    line: "Set the ratio limit to 2? 2 torrents already meet it and will be stopped or removed.",
+    line: "Set the ratio limit to 2? 2 torrents already meet it and will be removed or stopped.",
     force: true
   });
 });
