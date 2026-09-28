@@ -242,6 +242,40 @@ def category_paths(categories):
     return result
 
 
+def category_limits(categories):
+    """Build the status's `categoryLimits` map from the merged category cache.
+
+    Each entry pairs a category's ratio/seeding-time share limits with its
+    share-limit action. -2/-2/"Default" (the same "use the chain above me"
+    sentinel qBittorrent uses on a per-torrent ratioLimit) covers a category
+    that doesn't carry its own value; a present-but-zero limit is kept, not
+    treated as missing, the same way merge_maindata's own ratioLimit does.
+    """
+    result = {}
+    for name, c in (categories or {}).items():
+        c = c or {}
+        ratio_limit = c.get("ratio_limit")
+        seeding_time_limit = c.get("seeding_time_limit")
+        result[name] = {
+            "ratioLimit": -2 if ratio_limit is None else ratio_limit,
+            "seedingTimeLimit": -2 if seeding_time_limit is None else seeding_time_limit,
+            "shareLimitAction": c.get("share_limit_action") or "Default",
+        }
+    return result
+
+
+# qBittorrent's max_ratio_act preference: 0 Stop, 1 Remove,
+# 2 EnableSuperSeeding, 3 RemoveWithContent. Anything else (missing, out of
+# range, the wrong type) maps to Stop, as qBittorrent itself does.
+_SHARE_ACTION_BY_INT = {0: "Stop", 1: "Remove", 2: "EnableSuperSeeding", 3: "RemoveWithContent"}
+
+
+def share_action_label(value):
+    if isinstance(value, bool) or not isinstance(value, int):
+        return "Stop"
+    return _SHARE_ACTION_BY_INT.get(value, "Stop")
+
+
 def merge_maindata(raw, cache):
     """Faithful move of the inline python3 -c block from `qbt` cmd_status.
 
@@ -289,6 +323,13 @@ def merge_maindata(raw, cache):
             "upLimit": t.get("up_limit") or 0,
             "seqDl": t.get("seq_dl") is True,
             "ratioLimit": -2 if t.get("ratio_limit") is None else t.get("ratio_limit"),
+            "seedingTime": t.get("seeding_time") or 0,
+            "seedingTimeLimit": -2 if t.get("seeding_time_limit") is None else t.get("seeding_time_limit"),
+            "inactiveSeedingTimeLimit": -2 if t.get("inactive_seeding_time_limit") is None else t.get("inactive_seeding_time_limit"),
+            "shareLimitAction": t.get("share_limit_action") or "Default",
+            "firstLast": t.get("f_l_piece_prio") is True,
+            "maxRatio": -1 if t.get("max_ratio") is None else t.get("max_ratio"),
+            "maxSeedingTime": -1 if t.get("max_seeding_time") is None else t.get("max_seeding_time"),
             "category": t.get("category") or "",
             "tags": _split_tags(t.get("tags")),
             "tracker": _tracker_host(t.get("tracker")),
@@ -353,13 +394,23 @@ class SlowCache:
 
     def __init__(self, alt_speed=False, bind_iface="", vpn_iface_ok=False,
                  default_save_path="", relocation_torrent_changed=False,
-                 relocation_category_path_changed=False, fetched_at=None, interval=0):
+                 relocation_category_path_changed=False,
+                 share_ratio=-1, share_seeding_time=-1, share_action="Stop",
+                 fetched_at=None, interval=0):
         self.alt_speed = alt_speed
         self.bind_iface = bind_iface
         self.vpn_iface_ok = vpn_iface_ok
         self.default_save_path = default_save_path
         self.relocation_torrent_changed = relocation_torrent_changed
         self.relocation_category_path_changed = relocation_category_path_changed
+        # The global share limits (app/preferences' max_ratio/max_seeding_time,
+        # each gated on its own _enabled flag) and the global share-limit
+        # action (max_ratio_act, mapped to its string). Like
+        # default_save_path/relocation_*, these are never reset on a failed
+        # preferences call -- see build_status.
+        self.share_ratio = share_ratio
+        self.share_seeding_time = share_seeding_time
+        self.share_action = share_action
         self.fetched_at = fetched_at
         self.interval = interval
 
@@ -383,9 +434,11 @@ def build_status(probe, client, sync, slow, now):
     bind_iface = ""
     categories = []
     cat_paths = {}
+    cat_limits = {}
     tags = []
     default_save_path = ""
     relocation = {"torrentChanged": False, "categoryPathChanged": False}
+    share_defaults = {"ratio": -1, "seedingTime": -1, "action": "Stop"}
 
     if installed and daemon and lock_holder != "gui":
         try:
@@ -407,6 +460,7 @@ def build_status(probe, client, sync, slow, now):
                 torrents = rows
                 categories = sorted(sync.categories.keys())
                 cat_paths = category_paths(sync.categories)
+                cat_limits = category_limits(sync.categories)
                 tags = list(sync.tags)
                 server_state = raw.get("server_state") or {}
                 dl_speed = server_state.get("dl_info_speed") or 0
@@ -445,6 +499,13 @@ def build_status(probe, client, sync, slow, now):
                 slow.default_save_path = prefs.get("save_path") or ""
                 slow.relocation_torrent_changed = bool(prefs.get("torrent_changed_tmm_enabled"))
                 slow.relocation_category_path_changed = bool(prefs.get("category_changed_tmm_enabled"))
+                ratio = prefs.get("max_ratio")
+                slow.share_ratio = ratio if prefs.get("max_ratio_enabled") and ratio is not None else -1
+                seeding_time = prefs.get("max_seeding_time")
+                slow.share_seeding_time = (
+                    seeding_time if prefs.get("max_seeding_time_enabled") and seeding_time is not None else -1
+                )
+                slow.share_action = share_action_label(prefs.get("max_ratio_act"))
         slow.fetched_at = now
 
     if api:
@@ -458,6 +519,11 @@ def build_status(probe, client, sync, slow, now):
             bind_iface = slow.bind_iface
             if not slow.vpn_iface_ok:
                 vpn_iface = ""
+        share_defaults = {
+            "ratio": slow.share_ratio,
+            "seedingTime": slow.share_seeding_time,
+            "action": slow.share_action,
+        }
 
     status = {
         "installed": installed,
@@ -472,9 +538,11 @@ def build_status(probe, client, sync, slow, now):
         "bindIface": bind_iface,
         "categories": categories,
         "categoryPaths": cat_paths,
+        "categoryLimits": cat_limits,
         "tags": tags,
         "defaultSavePath": default_save_path,
         "relocation": relocation,
+        "shareDefaults": share_defaults,
     }
     return status, errors
 

@@ -655,6 +655,74 @@ TestCase {
     finish(p, 0, "{\"ok\":true}", "")
   }
 
+  // --- per-torrent limit helpers (slice 3b, Task 2) ------------------------
+
+  function test_limit_helpers_run_their_qbt_argv_as_window_tickets() {
+    var o = idleService(), svc = o.svc, p = o.p
+    var spy = spyOn(svc)
+    var h = hh("a"), h2 = hh("b")
+    var list = h + "|" + h2
+    var cases = [
+      { call: function(w) { return svc.setShareLimits(list, { ratio: "1.5" }, false, w) }, argv: ["share-limits", list, "--ratio", "1.5"] },
+      { call: function(w) { return svc.setShareLimits(list, { seedingTime: "60" }, false, w) }, argv: ["share-limits", list, "--seed-time", "60"] },
+      { call: function(w) { return svc.setShareLimits(list, { ratio: "-2", seedingTime: "-1" }, false, w) }, argv: ["share-limits", list, "--ratio", "-2", "--seed-time", "-1"] },
+      { call: function(w) { return svc.setShareLimits(list, { ratio: "2" }, true, w) }, argv: ["share-limits", list, "--ratio", "2", "--force"] },
+      { call: function(w) { return svc.setShareLimits("|" + h + "||" + h2 + "|", { ratio: "1" }, false, w) }, argv: ["share-limits", list, "--ratio", "1"] },
+      { call: function(w) { return svc.setSequential(list, true, w) }, argv: ["sequential", list, "on"] },
+      { call: function(w) { return svc.setSequential(h, false, w) }, argv: ["sequential", h, "off"] },
+      { call: function(w) { return svc.setFirstLast(list, true, w) }, argv: ["first-last", list, "on"] },
+      { call: function(w) { return svc.setFirstLast(h, false, w) }, argv: ["first-last", h, "off"] },
+      { call: function(w) { return svc.setSpeedLimit(list, "dl", 1048576, w) }, argv: ["limit", list, "dl", "1048576"] },
+      { call: function(w) { return svc.setSpeedLimit(h, "up", 0, w) }, argv: ["limit", h, "up", "0"] }
+    ]
+    svc.actionStatus = "widget status"
+    for (var i = 0; i < cases.length; i++) {
+      var t = cases[i].call({ origin: "window", hashes: [h] })
+      verify(t > 0, cases[i].argv[0] + " returns a ticket")
+      compare(p.command, [svc.helperPath].concat(cases[i].argv))
+      compare(svc.actionStatus, "widget status", "a window action leaves the widget's status alone")
+      finish(p, 0, "{\"ok\":true}", "")
+      compare(spy.count, i + 1)
+      compare(spy.signalArguments[i][0], t)
+      compare(spy.signalArguments[i][1], true)
+      compare(spy.signalArguments[i][3], "window")
+      compare(spy.signalArguments[i][4], [h])
+    }
+    // qbt's D8 guard refusal comes back as the ticket's (sanitized) error.
+    var tf = svc.setShareLimits(h, { ratio: "5" }, false, { origin: "window", hashes: [h] })
+    finish(p, 1, "", "1 torrent already meets that limit, and qBittorrent would remove it.")
+    compare(spy.signalArguments[cases.length][0], tf)
+    compare(spy.signalArguments[cases.length][1], false)
+    compare(spy.signalArguments[cases.length][2], "1 torrent already meets that limit, and qBittorrent would remove it.")
+  }
+
+  function test_limit_helpers_refuse_missing_arguments_without_running() {
+    var o = idleService(), svc = o.svc, p = o.p
+    var w = { origin: "window", hashes: [] }
+    var h = hh("a")
+    compare(svc.setShareLimits("", { ratio: "1" }, false, w), 0)
+    compare(svc.setShareLimits([], { ratio: "1" }, false, w), 0)
+    compare(svc.setShareLimits("||", { ratio: "1" }, false, w), 0)
+    compare(svc.setShareLimits(h, {}, false, w), 0, "no ratio and no seed time runs nothing")
+    compare(svc.setShareLimits(h, null, false, w), 0)
+    compare(svc.setSequential("", true, w), 0)
+    compare(svc.setFirstLast("", true, w), 0)
+    compare(svc.setSpeedLimit("", "dl", 1048576, w), 0)
+    compare(p.running, false, "nothing ran")
+    compare(svc.currentAction, null)
+  }
+
+  function test_limit_helper_widget_origin_sets_its_status_text() {
+    var o = idleService(), svc = o.svc, p = o.p
+    var h = hh("a")
+    svc.setShareLimits(h, { ratio: "1" }, false)
+    verify(svc.actionStatus.length > 0)
+    finish(p, 0, "{\"ok\":true}", "")
+    svc.setSequential(h, true)
+    verify(svc.actionStatus.length > 0)
+    finish(p, 0, "{\"ok\":true}", "")
+  }
+
   // LibraryView.js is node-tested; this proves QML's engine loads it and
   // runs its code-point handling the same way.
   function test_library_view_loads_under_qml() {

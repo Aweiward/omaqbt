@@ -1041,9 +1041,11 @@ function emptyStatus() {
     bindIface: "",
     categories: [],
     categoryPaths: {},
+    categoryLimits: {},
     tags: [],
     defaultSavePath: "",
     relocation: { torrentChanged: false, categoryPathChanged: false },
+    shareDefaults: { ratio: -1, seedingTime: -1, action: "Stop" },
     error: ""
   };
 }
@@ -1081,6 +1083,13 @@ function parseStatusJson(raw) {
       upLimit: Number(row.upLimit || 0),
       seqDl: row.seqDl === true,
       ratioLimit: row.ratioLimit == null ? -2 : Number(row.ratioLimit),
+      seedingTime: Number(row.seedingTime || 0),
+      seedingTimeLimit: row.seedingTimeLimit == null ? -2 : Number(row.seedingTimeLimit),
+      inactiveSeedingTimeLimit: row.inactiveSeedingTimeLimit == null ? -2 : Number(row.inactiveSeedingTimeLimit),
+      shareLimitAction: String(row.shareLimitAction || "Default"),
+      firstLast: row.firstLast === true,
+      maxRatio: row.maxRatio == null ? -1 : Number(row.maxRatio),
+      maxSeedingTime: row.maxSeedingTime == null ? -1 : Number(row.maxSeedingTime),
       category: String(row.category || ""),
       tags: Array.isArray(row.tags) ? row.tags : [],
       tracker: String(row.tracker || ""),
@@ -1102,11 +1111,17 @@ function parseStatusJson(raw) {
     bindIface: String(parsed.bindIface || ""),
     categories: Array.isArray(parsed.categories) ? parsed.categories : [],
     categoryPaths: (parsed.categoryPaths && typeof parsed.categoryPaths === "object" && !Array.isArray(parsed.categoryPaths)) ? parsed.categoryPaths : {},
+    categoryLimits: (parsed.categoryLimits && typeof parsed.categoryLimits === "object" && !Array.isArray(parsed.categoryLimits)) ? parsed.categoryLimits : {},
     tags: Array.isArray(parsed.tags) ? parsed.tags : [],
     defaultSavePath: String(parsed.defaultSavePath || ""),
     relocation: {
       torrentChanged: !!(parsed.relocation && parsed.relocation.torrentChanged === true),
       categoryPathChanged: !!(parsed.relocation && parsed.relocation.categoryPathChanged === true)
+    },
+    shareDefaults: {
+      ratio: (parsed.shareDefaults && parsed.shareDefaults.ratio != null) ? Number(parsed.shareDefaults.ratio) : -1,
+      seedingTime: (parsed.shareDefaults && parsed.shareDefaults.seedingTime != null) ? Number(parsed.shareDefaults.seedingTime) : -1,
+      action: String((parsed.shareDefaults && parsed.shareDefaults.action) || "Stop")
     },
     error: String(parsed.error || "")
   };

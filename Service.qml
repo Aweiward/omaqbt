@@ -600,6 +600,45 @@ Scope {
     return runAction([helperPath, "sharelimit", hash, String(ratio)], "", opts)
   }
 
+  // Per-torrent limits (slice 3b, Task 2). hashes is a "|" list, an array
+  // or a QML sequence of at most Model.HASH_CHUNK (the window chunks),
+  // read by LibraryView.hashList, same as the library helpers above.
+  // limits: {ratio?, seedingTime?} -- each sent only when given, so a
+  // caller can change just one without touching the other (qbt's
+  // share-limits keeps whatever it isn't told to change). force appends
+  // --force, for the D8 guard's confirm.
+  function setShareLimits(hashes, limits, force, opts) {
+    var list = Library.hashList(hashes).join("|")
+    if (list === "") return 0
+    var l = limits || {}
+    var hasRatio = l.ratio !== undefined && l.ratio !== null
+    var hasSeedingTime = l.seedingTime !== undefined && l.seedingTime !== null
+    if (!hasRatio && !hasSeedingTime) return 0
+    var cmd = [helperPath, "share-limits", list]
+    if (hasRatio) cmd.push("--ratio", String(l.ratio))
+    if (hasSeedingTime) cmd.push("--seed-time", String(l.seedingTime))
+    if (force) cmd.push("--force")
+    return runAction(cmd, "Setting share limits…", opts)
+  }
+
+  function setSequential(hashes, on, opts) {
+    var list = Library.hashList(hashes).join("|")
+    if (list === "") return 0
+    return runAction([helperPath, "sequential", list, on ? "on" : "off"], "Setting sequential download…", opts)
+  }
+
+  function setFirstLast(hashes, on, opts) {
+    var list = Library.hashList(hashes).join("|")
+    if (list === "") return 0
+    return runAction([helperPath, "first-last", list, on ? "on" : "off"], "Setting first/last piece priority…", opts)
+  }
+
+  function setSpeedLimit(hashes, kind, bytes, opts) {
+    var list = Library.hashList(hashes).join("|")
+    if (list === "") return 0
+    return runAction([helperPath, "limit", list, kind, String(bytes)], "Setting speed limit…", opts)
+  }
+
   // Shared by copyMagnet and copyText: opts: {origin: "window", hashes}
   // returns a ticket and reports through actionFinished, leaving
   // actionStatus and lastError alone; without opts (the widget) it sets

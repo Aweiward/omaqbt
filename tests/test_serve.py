@@ -166,8 +166,8 @@ class FirstStatusLineTests(unittest.TestCase):
                     list(line.keys()),
                     ["type", "installed", "daemon", "lockHolder", "api", "altSpeed",
                      "dlSpeed", "upSpeed", "torrents", "vpnIface", "bindIface",
-                     "categories", "categoryPaths", "tags", "defaultSavePath",
-                     "relocation"],
+                     "categories", "categoryPaths", "categoryLimits", "tags",
+                     "defaultSavePath", "relocation", "shareDefaults"],
                 )
 
 
@@ -478,6 +478,20 @@ class PreferencesCallTests(unittest.TestCase):
                 paths = [e["path"] for e in entries]
                 self.assertGreater(paths.count("/api/v2/sync/maindata"), maindata_before)
                 self.assertEqual(paths.count("/api/v2/app/preferences"), 1)
+
+    def test_share_defaults_and_category_limits_from_fixture_preferences(self):
+        # The fixture's default /app/preferences has every max_ratio/
+        # max_seeding_time toggle disabled and max_ratio_act 0 (Stop); its
+        # categories (maindata-full.json's, neither carrying its own share
+        # limits) fall back to the default sentinel.
+        with harness.fixture_server() as (port, env):
+            with ServeProcess(env) as sp:
+                first = sp.readline()
+                self.assertEqual(first["shareDefaults"], {"ratio": -1, "seedingTime": -1, "action": "Stop"})
+                self.assertEqual(first["categoryLimits"], {
+                    "linux": {"ratioLimit": -2, "seedingTimeLimit": -2, "shareLimitAction": "Default"},
+                    "os": {"ratioLimit": -2, "seedingTimeLimit": -2, "shareLimitAction": "Default"},
+                })
 
 
 def _stalling_socket():

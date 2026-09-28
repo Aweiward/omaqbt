@@ -556,6 +556,78 @@ test("parseStatusJson carries altSpeed and per-torrent limit fields", () => {
   assert.equal(parsed.torrents[1].ratioLimit, -2);
 });
 
+test("parseStatusJson carries per-torrent share/toggle fields with safe defaults", () => {
+  const parsed = Model.parseStatusJson(JSON.stringify({
+    installed: true, daemon: true, api: true,
+    torrents: [
+      {
+        hash: "a", name: "x", state: "downloading",
+        seedingTime: 3600, seedingTimeLimit: 60, inactiveSeedingTimeLimit: 30,
+        shareLimitAction: "Remove", firstLast: true, maxRatio: 1.5, maxSeedingTime: 4320
+      },
+      { hash: "b", name: "y", state: "uploading" }
+    ]
+  }));
+  const a = parsed.torrents[0];
+  assert.equal(a.seedingTime, 3600);
+  assert.equal(a.seedingTimeLimit, 60);
+  assert.equal(a.inactiveSeedingTimeLimit, 30);
+  assert.equal(a.shareLimitAction, "Remove");
+  assert.equal(a.firstLast, true);
+  assert.equal(a.maxRatio, 1.5);
+  assert.equal(a.maxSeedingTime, 4320);
+
+  const b = parsed.torrents[1];
+  assert.equal(b.seedingTime, 0);
+  assert.equal(b.seedingTimeLimit, -2);
+  assert.equal(b.inactiveSeedingTimeLimit, -2);
+  assert.equal(b.shareLimitAction, "Default");
+  assert.equal(b.firstLast, false);
+  assert.equal(b.maxRatio, -1);
+  assert.equal(b.maxSeedingTime, -1);
+});
+
+test("parseStatusJson keeps a zero seedingTimeLimit/maxRatio/maxSeedingTime, not the default", () => {
+  const parsed = Model.parseStatusJson(JSON.stringify({
+    installed: true, daemon: true, api: true,
+    torrents: [{
+      hash: "a", name: "x", state: "downloading",
+      seedingTimeLimit: 0, inactiveSeedingTimeLimit: 0, maxRatio: 0, maxSeedingTime: 0
+    }]
+  }));
+  const a = parsed.torrents[0];
+  assert.equal(a.seedingTimeLimit, 0);
+  assert.equal(a.inactiveSeedingTimeLimit, 0);
+  assert.equal(a.maxRatio, 0);
+  assert.equal(a.maxSeedingTime, 0);
+});
+
+test("parseStatusJson copies categoryLimits and shareDefaults with safe defaults", () => {
+  const parsed = Model.parseStatusJson(JSON.stringify({
+    installed: true, daemon: true, api: true,
+    torrents: [],
+    categoryLimits: { linux: { ratioLimit: 2, seedingTimeLimit: 60, shareLimitAction: "Remove" } },
+    shareDefaults: { ratio: 1.5, seedingTime: 120, action: "RemoveWithContent" }
+  }));
+  assert.deepEqual(parsed.categoryLimits, { linux: { ratioLimit: 2, seedingTimeLimit: 60, shareLimitAction: "Remove" } });
+  assert.deepEqual(parsed.shareDefaults, { ratio: 1.5, seedingTime: 120, action: "RemoveWithContent" });
+
+  const missing = Model.parseStatusJson(JSON.stringify({ installed: true, torrents: [] }));
+  assert.deepEqual(missing.categoryLimits, {});
+  assert.deepEqual(missing.shareDefaults, { ratio: -1, seedingTime: -1, action: "Stop" });
+
+  const garbage = Model.parseStatusJson("nope");
+  assert.deepEqual(garbage.categoryLimits, {});
+  assert.deepEqual(garbage.shareDefaults, { ratio: -1, seedingTime: -1, action: "Stop" });
+});
+
+test("parseStatusJson ignores a non-object categoryLimits", () => {
+  const parsed = Model.parseStatusJson(JSON.stringify({
+    installed: true, daemon: true, api: true, torrents: [], categoryLimits: ["not", "a", "map"]
+  }));
+  assert.deepEqual(parsed.categoryLimits, {});
+});
+
 test("parseStatusJson defaults altSpeed to false", () => {
   const parsed = Model.parseStatusJson(JSON.stringify({ installed: true, torrents: [] }));
   assert.equal(parsed.altSpeed, false);

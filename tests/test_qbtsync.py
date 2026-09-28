@@ -243,6 +243,113 @@ class MergeMaindataTests(unittest.TestCase):
         row = next(r for r in rows if r["hash"] == debian_hash)
         self.assertIs(row["autoTmm"], True)
 
+    # -- slice 3b, Task 2: per-torrent share/toggle fields ------------------
+
+    def test_row_share_fields_present(self):
+        raw = {
+            "full_update": True,
+            "torrents": {
+                "f0" * 20: {
+                    "name": "shared",
+                    "progress": 0.42,
+                    "ratio": 0.1,
+                    "seeding_time": 3600,
+                    "seeding_time_limit": -2,
+                    "inactive_seeding_time_limit": -2,
+                    "share_limit_action": "Stop",
+                    "f_l_piece_prio": True,
+                    "max_ratio": 1.5,
+                    "max_seeding_time": 4320,
+                }
+            },
+        }
+        _, rows = qbtsync.merge_maindata(raw, {})
+        row = rows[0]
+        self.assertEqual(row["seedingTime"], 3600)
+        self.assertEqual(row["seedingTimeLimit"], -2)
+        self.assertEqual(row["inactiveSeedingTimeLimit"], -2)
+        self.assertEqual(row["shareLimitAction"], "Stop")
+        self.assertIs(row["firstLast"], True)
+        self.assertEqual(row["maxRatio"], 1.5)
+        self.assertEqual(row["maxSeedingTime"], 4320)
+        # progress and ratio already existed; still there.
+        self.assertAlmostEqual(row["progress"], 0.42)
+        self.assertAlmostEqual(row["ratio"], 0.1)
+
+    def test_row_share_fields_default_for_bare_torrent(self):
+        raw = {
+            "full_update": True,
+            "torrents": {"a" * 40: {"name": "bare"}},
+        }
+        _, rows = qbtsync.merge_maindata(raw, {})
+        row = rows[0]
+        self.assertEqual(row["seedingTime"], 0)
+        self.assertEqual(row["seedingTimeLimit"], -2)
+        self.assertEqual(row["inactiveSeedingTimeLimit"], -2)
+        self.assertEqual(row["shareLimitAction"], "Default")
+        self.assertIs(row["firstLast"], False)
+        self.assertEqual(row["maxRatio"], -1)
+        self.assertEqual(row["maxSeedingTime"], -1)
+
+    def test_row_seeding_time_limit_zero_is_not_default(self):
+        raw = {
+            "full_update": True,
+            "torrents": {"b" * 40: {"name": "zero-seed", "seeding_time_limit": 0}},
+        }
+        _, rows = qbtsync.merge_maindata(raw, {})
+        self.assertEqual(rows[0]["seedingTimeLimit"], 0)
+
+    def test_row_inactive_seeding_time_limit_zero_is_not_default(self):
+        raw = {
+            "full_update": True,
+            "torrents": {"c" * 40: {"name": "zero-inactive", "inactive_seeding_time_limit": 0}},
+        }
+        _, rows = qbtsync.merge_maindata(raw, {})
+        self.assertEqual(rows[0]["inactiveSeedingTimeLimit"], 0)
+
+    def test_row_max_ratio_zero_is_not_none(self):
+        raw = {
+            "full_update": True,
+            "torrents": {"d" * 40: {"name": "zero-ratio", "max_ratio": 0}},
+        }
+        _, rows = qbtsync.merge_maindata(raw, {})
+        self.assertEqual(rows[0]["maxRatio"], 0)
+
+    def test_row_max_seeding_time_zero_is_not_none(self):
+        raw = {
+            "full_update": True,
+            "torrents": {"e" * 40: {"name": "zero-seed-max", "max_seeding_time": 0}},
+        }
+        _, rows = qbtsync.merge_maindata(raw, {})
+        self.assertEqual(rows[0]["maxSeedingTime"], 0)
+
+    def test_row_share_fields_survive_a_delta_that_does_not_resend_them(self):
+        full = {
+            "full_update": True,
+            "torrents": {
+                "f1" * 20: {
+                    "name": "shared",
+                    "seeding_time": 3600,
+                    "share_limit_action": "Stop",
+                    "f_l_piece_prio": True,
+                    "max_ratio": 1.5,
+                    "max_seeding_time": 4320,
+                }
+            },
+        }
+        delta = {
+            "full_update": False,
+            "torrents": {"f1" * 20: {"progress": 0.9}},
+        }
+        cache_map, _ = qbtsync.merge_maindata(full, {})
+        _, rows = qbtsync.merge_maindata(delta, cache_map)
+        row = next(r for r in rows if r["hash"] == "f1" * 20)
+        self.assertEqual(row["seedingTime"], 3600)
+        self.assertEqual(row["shareLimitAction"], "Stop")
+        self.assertIs(row["firstLast"], True)
+        self.assertEqual(row["maxRatio"], 1.5)
+        self.assertEqual(row["maxSeedingTime"], 4320)
+
 
 class MergeCategoriesTests(unittest.TestCase):
     def test_full_update_replaces_cache(self):
@@ -342,6 +449,65 @@ class CategoryPathsTests(unittest.TestCase):
 
     def test_empty_categories_is_empty_map(self):
         self.assertEqual(qbtsync.category_paths({}), {})
+
+
+class CategoryLimitsTests(unittest.TestCase):
+    """category_limits() builds the status's `categoryLimits` map from the
+    merged category cache: ratioLimit, seedingTimeLimit, shareLimitAction,
+    defaulting to (-2, -2, "Default") when a category doesn't carry its
+    own value."""
+
+    def test_reads_explicit_values(self):
+        limits = qbtsync.category_limits({
+            "os": {"ratio_limit": 2.5, "seeding_time_limit": 10080, "share_limit_action": "Remove"},
+        })
+        self.assertEqual(limits, {"os": {"ratioLimit": 2.5, "seedingTimeLimit": 10080, "shareLimitAction": "Remove"}})
+
+    def test_missing_values_default(self):
+        limits = qbtsync.category_limits({"linux": {"name": "linux", "savePath": ""}})
+        self.assertEqual(limits, {"linux": {"ratioLimit": -2, "seedingTimeLimit": -2, "shareLimitAction": "Default"}})
+
+    def test_zero_ratio_limit_is_not_default(self):
+        limits = qbtsync.category_limits({"os": {"ratio_limit": 0}})
+        self.assertEqual(limits["os"]["ratioLimit"], 0)
+
+    def test_zero_seeding_time_limit_is_not_default(self):
+        limits = qbtsync.category_limits({"os": {"seeding_time_limit": 0}})
+        self.assertEqual(limits["os"]["seedingTimeLimit"], 0)
+
+    def test_empty_share_limit_action_defaults(self):
+        limits = qbtsync.category_limits({"os": {"share_limit_action": ""}})
+        self.assertEqual(limits["os"]["shareLimitAction"], "Default")
+
+    def test_empty_categories_is_empty_map(self):
+        self.assertEqual(qbtsync.category_limits({}), {})
+
+
+class ShareActionLabelTests(unittest.TestCase):
+    """share_action_label() maps app/preferences' max_ratio_act int to its
+    string, the same way qBittorrent itself does: 0 Stop, 1 Remove,
+    2 EnableSuperSeeding, 3 RemoveWithContent, anything else Stop."""
+
+    def test_maps_each_known_int(self):
+        self.assertEqual(qbtsync.share_action_label(0), "Stop")
+        self.assertEqual(qbtsync.share_action_label(1), "Remove")
+        self.assertEqual(qbtsync.share_action_label(2), "EnableSuperSeeding")
+        self.assertEqual(qbtsync.share_action_label(3), "RemoveWithContent")
+
+    def test_out_of_range_int_is_stop(self):
+        self.assertEqual(qbtsync.share_action_label(7), "Stop")
+        self.assertEqual(qbtsync.share_action_label(-1), "Stop")
+
+    def test_wrong_type_is_stop(self):
+        self.assertEqual(qbtsync.share_action_label("Remove"), "Stop")
+        self.assertEqual(qbtsync.share_action_label(None), "Stop")
+        self.assertEqual(qbtsync.share_action_label(1.0), "Stop")
+
+    def test_bool_is_stop_even_though_true_equals_one(self):
+        # True == 1 in Python, so a naive dict.get(value, "Stop") would map
+        # True to "Remove". A bool isn't the int qBittorrent sends.
+        self.assertEqual(qbtsync.share_action_label(True), "Stop")
+        self.assertEqual(qbtsync.share_action_label(False), "Stop")
 
 
 class MergeTagsTests(unittest.TestCase):
@@ -696,6 +862,121 @@ class BuildStatusTests(unittest.TestCase):
         self.assertEqual(status["defaultSavePath"], "/home/user/Downloads")
         self.assertEqual(status["relocation"], {"torrentChanged": True, "categoryPathChanged": False})
 
+    def test_successful_maindata_builds_category_limits(self):
+        full = {
+            "full_update": True,
+            "torrents": {},
+            "categories": {
+                "linux": {"name": "linux", "savePath": ""},
+                "os": {"name": "os", "ratio_limit": 2.5, "seeding_time_limit": 10080, "share_limit_action": "Remove"},
+            },
+        }
+        probe = self.base_probe()
+        client = self.FakeClient({
+            "/api/v2/sync/maindata?rid=0": json.dumps(full),
+            "/api/v2/transfer/speedLimitsMode": "1",
+            "/api/v2/app/preferences": "{}",
+        })
+        sync = qbtsync.SyncState()
+        slow = qbtsync.SlowCache(interval=0)
+        status, errors = qbtsync.build_status(probe, client, sync, slow, 1000.0)
+        self.assertEqual(errors, [])
+        self.assertEqual(status["categoryLimits"], {
+            "linux": {"ratioLimit": -2, "seedingTimeLimit": -2, "shareLimitAction": "Default"},
+            "os": {"ratioLimit": 2.5, "seedingTimeLimit": 10080, "shareLimitAction": "Remove"},
+        })
+
+    # -- slice 3b, Task 2: shareDefaults from preferences --------------------
+
+    def test_share_defaults_read_from_preferences_when_enabled(self):
+        full = json.loads((FIXTURES / "maindata-full.json").read_text())
+        probe = self.base_probe()
+        client = self.FakeClient({
+            "/api/v2/sync/maindata?rid=0": json.dumps(full),
+            "/api/v2/transfer/speedLimitsMode": "1",
+            "/api/v2/app/preferences": json.dumps({
+                "max_ratio_enabled": True,
+                "max_ratio": 2.0,
+                "max_seeding_time_enabled": True,
+                "max_seeding_time": 4320,
+                "max_ratio_act": 3,
+            }),
+        })
+        sync = qbtsync.SyncState()
+        slow = qbtsync.SlowCache(interval=0)
+        status, errors = qbtsync.build_status(probe, client, sync, slow, 1000.0)
+        self.assertEqual(errors, [])
+        self.assertEqual(status["shareDefaults"], {"ratio": 2.0, "seedingTime": 4320, "action": "RemoveWithContent"})
+
+    def test_share_defaults_disabled_is_minus_one_and_unmapped_action_is_stop(self):
+        full = json.loads((FIXTURES / "maindata-full.json").read_text())
+        probe = self.base_probe()
+        client = self.FakeClient({
+            "/api/v2/sync/maindata?rid=0": json.dumps(full),
+            "/api/v2/transfer/speedLimitsMode": "1",
+            "/api/v2/app/preferences": json.dumps({
+                "max_ratio_enabled": False,
+                "max_ratio": 2.0,
+                "max_seeding_time_enabled": False,
+                "max_seeding_time": 4320,
+                "max_ratio_act": 7,
+            }),
+        })
+        sync = qbtsync.SyncState()
+        slow = qbtsync.SlowCache(interval=0)
+        status, errors = qbtsync.build_status(probe, client, sync, slow, 1000.0)
+        self.assertEqual(status["shareDefaults"], {"ratio": -1, "seedingTime": -1, "action": "Stop"})
+
+    def test_share_defaults_action_map(self):
+        full = json.loads((FIXTURES / "maindata-full.json").read_text())
+        probe = self.base_probe()
+        for act, name in ((0, "Stop"), (1, "Remove"), (2, "EnableSuperSeeding"), (3, "RemoveWithContent")):
+            client = self.FakeClient({
+                "/api/v2/sync/maindata?rid=0": json.dumps(full),
+                "/api/v2/transfer/speedLimitsMode": "1",
+                "/api/v2/app/preferences": json.dumps({"max_ratio_act": act}),
+            })
+            sync = qbtsync.SyncState()
+            slow = qbtsync.SlowCache(interval=0)
+            status, _ = qbtsync.build_status(probe, client, sync, slow, 1000.0)
+            self.assertEqual(status["shareDefaults"]["action"], name)
+
+    def test_share_defaults_kept_on_preferences_failure(self):
+        full = json.loads((FIXTURES / "maindata-full.json").read_text())
+        probe = self.base_probe()
+        sync = qbtsync.SyncState()
+        slow = qbtsync.SlowCache(interval=0)
+
+        client1 = self.FakeClient({
+            "/api/v2/sync/maindata?rid=0": json.dumps(full),
+            "/api/v2/transfer/speedLimitsMode": "1",
+            "/api/v2/app/preferences": json.dumps({
+                "max_ratio_enabled": True, "max_ratio": 2.0,
+                "max_seeding_time_enabled": True, "max_seeding_time": 4320,
+                "max_ratio_act": 1,
+            }),
+        })
+        first, _ = qbtsync.build_status(probe, client1, sync, slow, 1000.0)
+        self.assertEqual(first["shareDefaults"], {"ratio": 2.0, "seedingTime": 4320, "action": "Remove"})
+
+        client2 = self.FakeClient({
+            "/api/v2/sync/maindata?rid=1": json.dumps(full),
+            "/api/v2/transfer/speedLimitsMode": "1",
+            "/api/v2/app/preferences": qbtsync.ApiError(None, "connection refused"),
+        })
+        second, errors = qbtsync.build_status(probe, client2, sync, slow, 1001.0)
+        self.assertEqual(second["shareDefaults"], {"ratio": 2.0, "seedingTime": 4320, "action": "Remove"})
+        self.assertIn("connection refused", errors)
+
+    def test_share_defaults_default_before_any_fetch(self):
+        probe = self.base_probe(installed=False)
+        client = self.FakeClient({})
+        sync = qbtsync.SyncState()
+        slow = qbtsync.SlowCache(interval=0)
+        status, _ = qbtsync.build_status(probe, client, sync, slow, 1000.0)
+        self.assertEqual(status["shareDefaults"], {"ratio": -1, "seedingTime": -1, "action": "Stop"})
+        self.assertEqual(status["categoryLimits"], {})
+
     def test_categories_and_tags_honour_delta_removed_semantics(self):
         full = json.loads((FIXTURES / "maindata-full.json").read_text())
         delta = json.loads((FIXTURES / "maindata-delta.json").read_text())
@@ -930,7 +1211,8 @@ class BuildStatusTests(unittest.TestCase):
             list(status.keys()),
             ["installed", "daemon", "lockHolder", "api", "altSpeed", "dlSpeed",
              "upSpeed", "torrents", "vpnIface", "bindIface", "categories",
-             "categoryPaths", "tags", "defaultSavePath", "relocation"],
+             "categoryPaths", "categoryLimits", "tags", "defaultSavePath",
+             "relocation", "shareDefaults"],
         )
 
 
