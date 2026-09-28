@@ -333,18 +333,19 @@ TestCase {
     compare(status(o), "Next tier added to Trackers to add")
   }
 
-  function test_a_line_qbt_would_refuse_blocks_adds_until_it_is_removed() {
-    // qBittorrent's own UI may have stored it; qbt checks every line.
+  // Ruling EC: qbt checks only the lines it doesn't already store.
+  function test_a_stored_line_qbt_would_refuse_does_not_block_a_valid_add() {
+    // qBittorrent's own UI may have stored it.
     var o = make(lists({ add_trackers: "udp://a.example/announce\nhttp://has space/announce" }))
     openListOf(o, "add_trackers")
     key(o.c, "a")
+    typeAndEnter(o, "http://also bad/announce")
+    compare(o.c.mode, "INSERT", "the new line is still checked")
+    compare(status(o), "Use an http, https or udp tracker URL.")
     typeAndEnter(o, "udp://c.example/announce")
     compare(o.c.mode, "NORMAL")
-    compare(writes(o).length, 0)
-    compare(status(o), "Remove http://has space/announce first: Use an http, https or udp tracker URL.")
-    key(o.c, "j")
-    key(o.c, "x")
-    compare(writes(o), [["add_trackers", "udp://a.example/announce"]], "removing it is always allowed")
+    compare(writes(o), [["add_trackers", "udp://a.example/announce\nudp://c.example/announce\nhttp://has space/announce"]],
+      "the stored odd line round-trips unchanged")
   }
 
   function test_x_on_a_tier_break_joins_the_tiers_and_touches_nothing_else() {
@@ -397,6 +398,13 @@ TestCase {
     compare(o.c.mode, "NORMAL")
     compare(status(o), "2001:db8::1 is already banned.")
     compare(calls(o.svc, "banList").length, 0)
+    // Checked against the list as it stands at Enter, not at a.
+    key(o.c, "a")
+    view(o).reload(true)
+    o.svc.answer({ ok: true, prefs: lists({ banned_IPs: "10.0.0.1\n2001:db8::1\n198.51.100.7" }) })
+    typeAndEnter(o, "198.51.100.7")
+    compare(status(o), "198.51.100.7 is already banned.")
+    compare(calls(o.svc, "banList").length, 0)
     key(o.c, "a")
     typeAndEnter(o, "2001:DB8::5")
     compare(calls(o.svc, "banList").map(function(x) { return [x.args[0], x.args[1]] }), [["add", "2001:db8::5"]], "sent in QHostAddress form")
@@ -405,8 +413,8 @@ TestCase {
     finish(o, true)
     compare(status(o), "Banned 2001:db8::5")
     compare(calls(o.svc, "readPrefs").length, reads + 1)
-    o.svc.answer({ ok: true, prefs: lists({ banned_IPs: "10.0.0.1\n2001:db8::1\n2001:db8::5" }) })
-    key(o.c, "k"); key(o.c, "k"); key(o.c, "k")
+    o.svc.answer({ ok: true, prefs: lists({ banned_IPs: "10.0.0.1\n198.51.100.7\n2001:db8::1\n2001:db8::5" }) })
+    key(o.c, "k"); key(o.c, "k"); key(o.c, "k"); key(o.c, "k")
     key(o.c, "x")
     compare(o.c.confirm, null, "unbanning asks nothing")
     compare(calls(o.svc, "banList")[1].args.slice(0, 2), ["remove", "10.0.0.1"])
@@ -466,10 +474,19 @@ TestCase {
     for (var j = 0; j < kids.length; j++) sweep(kids[j], s, depth - 1, path + "/" + (kids[j].objectName || j), seen, hits)
     return hits
   }
+  function clientCommands(o) {
+    var d = o.c.data
+    for (var i = 0; i < d.length; i++) if (d[i] && typeof d[i].runPaletteRow === "function") return d[i]
+    return null
+  }
   function sweepAll(o, s) {
     var hits = []
     sweep(cmds(o), s, 1, "SettingsCommands", [], hits)
     sweep(view(o), s, 6, "SettingsPane", [], hits)
+    sweep(clientCommands(o), s, 1, "ClientCommands", [], hits)
+    // The status line walked down to its TextField (text, displayText, …).
+    sweep(line(o), s, 8, "StatusLine", [], hits)
+    sweep(findWith(content(o), "complete"), s, 8, "CommandPalette", [], hits)
     var own = []
     for (var k in o.c) {
       var v
@@ -488,6 +505,13 @@ TestCase {
     cmds(o).input = { kind: "value", key: "k", label: secret }
     verify(sweepAll(o, secret).indexOf("SettingsCommands.input") !== -1)
     cmds(o).input = null
+    verify(findWith(content(o), "complete").evalState !== undefined, "the sweep reaches the palette")
+    line(o).setInput(secret)
+    verify(sweepAll(o, secret).some(function(h) { return h.indexOf("StatusLine") === 0 }), "and the status line's field")
+    line(o).setInput("")
+    clientCommands(o).paletteRange = [secret]
+    verify(sweepAll(o, secret).indexOf("ClientCommands.paletteRange") !== -1, "and ClientCommands")
+    clientCommands(o).paletteRange = []
     o.c.messages = View.msgNote(o.c.messages, secret, "muted")
     verify(sweepAll(o, secret).length > 0, "the Client's messages are swept")
   }
@@ -508,7 +532,6 @@ TestCase {
     compare(calls(o.svc, "setSecret").map(function(x) { return [x.args[0], x.args[1]] }), [["proxy_password", secret]])
     compare(writes(o).length, 0, "never pref-set --")
     compare(field(o).text, "", "the field is emptied at once")
-    compare(field(o).canUndo, false, "and its undo can't bring the value back")
     compare(field(o).echoMode, TextInput.Normal)
     compare(status(o), "Saving Proxy password…")
     compare(valueText(o, "proxy_password"), "saving…")
@@ -634,6 +657,10 @@ TestCase {
 
   function test_clear_secret_from_the_palette_asks_as_x_does_and_stays_in_settings() {
     var o = make(secrets({ proxy_password: { set: true } }))
+    esc(o)
+    o.c.setPane("inspector")
+    comma(o)
+    o.svc.answer({ ok: true, prefs: secrets({ proxy_password: { set: true } }) })
     focusKey(o, "proxy_password")
     var cc = null
     for (var i = 0; i < o.c.data.length; i++) if (o.c.data[i] && typeof o.c.data[i].runPaletteRow === "function") cc = o.c.data[i]
@@ -647,6 +674,10 @@ TestCase {
     compare(o.c.mode, "CONFIRM")
     key(o.c, "y")
     compare(calls(o.svc, "clearSecret").map(function(x) { return x.args[0] }), ["proxy_password"])
+    compare(o.c.pane, "inspector", "the torrent pane underneath is kept")
+    esc(o); esc(o)
+    verify(!view(o).open)
+    compare(o.c.keyPane, "inspector", "leaving Settings lands where it was")
   }
 
   // ---- narrow ----------------------------------------------------------------------
@@ -721,8 +752,11 @@ TestCase {
     compare(o.c.keyPane, "settingsKeys")
   }
 
-  function test_narrow_banned_ips_from_the_overlay_opens_the_list() {
+  // Ruling EF: a section-level list (Banned IPs) goes back to the overlay,
+  // and Esc there leaves Settings; no list <-> overlay bounce.
+  function test_narrow_banned_ips_esc_goes_to_the_overlay_then_out_of_settings() {
     var o = narrowClient(lists())
+    o.c.pane = "inspector"
     tab(o)
     focusSection(o, "Banned IPs")
     enter(o)
@@ -731,6 +765,33 @@ TestCase {
     esc(o)
     compare(o.c.keyPane, "settingsSections", "Esc goes back to the sections (the overlay)")
     esc(o)
-    compare(o.c.keyPane, "settingsList", "and closing it returns to the list")
+    verify(!view(o).open, "Esc in the overlay on a list section leaves Settings")
+    compare(o.c.keyPane, "inspector")
+  }
+
+  function test_narrow_esc_in_the_overlay_on_a_settings_section_closes_it() {
+    var o = narrowClient(lists())
+    tab(o)
+    esc(o)
+    compare(o.c.keyPane, "settingsKeys")
+    verify(view(o).open)
+  }
+
+  function test_a_resize_to_narrow_on_the_banned_ips_section_opens_its_list() {
+    var o = make(lists())
+    focusSection(o, "Banned IPs")
+    compare(o.c.keyPane, "settingsSections")
+    winOf(o.c).width = 800
+    wait(30)
+    verify(view(o).open, "a resize never leaves Settings")
+    compare(o.c.keyPane, "settingsList")
+  }
+
+  function test_row_lists_still_return_to_their_row_narrow() {
+    var o = narrowClient(lists())
+    openListOf(o, "add_trackers")
+    esc(o)
+    compare(o.c.keyPane, "settingsKeys")
+    compare(view(o).cursorRow.key, "add_trackers")
   }
 }

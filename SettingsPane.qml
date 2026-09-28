@@ -130,7 +130,7 @@ Item {
 
   // A resize below the breakpoint while the sections have focus hands it
   // to what they show (the 1b pattern: a collapsing pane gives focus back).
-  onNarrowChanged: if (narrow && open && column === "settingsSections") closeSections()
+  onNarrowChanged: if (narrow && open && column === "settingsSections") showSection()
 
   // Reads preferences again. keep: leave the current values up until the
   // answer (a re-read after a write), rather than "—".
@@ -210,8 +210,16 @@ Item {
     column = "settingsSections"
   }
 
-  // Esc on the overlay: closed, back to what the section shows.
+  // Esc on the overlay (Ruling EF): closed, back to the settings; on a list
+  // section (Banned IPs, whose Esc brought you here) it leaves Settings, so
+  // the list and the overlay never bounce.
   function closeSections() {
+    if (section.list) closeView()
+    else { listKey = ""; column = "settingsKeys" }
+  }
+
+  // The focus handoff when the sections collapse: to what the section shows.
+  function showSection() {
     if (section.list) openList(String(section.list))
     else { listKey = ""; column = "settingsKeys" }
   }
@@ -550,7 +558,7 @@ Item {
 
     KeyFooter {
       id: sectionsFooter
-      keys: View.settingsFooterKeys("settingsSections", settings.searching, "none", { narrow: settings.narrow })
+      keys: View.settingsFooterKeys("settingsSections", settings.searching, "none", { narrow: settings.narrow, listSection: !!settings.section.list })
     }
   }
 

@@ -869,7 +869,7 @@ function settingsFooterKeys(column, searching, editor, ctx) {
   if (column === "settingsSections") {
     if (c.narrow === true) {
       return [{ key: "j/k", label: "section" }, { key: "Enter", label: "choose" }, { key: "/", label: "search all" },
-        { key: "Esc", label: searching === true ? "clear search" : "close" }];
+        { key: "Esc", label: searching === true ? "clear search" : (c.listSection === true ? "back" : "close") }];
     }
     return [{ key: "j/k", label: "section" }, { key: "l", label: "keys" }, { key: "/", label: "search all" }, esc];
   }

@@ -71,7 +71,7 @@ QtObject {
     var v = settingsView
     if (!v.open) return null
     var out = { key: null, toggle: false, editable: false, listRow: false, secretSet: false, listEditable: false, listItem: null,
-      narrow: v.narrow === true, undoCount: 0 }
+      narrow: v.narrow === true, undoCount: 0, listSection: !!v.section.list }
     if (v.failed) return out
     if (v.column === "settingsList") {
       out.key = v.listKey
@@ -189,16 +189,13 @@ QtObject {
       return
     }
     if (t.key === SettingsView.BAN_KEY) {
-      if (SettingsView.banHas(t.from, parsed.value)) { client.note(parsed.value + " is already banned.", "muted"); return }
+      // The list as it stands now: a re-read may have landed since a.
+      if (SettingsView.banHas(now, parsed.value)) { client.note(parsed.value + " is already banned.", "muted"); return }
       banWrite("add", parsed.value)
       return
     }
     var r = SettingsView.listWithAdded(t.key, t.from, t.after, parsed.value)
     if (r.same === true) { if (r.note) client.note(r.note, "muted"); return }
-    // qbt checks every line: one it would refuse (stored by qBittorrent's
-    // own UI) blocks the write until it's removed, which is always allowed.
-    var bad = SettingsView.listBadLine(t.key, r.value)
-    if (bad) { client.note(SettingsView.listBadNote(bad), "urgent"); return }
     settingsView.setListCursor(t.key, r.index)
     write(t.key, t.label, r.value, SettingsView.listDoneNote(t.key, "add", parsed.value))
   }

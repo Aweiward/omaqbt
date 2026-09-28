@@ -847,28 +847,6 @@ function listWithout(key, value, item) {
   return { value: joinList(lines) };
 }
 
-// listBadLine(key, value) -> {index, value, error} for the first line of a
-// whole add_trackers or excluded_file_names value that qbt would refuse
-// (it checks every line, not just the new one), else null. A tracker tier
-// break (an empty line) and an empty pattern are kept, not refused.
-function listBadLine(key, value) {
-  var kind = listKindOf(key);
-  if (kind !== "trackerUrl" && kind !== "pattern") return null;
-  var lines = splitList(value);
-  for (var i = 0; i < lines.length; i++) {
-    if (lines[i] === "") continue;
-    var r = parseListLine(kind, lines[i]);
-    if (r.error !== undefined) return { index: i, value: lines[i], error: r.error };
-  }
-  return null;
-}
-
-// listBadNote(bad) -> "Remove <line> first: <reason>", for listBadLine's
-// answer: the new list can't be saved until that line goes.
-function listBadNote(bad) {
-  return "Remove " + textOf(bad && bad.value) + " first: " + textOf(bad && bad.error);
-}
-
 // banHas(value, ip) -> whether the ban list holds ip, compared in
 // QHostAddress's form.
 function banHas(value, ip) {
@@ -1011,8 +989,6 @@ if (typeof module !== "undefined") {
     listWithAdded: listWithAdded,
     listWithout: listWithout,
     banHas: banHas,
-    listBadLine: listBadLine,
-    listBadNote: listBadNote,
     listEmptyText: listEmptyText,
     listPrompt: listPrompt,
     listTitle: listTitle,

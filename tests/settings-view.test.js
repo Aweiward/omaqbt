@@ -975,17 +975,15 @@ test("4b secretQuestion / secretDoneNote: name the secret, never a value", () =>
   assert.equal(V.secretDoneNote("mail_notification_password", "set"), "SMTP password set");
 });
 
-test("4b listBadLine: the first line qbt would refuse in a whole list (it checks every line)", () => {
-  assert.equal(V.listBadLine("add_trackers", "udp://a\n\nhttp://b"), null);
-  assert.deepEqual(V.listBadLine("add_trackers", "udp://a\nhttp://has space/announce\n\nwss://c"),
-    { index: 1, value: "http://has space/announce", error: "Use an http, https or udp tracker URL." });
-  assert.equal(V.listBadLine("excluded_file_names", "*.exe\n\n*.scr"), null, "empty patterns are kept, not refused");
-  assert.deepEqual(V.listBadLine("excluded_file_names", "*.exe\n*.b\rat"), { index: 1, value: "*.b\rat", error: "Keep each pattern to one line." });
-  assert.equal(V.listBadLine("banned_IPs", "fe80::1%eth0"), null, "bans aren't written whole");
-  assert.equal(V.listBadLine("add_trackers", ""), null);
-});
-
-test("4b listBadNote: names the line to remove and qbt's reason", () => {
-  assert.equal(V.listBadNote({ index: 1, value: "http://x y", error: "Use an http, https or udp tracker URL." }),
-    "Remove http://x y first: Use an http, https or udp tracker URL.");
+// Ruling EC: qbt validates only the lines it doesn't already store, so a
+// stored line qbt's rule would refuse never blocks an add, and round-trips.
+test("4b EC: a stored odd line doesn't block a valid add and comes back unchanged", () => {
+  assert.equal("listBadLine" in V, false, "the whole-list gate is gone");
+  assert.equal("listBadNote" in V, false);
+  const odd = "udp://a\nhttp://has space/announce\n\nwss://c";
+  const r = V.listWithAdded("add_trackers", odd, 0, "udp://new/announce");
+  assert.deepEqual(r, { value: "udp://a\nudp://new/announce\nhttp://has space/announce\n\nwss://c", index: 1 });
+  assert.deepEqual(V.listWithout("add_trackers", r.value, { index: 1, value: "udp://new/announce", tierBreak: false }), { value: odd });
+  assert.deepEqual(V.parseListLine("trackerUrl", "http://has space/announce"), { error: "Use an http, https or udp tracker URL." },
+    "a new line is still checked");
 });
