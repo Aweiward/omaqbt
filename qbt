@@ -256,6 +256,13 @@ api_exec() {
   if [[ $code == 403 ]]; then
     die "localhost auth is required"
   fi
+  # B1: torrents/add answers 202 (APIStatus::Async) when a source is a URL
+  # qBittorrent must download first (an https .torrent). Only the add call
+  # sites opt in, with `local api_accept_202=1` (dynamically scoped, like
+  # api_error_detail below), so no other endpoint takes a 202 as success.
+  if [[ $code == 202 && ${api_accept_202:-0} == 1 ]]; then
+    code=200
+  fi
   if [[ $code != 200 && $code != 204 ]]; then
     # F12: a command that sets `local api_error_detail=code` (the slice-2b
     # tracker/peer/fetch-metadata commands) reports the status only. The
@@ -351,7 +358,7 @@ cmd_add() {
     [[ -n $category ]] && args+=(-F "category=${category}")
     api_form POST "/api/v2/torrents/add" "${args[@]}" >/dev/null
   else
-    local body
+    local body api_accept_202=1
     body="urls=$(jq -nr --arg u "$target" '$u|@uri')"
     [[ $stopped == true ]] && body+="&stopped=true&paused=true"
     [[ -n $savepath ]] && body+="&savepath=$(jq -nr --arg v "$savepath" '$v|@uri')"
@@ -2651,15 +2658,22 @@ search_id_path() {
 }
 
 # $STATE_DIR/search.id: mode 0600, the id and a newline. Written to a
-# temporary name and moved into place, so a planted symlink is replaced,
-# never followed. A failed write still lets start print the id: the window
-# deletes its job itself (the final read, the window closing).
+# temporary name and moved into place, so a planted symlink at search.id is
+# replaced, never followed. The temporary name is opened with noclobber:
+# anything already there (a planted file, or a symlink to one or to
+# nowhere) fails the write rather than being written through, and only a
+# regular file of our own is moved into place. A failed write still lets
+# start print the id: the window deletes its job itself (the final read,
+# the window closing).
 search_id_write() {
   local f tmp
   f=$(search_id_path)
   (ensure_state_dir "$STATE_DIR") >/dev/null 2>&1 || return 0
   tmp="$f.$$.tmp"
-  if (umask 077; printf '%s\n' "$1" >"$tmp") 2>/dev/null; then
+  if (umask 077; set -o noclobber; printf '%s\n' "$1" >"$tmp") 2>/dev/null; then
+    # noclobber still opens an existing non-regular target (a FIFO, a
+    # device) without O_EXCL; never move such a thing into place.
+    [[ -f $tmp && ! -L $tmp ]] || return 0
     mv -f -- "$tmp" "$f" 2>/dev/null || rm -f -- "$tmp" 2>/dev/null || true
   fi
 }
@@ -2681,7 +2695,7 @@ search_drop_stale() {
   f=$(search_id_path)
   [[ -e $f || -L $f ]] || return 0
   old=$(search_id_read)
-  if [[ $old =~ ^[1-9][[:digit:]]{0,9}$ ]] && (( 10#$old <= 2147483647 )); then
+  if [[ $old =~ ^[[:digit:]]{1,10}$ && $old != 0* ]] && (( 10#$old <= 2147483647 )); then
     if ! api_try_stdin POST "/api/v2/search/delete" < <(printf 'id=%s' "$old"); then
       [[ $API_FAIL == "HTTP 404" ]] || die "qBittorrent refused it (${API_FAIL})"
     fi
@@ -2736,7 +2750,7 @@ search_start() {
   local id
   id=$(printf '%s' "$API_BODY" | jq -r 'if type == "object" and (.id | type) == "number"
       and .id == (.id | floor) and .id >= 1 and .id <= 2147483647 then .id else empty end' 2>/dev/null) || id=""
-  [[ $id =~ ^[1-9][[:digit:]]{0,9}$ ]] || die "qBittorrent sent something unreadable"
+  [[ $id =~ ^[[:digit:]]{1,10}$ && $id != 0* ]] || die "qBittorrent sent something unreadable"
   search_id_write "$id"
   printf '{"id":%s}\n' "$id"
 }
@@ -2780,6 +2794,8 @@ search_add() {
     api_try_stdin POST "/api/v2/search/downloadTorrent" \
       < <(printf 'torrentUrl=%s&pluginName=%s' "$enc" "$plugin") || die "qBittorrent refused it (${API_FAIL})"
   else
+    # B1: an https .torrent is pending (202) until qBittorrent fetches it.
+    local api_accept_202=1
     api_try_stdin POST "/api/v2/torrents/add" < <(printf 'urls=%s' "$enc") \
       || die "qBittorrent refused it (${API_FAIL})"
   fi

@@ -471,7 +471,7 @@ class SearchStartTest(SearchCase):
         self.assertEqual(self.posts_since(before, "/api/v2/search/start"), [])
 
     def test_a_garbage_or_symlinked_search_id_is_just_removed(self):
-        for content in ("abc\n", "0\n", "2147483648\n", "", "12 34\n"):
+        for content in ("abc\n", "0\n", "012\n", "2147483648\n", "", "12 34\n", "\u0661\u0662\n"):
             self.id_path().write_text(content)
             before = len(self.log())
             r = self.start()
@@ -488,6 +488,44 @@ class SearchStartTest(SearchCase):
         self.assertEqual((target / "victim").read_text(), "keep\n")
         self.assertFalse(self.id_path().is_symlink())
         self.assertEqual(self.id_path().read_text(), f"{json.loads(r.stdout)['id']}\n")
+
+    def start_with_planted_temp(self, plant):
+        """Runs `qbt search start` under a known pid (exec keeps it), and
+        calls plant(temp_path) before it starts: search_id_write's temporary
+        name is search.id.<pid>.tmp."""
+        p = subprocess.Popen(["bash", "-c", 'echo $$; read -r _; exec "$0" search start --pattern x --category all',
+                              QBT], env=self.env, text=True, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                             stderr=subprocess.PIPE)
+        pid = int(p.stdout.readline())
+        tmp = self.id_path().with_name(f"search.id.{pid}.tmp")
+        plant(tmp)
+        out, err = p.communicate("\n", timeout=60)
+        self.assertEqual((p.returncode, err), (0, ""))
+        return tmp, json.loads(out)["id"]
+
+    def test_a_planted_temp_file_is_never_written_through(self):
+        # Ruling FG: noclobber on the temporary name. Whatever is already
+        # there fails the write; start still prints its id, and search.id
+        # is simply not written (the window deletes its own job).
+        target = Path(tempfile.mkdtemp(prefix="qbt-search-target-"))
+        self.addCleanup(shutil.rmtree, target, True)
+        (target / "victim").write_text("keep\n")
+        plants = {
+            "a planted file": lambda t: t.write_text("planted\n"),
+            "a symlink to a file": lambda t: t.symlink_to(target / "victim"),
+            "a dangling symlink": lambda t: t.symlink_to(target / "nowhere"),
+        }
+        for why, plant in plants.items():
+            with self.subTest(why):
+                self.id_path().unlink(missing_ok=True)
+                tmp, _ = self.start_with_planted_temp(plant)
+                self.assertFalse(self.id_path().exists(), why)
+                self.assertEqual((target / "victim").read_text(), "keep\n")
+                self.assertFalse((target / "nowhere").exists())
+                if why == "a planted file":
+                    self.assertEqual(tmp.read_text(), "planted\n")
+                tmp.unlink()
+                self.reset()
 
     def test_the_fixture_cancels_after_three_minutes_on_a_fake_clock(self):
         self.control({"search": {"rate": 1, "total": 1000, "finish": None}})
@@ -598,6 +636,28 @@ class SearchAddTest(SearchCase):
         before = len(self.log())
         self.ok(self.run_qbt("search", "add", "https://example.org/dl/debian.torrent"), '{"ok":true,"via":"add"}')
         self.assertEqual([e["path"] for e in self.requests_since(before)], ["/api/v2/torrents/add"])
+
+    def test_the_fixture_answers_a_pending_url_with_202(self):
+        # qBittorrent 5.2.3's torrents/add (APIStatus::Async): a URL it must
+        # fetch first is pending, a magnet is added at once.
+        status, body = self.post("/api/v2/torrents/add", "urls=https%3A%2F%2Fexample.org%2Fdl%2Fdebian.torrent")
+        self.assertEqual((status, json.loads(body)["pending_count"]), (202, 1))
+        status, _ = self.post("/api/v2/torrents/add", "urls=" + MAGNET.replace(":", "%3A").replace("?", "%3F")
+                              .replace("=", "%3D").replace("&", "%26"))
+        self.assertEqual(status, 200)
+
+    def test_qbt_add_takes_a_pending_https_torrent_as_added(self):
+        # B1: the pre-existing `qbt add <https url>` hits the same 202.
+        before = len(self.log())
+        self.ok(self.run_qbt("add", "https://example.org/dl/debian.torrent"))
+        reqs = self.requests_since(before)
+        self.assertEqual([e["path"] for e in reqs], ["/api/v2/torrents/add"])
+        self.assertEqual(self.form(reqs[0])["urls"], ["https://example.org/dl/debian.torrent"])
+
+    def test_202_is_success_only_for_torrents_add(self):
+        self.control({"search_downloadTorrent": "202"})
+        self.refused(self.run_qbt("search", "add", "https://example.org/d/1", "piratebay"),
+                     sentence("refused", why="HTTP 202"))
 
     def test_failed_requests(self):
         self.control({"add": "404"})

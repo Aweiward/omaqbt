@@ -206,7 +206,25 @@ class SearchWatchTest(SearchWatchCase):
         self.assertEqual((first["status"], first["total"], first["rows"]), ("Running", 0, []))
         before = len(self.search_reads())
         self.no_search_reply_for(sp, 2.6)
-        self.assertGreaterEqual(len(self.search_reads()) - before, 2, "it keeps polling about once a second")
+        polls = len(self.search_reads()) - before
+        self.assertGreaterEqual(polls, 2, "it keeps polling about once a second")
+        # ...and no faster (Ruling FG): about one read a second, never a busy loop.
+        self.assertLessEqual(polls, 4, "at most about one read a second")
+
+    def test_a_stalled_read_gives_up_after_one_second(self):
+        # Ruling FG: the search read times out after 1 s (like inspect), so
+        # a stalled qBittorrent holds the main thread no longer than that.
+        jid = self.start_job({"total": 3, "finish": None})
+        sp = self.serve()
+        self.control({"search_results": "sleep7"})
+        sp.send({"cmd": "search", "id": jid, "offset": 0})
+        time.sleep(0.2)
+        sent = time.monotonic()
+        sp.send({"cmd": "refresh"})
+        sp.read_until(lambda o: o.get("type") == "status", timeout=5)
+        # The refresh can wait out two stalled reads (the answer-at-once one
+        # and the next poll, due as it ends): about 1.8 s at 1 s, 3.8 s at 2 s.
+        self.assertLess(time.monotonic() - sent, 2.8)
 
     def test_the_three_minute_cancel_on_a_fake_clock(self):
         spec = {"total": 1000, "rate": 1, "finish": None}
@@ -307,6 +325,20 @@ class SearchWatchTest(SearchWatchCase):
         reply = sp.read_until(is_search, timeout=3)
         self.assertEqual((reply["id"], reply["offset"], reply["rows"]), (b, 3, []))
 
+    def test_a_search_command_without_an_id_is_bad_and_keeps_the_watch(self):
+        # The id key must be present (null or an int): a bare {"cmd":"search"}
+        # is not id:null, so it never drops the watch.
+        jid = self.start_job({"total": 5, "rate": 1, "finish": None})
+        sp = self.serve()
+        self.collect_first(sp, jid)
+        sp.send({"cmd": "search"})
+        reply = sp.read_until(lambda o: o.get("type") == "error", timeout=3)
+        self.assertEqual(reply, {"type": "error", "id": None, "error": "bad command"})
+        before = len(self.search_reads())
+        reply = sp.read_until(is_search, timeout=3)
+        self.assertEqual(reply["id"], jid)
+        self.assertGreater(len(self.search_reads()), before, "the watch is still polling")
+
     def test_bad_commands(self):
         sp = self.serve()
         for cmd in ({"cmd": "search", "id": "5", "offset": 0},
@@ -317,11 +349,13 @@ class SearchWatchTest(SearchWatchCase):
                     {"cmd": "search", "id": 5, "offset": -1},
                     {"cmd": "search", "id": 5, "offset": 2001},
                     {"cmd": "search", "id": 5, "offset": 1.5},
-                    {"cmd": "search", "id": 5, "offset": False}):
+                    {"cmd": "search", "id": 5, "offset": False},
+                    {"cmd": "search", "offset": 0},
+                    {"cmd": "search"}):
             with self.subTest(cmd=cmd):
                 sp.send(cmd)
                 reply = sp.read_until(lambda o: o.get("type") in ("error", "search"), timeout=3)
-                self.assertEqual(reply, {"type": "error", "id": cmd["id"], "error": "bad command"})
+                self.assertEqual(reply, {"type": "error", "id": cmd.get("id"), "error": "bad command"})
         self.assertEqual(self.search_reads(), [])
 
 

@@ -276,6 +276,10 @@ def share_action_label(value):
     return _SHARE_ACTION_BY_INT.get(value, "Stop")
 
 
+def _str_or_empty(value):
+    return value if isinstance(value, str) else ""
+
+
 def merge_maindata(raw, cache):
     """Faithful move of the inline python3 -c block from `qbt` cmd_status.
 
@@ -334,6 +338,11 @@ def merge_maindata(raw, cache):
             "tags": _split_tags(t.get("tags")),
             "tracker": _tracker_host(t.get("tracker")),
             "autoTmm": t.get("auto_tmm") is True,
+            # Slice 5a (Ruling FG): the library match (OV11) compares a
+            # magnet's btih with hash/infohash_v1 and its btmh with
+            # infohash_v2. qBittorrent's names, always strings.
+            "infohash_v1": _str_or_empty(t.get("infohash_v1")),
+            "infohash_v2": _str_or_empty(t.get("infohash_v2")),
         })
     return torrents, rows
 
