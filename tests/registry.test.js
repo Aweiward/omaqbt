@@ -1697,3 +1697,59 @@ test("the palette opens the pickers the same way", () => {
   assert.equal(r.commandId, "torrent.tags");
   assert.equal(r.state.mode, "PICKER");
 });
+
+// --- slice 3b, Task 5: the Info Limits keys (Ruling CJ) ---------------------
+
+test("CJ: Space on a no-metadata Info tab toggles a toggle row, else starts the download", () => {
+  // The cursor on Sequential/First-last: limit.toggle, even with no metadata.
+  const toggle = dispatch(onTab("info", { cursorNoMetadata: true, limitCursorKey: "seqDl", limitToggle: true }), ev(" ", KEY.Space));
+  assert.equal(toggle.commandId, "limit.toggle");
+  assert.equal(toggle.args.limitKey, "seqDl", "the row under the cursor, captured at key time");
+  // A value row: the 2b start-only carve-out (file.cycle's Start download).
+  const value = dispatch(onTab("info", { cursorNoMetadata: true, limitCursorKey: "ratioLimit", limitToggle: false }), ev(" ", KEY.Space));
+  assert.equal(value.commandId, "file.cycle");
+  // No Limits cursor at all: the carve-out too.
+  const none = dispatch(onTab("info", { cursorNoMetadata: true }), ev(" ", KEY.Space));
+  assert.equal(none.commandId, "file.cycle");
+  // With metadata: a toggle row toggles, a value row is blocked with no note.
+  assert.equal(dispatch(onTab("info", { limitCursorKey: "firstLast", limitToggle: true }), ev(" ", KEY.Space)).commandId, "limit.toggle");
+  const inert = dispatch(onTab("info", { limitCursorKey: "dlLimit" }), ev(" ", KEY.Space));
+  assert.equal(inert.commandId, null);
+  assert.equal(inert.blocked, "");
+  // Files keeps its own Space, metadata or not.
+  assert.equal(dispatch(onTab("files", { limitCursorKey: "seqDl", limitToggle: true }), ev(" ", KEY.Space)).commandId, "file.cycle");
+});
+
+test("CJ: the Start download row is Info-only and never reachable from the palette's Files row", () => {
+  const rows = rowsFor("file.cycle");
+  assert.equal(rows.length, 2);
+  assert.deepEqual(rows[0].tabs, ["files"], "the Files row stays first (the palette reads the first row)");
+  assert.equal(rows[0].title, "Cycle file priority");
+  assert.deepEqual(rows[1].tabs, ["info"]);
+  assert.equal(rows[1].title, "Start download");
+  // dispatchCommand honours the same condition.
+  assert.equal(Registry.dispatchCommand(onTab("info", { cursorNoMetadata: true }), "file.cycle").commandId, "file.cycle");
+  assert.equal(Registry.dispatchCommand(onTab("info"), "file.cycle").commandId, null);
+  assert.equal(Registry.dispatchCommand(onTab("info", { cursorNoMetadata: true, limitCursorKey: "seqDl", limitToggle: true }), "file.cycle").commandId, null);
+});
+
+test("CJ: ? shows Space as Start download on a no-metadata Info tab unless the cursor is on a toggle row", () => {
+  function spaceTitles(st) {
+    return helpFor("NORMAL", "inspector", "info", st).filter((r) => r.keys.includes("Space")).map((r) => r.title);
+  }
+  assert.deepEqual(spaceTitles({ cursorNoMetadata: true }), ["Start download"]);
+  assert.deepEqual(spaceTitles({ cursorNoMetadata: true, limitCursorKey: "dlLimit" }), ["Start download"]);
+  assert.deepEqual(spaceTitles({ cursorNoMetadata: true, limitCursorKey: "seqDl", limitToggle: true }), ["Toggle limit"]);
+  assert.deepEqual(spaceTitles({ limitCursorKey: "seqDl", limitToggle: true }), ["Toggle limit"]);
+  assert.deepEqual(spaceTitles({}), ["Toggle limit"]);
+  // No state: as before Task 5.
+  assert.deepEqual(helpFor("NORMAL", "inspector", "info").filter((r) => r.keys.includes("Space")).map((r) => r.title), ["Toggle limit"]);
+  // Files is untouched.
+  assert.deepEqual(helpFor("NORMAL", "inspector", "files", { cursorNoMetadata: true }).filter((r) => r.keys.includes("Space")).map((r) => r.title), ["Cycle file priority"]);
+});
+
+test("limit.edit captures the Limits row under the cursor at key time", () => {
+  const r = dispatch(onTab("info", { limitCursorKey: "ratioLimit" }), ev("\r", KEY.Return));
+  assert.equal(r.commandId, "limit.edit");
+  assert.equal(r.args.limitKey, "ratioLimit");
+});

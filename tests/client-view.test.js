@@ -1997,3 +1997,60 @@ test("magnetSync in PICKER treats the picker's field like the palette's: no CONF
   assert.equal(r.focus, false);
   assert.equal(r.mem.focusDue, true);
 });
+
+// --- The Info Limits group (slice 3b, Task 5) -----------------------------------
+
+test("inspectorDispatch: the Limits cursor row, only while the inspector is focused on Info", () => {
+  const value = { key: "ratioLimit", label: "Ratio limit", value: "default (none)", muted: true, toggle: false };
+  const toggle = { key: "seqDl", label: "Sequential", value: "off", muted: false, toggle: true };
+  let d = V.inspectorDispatch(insp({ tab: "info", limitRow: value }));
+  assert.equal(d.limitCursorKey, "ratioLimit");
+  assert.equal(d.limitToggle, false);
+  d = V.inspectorDispatch(insp({ tab: "info", limitRow: toggle }));
+  assert.equal(d.limitCursorKey, "seqDl");
+  assert.equal(d.limitToggle, true);
+  for (const off of [insp({ tab: "files", limitRow: toggle }), insp({ tab: "info", pane: "table", limitRow: toggle }), insp({ tab: "info", row: null, limitRow: toggle })]) {
+    d = V.inspectorDispatch(off);
+    assert.equal(d.limitCursorKey, null);
+    assert.equal(d.limitToggle, false);
+  }
+  const st = V.dispatchState({ mode: "NORMAL" }, "inspector", "rows", true, [], V.inspectorDispatch(insp({ tab: "info", limitRow: toggle })));
+  assert.equal(st.limitCursorKey, "seqDl");
+  assert.equal(st.limitToggle, true);
+  assert.equal(V.sameInspectorState(V.inspectorDispatch(insp({ tab: "info", limitRow: value })), V.inspectorDispatch(insp({ tab: "info", limitRow: toggle }))), false);
+});
+
+test("confirmLine: the share-limit confirm carries its own line, accept set", () => {
+  const line = "Set the ratio limit to 0? 1 torrent already meets it and will be removed with its files.";
+  assert.deepEqual(V.confirmLine({ commandId: "limit.edit", kind: "limitSet", line: line }), { lead: line, strong: "", tail: "", accept: "set" });
+});
+
+test("inputPrompt/modeHints: the Limits INSERT names the row and the torrent", () => {
+  assert.deepEqual(V.inputPrompt("limit:dlLimit", "debian.iso"), { prompt: "↓ limit for debian.iso", placeholder: "500K, 1.5M, 0 or u" });
+  assert.deepEqual(V.inputPrompt("limit:upLimit", "debian.iso"), { prompt: "↑ limit for debian.iso", placeholder: "500K, 1.5M, 0 or u" });
+  assert.deepEqual(V.inputPrompt("limit:ratioLimit", "debian.iso"), { prompt: "Ratio limit for debian.iso", placeholder: "1.5, g or n" });
+  assert.deepEqual(V.inputPrompt("limit:seedingTimeLimit", "debian.iso"), { prompt: "Seed time for debian.iso", placeholder: "90m, 2h, 3d, g or n" });
+  for (const p of ["limit:dlLimit", "limit:upLimit", "limit:ratioLimit", "limit:seedingTimeLimit"]) {
+    assert.deepEqual(V.modeHints("INSERT", { purpose: p }), [{ key: "Enter", label: "set" }, { key: "Esc", label: "cancel" }], p);
+  }
+});
+
+test("msgTrack/msgFinish: a guard copy prefixes only qBittorrent's bare refusal; qbt's own sentences stand alone", () => {
+  const copy = { progress: "Setting the ratio limit…", done: "Ratio limit set to 0", fail: "Setting the ratio limit failed", guard: true };
+  const m = V.msgTrack(V.emptyMessages(), 7, "library", 1, [H("a")], copy);
+  assert.equal(V.messageLine(m).text, "Setting the ratio limit…");
+  assert.equal(V.messageLine(V.msgFinish(m, 7, false, "qBittorrent refused it (HTTP 409)\n")).text, "Setting the ratio limit failed: HTTP 409");
+  assert.equal(V.messageLine(V.msgFinish(m, 7, false, "qBittorrent refused it (couldn't reach qBittorrent)")).text, "Setting the ratio limit failed: couldn't reach qBittorrent");
+  const guard = "1 torrent already meets that limit, and qBittorrent would remove it with its files.";
+  assert.equal(V.messageLine(V.msgFinish(m, 7, false, guard + "\n")).text, guard);
+  const partial = "Share limits set on 3 of 5 torrents; qBittorrent refused the rest (HTTP 409)";
+  assert.equal(V.messageLine(V.msgFinish(m, 7, false, partial)).text, partial);
+  assert.equal(V.messageLine(V.msgFinish(m, 7, false, "")).text, "Setting the ratio limit failed.");
+  assert.equal(V.messageLine(V.msgFinish(m, 7, true, "")).text, "Ratio limit set to 0");
+  assert.deepEqual(V.msgFinish(m, 7, false, guard).errorHashes, [H("a")]);
+});
+
+test("paletteReasonNote: a row blocked with no note says nothing (the Limits rows, D12)", () => {
+  assert.equal(V.paletteReasonNote({ title: "Toggle limit", reason: "" }), "");
+  assert.equal(V.paletteReasonNote({ title: "Edit limit", reason: "focus the info tab" }), "Edit limit: focus the info tab.");
+});

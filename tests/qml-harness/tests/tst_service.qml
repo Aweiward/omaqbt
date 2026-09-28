@@ -387,6 +387,23 @@ TestCase {
     verify(svc.inspectByKey[b + "|info"] === undefined, "b left torrents and is dropped")
   }
 
+  // Slice 3b Task 5: the share-limit chain the D8 confirm resolves through
+  // (LimitsView.shareConfirm reads them off Service, as its `status`).
+  function test_status_carries_category_limits_and_share_defaults() {
+    var svc = createTemporaryObject(serviceComp, tc)
+    compare(svc.categoryLimits, {})
+    compare(svc.shareDefaults, { ratio: -1, seedingTime: -1, action: "Stop" })
+    svc.applyStatus(JSON.stringify({ torrents: [],
+      categoryLimits: { anime: { ratioLimit: 2, seedingTimeLimit: -2, shareLimitAction: "RemoveWithContent" } },
+      shareDefaults: { ratio: 1.5, seedingTime: 120, action: "Remove" } }))
+    compare(svc.categoryLimits.anime.shareLimitAction, "RemoveWithContent")
+    compare(svc.categoryLimits.anime.ratioLimit, 2)
+    compare(svc.shareDefaults, { ratio: 1.5, seedingTime: 120, action: "Remove" })
+    svc.applyStatus(JSON.stringify({ torrents: [] }))
+    compare(svc.categoryLimits, {})
+    compare(svc.shareDefaults, { ratio: -1, seedingTime: -1, action: "Stop" })
+  }
+
   // --- watch ------------------------------------------------------------
 
   function test_watch_sends_only_when_up_and_is_resent_on_up() {

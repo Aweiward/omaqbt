@@ -1026,3 +1026,46 @@ test("trackerRows carries each row's refusal", () => {
   assert.equal(rows[1].refusal, I.PIPE_NOTE);
   assert.equal(rows[2].refusal, "This tracker's URL can't be changed or removed from here.");
 });
+
+// --- The Info Limits group (slice 3b, Task 5) ------------------------------------
+
+const LIMIT_ROWS = [
+  { key: "dlLimit", label: "↓ limit", value: "unlimited", muted: true, toggle: false },
+  { key: "upLimit", label: "↑ limit", value: "500 KiB/s", muted: false, toggle: false },
+  { key: "ratioLimit", label: "Ratio limit", value: "default (none)", muted: true, toggle: false },
+  { key: "seedingTimeLimit", label: "Seed time", value: "2h", muted: false, toggle: false },
+  { key: "seqDl", label: "Sequential", value: "off", muted: false, toggle: true },
+  { key: "firstLast", label: "First/last", value: "on", muted: false, toggle: true }
+];
+
+test("withLimits: the Limits group sits between Transfer and Torrent, cursor on one row", () => {
+  const groups = I.infoGroups(null);
+  const out = I.withLimits(groups, LIMIT_ROWS, "seqDl");
+  assert.deepEqual(out.map((g) => g.title), ["Transfer", "Limits", "Torrent"]);
+  assert.equal(out[0], groups[0], "the other groups are untouched");
+  assert.equal(out[2], groups[1]);
+  assert.deepEqual(out[1].fields.map((f) => [f.label, f.value, f.tone, f.note, f.key, f.cursor]), [
+    ["↓ limit", "unlimited", "muted", "", "dlLimit", false],
+    ["↑ limit", "500 KiB/s", "fg", "", "upLimit", false],
+    ["Ratio limit", "default (none)", "muted", "", "ratioLimit", false],
+    ["Seed time", "2h", "fg", "", "seedingTimeLimit", false],
+    ["Sequential", "off", "fg", "", "seqDl", true],
+    ["First/last", "on", "fg", "", "firstLast", false]
+  ]);
+  // No cursor key: no row is marked. No rows: no group.
+  assert.ok(I.withLimits(groups, LIMIT_ROWS, "").every((g) => g.fields.every((f) => f.cursor !== true)));
+  assert.deepEqual(I.withLimits(groups, [], "dlLimit").map((g) => g.title), ["Transfer", "Torrent"]);
+  assert.deepEqual(I.withLimits(groups, null, "").map((g) => g.title), ["Transfer", "Torrent"]);
+});
+
+test("infoFooterKeys: the Limits keys first; a base key they claim drops out", () => {
+  const info = [{ key: "o", label: "open folder" }, { key: "y", label: "copy magnet" }];
+  const noMeta = [{ key: "Space", label: "Start download" }, { key: "f", label: "Fetch metadata only" }];
+  const edit = [{ key: "j/k", label: "move" }, { key: "Enter", label: "edit" }];
+  const flip = [{ key: "j/k", label: "move" }, { key: "Space", label: "turn on" }];
+  assert.deepEqual(I.infoFooterKeys([], info), info);
+  assert.deepEqual(I.infoFooterKeys(edit, info), edit.concat(info));
+  assert.deepEqual(I.infoFooterKeys(edit, noMeta), edit.concat(noMeta));
+  assert.deepEqual(I.infoFooterKeys(flip, noMeta), flip.concat([noMeta[1]]), "Space flips the toggle, not Start download");
+  assert.deepEqual(I.infoFooterKeys(null, null), []);
+});

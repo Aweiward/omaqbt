@@ -123,17 +123,24 @@ var commands = [
   { id: "file.down", title: "Next row", group: "View", keys: ["j", "Down"], modes: ["NORMAL"], panes: ["inspector"], tabs: ["files", "trackers", "peers"], needs: "none" },
   { id: "file.up", title: "Previous row", group: "View", keys: ["k", "Up"], modes: ["NORMAL"], panes: ["inspector"], tabs: ["files", "trackers", "peers"], needs: "none" },
   { id: "file.cycle", title: "Cycle file priority", group: "Torrent", keys: ["Space"], modes: ["NORMAL"], panes: ["inspector"], tabs: ["files"], needs: "torrent" },
+  // Deviation 3 on Info (Ruling CJ): a no-metadata torrent's Space is
+  // Start download -- file.cycle's handler starts a stopped one and never
+  // stops a running one -- unless the Limits cursor is on a toggle row,
+  // where limit.toggle wins. `when` (see WHEN) makes it a match-level rule,
+  // so `?` and the palette see it too. This row comes after the Files row:
+  // the palette reads a command's title and tabs from its first row.
+  { id: "file.cycle", title: "Start download", group: "Torrent", keys: ["Space"], modes: ["NORMAL"], panes: ["inspector"], tabs: ["info"], needs: "torrent", when: "startDownload" },
 
-  // NORMAL, inspector pane, Info tab only: the Limits group's cursor
-  // (Task 5 adds the group; this only reserves its keys, D7). limit.edit
-  // and limit.toggle need a row/toggle row under the Limits cursor --
-  // limitCursorKey/limitToggle, which Task 5's Limits group will compute;
-  // until then Enter is a no-op and Space is blocked with no note (never
-  // torrent.toggle, which the inspector pane never binds Space to).
+  // NORMAL, inspector pane, Info tab only: the Limits group's cursor (D7).
+  // limit.edit and limit.toggle need a row/toggle row under the Limits
+  // cursor (limitCursorKey/limitToggle, from ClientView.inspectorDispatch),
+  // and act on it as it stood at key time (args.limitKey). Space on a
+  // value row is blocked with no note (D12: never torrent.toggle, which
+  // the inspector pane never binds Space to).
   { id: "limit.down", title: "Next limit", group: "View", keys: ["j", "Down"], modes: ["NORMAL"], panes: ["inspector"], tabs: ["info"], needs: "none" },
   { id: "limit.up", title: "Previous limit", group: "View", keys: ["k", "Up"], modes: ["NORMAL"], panes: ["inspector"], tabs: ["info"], needs: "none" },
   { id: "limit.edit", title: "Edit limit", group: "Torrent", keys: ["Enter"], modes: ["NORMAL"], panes: ["inspector"], tabs: ["info"], needs: "limitRow" },
-  { id: "limit.toggle", title: "Toggle limit", group: "Torrent", keys: ["Space"], modes: ["NORMAL"], panes: ["inspector"], tabs: ["info"], needs: "limitToggle" },
+  { id: "limit.toggle", title: "Toggle limit", group: "Torrent", keys: ["Space"], modes: ["NORMAL"], panes: ["inspector"], tabs: ["info"], needs: "limitToggle", when: "limitSpace" },
 
   // NORMAL, inspector pane, trackers tab only (Deviation 4: R too). a and
   // R work on an empty list; c and x act on the tracker under the cursor,
@@ -244,8 +251,9 @@ function normalizeState(state) {
     cursorPendingMagnet: s.cursorPendingMagnet === true,
     // The inspector's currently shown tab ("info"/"trackers"/"peers"/
     // "files"/"chart", "" when the inspector isn't focused): what `tabs`
-    // (D7) matches against. Task 5's Limits group cursor, defaulted so
-    // limit.edit/limit.toggle are blocked (with no note) until it's wired.
+    // (D7) matches against. The Info tab's Limits cursor: the row key under
+    // it ("dlLimit" ... "firstLast", null for none) and whether it's a
+    // toggle row (Sequential, First/last).
     inspectorTab: typeof s.inspectorTab === "string" ? s.inspectorTab : "",
     limitCursorKey: s.limitCursorKey || null,
     limitToggle: s.limitToggle === true,
@@ -307,8 +315,24 @@ function tabMatches(row, tab) {
   return !row.tabs || row.tabs.indexOf(tab) !== -1;
 }
 
+// A row's optional `when` (Ruling CJ): a named condition on the dispatch
+// state that must hold for the row to exist at all -- unlike `needs`, a
+// failed `when` doesn't block the key, it lets the next row have it.
+// findMatch, findMatchIgnoringTabs, dispatchCommand and helpFor all apply
+// it, so a key, the palette and `?` agree. startDownload: Info's Space on
+// a no-metadata torrent, unless the Limits cursor is on a toggle row;
+// limitSpace is its complement, so `?` lists one Space on Info.
+var WHEN = {
+  startDownload: function(s) { return s.cursorNoMetadata === true && s.limitToggle !== true; },
+  limitSpace: function(s) { return !(s.cursorNoMetadata === true && s.limitToggle !== true); }
+};
+
+function whenMatches(row, s) {
+  return !row.when || (Object.prototype.hasOwnProperty.call(WHEN, row.when) && WHEN[row.when](s) === true);
+}
+
 // findMatch(s, ev) -> the row a key resolves to: the first row matching
-// mode, pane, key AND (D7) tab. A row that matches everything but the tab
+// mode, pane, key AND (D7) tab (and its `when`, if any). A row that matches everything but the tab
 // (e.g. x pressed off the trackers tab) is not returned here -- see
 // findMatchIgnoringTabs, which dispatch() consults only to keep reporting
 // that row's own `needs` reason, never to run it.
@@ -319,6 +343,7 @@ function findMatch(s, ev) {
     if (row.modes.indexOf(s.mode) === -1) continue;
     if (!paneMatches(row, s.pane)) continue;
     if (!tabMatches(row, s.inspectorTab)) continue;
+    if (!whenMatches(row, s)) continue;
     for (j = 0; j < row.keys.length; j++) {
       label = row.keys[j];
       if (label === "g g" || label === "Esc Esc") continue;
@@ -339,21 +364,12 @@ function findMatchIgnoringTabs(s, ev) {
     row = commands[i];
     if (row.modes.indexOf(s.mode) === -1) continue;
     if (!paneMatches(row, s.pane)) continue;
+    if (!whenMatches(row, s)) continue;
     for (j = 0; j < row.keys.length; j++) {
       label = row.keys[j];
       if (label === "g g" || label === "Esc Esc") continue;
       if (matchLabel(label, ev)) return row;
     }
-  }
-  return null;
-}
-
-// findRowById(id) -> the (single) commands-table row with this id, or null.
-// Used by dispatch()'s Deviation-3 carve-out to resolve file.cycle without
-// going through findMatch's tab filter.
-function findRowById(id) {
-  for (var i = 0; i < commands.length; i++) {
-    if (commands[i].id === id) return commands[i];
   }
   return null;
 }
@@ -385,8 +401,8 @@ var LIBRARY_NEEDS = { libraryGroup: "group", libraryName: "name", categoryName: 
 // a cursor torrent without metadata that isn't a browser magnet still
 // pending in the handler flow (that hash is already fetching); limitRow
 // needs a row under the Info tab's Limits cursor (s.limitCursorKey);
-// limitToggle needs that row to be a toggle (s.limitToggle) -- both are
-// Task 5's to compute; until then they default unmet (D7's Task-4 stub).
+// limitToggle needs that row to be a toggle (s.limitToggle); both come
+// from ClientView.inspectorDispatch and default unmet.
 function preconditionMet(needs, s) {
   if (!needs || needs === "none") return true;
   if (needs === "torrent") return s.hasTorrent === true;
@@ -403,9 +419,9 @@ function preconditionMet(needs, s) {
 
 // needsReason(needs, s) -> why an unmet `needs` blocks a command: the
 // dispatch `blocked` text and the palette's dimmed-row reason. "" when met,
-// and also "" for limitRow/limitToggle even when unmet -- Space/Enter on
-// the Info tab are blocked with no note until Task 5 wires the Limits
-// cursor (the brief's "blocked with no note on a non-toggle row").
+// and also "" for limitRow/limitToggle even when unmet -- Space on a
+// Limits value row (or Enter/Space with no Limits row) is blocked with no
+// note (D12).
 function needsReason(needs, s) {
   if (preconditionMet(needs, s)) return "";
   if (needs === "tracker" || needs === "trackersTab") return "focus the trackers tab";
@@ -473,6 +489,10 @@ function buildArgs(row, s) {
   // Likewise the category or tag under the filters cursor.
   if (Object.prototype.hasOwnProperty.call(LIBRARY_NEEDS, row.needs)) {
     args.target = copyTarget(s.libraryTarget);
+  }
+  // The Info tab's Limits row under the cursor, as it stood at key time.
+  if (row.needs === "limitRow" || row.needs === "limitToggle") {
+    args.limitKey = s.limitCursorKey;
   }
   if (EXTEND_IDS[row.id] === true && s.mode === "VISUAL") {
     args.extend = true;
@@ -589,19 +609,6 @@ function dispatch(state, event) {
     return { state: assign(s, { prefix: "g", prefixAt: now }), commandId: null };
   }
 
-  // Deviation 3 carve-out: file.cycle now matches only the Files tab
-  // (limit.toggle owns Space on Info, D7), but a no-metadata torrent's
-  // Info tab still needs Space to start it -- exactly as Files does
-  // (ClientCommands.qml's file.cycle handler already covers Info there).
-  // Resolved before findMatch so file.cycle's own tab scope can't shadow
-  // it; this never reaches torrent.toggle directly (only file.cycle does,
-  // and only the window's own handler decides whether to escalate to it).
-  if (s.mode === "NORMAL" && s.pane === "inspector" && s.inspectorTab === "info" &&
-      ev.key === KEY.Space && s.cursorNoMetadata === true) {
-    var fileCycleRow = findRowById("file.cycle");
-    if (fileCycleRow) return resolveRow(s, fileCycleRow, now);
-  }
-
   var row = findMatch(s, ev);
   if (!row || row.id === null) {
     // A row matches this key/mode/pane but not the focused tab (e.g. x off
@@ -702,26 +709,31 @@ function dispatchCommand(state, commandId) {
     if (row.id === null || row.id !== commandId) continue;
     if (row.modes.indexOf(s.mode) === -1 || !paneMatches(row, s.pane)) continue;
     if (!tabMatches(row, s.inspectorTab)) continue;
+    if (!whenMatches(row, s)) continue;
     return resolveRow(s, row, 0);
   }
   return { state: s, commandId: null };
 }
 
-// helpFor(mode, pane, tab) -> rows from `commands` active for that
+// helpFor(mode, pane, tab, state) -> rows from `commands` active for that
 // mode/pane, generated from the same table dispatch() reads. Reserved
 // (id === null) rows are not commands, so they are left out. `tab` is
 // optional (D7): when given, a row whose `tabs` excludes it is left out
 // too (the `?` overlay's inspector-pane listing, one tab at a time); when
 // omitted, every tab's rows are listed together, as before Task 4.
-function helpFor(mode, pane, tab) {
+// `state` (optional, the dispatch state's fields) decides each row's
+// `when` (Ruling CJ); without it, the empty state decides.
+function helpFor(mode, pane, tab, state) {
   var out = [];
   var i, row;
+  var s = normalizeState(state);
   for (i = 0; i < commands.length; i++) {
     row = commands[i];
     if (row.id === null) continue;
     if (row.modes.indexOf(mode) === -1) continue;
     if (!paneMatches(row, pane)) continue;
     if (tab !== undefined && !tabMatches(row, tab)) continue;
+    if (!whenMatches(row, s)) continue;
     out.push(row);
   }
   return out;

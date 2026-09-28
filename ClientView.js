@@ -518,7 +518,9 @@ function progressText(kind, count) {
 
 // The `y` hint of each library confirm; a rename that merges passes its
 // own ("merge").
-var LIBRARY_ACCEPT = { libraryRemove: "delete", libraryRename: "rename", libraryPath: "change", categorySet: "set" };
+// limitSet (slice 3b) is the D8 share-limit confirm, whose line
+// LimitsView.shareConfirm writes.
+var LIBRARY_ACCEPT = { libraryRemove: "delete", libraryRename: "rename", libraryPath: "change", categorySet: "set", limitSet: "set" };
 
 // confirmLine(confirm) -> the CONFIRM status line, from
 // CommandRegistry.dispatch's `confirm` result {commandId, count, withFiles}.
@@ -719,6 +721,13 @@ function magnetLine(ms) {
 // line. `shown` is the tracker being changed, already redacted
 // (InspectorView.redactUrl): the full old URL never reaches the screen.
 var TRACKER_URL_PLACEHOLDER = "udp://, http://, https:// or wss://";
+// "limit:" + a LimitsView row key -> [label, placeholder].
+var LIMIT_PROMPTS = {
+  "limit:dlLimit": ["↓ limit", "500K, 1.5M, 0 or u"],
+  "limit:upLimit": ["↑ limit", "500K, 1.5M, 0 or u"],
+  "limit:ratioLimit": ["Ratio limit", "1.5, g or n"],
+  "limit:seedingTimeLimit": ["Seed time", "90m, 2h, 3d, g or n"]
+};
 function inputPrompt(purpose, shown) {
   if (purpose === "move") return { prompt: "move to", placeholder: "/absolute/path" };
   if (purpose === "trackerAdd") return { prompt: "Add tracker URL", placeholder: TRACKER_URL_PLACEHOLDER };
@@ -729,6 +738,10 @@ function inputPrompt(purpose, shown) {
   if (purpose === "tagAdd") return { prompt: "New tag", placeholder: "" };
   if (purpose === "categoryRename" || purpose === "tagRename") return { prompt: "Rename " + String(shown || "") + " to", placeholder: "" };
   if (purpose === "categoryPath") return { prompt: "Save path for " + String(shown || ""), placeholder: "empty = default" };
+  // The Info tab's Limits rows (slice 3b); `shown` is the torrent's name.
+  if (Object.prototype.hasOwnProperty.call(LIMIT_PROMPTS, purpose)) {
+    return { prompt: LIMIT_PROMPTS[purpose][0] + " for " + String(shown || ""), placeholder: LIMIT_PROMPTS[purpose][1] };
+  }
   return { prompt: "/", placeholder: "filter by name, or paste a magnet" };
 }
 
@@ -745,7 +758,7 @@ function modeHints(mode, ctx) {
     if (c.purpose === "trackerEdit") return [{ key: "Enter", label: "change" }, { key: "Esc", label: "cancel" }];
     if (c.purpose === "categoryAdd" || c.purpose === "tagAdd") return [{ key: "Enter", label: "create" }, { key: "Esc", label: "cancel" }];
     if (c.purpose === "categoryRename" || c.purpose === "tagRename") return [{ key: "Enter", label: "rename" }, { key: "Esc", label: "cancel" }];
-    if (c.purpose === "categoryPath") return [{ key: "Enter", label: "set" }, { key: "Esc", label: "cancel" }];
+    if (c.purpose === "categoryPath" || Object.prototype.hasOwnProperty.call(LIMIT_PROMPTS, c.purpose)) return [{ key: "Enter", label: "set" }, { key: "Esc", label: "cancel" }];
     return [{ key: "Enter", label: "keep filter" }, { key: "Esc", label: "cancel" }];
   }
   // The palette and the C/T pickers show their own key hints in a footer.
@@ -938,7 +951,8 @@ function libraryTarget(ctx) {
 //     in the handler flow. These follow the cursor from any pane.
 // ctx: {pane, state (tableState), tab, trackers, trackerIndex, peers,
 // peerIndex, row (the cursor's raw row or null), cursorHash, noMeta,
-// pending (Service.magnetPendingHashes)}.
+// pending (Service.magnetPendingHashes), limitRow (the LimitsView.limitRows
+// entry under the Info tab's Limits cursor, or null)}.
 function inspectorDispatch(ctx) {
   var c = ctx || {};
   var row = c.row || null;
@@ -961,6 +975,7 @@ function inspectorDispatch(ctx) {
   }
   var st = row ? String(row.state || "").toLowerCase() : "";
   var hash = String(c.cursorHash || "");
+  var limitRow = focused && c.tab === "info" && c.limitRow && c.limitRow.key ? c.limitRow : null;
   return {
     inspectorTarget: target,
     trackersTab: focused && c.tab === "trackers",
@@ -970,11 +985,10 @@ function inspectorDispatch(ctx) {
     // inspector isn't focused, so a stale tab from a previous dispatch
     // never leaks into an unrelated pane's key.
     inspectorTab: focused ? String(c.tab || "") : "",
-    // Placeholders for Task 5's Info-tab Limits cursor (limit.edit/
-    // limit.toggle's needs): no Limits group exists yet, so these always
-    // read "blocked, no row" until Task 5 computes them here.
-    limitCursorKey: null,
-    limitToggle: false,
+    // The Info tab's Limits row under its cursor (limit.edit/limit.toggle's
+    // needs), gated like inspectorTab: none unless focused on Info.
+    limitCursorKey: limitRow ? String(limitRow.key) : null,
+    limitToggle: !!limitRow && limitRow.toggle === true,
     cursorNoMetadata: row !== null && c.noMeta === true,
     cursorStopped: st === "stoppeddl" || st === "pauseddl",
     cursorPendingMagnet: hash !== "" && (c.pending || []).indexOf(hash) !== -1,
@@ -1093,7 +1107,10 @@ var BUSY_NOTE = "Busy, try again.";
 // whose copy names its target ("Renaming anime → animation…" / "Renamed
 // anime → animation"); raw shows the failure as the error text alone (qbt's
 // own sentence, e.g. "Rename incomplete (12 of 21 moved); …"); fail names
-// the action first ("Deleting category anime failed: HTTP 409").
+// the action first ("Deleting category anime failed: HTTP 409"). guard
+// (slice 3b, share limits) keeps `fail` for qbt's bare "qBittorrent
+// refused it (…)" only; any other error is qbt's own sentence (the D8
+// guard's refusal, a partial write) and shows as it is.
 function msgTrack(m, ticket, kind, count, hashes, copy) {
   var list = Array.isArray(ticket) ? ticket : [ticket];
   var ids = [];
@@ -1110,7 +1127,7 @@ function msgTrack(m, ticket, kind, count, hashes, copy) {
   var group = ids[0];
   var own = (hashes || []).slice();
   for (var j = 0; j < ids.length; j++) {
-    next.tickets[ids[j]] = { kind: kind, count: Number(count) || 0, hashes: own, text: text, group: group, done: cp.done ? String(cp.done) : "", raw: cp.raw === true, fail: cp.fail ? String(cp.fail) : "" };
+    next.tickets[ids[j]] = { kind: kind, count: Number(count) || 0, hashes: own, text: text, group: group, done: cp.done ? String(cp.done) : "", raw: cp.raw === true, fail: cp.fail ? String(cp.fail) : "", guard: cp.guard === true };
   }
   next.groups[group] = { left: ids.length, failed: false, error: "" };
   next.progress = text;
@@ -1232,6 +1249,7 @@ function msgFinish(m, ticket, ok, error) {
   if (group.failed) {
     var err = group.error;
     if (entry.raw === true && err !== "") next.error = err;
+    else if (entry.guard === true && err !== "" && refusalDetail(err) === err) next.error = err;
     else if (entry.fail) next.error = entry.fail + (err !== "" ? ": " + refusalDetail(err) : ".");
     else next.error = failureText(entry.kind, entry.count) + (err !== "" ? ": " + err : ".");
     next.errorHashes = entry.hashes.slice();
@@ -1934,8 +1952,10 @@ function overlayOwnsKey(keyMode, ev, queryEmpty) {
   return false;
 }
 
-// The status-line note for Enter (or a click) on a disabled palette row.
+// The status-line note for Enter (or a click) on a disabled palette row;
+// "" for a row blocked with no note (reason "", e.g. the Limits rows).
 function paletteReasonNote(row) {
+  if (!row.reason) return "";
   return String(row.title) + ": " + String(row.reason) + ".";
 }
 

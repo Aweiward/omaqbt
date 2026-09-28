@@ -6,6 +6,7 @@ import "CommandRegistry.js" as Registry
 import "ClientView.js" as View
 import "InspectorView.js" as InspectorView
 import "LibraryView.js" as Library
+import "LimitsView.js" as Limits
 
 // The window's command -> action mapping: run() turns a command id from
 // CommandRegistry into Service calls and view changes on the Client it is
@@ -201,7 +202,7 @@ QtObject {
   readonly property var footerKeys: Library.footerKeys(client.inspectorNow.libraryTarget)
   // The name the INSERT prompt shows: a tracker's redacted URL, or the
   // category or tag being renamed or re-pathed.
-  readonly property string inputShown: trackerInput ? trackerInput.shown : (libraryInput ? libraryInput.target.value : "")
+  readonly property string inputShown: trackerInput ? trackerInput.shown : (libraryInput ? libraryInput.target.value : (limitInput ? limitInput.name : ""))
 
   // The row an open a/c/p INSERT acts on, captured when the key was
   // pressed: {target} (Registry's frozen copy, {kind, value, label}). The
@@ -364,6 +365,9 @@ QtObject {
     for (var k in libraryWatches) if (k !== String(ticket)) n[k] = libraryWatches[k]
     libraryWatches = n
     if (w.picker) { pickerFinished(ticket, ok, error, w.picker); return }
+    // A limit write that failed may have changed part of what it asked
+    // (a partial share-limit write): refresh so what did change shows.
+    if (w.refresh) { if (ok !== true) client.service.refresh(); return }
     if (ok !== true) return
     var c = client
     if (w.cursor) { c.setFilterCursor(w.cursor); return }
@@ -371,6 +375,133 @@ QtObject {
     var fc = Library.followFilter(c.filterCursor, w.follow)
     if (fc !== c.filterCursor) c.setFilterCursor(fc)
     if (f !== c.filter) c.applyFilter(f)
+  }
+
+  // ---- the Info tab's Limits group (slice 3b) ---------------------------------
+
+  // hash -> the key of the Limits row under that torrent's cursor, so each
+  // torrent keeps its own row (a new one starts at the top); the six keys
+  // never change, so keyedIndex only has to fall back for a new torrent.
+  property var limitCursors: ({})
+  // LimitsView.limitRows for the cursor torrent, and the row under its
+  // Limits cursor (null without a torrent).
+  readonly property var limitRows: Limits.limitRows(client.cursorRow, client.service)
+  readonly property var limitCursorRow: {
+    var i = InspectorView.keyedIndex(limitRows, limitCursors[client.cursorHash], 0)
+    return i >= 0 ? limitRows[i] : null
+  }
+  // The cursor shows only while the inspector is focused on Info.
+  readonly property var shownLimitRow: View.dispatchPane(client.pane, client.tableState) === "inspector"
+    && client.inspectorTab === "info" ? limitCursorRow : null
+  readonly property var infoGroups: InspectorView.withLimits(client.infoTab.groups, limitRows, shownLimitRow ? shownLimitRow.key : "")
+  readonly property var limitFooterKeys: Limits.footerKeys(shownLimitRow)
+  // The torrents and row an open Limits INSERT acts on, captured when
+  // Enter was pressed: {key, hashes, name}. The commit reads only this.
+  property var limitInput: null
+
+  function isLimitPurpose(purpose) {
+    return String(purpose).indexOf("limit:") === 0
+  }
+
+  function isShareKey(k) {
+    return k === "ratioLimit" || k === "seedingTimeLimit"
+  }
+
+  // Status rows for hashes, from every torrent (not the filtered table).
+  function rowsFor(hashes) {
+    var all = client.service.torrents || []
+    var out = []
+    for (var i = 0; i < all.length; i++) if (hashes.indexOf(Model.torrentId(all[i])) !== -1) out.push(all[i])
+    return out
+  }
+
+  // j/k on Info: this torrent's Limits cursor, clamped to the rows.
+  function moveLimit(delta) {
+    var rows = limitRows
+    if (rows.length === 0) return
+    var next = View.moveIndex(rows.length, InspectorView.keyedIndex(rows, limitCursors[client.cursorHash], 0), delta)
+    var n = ({})
+    for (var k in limitCursors) n[k] = limitCursors[k]
+    n[client.cursorHash] = rows[next].key
+    limitCursors = n
+  }
+
+  // Enter on a Limits value row (key and torrent captured at key time):
+  // INSERT prefilled with the current value in input form. A ratio or seed
+  // time waits for the preferences behind the confirm (Ruling CG).
+  function startLimitInput(hash, key) {
+    var c = client
+    var row = rowsFor([hash])[0]
+    if (!row || Limits.editText(key, row) === "") return
+    if (isShareKey(key) && !readyAtEnter()) { c.note(Limits.NOT_READY, "urgent"); return }
+    limitInput = { key: key, hashes: [hash], name: String(row.name || "") }
+    startInput("limit:" + key, Limits.editText(key, row))
+  }
+
+  // Enter on a Limits INSERT. raw is the field exactly as typed (the
+  // parsers never trim). A parse error, or a share limit whose preferences
+  // aren't known any more (BQ), stays in INSERT; a ratio or seed time that
+  // some target already meets raises one CONFIRM (D8) first.
+  function commitLimit(raw) {
+    var c = client
+    var t = limitInput
+    if (isShareKey(t.key) && !readyAtEnter()) { refuseInput(Limits.NOT_READY); return }
+    var parsed = t.key === "ratioLimit" ? Limits.parseRatio(raw) : (t.key === "seedingTimeLimit" ? Limits.parseSeedTime(raw) : Limits.parseSpeed(raw))
+    if (parsed.error) { refuseInput(parsed.error); return }
+    var value = t.key === "ratioLimit" ? parsed.ratio : (t.key === "seedingTimeLimit" ? parsed.minutes : parsed.bytes)
+    limitInput = null
+    endInput()
+    askOrWriteLimit({ key: t.key, value: value, hashes: t.hashes.slice(), force: false })
+  }
+
+  // args: {key, value, hashes, force}. A share limit runs LimitsView.
+  // shareConfirm over the targets as they stand now; a non-empty line
+  // raises one CONFIRM whose `y` comes back as limit.edit with these
+  // frozen args and its force. Shared with Task 6's palette commands.
+  function askOrWriteLimit(args) {
+    var c = client
+    if (isShareKey(args.key)) {
+      var plan = Limits.shareConfirm(args.key === "ratioLimit" ? { ratio: args.value } : { seedingTime: args.value }, rowsFor(args.hashes), c.service)
+      args.force = plan.force
+      if (plan.line !== "") {
+        var r = Registry.raiseConfirm(c.regState, "limit.edit", "limitSet", args)
+        c.regState = r.state
+        c.confirmHashes = args.hashes.slice()
+        c.confirm = withLine(r.confirm, plan.line, "set")
+        return
+      }
+    }
+    writeLimit(args)
+  }
+
+  // The write: chunked like every window action, reported with
+  // LimitsView.limitCopy, refreshed after a failure (libraryFinished).
+  function writeLimit(args) {
+    var c = client
+    var svc = c.service
+    var k = args.key
+    var v = args.value
+    var hashes = args.hashes || []
+    if (hashes.length === 0) return
+    var rows = rowsFor(hashes)
+    var copy = Limits.limitCopy(k, v, rows.length === 1 ? rows[0] : null, hashes.length)
+    if (!copy) return
+    var tickets = c.perChunk(hashes, function(joined, chunk) {
+      var o = c.opts(chunk)
+      if (k === "dlLimit" || k === "upLimit") return svc.setSpeedLimit(joined, k === "dlLimit" ? "dl" : "up", v, o)
+      if (k === "ratioLimit") return svc.setShareLimits(joined, { ratio: v }, args.force === true, o)
+      if (k === "seedingTimeLimit") return svc.setShareLimits(joined, { seedingTime: v }, args.force === true, o)
+      return k === "seqDl" ? svc.setSequential(joined, v, o) : svc.setFirstLast(joined, v, o)
+    })
+    trackLibrary(tickets, copy, { refresh: true }, hashes)
+  }
+
+  // Space on Sequential or First/last: the value the row shows, negated
+  // (D4; qbt's on/off is idempotent, so a double Space converges).
+  function toggleLimit(hash, key) {
+    var row = rowsFor([hash])[0]
+    if (!row || (key !== "seqDl" && key !== "firstLast")) return
+    writeLimit({ key: key, value: row[key] !== true, hashes: [hash], force: false })
   }
 
   // ---- the C and T pickers (slice 3a) ------------------------------------------
@@ -632,6 +763,11 @@ QtObject {
 
   function commitInput() {
     var c = client
+    if (isLimitPurpose(c.inputPurpose)) {
+      if (limitInput) commitLimit(inputLine.inputValue())
+      else endInput()
+      return
+    }
     if (isLibraryPurpose(c.inputPurpose)) {
       if (libraryInput) commitLibrary(inputLine.inputValue())
       else endInput()
@@ -673,6 +809,7 @@ QtObject {
     c.moveHashes = []
     trackerInput = null
     libraryInput = null
+    limitInput = null
     endInput()
   }
 
@@ -904,6 +1041,25 @@ QtObject {
       // metaDL, or a fetch-metadata re-add).
       if ((c.inspectorTab === "info" || c.inspectorTab === "files") && c.cursorRow && c.infoTab.noMeta
           && View.toggleStarts(c.rawFor(targets))) run("torrent.toggle", args, ev, targets)
+      return
+
+    // The Info tab's Limits group (slice 3b): args.limitKey is the row
+    // under the Limits cursor when the key was pressed; limit.edit comes
+    // back with args.confirmed (and its frozen args) after the D8 CONFIRM.
+    case "limit.down":
+    case "limit.up":
+      moveLimit(commandId === "limit.down" ? 1 : -1)
+      return
+
+    case "limit.edit":
+      if (args.confirmed === true) { c.confirmHashes = []; writeLimit(args); return }
+      if (targets.length === 0 || !args.limitKey) return
+      startLimitInput(targets[0], args.limitKey)
+      return
+
+    case "limit.toggle":
+      if (targets.length === 0 || !args.limitKey) return
+      toggleLimit(targets[0], args.limitKey)
       return
 
     // The trackers tab (Deviation 4: R too). The registry only lets these

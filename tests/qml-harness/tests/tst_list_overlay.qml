@@ -45,4 +45,32 @@ TestCase {
 
     overlay.keyForwarded.disconnect(onForwarded)
   }
+
+  // Every Text's string under obj. The TestCase's own item isn't shown, so
+  // this walks by structure, not by visibility.
+  function allTexts(obj, out) {
+    out = out || []
+    if (!obj) return out
+    if (typeof obj.text === "string" && obj.font !== undefined) out.push(obj.text)
+    var kids = obj.children || []
+    for (var i = 0; i < kids.length; i++) allTexts(kids[i], out)
+    if (obj.contentItem && kids.indexOf(obj.contentItem) === -1) allTexts(obj.contentItem, out)
+    return out
+  }
+
+  // Slice 3b Task 5 (Ruling CJ 4): a dimmed row with no reason (the Limits
+  // rows, blocked with no note) shows no dangling " · ".
+  function test_a_dimmed_row_without_a_reason_shows_no_separator() {
+    var saved = overlay.rows
+    overlay.rows = [
+      { kind: "command", id: "a", title: "Edit limit", group: "Torrent", keys: "Enter", indices: [], enabled: false, reason: "" },
+      { kind: "command", id: "b", title: "Next limit", group: "View", keys: "j", indices: [], enabled: false, reason: "focus the info tab" }
+    ]
+    wait(30)
+    var texts = allTexts(overlay)
+    verify(texts.indexOf("Edit limit") !== -1, "the rows render: " + texts.join("|"))
+    var seps = texts.filter(function(t) { return t.indexOf("·") !== -1 })
+    compare(seps, ["  · focus the info tab"], "no separator without a reason")
+    overlay.rows = saved
+  }
 }

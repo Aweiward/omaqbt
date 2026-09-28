@@ -473,6 +473,53 @@ function doneNote(key, value, row) {
   return "";
 }
 
+// --- The window's copy (slice 3b, Task 5) ---------------------------------------------
+
+// Ruling CG: a ratio or seed-time edit waits for the preferences read
+// behind shareDefaults (LibraryView.libraryReady, checked at the key and
+// again at Enter).
+var NOT_READY = "Still reading qBittorrent's share limits; try again in a moment.";
+
+var ACTION_NAMES = {
+  dlLimit: "the ↓ limit",
+  upLimit: "the ↑ limit",
+  ratioLimit: "the ratio limit",
+  seedingTimeLimit: "the seed time limit",
+  seqDl: "sequential download",
+  firstLast: "first and last pieces first"
+};
+
+// limitCopy(key, value, row, count) -> ClientView.msgTrack's copy for one
+// limit write: {progress, done, fail} ("Setting the ratio limit…",
+// doneNote, "Setting the ratio limit failed"), or null for an unknown key.
+// count > 1 (Task 6's palette commands on a range) appends " on N
+// torrents" to the done note, which then skips its per-row suffix. A share
+// limit carries guard: true: qbt's own sentences (the D8 guard's refusal,
+// a partial write) show as they are; only its bare "qBittorrent refused
+// it (…)" gets the fail lead ("Setting the ratio limit failed: HTTP 409").
+function limitCopy(key, value, row, count) {
+  if (!hasOwn(ACTION_NAMES, key)) return null;
+  var n = Number(count) || 1;
+  var name = ACTION_NAMES[key];
+  var copy = {
+    progress: "Setting " + name + "…",
+    done: n > 1 ? doneNote(key, value, null) + " on " + n + " torrents" : doneNote(key, value, row),
+    fail: "Setting " + name + " failed"
+  };
+  if (key === "ratioLimit" || key === "seedingTimeLimit") copy.guard = true;
+  return copy;
+}
+
+// footerKeys(limitRow) -> the Info footer's keys for the Limits row under
+// the cursor (a limitRows entry): j/k, then Enter to edit a value or Space
+// to flip a toggle. No row (the cursor isn't showing), no keys.
+function footerKeys(limitRow) {
+  if (!limitRow || typeof limitRow !== "object") return [];
+  var move = { key: "j/k", label: "move" };
+  if (limitRow.toggle === true) return [move, { key: "Space", label: limitRow.value === "on" ? "turn off" : "turn on" }];
+  return [move, { key: "Enter", label: "edit" }];
+}
+
 if (typeof module !== "undefined") {
   module.exports = {
     SPEED_ERROR: SPEED_ERROR,
@@ -495,6 +542,9 @@ if (typeof module !== "undefined") {
     limitRows: limitRows,
     editText: editText,
     shareConfirm: shareConfirm,
-    doneNote: doneNote
+    doneNote: doneNote,
+    NOT_READY: NOT_READY,
+    limitCopy: limitCopy,
+    footerKeys: footerKeys
   };
 }

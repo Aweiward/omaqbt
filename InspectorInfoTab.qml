@@ -6,7 +6,7 @@ import "ClientView.js" as View
 import "InspectorView.js" as InspectorView
 
 // The Info tab: the cursor row's full name (wrapped), PiecesBar or the
-// no-metadata line, the slice-1 field block, the Transfer/Torrent groups
+// no-metadata line, the slice-1 field block, the Transfer/Limits/Torrent groups
 // (with the Comment 3-line cap) and the pinned action-keys footer sized to
 // its wrapped keys. Extracted out of InspectorPane.qml (slice 2b, Task 1:
 // pure refactor, no behaviour change).
@@ -24,7 +24,11 @@ Item {
   // M2: true for a fresh Info-tab error -- see InspectorPane.qml's own
   // `infoErrored` property doc.
   property bool infoErrored: false
+  // Transfer, Limits (slice 3b, InspectorView.withLimits) and Torrent. A
+  // Limits field carries `cursor` on the row under the Limits cursor.
   property var groups: []
+  // LimitsView.footerKeys for that row, ahead of the tab's own keys.
+  property var limitKeys: []
   property int padX: 0
   property color lineColor: "transparent"
 
@@ -148,42 +152,65 @@ Item {
               // this session" suffix, the only field that carries one)
               // sits after it in its own muted tone, so the value's
               // width leaves room for it instead of always wrapping.
-              delegate: Row {
+              delegate: Item {
                 id: gfield
                 required property var modelData
                 width: group.width
-                Text {
-                  width: Style.space(96)
-                  text: gfield.modelData.label
-                  textFormat: Text.PlainText
-                  font.family: Style.fontFamily
-                  font.pixelSize: Style.font.body
-                  color: Color.muted
+                height: gfieldRow.height
+
+                // The Limits cursor: InspectorList's fill and accent bar,
+                // pane-wide.
+                Rectangle {
+                  objectName: "limitCursor"
+                  visible: gfield.modelData.cursor === true
+                  x: -root.padX
+                  y: -Style.space(4)
+                  width: infoColumn.width
+                  height: gfield.height + Style.space(8)
+                  color: Style.selectedAccentFill
+                  Rectangle {
+                    width: Style.space(3)
+                    height: parent.height
+                    color: Color.accent
+                  }
                 }
-                Text {
-                  id: gvalue
-                  objectName: "groupValue_" + gfield.modelData.label
-                  width: gfield.width - Style.space(96) - (gnote.visible ? gnote.implicitWidth : 0)
-                  text: gfield.modelData.value
-                  textFormat: Text.PlainText
-                  wrapMode: Text.WrapAnywhere
-                  // Comment is the one field the spec caps: at most 3
-                  // lines, then "…" (a save path or a long hash still
-                  // wraps in full).
-                  maximumLineCount: gfield.modelData.label === "Comment" ? 3 : 0
-                  elide: gfield.modelData.label === "Comment" ? Text.ElideRight : Text.ElideNone
-                  font.family: Style.fontFamily
-                  font.pixelSize: Style.font.body
-                  color: root.toneColor(gfield.modelData.tone)
-                }
-                Text {
-                  id: gnote
-                  visible: !!gfield.modelData.note
-                  text: " " + gfield.modelData.note
-                  textFormat: Text.PlainText
-                  font.family: Style.fontFamily
-                  font.pixelSize: Style.font.body
-                  color: Color.muted
+
+                Row {
+                  id: gfieldRow
+                  width: gfield.width
+                  Text {
+                    width: Style.space(96)
+                    text: gfield.modelData.label
+                    textFormat: Text.PlainText
+                    font.family: Style.fontFamily
+                    font.pixelSize: Style.font.body
+                    color: Color.muted
+                  }
+                  Text {
+                    id: gvalue
+                    objectName: "groupValue_" + gfield.modelData.label
+                    width: gfield.width - Style.space(96) - (gnote.visible ? gnote.implicitWidth : 0)
+                    text: gfield.modelData.value
+                    textFormat: Text.PlainText
+                    wrapMode: Text.WrapAnywhere
+                    // Comment is the one field the spec caps: at most 3
+                    // lines, then "…" (a save path or a long hash still
+                    // wraps in full).
+                    maximumLineCount: gfield.modelData.label === "Comment" ? 3 : 0
+                    elide: gfield.modelData.label === "Comment" ? Text.ElideRight : Text.ElideNone
+                    font.family: Style.fontFamily
+                    font.pixelSize: Style.font.body
+                    color: root.toneColor(gfield.modelData.tone)
+                  }
+                  Text {
+                    id: gnote
+                    visible: !!gfield.modelData.note
+                    text: " " + gfield.modelData.note
+                    textFormat: Text.PlainText
+                    font.family: Style.fontFamily
+                    font.pixelSize: Style.font.body
+                    color: Color.muted
+                  }
                 }
               }
             }
@@ -222,8 +249,11 @@ Item {
       anchors.topMargin: infoFoot.vPad
       spacing: Style.space(14)
       Repeater {
-        // No metadata: the pinned keys become Space and f (the states table).
-        model: !root.info ? [] : (root.noMeta ? InspectorView.emptyCopy("info", root.row).keys : root.info.keys)
+        // No metadata: the pinned keys become Space and f (the states
+        // table). The Limits cursor's keys come first, and claim Space on
+        // a toggle row (Ruling CJ).
+        model: !root.info ? [] : InspectorView.infoFooterKeys(root.limitKeys,
+          root.noMeta ? InspectorView.emptyCopy("info", root.row).keys : root.info.keys)
         delegate: Row {
           id: act
           required property var modelData

@@ -38,6 +38,12 @@ Scope {
   // /app/preferences, read on the slow timer.
   property string defaultSavePath: ""
   property var relocation: ({ torrentChanged: false, categoryPathChanged: false })
+  // The share-limit chain behind a torrent's -2 values (slice 3b): each
+  // category's {ratioLimit, seedingTimeLimit, shareLimitAction}, and the
+  // global {ratio, seedingTime, action} (Model.parseStatusJson's shapes).
+  // LimitsView.shareConfirm reads them off this object as its `status`.
+  property var categoryLimits: ({})
+  property var shareDefaults: ({ ratio: -1, seedingTime: -1, action: "Stop" })
   // The home directory, so the window predicts where `p ~/x` puts files
   // (qbt expands ~/ with the same $HOME; LibraryView.movePlan's home).
   readonly property string homeDir: Quickshell.env("HOME") || ""
@@ -235,6 +241,8 @@ Scope {
     tags = Array.isArray(parsed.tags) ? parsed.tags : []
     defaultSavePath = parsed.defaultSavePath || ""
     relocation = parsed.relocation || { torrentChanged: false, categoryPathChanged: false }
+    categoryLimits = parsed.categoryLimits || ({})
+    shareDefaults = parsed.shareDefaults || { ratio: -1, seedingTime: -1, action: "Stop" }
     lastError = Model.nextStatusError(parsed, lastError)
     if (finished.length > 0) notify(Model.completionText(finished))
     pruneInspectByKey(torrents)

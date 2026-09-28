@@ -31,6 +31,9 @@ Item {
   // transient error blanks the pieces area without a stale line.
   property bool infoErrored: false
   property var groups: []
+  // LimitsView.footerKeys for the Limits cursor row ([] unless focused on
+  // Info), pinned ahead of the Info footer's own keys.
+  property var limitKeys: []
   // View.filesView(...): {state: "loading"|"error"|"empty"|"rows", rows}.
   property var files: ({ state: "loading", rows: [] })
   property int fileIndex: 0
@@ -169,6 +172,7 @@ Item {
       row: pane.row
       infoErrored: pane.infoErrored
       groups: pane.groups
+      limitKeys: pane.limitKeys
       padX: pane.padX
       lineColor: pane.lineColor
     }

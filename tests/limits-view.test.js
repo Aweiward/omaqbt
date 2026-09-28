@@ -697,3 +697,36 @@ test("doneNote: ratio and seed time on a torrent that isn't seeding yet apply on
   assert.equal(V.doneNote("ratioLimit", 2, row({ state: "forcedUP", progress: 1 })), "Ratio limit set to 2.00", "forcedUP is seeding");
   assert.equal(V.doneNote("ratioLimit", 2, null), "Ratio limit set to 2.00");
 });
+
+// --- limitCopy, footerKeys, NOT_READY (slice 3b, Task 5) -------------------------
+
+test("limitCopy: progress, done and a failure lead that names the action", () => {
+  const down = V.limitCopy("dlLimit", 512000, row());
+  assert.deepEqual(down, { progress: "Setting the ↓ limit…", done: "↓ limit set to 500 KiB/s", fail: "Setting the ↓ limit failed" });
+  assert.equal(V.limitCopy("upLimit", 0, row()).done, "↑ limit set to unlimited");
+  assert.equal(V.limitCopy("upLimit", 0, row()).fail, "Setting the ↑ limit failed");
+  const ratio = V.limitCopy("ratioLimit", 1.5, row({ state: "downloading", progress: 0.2 }));
+  assert.deepEqual(ratio, { progress: "Setting the ratio limit…", done: "Ratio limit set to 1.50 (applies once seeding)", fail: "Setting the ratio limit failed", guard: true });
+  const seed = V.limitCopy("seedingTimeLimit", 120, row());
+  assert.deepEqual(seed, { progress: "Setting the seed time limit…", done: "Seed time limit set to 2h", fail: "Setting the seed time limit failed", guard: true });
+  assert.deepEqual(V.limitCopy("seqDl", true, row()), { progress: "Setting sequential download…", done: "Sequential download on", fail: "Setting sequential download failed" });
+  assert.deepEqual(V.limitCopy("firstLast", false, row()), { progress: "Setting first and last pieces first…", done: "First and last pieces first off", fail: "Setting first and last pieces first failed" });
+  // Several torrents (Task 6's palette commands): the count, no per-row suffix.
+  assert.equal(V.limitCopy("dlLimit", 512000, null, 3).done, "↓ limit set to 500 KiB/s on 3 torrents");
+  assert.equal(V.limitCopy("ratioLimit", -2, null, 2).done, "Ratio limit set to default on 2 torrents");
+  assert.equal(V.limitCopy("ratioLimit", -1, row(), 1).done, "Ratio limit set to none");
+  assert.equal(V.limitCopy("nope", 1, row()), null);
+});
+
+test("footerKeys: j/k plus Enter on a value row, Space on a toggle row, nothing without a row", () => {
+  assert.deepEqual(V.footerKeys(null), []);
+  const rows = V.limitRows(row({ seqDl: true }), {});
+  assert.deepEqual(V.footerKeys(rows[0]), [{ key: "j/k", label: "move" }, { key: "Enter", label: "edit" }]);
+  assert.deepEqual(V.footerKeys(rows[3]), [{ key: "j/k", label: "move" }, { key: "Enter", label: "edit" }]);
+  assert.deepEqual(V.footerKeys(rows[4]), [{ key: "j/k", label: "move" }, { key: "Space", label: "turn off" }]);
+  assert.deepEqual(V.footerKeys(rows[5]), [{ key: "j/k", label: "move" }, { key: "Space", label: "turn on" }]);
+});
+
+test("NOT_READY names the share limits, not the folders", () => {
+  assert.equal(V.NOT_READY, "Still reading qBittorrent's share limits; try again in a moment.");
+});

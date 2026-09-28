@@ -258,9 +258,10 @@ Item {
               }
             }
 
+            // A row blocked with no note (reason "") shows no separator.
             Text {
-              visible: row.dim
-              text: "  · " + row.modelData.reason
+              visible: row.dim && !!row.modelData.reason
+              text: row.modelData.reason ? "  · " + row.modelData.reason : ""
               textFormat: Text.PlainText
               font.family: Style.fontFamily
               font.pixelSize: Style.font.bodySmall

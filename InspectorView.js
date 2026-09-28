@@ -887,6 +887,38 @@ function infoView(entry, sinceMs, sidecarUp, row, fmtDate) {
   };
 }
 
+// withLimits(groups, rows, cursorKey) -> infoView's groups with the Limits
+// group (slice 3b) between Transfer and Torrent: LimitsView.limitRows as
+// fields {label, value, tone, note, key, cursor}, muted where the value
+// isn't the torrent's own; `cursor` marks the row whose key is cursorKey
+// ("" while the inspector isn't focused on Info). No rows, no group.
+function withLimits(groups, rows, cursorKey) {
+  var list = Array.isArray(groups) ? groups.slice() : [];
+  var limits = rows || [];
+  if (limits.length === 0) return list;
+  var fields = [];
+  for (var i = 0; i < limits.length; i++) {
+    var r = limits[i];
+    fields.push({ label: r.label, value: r.value, tone: r.muted ? "muted" : "fg", note: "", key: r.key, cursor: cursorKey !== "" && r.key === cursorKey });
+  }
+  list.splice(Math.min(1, list.length), 0, { title: "Limits", fields: fields });
+  return list;
+}
+
+// infoFooterKeys(limitKeys, baseKeys) -> the Info footer's pinned keys:
+// LimitsView.footerKeys for the Limits cursor row first, then the tab's
+// own keys (o/y/m/e, or a no-metadata torrent's Space/f) minus any key the
+// Limits row claims (Space on a toggle row flips it, Ruling CJ).
+function infoFooterKeys(limitKeys, baseKeys) {
+  var first = limitKeys || [];
+  var taken = {};
+  for (var i = 0; i < first.length; i++) taken[first[i].key] = true;
+  var out = first.slice();
+  var base = baseKeys || [];
+  for (var j = 0; j < base.length; j++) if (!taken[base[j].key]) out.push(base[j]);
+  return out;
+}
+
 // peerDetail(row) -> the cursor peer's detail lines: {ip (shown in fg),
 // rest (":port · connection · downloaded N"), flags, flagsDesc (qbt's
 // one-meaning-per-line description joined with " · ")}.
@@ -932,6 +964,8 @@ if (typeof module !== "undefined" && module.exports) {
     trackerSummaryParts: trackerSummaryParts,
     trackerDetail: trackerDetail,
     peerDetail: peerDetail,
-    infoView: infoView
+    infoView: infoView,
+    withLimits: withLimits,
+    infoFooterKeys: infoFooterKeys
   };
 }

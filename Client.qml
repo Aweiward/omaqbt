@@ -165,7 +165,7 @@ Item {
   readonly property var inspectorNow: View.inspectorDispatch({ pane: pane, state: tableState, tab: inspectorTab,
     trackers: trackersView.rows, trackerIndex: trackerIndex, peers: peersView.rows, peerIndex: peerIndex, row: cursorRow,
     cursorHash: cursorHash, noMeta: infoTab.noMeta, pending: service ? service.magnetPendingHashes : [],
-    filterCursor: filterCursor, filterEntries: filterEntries, libraryReady: commands.libraryReady })
+    filterCursor: filterCursor, filterEntries: filterEntries, libraryReady: commands.libraryReady, limitRow: commands.limitCursorRow })
   property var inspectorState: View.inspectorDispatch({})
   onInspectorNowChanged: if (!View.sameInspectorState(inspectorState, inspectorNow)) inspectorState = inspectorNow
 
@@ -704,7 +704,8 @@ Item {
             piecesLegend: root.infoTab.legend
             noMeta: root.infoTab.noMeta
             infoErrored: root.infoTab.errored
-            groups: root.infoTab.groups
+            groups: commands.infoGroups
+            limitKeys: commands.limitFooterKeys
             files: root.filesState
             fileIndex: root.fileIndex
             trackers: root.trackersView
@@ -774,7 +775,7 @@ Item {
       HelpOverlay {
         anchors.fill: parent
         visible: root.helpOpen
-        groups: root.helpOpen ? View.helpRows(Registry.helpFor("NORMAL", root.helpPane, root.inspectorTab)) : []
+        groups: root.helpOpen ? View.helpRows(Registry.helpFor("NORMAL", root.helpPane, root.inspectorTab, root.inspectorNow)) : []
         mode: "NORMAL"
         paneName: root.helpPane
         onDismissed: {
