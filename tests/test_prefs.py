@@ -30,10 +30,17 @@ SCHEMA = json.loads((ROOT / "settings-schema.json").read_text())
 DUMP = json.loads((ROOT / "tests" / "fixtures" / "preferences-5.2.3.json").read_text())
 CASES = json.loads((ROOT / "tests" / "fixtures" / "settings-cases.json").read_text())
 TEXT_RULES_CASES = json.loads((ROOT / "tests" / "fixtures" / "text-rules-cases.json").read_text())["cases"]
+LIST_RULES = json.loads((ROOT / "tests" / "fixtures" / "list-rules-cases.json").read_text())
 UTF8_ENV = {"LANG": "en_US.UTF-8", "LC_ALL": "en_US.UTF-8"}
 C_ENV = {"LANG": "C", "LC_ALL": "C"}
-# Ruling DH: multi-line text is read-only in 4a.
-MULTILINE_MESSAGE = "Editing multi-line settings arrives in 4b."
+USAGE_MESSAGE = "usage: qbt pref-set <key> (-- <value> | --stdin | --clear)"
+# Slice 4b: the three writable secrets go through --stdin only (eng 4b D7).
+SECRET_ARGV_MESSAGE = "Send this password with --stdin, never as an argument."
+STDIN_ONLY_MESSAGE = "Only the proxy, Dynamic DNS and SMTP passwords take --stdin or --clear."
+STDIN_TIMEOUT_MESSAGE = "The value didn't arrive within 5 seconds."
+# Ruling EB (eng 4b D9).
+WHITELIST_MESSAGE = "OmaqBT keeps this read-only: it has no effect while the Web UI only listens on 127.0.0.1."
+WRITABLE_SECRETS = ("proxy_password", "dyndns_password", "mail_notification_password")
 
 SECRET_VALUES = {
     "proxy_password": "hunter2-PROXYSECRET",
@@ -158,21 +165,16 @@ def qbt_array(name):
     return [line.strip().strip("'") for line in m.group(1).splitlines() if line.strip()]
 
 
-# Slice 4b Task 1 flagged the custom-header keys locked (eng 4b D8) in the
-# schema; qbt already refuses them through the schema's entry flag ("OmaqBT
-# needs this as it is."). Task 2 adds them to PREF_LOCKED_WEBUI: it must then
-# empty this set (the tripwires below fail until it does).
-PENDING_TASK2_LOCKS = {"web_ui_use_custom_http_headers_enabled", "web_ui_custom_http_headers"}
-
-
 class HardcodedListsTest(unittest.TestCase):
     """Ruling DB: the schema's locked set equals qbt's hardcoded lists."""
 
     def test_locked_equals_schema(self):
         mine = qbt_array("PREF_LOCKED_VPN") + qbt_array("PREF_LOCKED_WEBUI")
         self.assertEqual(len(mine), len(set(mine)))
-        self.assertFalse(PENDING_TASK2_LOCKS & set(mine), "Task 2: empty PENDING_TASK2_LOCKS now that qbt has them")
-        self.assertEqual(set(mine), set(SCHEMA["locked"]) - PENDING_TASK2_LOCKS)
+        self.assertEqual(set(mine), set(SCHEMA["locked"]))
+        # Eng 4b D8: the custom headers are hardcoded, not just flagged.
+        self.assertIn("web_ui_custom_http_headers", mine)
+        self.assertIn("web_ui_use_custom_http_headers_enabled", mine)
         self.assertEqual(set(qbt_array("PREF_LOCKED_VPN")), set(VPN_LOCKS))
         self.assertIn("web_ui_reverse_prox*", mine)  # Ruling DD
 
@@ -181,12 +183,17 @@ class HardcodedListsTest(unittest.TestCase):
         mine = qbt_array("PREF_LOCKED_VPN") + qbt_array("PREF_LOCKED_WEBUI")
         flagged = {k for k, e in SCHEMA["keys"].items() if e.get("locked")}
         matched = {k for k in SCHEMA["keys"] if any(fnmatch.fnmatchcase(k, g) for g in mine)}
-        self.assertFalse(PENDING_TASK2_LOCKS & matched, "Task 2: empty PENDING_TASK2_LOCKS now that qbt has them")
-        self.assertEqual(flagged - PENDING_TASK2_LOCKS, matched)
+        self.assertEqual(flagged, matched)
         self.assertIn("web_ui_reverse_proxies_list", matched)
 
     def test_other_refused_equals_schema(self):
         self.assertEqual(qbt_array("PREF_OTHER_REFUSED"), SCHEMA["otherRefusedPatterns"])
+
+    def test_secret_writable_equals_schema(self):
+        # Eng 4b D7: the --stdin allowlist, hardcoded before the schema.
+        flagged = {k for k, e in SCHEMA["keys"].items() if e.get("secretWritable")}
+        self.assertEqual(set(qbt_array("PREF_SECRET_WRITABLE")), flagged)
+        self.assertEqual(flagged, set(WRITABLE_SECRETS))
 
 
 class PrefsReadTest(PrefsCase):
@@ -234,10 +241,13 @@ class PrefSetRefusalsTest(PrefsCase):
     def test_usage(self):
         for args in (["pref-set"], ["pref-set", "dht"], ["pref-set", "dht", "true"],
                      ["pref-set", "dht", "-", "true"], ["pref-set", "dht", "--"],
-                     ["pref-set", "dht", "--", "true", "extra"], ["pref-set", "--", "true"]):
+                     ["pref-set", "dht", "--", "true", "extra"], ["pref-set", "--", "true"],
+                     ["pref-set", "--stdin"], ["pref-set", "--clear"], ["pref-set", "proxy_password", "--stdin", "x"],
+                     ["pref-set", "proxy_password", "--clear", "x"], ["pref-set", "proxy_password", "--STDIN"],
+                     ["pref-set", "proxy_password", "-", "--stdin"], ["pref-set", "proxy_password", "--", "--stdin", "x"]):
             before = len(self.log())
             r = self.run_qbt(*args)
-            self.assertEqual((r.returncode, r.stderr.strip()), (1, "usage: qbt pref-set <key> -- <value>"), args)
+            self.assertEqual((r.returncode, r.stderr.strip()), (1, USAGE_MESSAGE), args)
             self.assertEqual(self.log()[before:], [], f"{args}: no request at all")
 
     def test_every_lock(self):
@@ -258,9 +268,12 @@ class PrefSetRefusalsTest(PrefsCase):
     def test_read_only_hidden_deferred_secret(self):
         self.set_refused("add_trackers_url_list", "x", "qBittorrent doesn't let this be changed.")
         self.set_refused("web_ui_api_key", "x", "qBittorrent doesn't let this be changed.")
-        for key in ("proxy_password", "dyndns_password", "mail_notification_password"):
-            r = self.set_refused(key, "hunter3", "OmaqBT doesn't change secrets yet.")
+        for key in WRITABLE_SECRETS:
+            # Slice 4b: never on argv, only through --stdin.
+            r = self.set_refused(key, "hunter3", SECRET_ARGV_MESSAGE)
             self.assertNotIn("hunter3", r.stderr)
+        # Ruling EB: OmaqBT's choice, not qBittorrent's.
+        self.set_refused("bypass_auth_subnet_whitelist", "10.0.0.0/8", WHITELIST_MESSAGE)
         for key, entry in SCHEMA["keys"].items():
             if entry.get("hidden"):
                 self.set_refused(key, "1", "OmaqBT doesn't change this setting.")
@@ -335,10 +348,8 @@ class PrefSetCasesTest(PrefsCase):
                 continue
             seen += 1
             with self.subTest(section=section, key=case["key"], input=case["input"], why=case["why"]):
-                if SCHEMA["keys"][case["key"]].get("multiline"):
-                    # Ruling DH overrides the case's ok for 4a.
-                    self.set_refused(case["key"], case["input"], MULTILINE_MESSAGE, env=env)
-                elif case["ok"]:
+                self.assertFalse(SCHEMA["keys"][case["key"]].get("multiline"), "Ruling DM: lists live in list-rules-cases.json")
+                if case["ok"]:
                     want = self.expected(section, case)
                     self.assertEqual(self.set_ok(case["key"], case["input"], env=env), want)
                     st = self.state()
@@ -433,14 +444,20 @@ class PrefSetFidelityTest(PrefsCase):
         self.set_refused("app_instance_name", "a\rb", "Keep it to one line.")
         self.set_refused("save_path", "/srv/a\nb", "Use an absolute path or one starting with ~/.")
 
-    def test_multiline_keys_are_read_only_in_4a(self):
+    def test_multiline_keys_that_can_be_edited_are_lists(self):
         # Slice 4b Task 1: the headers are locked (D8), the whitelist read-only (D9).
         keys = [k for k, e in SCHEMA["keys"].items()
                 if e.get("multiline") and not (e.get("hidden") or e.get("deferred") or e.get("readOnly") or e.get("locked"))]
         self.assertEqual(sorted(keys), sorted(["excluded_file_names", "add_trackers"]))
         for key in keys:
-            for value in ("one", "a\nb", ""):
-                self.set_refused(key, value, MULTILINE_MESSAGE)
+            self.assertIn(SCHEMA["keys"][key].get("listKind"), ("trackerUrl", "pattern"), key)
+        # Bans travel only through ban-list (eng 4b D3), never pref-set.
+        self.assertTrue(SCHEMA["keys"]["banned_IPs"].get("hidden"))
+        for value in ("203.0.113.5", "203.0.113.5\n198.51.100.7", ""):
+            self.set_refused("banned_IPs", value, "OmaqBT doesn't change this setting.")
+        # Locked and read-only multi-line keys stay refused.
+        self.set_refused("web_ui_custom_http_headers", "X-A: 1", "OmaqBT needs this as it is.")
+        self.set_refused("bypass_auth_subnet_whitelist", "", WHITELIST_MESSAGE)
 
     def test_paths(self):
         home = os.environ["HOME"]
@@ -776,21 +793,50 @@ class SecretsBeforeSchemaTest(FinalFixCase):
         self.assertEqual((r.returncode, r.stdout, r.stderr.strip()), (1, "", message), key)
         self.assertEqual(self.log()[before:], [], f"{key}: no request at all")
 
+    def refused_stdin(self, qbt, key, mode, message):
+        import subprocess
+        before = len(self.log())
+        r = subprocess.run([qbt, "pref-set", key, mode], env=self.env, input="x1", text=True, capture_output=True)
+        self.assertEqual((r.returncode, r.stdout, r.stderr.strip()), (1, "", message), f"{key} {mode}")
+        self.assertEqual(self.log()[before:], [], f"{key} {mode}: no request at all")
+
     def check(self, qbt):
-        for key in ("proxy_password", "dyndns_password", "mail_notification_password"):
-            self.refused_by(qbt, key, "OmaqBT doesn't change secrets yet.")
+        for key in WRITABLE_SECRETS:
+            self.refused_by(qbt, key, SECRET_ARGV_MESSAGE)
         self.refused_by(qbt, "web_ui_api_key", "qBittorrent doesn't let this be changed.")
         for key in ("backup_password_extra", "X_PassWord", "web_ui_password", "password"):
             self.refused_by(qbt, key, "OmaqBT won't change this setting.")
+        self.refused_by(qbt, "bypass_auth_subnet_whitelist", WHITELIST_MESSAGE)
+        # Eng 4b D7: the --stdin allowlist is checked before any schema read.
+        for mode in ("--stdin", "--clear"):
+            self.refused_stdin(qbt, "web_ui_api_key", mode, "qBittorrent doesn't let this be changed.")
+            for key in ("web_ui_password", "backup_password_extra", "X_PassWord", "future_token", "Auth_TOKEN",
+                        "client_Secret_x", "my_api_key", "password"):
+                self.refused_stdin(qbt, key, mode, "OmaqBT won't change this setting.")
+            for key in ("dht", "app_instance_name", "no_such_setting"):
+                self.refused_stdin(qbt, key, mode, STDIN_ONLY_MESSAGE)
 
     def test_without_a_schema(self):
-        self.check(self.copy_qbt())
+        qbt = self.copy_qbt()
+        self.check(qbt)
+        # An allowlisted secret still needs the schema's label, and fails closed.
+        for mode in ("--stdin", "--clear"):
+            self.refused_stdin(qbt, "proxy_password", mode, "The settings schema is missing.")
+
+    def test_a_schema_can_only_restrict_the_allowlist(self):
+        schema = json.loads(json.dumps(SCHEMA))
+        del schema["keys"]["dyndns_password"]["secretWritable"]
+        qbt = self.copy_qbt(schema)
+        for mode in ("--stdin", "--clear"):
+            self.refused_stdin(qbt, "dyndns_password", mode, "OmaqBT doesn't change secrets yet.")
 
     def test_with_a_schema_that_unlocks_them(self):
         schema = json.loads(json.dumps(SCHEMA))
         for key in ("proxy_password", "dyndns_password", "mail_notification_password", "web_ui_api_key"):
             schema["keys"][key] = {"label": key, "type": "text"}
-        schema["keys"]["backup_password_extra"] = {"label": "b", "type": "text"}
+        for key in ("backup_password_extra", "web_ui_password", "future_token", "dht"):
+            schema["keys"][key] = {"label": "b", "type": "secret", "secret": True, "secretWritable": True}
+        schema["keys"]["bypass_auth_subnet_whitelist"] = {"label": "w", "type": "text"}
         self.check(self.copy_qbt(schema))
 
 
@@ -808,35 +854,722 @@ class RedactionTest(PrefsCase):
             self.assertNotIn(secret, r.stdout + r.stderr)
 
 
-class SecretArgvTest(PrefsCase):
-    """No secret value is ever on the argv of a process qbt spawns: every
-    external command qbt runs here is shimmed to log its argv first."""
+SECRET_LABELS = {"proxy_password": "Proxy password", "dyndns_password": "Password",
+                 "mail_notification_password": "SMTP password"}
+SECRET_CASES = [c for c in LIST_RULES["cases"] if c["kind"] == "secret"]
+BAN_USAGE = "usage: qbt ban-list add|remove <ip>"
+IP_MESSAGE = "Use an IPv4 or IPv6 address."
+TRACKER_MESSAGE = "Use an http, https or udp tracker URL."
+PATTERN_LINE_MESSAGE = "Keep each pattern to one line."
 
-    def test_no_secret_in_any_argv(self):
+
+class StdinCase(FinalFixCase):
+    def run_stdin(self, key, data=b"", mode="--stdin", env=None):
+        import subprocess
+        full = dict(self.env)
+        full.update(env or {})
+        if isinstance(data, str):
+            data = data.encode("utf-8", "surrogateescape")
+        return subprocess.run([QBT, "pref-set", key, mode], env=full, input=data, capture_output=True)
+
+    def secret_ok(self, key, value, env=None, mode="--stdin"):
+        before = len(self.log())
+        r = self.run_stdin(key, value, mode=mode, env=env)
+        self.assertEqual((r.returncode, r.stdout.decode().strip(), r.stderr.decode()), (0, '{"ok":true}', ""),
+                         f"{key} {mode} {value!r}")
+        posts = self.posts_since(before)
+        self.assertEqual(len(posts), 1, f"{key}: one setPreferences POST")
+        self.assertEqual(self.sent(posts[0]), {key: value if isinstance(value, str) else value.decode()})
+        return r
+
+    def secret_refused(self, key, value, message, env=None, mode="--stdin", posts=0):
+        before = len(self.log())
+        r = self.run_stdin(key, value, mode=mode, env=env)
+        self.assertEqual((r.returncode, r.stdout, r.stderr.decode().strip()), (1, b"", message), f"{key} {value!r}")
+        self.assertEqual(len(self.posts_since(before)), posts, f"{key} {value!r}: setPreferences POSTs")
+        return r
+
+
+class SecretStdinTest(StdinCase):
+    """Eng 4b D2/D7, Ruling EB: `pref-set <key> --stdin` for the three
+    writable secrets. The value is read once from stdin (5 s), never on an
+    argv or in the environment, and read back exactly."""
+
+    def test_every_secret_case(self):
+        self.assertGreaterEqual(len(SECRET_CASES), 10)
+        for env in (UTF8_ENV, C_ENV):
+            for case in SECRET_CASES:
+                with self.subTest(input=case["input"][:40], why=case["why"], env=env["LC_ALL"]):
+                    if case["ok"]:
+                        self.secret_ok("proxy_password", case["input"], env=env)
+                        self.assertEqual(self.state()["proxy_password"], case["normalised"])
+                    else:
+                        r = self.secret_refused("proxy_password", case["input"], case["message"], env=env)
+                        if len(case["input"]) > 3:
+                            self.assertNotIn(case["input"].encode(), r.stderr)
+
+    def test_each_writable_secret(self):
+        for key in WRITABLE_SECRETS:
+            self.secret_ok(key, f"new-{key}-value")
+            self.assertEqual(self.state()[key], f"new-{key}-value")
+            r = self.run_qbt("prefs")
+            self.assertEqual(json.loads(r.stdout)[key], {"set": True})
+            self.assertNotIn(f"new-{key}-value", r.stdout + r.stderr)
+
+    def test_invalid_utf8_is_refused(self):
+        for env in (UTF8_ENV, C_ENV):
+            self.secret_refused("proxy_password", b"pass\xffword", "Use valid UTF-8 text.", env=env)
+            self.secret_refused("proxy_password", b"\xc3", "Use valid UTF-8 text.", env=env)
+            # Byte-exact (fix round 1): what bash's regex lets through.
+            for data in (b"a\xed\xa0\x80b", b"\xf4\x90\x80\x80", b"\xc0\xaf", b"\xed\xbf\xbf"):
+                self.secret_refused("proxy_password", data, "Use valid UTF-8 text.", env=env)
+
+    def test_nul_anywhere_is_refused(self):
+        for data in (b"\x00", b"\x00password", b"password\x00", b"pass\x00word\n", b"a\x00b\x00c"):
+            self.secret_refused("dyndns_password", data, "Use a value without NUL characters.")
+
+    def test_line_endings_are_refused(self):
+        for data in (b"password\n", b"password\r\n", b"password\r", b"\n", b"\npassword", b"a\nb\n"):
+            self.secret_refused("dyndns_password", data, "Keep it to one line.")
+
+    def test_the_cap_counts_code_points(self):
+        self.secret_ok("mail_notification_password", "x" * 1024)
+        self.secret_ok("mail_notification_password", "\U0001F98A" * 1024, env=C_ENV)
+        self.secret_refused("mail_notification_password", "x" * 1025, "Use at most 1024 characters.")
+        self.secret_refused("mail_notification_password", "é" * 1025, "Use at most 1024 characters.", env=C_ENV)
+
+    def test_clear_writes_empty_and_reads_no_stdin(self):
+        import subprocess
+        self.secret_ok("proxy_password", "to-be-cleared")
+        for key in WRITABLE_SECRETS:
+            before = len(self.log())
+            # stdin stays open and unwritten: --clear must not wait on it.
+            p = subprocess.Popen([QBT, "pref-set", key, "--clear"], env=self.env, stdin=subprocess.PIPE,
+                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            try:
+                out, err = p.communicate(timeout=4)
+            finally:
+                p.kill()
+                p.stdin.close() if p.stdin and not p.stdin.closed else None
+            self.assertEqual((p.returncode, out.strip(), err), (0, b'{"ok":true}', b""), key)
+            posts = self.posts_since(before)
+            self.assertEqual([self.sent(x) for x in posts], [{key: ""}])
+            self.assertEqual(self.state()[key], "")
+            self.assertEqual(json.loads(self.run_qbt("prefs").stdout)[key], {"set": False})
+
+    def test_stdin_timeout(self):
+        import subprocess
+        import time
+        before = len(self.log())
+        p = subprocess.Popen([QBT, "pref-set", "proxy_password", "--stdin"], env=self.env, stdin=subprocess.PIPE,
+                             stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        start = time.monotonic()
+        p.stdin.write(b"PARTIALSECRET")
+        p.stdin.flush()
+        try:
+            rc = p.wait(timeout=9)
+        finally:
+            p.stdin.close()
+        out, err = p.stdout.read(), p.stderr.read()
+        p.stdout.close()
+        p.stderr.close()
+        self.assertGreaterEqual(time.monotonic() - start, 4.5)
+        self.assertEqual((rc, out, err.decode().strip()), (1, b"", STDIN_TIMEOUT_MESSAGE))
+        self.assertEqual(self.log()[before:], [], "no request at all")
+        self.assertNotIn(b"PARTIALSECRET", out + err)
+
+    def test_write_failures(self):
+        value = "FAILSECRET-1"
+        self.control({"setPreferences": "409secret"})
+        r = self.secret_refused("proxy_password", value, "qBittorrent refused it (HTTP 409)", posts=1)
+        self.assertNotIn(value.encode(), r.stderr)
+        self.control({"setPreferences": "noop"})
+        self.secret_refused("proxy_password", value, "qBittorrent ignored Proxy password", posts=1)
+        self.control({"prefs_override": {"proxy_password": value + " "}})
+        self.secret_refused("proxy_password", value, "qBittorrent ignored Proxy password", posts=1)
+        self.control({"prefs_override": {"dyndns_password": " " + value}})
+        self.secret_refused("dyndns_password", value, "qBittorrent ignored Password", posts=1)
+        self.control({"preferences": "409state"})
+        self.secret_refused("mail_notification_password", value, "Couldn't confirm SMTP password (HTTP 409)", posts=1)
+        self.control({"preferences": "unreadable"})
+        self.secret_refused("mail_notification_password", value,
+                            "Couldn't confirm SMTP password (qBittorrent sent something unreadable)", posts=1)
+        self.control({})
+
+    def test_write_timeout(self):
+        self.control({"setPreferences": "sleep7"})
+        self.secret_refused("proxy_password", "SLOWSECRET-2", "qBittorrent refused it (couldn't reach qBittorrent)",
+                            posts=1)
+        self.control({})
+
+    def test_unreachable(self):
+        env = {"QBT_BASE": "http://127.0.0.1:9"}
+        self.secret_refused("proxy_password", "DOWNSECRET-3", "qBittorrent refused it (couldn't reach qBittorrent)",
+                            env=env)
+        self.secret_refused("proxy_password", "x", "refusing non-localhost host (base must be http://127.0.0.1:<port>)",
+                            env={"QBT_BASE": "http://127.0.0.2:1"})
+
+
+class ListWritesTest(FinalFixCase):
+    """Eng 4b D5/D10: add_trackers and excluded_file_names take a whole
+    newline-joined list through `pref-set <key> -- <value>`. Every line is
+    checked per list-rules-cases.json, and the read-back is exact: tier
+    breaks, repeated blank lines, empty entries and a trailing newline all
+    round-trip."""
+
+    KEYS = {"trackerUrl": "add_trackers", "pattern": "excluded_file_names"}
+
+    def test_every_list_round_trip(self):
+        seen = 0
+        for case in LIST_RULES["lists"]:
+            if case["key"] == "banned_IPs":
+                continue
+            seen += 1
+            for env in (UTF8_ENV, C_ENV):
+                with self.subTest(key=case["key"], why=case["why"], env=env["LC_ALL"]):
+                    # Ruling EC: the lines already stored (here, every one)
+                    # go back as they are.
+                    self.assertEqual(self.post_raw({case["key"]: case["input"]}), 200)
+                    self.assertEqual(self.set_ok(case["key"], case["input"], env=env), {case["key"]: case["input"]})
+                    self.assertEqual(self.state()[case["key"]], case["normalised"])
+        self.assertEqual(seen, 10)
+
+    def test_every_line_case(self):
+        seen = 0
+        for case in LIST_RULES["cases"]:
+            key = self.KEYS.get(case["kind"])
+            if key is None:
+                continue
+            seen += 1
+            with self.subTest(kind=case["kind"], input=case["input"][:60], why=case["why"]):
+                if "\n" in case["input"]:
+                    # One line per list entry: the window refuses a typed
+                    # newline, but a whole list is newline-joined, so qbt
+                    # checks each line on its own.
+                    self.assertEqual(self.set_ok(key, case["input"]), {key: case["input"]})
+                elif case["kind"] == "pattern" and case["input"] == "":
+                    # "a adds none" is the window's rule; as a whole value
+                    # "" is the empty list, which round-trips.
+                    self.assertEqual(self.set_ok(key, ""), {key: ""})
+                elif case["ok"]:
+                    self.assertEqual(self.set_ok(key, case["input"]), {key: case["input"]})
+                    self.assertEqual(self.state()[key], case["normalised"])
+                else:
+                    self.set_refused(key, case["input"], case["message"])
+        self.assertGreater(seen, 30)
+
+    def test_one_bad_line_refuses_the_whole_list(self):
+        self.set_ok("add_trackers", "udp://a.example:1/announce")
+        for bad in ("udp://a.example:1/announce\n\nftp://b.example/x", "udp://a.example:1/announce\nudp://",
+                    "https://ok.example/a\n\nhttps://ok.example/a|b", "\n udp://a.example:1/announce",
+                    "udp://a.example:1/announce\r\nhttp://b.example/announce"):
+            self.set_refused("add_trackers", bad, TRACKER_MESSAGE)
+        for bad in ("*.exe\r\n*.scr", "*.exe\n\r", "\r"):
+            self.set_refused("excluded_file_names", bad, PATTERN_LINE_MESSAGE)
+        self.assertEqual(self.state()["add_trackers"], "udp://a.example:1/announce")
+
+    def test_tracker_length_counts_the_line(self):
+        url = "https://t.example/" + "a" * (2048 - len("https://t.example/"))
+        self.assertEqual(self.set_ok("add_trackers", url + "\n\n" + url), {"add_trackers": url + "\n\n" + url})
+        self.set_refused("add_trackers", url + "a", TRACKER_MESSAGE)
+
+    def test_invalid_utf8_is_refused(self):
+        self.set_refused("excluded_file_names", "*.exe\na\udcffb", "Use valid UTF-8 text.")
+        # Byte-exact (fix round 1): a UTF-16 surrogate, past U+10FFFF, overlong.
+        for bad in ("a\udced\udca0\udc80b", "\udcf4\udc90\udc80\udc80", "\udcc0\udcaf"):
+            self.set_refused("excluded_file_names", "*.exe\n" + bad, "Use valid UTF-8 text.")
+            self.set_refused("app_instance_name", bad, "Use valid UTF-8 text.")
+
+    def test_only_lines_not_stored_are_checked(self):
+        # Ruling EC, the reviewer's repro: a line qBittorrent's own UI stored
+        # (wss://) doesn't block adding or removing others.
+        stored = "http://a.example/announce\nwss://ws.example/x\n\nudp://b.example:1/announce"
+        self.assertEqual(self.post_raw({"add_trackers": stored}), 200)
+        added = stored + "\nhttp://c.example/announce"
+        self.assertEqual(self.set_ok("add_trackers", added), {"add_trackers": added})
+        self.assertEqual(self.state()["add_trackers"], added)
+        removed = "wss://ws.example/x\n\nudp://b.example:1/announce\nhttp://c.example/announce"
+        self.assertEqual(self.set_ok("add_trackers", removed), {"add_trackers": removed})
+        self.assertEqual(self.state()["add_trackers"], removed)
+        # A new bad line is still refused.
+        self.set_refused("add_trackers", removed + "\nwss://new.example/x", TRACKER_MESSAGE)
+        # Patterns: a stored CR line is kept; a new one is refused.
+        self.assertEqual(self.post_raw({"excluded_file_names": "*.exe\na\rb"}), 200)
+        self.assertEqual(self.set_ok("excluded_file_names", "*.exe\na\rb\n*.scr"),
+                         {"excluded_file_names": "*.exe\na\rb\n*.scr"})
+        self.set_refused("excluded_file_names", "*.exe\na\rb\n*.scr\nc\rd", PATTERN_LINE_MESSAGE)
+
+    def test_a_new_empty_pattern_is_refused(self):
+        self.assertEqual(self.post_raw({"excluded_file_names": "*.exe"}), 200)
+        for bad in ("*.exe\n", "\n*.exe", "*.exe\n\n*.scr"):
+            self.set_refused("excluded_file_names", bad, "Use a pattern such as *.exe.")
+        # Stored empties keep round-tripping, and the empty list is fine.
+        self.assertEqual(self.post_raw({"excluded_file_names": "*.exe\n\n*.scr"}), 200)
+        self.assertEqual(self.set_ok("excluded_file_names", "*.exe\n\n*.scr\n*.bat"),
+                         {"excluded_file_names": "*.exe\n\n*.scr\n*.bat"})
+        self.assertEqual(self.set_ok("excluded_file_names", ""), {"excluded_file_names": ""})
+        # Tracker tier breaks are always fine.
+        self.assertEqual(self.post_raw({"add_trackers": "udp://a.example:1/x"}), 200)
+        self.assertEqual(self.set_ok("add_trackers", "udp://a.example:1/x\n\nudp://b.example:1/x"),
+                         {"add_trackers": "udp://a.example:1/x\n\nudp://b.example:1/x"})
+
+    def test_the_stored_read_fails_before_any_write(self):
+        self.control({"preferences": "409state"})
+        self.set_refused("add_trackers", "udp://a.example:1/x", "qBittorrent refused it (HTTP 409)")
+        self.control({"preferences": "unreadable"})
+        self.set_refused("excluded_file_names", "*.exe", "qBittorrent sent something unreadable")
+        self.control({})
+
+    def test_read_back_is_exact(self):
+        # 4a's rule trims strings; a list must come back exactly.
+        for key, sent, got in (("add_trackers", "udp://a.example:1/announce\n", "udp://a.example:1/announce"),
+                               ("add_trackers", "udp://a.example:1/announce\n\nhttp://b.example/x",
+                                "udp://a.example:1/announce\nhttp://b.example/x"),
+                               ("excluded_file_names", "*.exe\n*.scr", "*.exe"),
+                               ("excluded_file_names", " *.tmp ", "*.tmp")):
+            self.control({"prefs_override": {key: got}})
+            r = self.run_qbt("pref-set", key, "--", sent)
+            label = SCHEMA["keys"][key]["label"]
+            self.assertEqual((r.returncode, r.stdout, r.stderr.strip()), (1, "", f"qBittorrent ignored {label}"), sent)
+        self.control({})
+
+    def test_untouched_lines_survive_an_edit(self):
+        # Review focus 3: the window sends the whole list back; tiers and
+        # empty entries it didn't touch reach qBittorrent unchanged.
+        start = "udp://a.example:1/announce\n\n\nhttp://b.example/announce\n"
+        self.set_ok("add_trackers", start)
+        self.assertEqual(self.set_ok("add_trackers", start + "https://c.example/x"),
+                         {"add_trackers": start + "https://c.example/x"})
+        self.assertEqual(self.state()["add_trackers"], start + "https://c.example/x")
+
+
+class BanListTest(FinalFixCase):
+    """Eng 4b D3/D11: `qbt ban-list add|remove <ip>` re-reads banned_IPs
+    just before writing, compares addresses in QHostAddress's form, and
+    reports a mismatch without restoring anything."""
+
+    def ban(self, op, ip, env=None):
+        return self.run_qbt("ban-list", op, ip, env=env)
+
+    def ban_ok(self, op, ip, changed=True):
+        before = len(self.log())
+        r = self.ban(op, ip)
+        self.assertEqual((r.returncode, r.stdout.strip(), r.stderr), (0, '{"ok":true}', ""), f"{op} {ip!r}")
+        posts = self.posts_since(before)
+        self.assertEqual(len(posts), 1 if changed else 0, f"{op} {ip!r}: setPreferences POSTs")
+        return [self.sent(x) for x in posts]
+
+    def ban_refused(self, op, ip, message, posts=0, requests=None):
+        before = len(self.log())
+        r = self.ban(op, ip)
+        self.assertEqual((r.returncode, r.stdout, r.stderr.strip()), (1, "", message), f"{op} {ip!r}")
+        self.assertEqual(len(self.posts_since(before)), posts, f"{op} {ip!r}: setPreferences POSTs")
+        if requests is not None:
+            self.assertEqual(len(self.log()) - before, requests, f"{op} {ip!r}: requests")
+        return r
+
+    def set_bans(self, text):
+        self.assertEqual(self.post_raw({"banned_IPs": text}), 200)
+
+    def bans(self):
+        return self.state()["banned_IPs"]
+
+    def setUp(self):
+        self.set_bans("")
+
+    def test_usage(self):
+        for args in (["ban-list"], ["ban-list", "add"], ["ban-list", "add", "1.2.3.4", "x"], ["ban-list", "ban", "1.2.3.4"],
+                     ["ban-list", "--", "1.2.3.4"], ["ban-list", "Add", "1.2.3.4"], ["ban-list", "list"]):
+            before = len(self.log())
+            r = self.run_qbt(*args)
+            self.assertEqual((r.returncode, r.stdout, r.stderr.strip()), (1, "", BAN_USAGE), args)
+            self.assertEqual(self.log()[before:], [], f"{args}: no request at all")
+
+    def test_every_ip_case(self):
+        seen = 0
+        for case in LIST_RULES["cases"]:
+            if case["kind"] != "ip":
+                continue
+            seen += 1
+            with self.subTest(input=case["input"], why=case["why"]):
+                self.set_bans("")
+                if case["ok"]:
+                    self.assertEqual(self.ban_ok("add", case["input"]), [{"banned_IPs": case["normalised"]}])
+                    self.assertEqual(self.bans(), case["normalised"])
+                    self.assertEqual(self.ban_ok("remove", case["input"]), [{"banned_IPs": ""}])
+                    self.assertEqual(self.bans(), "")
+                else:
+                    self.ban_refused("add", case["input"], IP_MESSAGE, requests=0)
+                    # Ruling ED: remove first looks for it exactly as stored.
+                    self.ban_refused("remove", case["input"], IP_MESSAGE, posts=0,
+                                     requests=0 if case["input"] == "" or "\n" in case["input"] else 1)
+        self.assertGreater(seen, 20)
+
+    def test_add_keeps_every_other_ban(self):
+        self.set_bans("10.0.0.1\n2001:db8::1\n::ffff:1.2.3.4")
+        self.assertEqual(self.ban_ok("add", "9.9.9.9"), [{"banned_IPs": "10.0.0.1\n2001:db8::1\n::ffff:1.2.3.4\n9.9.9.9"}])
+        self.assertEqual(self.bans(), "10.0.0.1\n2001:db8::1\n9.9.9.9\n::ffff:1.2.3.4")
+
+    def test_remove_matches_any_form(self):
+        self.set_bans("10.0.0.1\n2001:db8::1\n9.9.9.9")
+        self.assertEqual(self.ban_ok("remove", "2001:0DB8:0000:0000:0000:0000:0000:0001"),
+                         [{"banned_IPs": "10.0.0.1\n9.9.9.9"}])
+        self.assertEqual(self.bans(), "10.0.0.1\n9.9.9.9")
+        self.set_bans("::ffff:1.2.3.4\n1.2.3.4")
+        self.assertEqual(self.ban_ok("remove", "::FFFF:0102:0304"), [{"banned_IPs": "1.2.3.4"}])
+
+    def test_already_banned_or_not_banned_writes_nothing(self):
+        self.set_bans("10.0.0.1\n2001:db8::1")
+        self.ban_ok("add", "2001:DB8:0::1", changed=False)
+        self.ban_ok("add", "10.0.0.1", changed=False)
+        self.ban_ok("remove", "10.0.0.2", changed=False)
+        self.ban_ok("remove", "::ffff:10.0.0.1", changed=False)
+        self.assertEqual(self.bans(), "10.0.0.1\n2001:db8::1")
+
+    def test_reads_just_before_writing(self):
+        self.set_bans("10.0.0.1")
+        before = len(self.log())
+        self.ban_ok("add", "10.0.0.2")
+        calls = [(e["method"], e["path"]) for e in self.log()[before:]]
+        self.assertEqual(calls, [("GET", "/api/v2/app/preferences"), ("POST", "/api/v2/app/setPreferences"),
+                                 ("GET", "/api/v2/app/preferences")])
+        # A change made elsewhere since the window last read is kept.
+        self.set_bans("10.0.0.1\n10.0.0.2\n172.16.0.9")
+        self.assertEqual(self.ban_ok("remove", "10.0.0.1"), [{"banned_IPs": "10.0.0.2\n172.16.0.9"}])
+
+    def test_qt_forms(self):
+        # QHostAddress::toString (checked against Qt 6.11): an address whose
+        # first 96 bits are zero keeps a dotted tail, like a mapped one.
+        for ip, stored in (("::1.2.3.4", "::1.2.3.4"), ("::0:102:304", "::1.2.3.4"), ("::0.0.1.0", "::100"),
+                           ("::1:0", "::0.1.0.0"), ("::FFFF:c000:201", "::ffff:192.0.2.1"),
+                           ("1:0:0:2:0:0:0:3", "1:0:0:2::3"), ("::2:3:4:5:6:7:8", "0:2:3:4:5:6:7:8"),
+                           ("2001:db8:0:0:1:0:0:1", "2001:db8::1:0:0:1"), ("::", "::"), ("ABCD::", "abcd::")):
+            with self.subTest(ip=ip):
+                self.set_bans("")
+                self.assertEqual(self.ban_ok("add", ip), [{"banned_IPs": stored}])
+                self.assertEqual(self.bans(), stored)
+                self.ban_ok("add", stored, changed=False)
+
+    def test_entries_qbt_would_refuse_are_kept_untouched(self):
+        # qBittorrent's own UI can store a ban qbt wouldn't accept (Qt keeps
+        # a zone id): an edit of another address carries it through and is
+        # not reported as a changed list.
+        self.set_bans("fe80::1%eth0\n10.0.0.1")
+        self.assertEqual(self.bans(), "10.0.0.1\nfe80::1%eth0")
+        self.assertEqual(self.ban_ok("add", "10.0.0.2"), [{"banned_IPs": "10.0.0.1\nfe80::1%eth0\n10.0.0.2"}])
+        self.assertEqual(self.bans(), "10.0.0.1\n10.0.0.2\nfe80::1%eth0")
+        self.assertEqual(self.ban_ok("remove", "10.0.0.1"), [{"banned_IPs": "10.0.0.2\nfe80::1%eth0"}])
+        self.assertEqual(self.bans(), "10.0.0.2\nfe80::1%eth0")
+
+    def test_remove_takes_an_address_exactly_as_stored(self):
+        # Ruling ED: a zone id stored by qBittorrent's own UI can be unbanned,
+        # though add refuses it.
+        self.set_bans("fe80::1%eth0\n10.0.0.1")
+        self.ban_refused("add", "fe80::1%eth0", IP_MESSAGE, requests=0)
+        self.ban_refused("remove", "FE80::1%eth0", IP_MESSAGE, posts=0)
+        self.ban_refused("remove", "fe80::1%eth", IP_MESSAGE, posts=0)
+        self.assertEqual(self.ban_ok("remove", "fe80::1%eth0"), [{"banned_IPs": "10.0.0.1"}])
+        self.assertEqual(self.bans(), "10.0.0.1")
+        self.set_bans("fe80::1%eth0")
+        self.control({"prefs_override": {"banned_IPs": "fe80::1%eth0"}})
+        self.ban_refused("remove", "fe80::1%eth0", "qBittorrent still bans fe80::1%eth0.", posts=1)
+        self.control({})
+
+    def test_lost_update_is_reported_never_restored(self):
+        self.set_bans("10.0.0.1")
+        # Another writer lands right after ours: the ban is there, the list isn't what we wrote.
+        self.control({"prefs_override": {"banned_IPs": "10.0.0.1\n10.0.0.2\n172.16.0.9"}})
+        self.ban_refused("add", "10.0.0.2", "The ban list changed while OmaqBT saved it; check it.", posts=1)
+        self.assertEqual(self.bans(), "10.0.0.1\n10.0.0.2\n172.16.0.9", "nothing restored")
+        # ...or it drops ours.
+        self.control({"prefs_override": {"banned_IPs": "10.0.0.1"}})
+        self.ban_refused("add", "10.0.0.3", "qBittorrent didn't ban 10.0.0.3.", posts=1)
+        # ...or drops another one, keeping ours.
+        self.control({"prefs_override": {"banned_IPs": "2001:db8::1"}})
+        self.ban_refused("add", "2001:DB8::1", "The ban list changed while OmaqBT saved it; check it.", posts=1)
+        self.control({})
+        self.set_bans("10.0.0.1\n2001:db8::1")
+        self.control({"prefs_override": {"banned_IPs": "10.0.0.1\n2001:db8::1"}})
+        self.ban_refused("remove", "2001:DB8::1", "qBittorrent still bans 2001:db8::1.", posts=1)
+        self.control({"prefs_override": {"banned_IPs": ""}})
+        self.ban_refused("remove", "10.0.0.1", "The ban list changed while OmaqBT saved it; check it.", posts=1)
+        self.control({})
+        self.assertEqual(self.bans(), "", "nothing restored")
+
+    def test_failures_report_the_code_only(self):
+        self.set_bans("10.0.0.1")
+        self.control({"preferences": "409state"})
+        self.ban_refused("add", "10.0.0.2", "qBittorrent refused it (HTTP 409)", posts=0)
+        self.control({"preferences": "unreadable"})
+        self.ban_refused("add", "10.0.0.2", "qBittorrent sent something unreadable", posts=0)
+        # banned_IPs that isn't a string.
+        self.control({"prefs_override": {"banned_IPs": 5}})
+        self.set_bans("10.0.0.1")
+        self.control({})
+        self.ban_refused("add", "10.0.0.2", "qBittorrent sent something unreadable", posts=0)
+        self.set_bans("10.0.0.1")
+        self.control({"setPreferences": "409secret"})
+        r = self.ban_refused("add", "10.0.0.2", "qBittorrent refused it (HTTP 409)", posts=1)
+        self.assertNotIn("passkey", r.stderr)
+        self.control({"setPreferences": "sleep7"})
+        self.ban_refused("add", "10.0.0.2", "qBittorrent refused it (couldn't reach qBittorrent)", posts=1)
+        # The read-back after the write fails: the write may have applied.
+        for fault, reason in (("409", "HTTP 409"), ("unreadable", "qBittorrent sent something unreadable")):
+            self.control({})
+            self.set_bans("10.0.0.1")
+            self.state()
+            self.control({"preferences_after_post": fault})
+            self.ban_refused("add", "10.0.0.2", f"Couldn't confirm Banned IPs ({reason})", posts=1)
+            self.control({})
+            self.assertEqual(self.bans(), "10.0.0.1\n10.0.0.2", "the write applied")
+            self.control({"preferences_after_post": fault})
+            self.ban_refused("remove", "10.0.0.1", f"Couldn't confirm Banned IPs ({reason})", posts=1)
+        self.control({})
+
+
+class FixtureBannedIpsTest(FinalFixCase):
+    """5.2.3's setBannedIPs (sessionimpl.cpp:4167, appcontroller.cpp:783):
+    empty parts skipped, invalid addresses dropped, QHostAddress form,
+    sorted as strings, de-duplicated."""
+
+    def test_every_banned_ips_round_trip(self):
+        seen = 0
+        for case in LIST_RULES["lists"]:
+            if case["key"] != "banned_IPs":
+                continue
+            seen += 1
+            with self.subTest(why=case["why"]):
+                self.assertEqual(self.post_raw({"banned_IPs": case["input"]}), 200)
+                self.assertEqual(self.state()["banned_IPs"], case["normalised"])
+        self.assertEqual(seen, 6)
+
+    def test_qt_dotted_tail(self):
+        self.assertEqual(self.post_raw({"banned_IPs": "::0:102:304\n::1:0\n::0.0.1.0\n::ffff:c000:201"}), 200)
+        self.assertEqual(self.state()["banned_IPs"], "::0.1.0.0\n::1.2.3.4\n::100\n::ffff:192.0.2.1")
+
+
+# Every external command qbt may spawn. PATH holds only these shims, so a
+# command qbt spawns that isn't here fails loudly instead of going unlogged.
+SHIMMED_TOOLS = ("jq", "curl", "sed", "cat", "mktemp", "rm", "readlink", "dirname", "stat", "id", "grep", "cut",
+                 "tail", "head", "tr", "wc", "od", "env", "timeout", "sleep", "pgrep", "mkdir", "chmod", "date",
+                 "basename", "sort", "uniq", "printf", "tee", "mv", "cp", "ls", "flock", "python3", "base64",
+                 # qbt's own #!/usr/bin/env bash finds bash through PATH.
+                 "bash")
+
+
+class SecretArgvTest(StdinCase):
+    """Eng 4b D7 (mandatory): no secret is ever on the argv or in the
+    environment of a process qbt spawns, on success, refusal, timeout and
+    failure. Every external command runs through a shim that logs its argv
+    and its whole environment first."""
+
+    def make_shims(self):
         import shutil
         bindir = Path(tempfile.mkdtemp(prefix="qbt-argv-"))
-        argv_log = bindir / "argv.log"
+        self.addCleanup(shutil.rmtree, bindir, True)
+        log = bindir / "spawn.log"
+        for tool in SHIMMED_TOOLS:
+            real = shutil.which(tool)
+            if not real:
+                continue
+            shim = bindir / tool
+            # Absolute paths only: PATH points back at the shims.
+            shim.write_text(
+                "#!/bin/sh\n"
+                # An inherited SHELLOPTS=xtrace would trace the shim itself.
+                "{ set +o xtrace; } 2>/dev/null\n"
+                f"{{ printf 'ARGV\\0'; printf '%s\\0' \"$0\" \"$@\"; printf 'ENV\\0'; /usr/bin/cat /proc/$$/environ; }} >>'{log}'\n"
+                f"exec '{real}' \"$@\"\n")
+            shim.chmod(0o755)
+        self.assertTrue((bindir / "jq").exists() and (bindir / "curl").exists())
+        return {"PATH": str(bindir)}, log
+
+    def test_no_secret_in_any_spawned_argv_or_environment(self):
+        import subprocess
+        import time
+        env, log = self.make_shims()
+        secrets = []
+
+        def secret(tag):
+            value = f"S3CRET-{tag}-" + "q" * 6
+            secrets.append(value)
+            return value
+
+        # Success, for all three, and a clear.
+        for key in WRITABLE_SECRETS:
+            v = secret(key)
+            r = self.run_stdin(key, v, env=env)
+            self.assertEqual((r.returncode, r.stderr), (0, b""), f"{key}: qbt ran with only the shims on PATH")
+            self.assertEqual(self.state()[key], v)
+        r = self.run_stdin("proxy_password", mode="--clear", env=env)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        # Refusals: NUL, newline, too long, invalid UTF-8, a refused key.
+        for data in (secret("nul") + "\0x", secret("nl") + "\n", secret("long") * 80, secret("bad") + "\udcff"):
+            r = self.run_stdin("dyndns_password", data, env=env)
+            self.assertEqual(r.returncode, 1)
+        for key in ("web_ui_password", "dht", "web_ui_api_key"):
+            r = self.run_stdin(key, secret(key), env=env)
+            self.assertEqual(r.returncode, 1)
+        r = self.run_qbt("pref-set", "proxy_password", "--", "argv-is-the-callers", env=env)
+        self.assertEqual(r.returncode, 1)
+        # Failures: refused POST, ignored write, failed read-back, unreachable.
+        for control in ({"setPreferences": "409secret"}, {"setPreferences": "noop"}, {"preferences": "409state"},
+                        {"preferences": "unreadable"}):
+            self.control(control)
+            r = self.run_stdin("mail_notification_password", secret("fail"), env=env)
+            self.assertEqual(r.returncode, 1, control)
+        self.control({})
+        r = self.run_stdin("proxy_password", secret("down"), env=dict(env, QBT_BASE="http://127.0.0.1:9"))
+        self.assertEqual(r.returncode, 1)
+        # Timeouts: the POST stalls past curl's limit, and stdin never closes.
+        self.control({"setPreferences": "sleep7"})
+        r = self.run_stdin("proxy_password", secret("slow"), env=env)
+        self.assertEqual(r.returncode, 1)
+        self.control({})
+        full = dict(self.env)
+        full.update(env)
+        p = subprocess.Popen([QBT, "pref-set", "proxy_password", "--stdin"], env=full, stdin=subprocess.PIPE,
+                             stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        p.stdin.write(secret("stall").encode())
+        p.stdin.flush()
         try:
-            for tool in ("jq", "curl", "sed", "cat", "mktemp", "rm", "readlink", "dirname", "stat", "id"):
-                real = shutil.which(tool)
-                if not real:
-                    continue
-                shim = bindir / tool
-                shim.write_text(f"#!/bin/sh\nprintf '%s\\0' \"$@\" >>'{argv_log}'\nexec '{real}' \"$@\"\n")
-                shim.chmod(0o755)
-            env = {"PATH": f"{bindir}:{os.environ['PATH']}"}
-            self.run_qbt("prefs", env=env)
-            self.run_qbt("pref-set", "dht", "--", "false", env=env)
-            self.run_qbt("pref-set", "future_name", "--", "x", env=env)
-            self.control({"setPreferences": "noop"})
-            self.run_qbt("pref-set", "future_flag", "--", "true", env=env)
-            self.control({})
-            logged = argv_log.read_bytes().decode("utf-8", "replace")
-            self.assertIn("setPreferences", logged, "the shims really ran")
-            for secret in SECRET_VALUES.values():
-                self.assertNotIn(secret, logged)
+            self.assertEqual(p.wait(timeout=9), 1)
         finally:
-            shutil.rmtree(bindir, ignore_errors=True)
+            p.stdin.close()
+            p.stdout.close()
+            p.stderr.close()
+        # 4a's paths and the 4b list and ban writes, with secrets stored.
+        self.secret_ok("proxy_password", secret("stored"))
+        self.assertEqual(self.run_qbt("prefs", env=env).returncode, 0)
+        self.assertEqual(self.run_qbt("pref-set", "dht", "--", "false", env=env).returncode, 0)
+        self.assertEqual(self.run_qbt("pref-set", "add_trackers", "--", "udp://a.example:1/x\n\nhttp://b.example/y",
+                                      env=env).returncode, 0)
+        self.assertEqual(self.run_qbt("ban-list", "add", "203.0.113.9", env=env).returncode, 0)
+        self.assertEqual(self.run_qbt("ban-list", "remove", "203.0.113.9", env=env).returncode, 0)
+        self.control({"setPreferences": "noop"})
+        self.assertEqual(self.run_qbt("pref-set", "future_flag", "--", "true", env=env).returncode, 1)
+        self.control({})
+
+        logged = log.read_bytes()
+        self.assertIn(b"setPreferences", logged, "the shims really ran")
+        self.assertIn(b"--data-binary", logged, "the secret POST went through a shimmed curl")
+        entries = logged.split(b"ARGV\0")[1:]
+        self.assertGreater(len(entries), 50)
+        stored = [v.encode() for v in SECRET_VALUES.values()]
+        for value in secrets:
+            self.assertNotIn(value.encode(), logged, value)
+            # URL- or JSON-encoded forms too.
+            self.assertNotIn(value.replace("-", "%2D").encode(), logged)
+        for value in stored:
+            self.assertNotIn(value, logged)
+        self.assertNotIn(b"S3CRET", logged)
+
+    def test_inherited_shellopts_never_leak(self):
+        # Fix round 1 (Ruling EE): an exported SHELLOPTS turns bash options
+        # on before qbt's first line runs. allexport would export the value
+        # to every child; xtrace would print it on stderr.
+        env, log = self.make_shims()
+        value = "S3CRET-opts-" + "w" * 6
+        for opts in ("allexport", "xtrace", "allexport:xtrace", "braceexpand:allexport:hashall:interactive-comments:xtrace"):
+            for key, mode, data in (("proxy_password", "--stdin", value), ("proxy_password", "--stdin", value + "\n"),
+                                    ("dyndns_password", "--clear", "")):
+                r = self.run_stdin(key, data, mode=mode, env=dict(env, SHELLOPTS=opts))
+                self.assertNotIn(value.encode(), r.stdout + r.stderr, opts)
+                if data == value:
+                    self.assertEqual((r.returncode, r.stderr), (0, b""), f"SHELLOPTS={opts}")
+            self.assertEqual(self.run_qbt("ban-list", "add", "203.0.113.8", env=dict(env, SHELLOPTS=opts)).stderr, "")
+        self.assertEqual(self.state()["proxy_password"], value)
+        logged = log.read_bytes()
+        self.assertIn(b"SHELLOPTS=", logged, "the shims saw the inherited SHELLOPTS")
+        self.assertNotIn(value.encode(), logged)
+        self.assertNotIn(b"S3CRET", logged)
+
+    def test_ban_list_runs_one_jq_between_its_read_and_its_write(self):
+        # Fix round 1: the plan, the address and the body are one jq call,
+        # so the read-to-write window holds no more spawns than it must.
+        env, log = self.make_shims()
+        self.assertEqual(FinalFixCase.post_raw(self, {"banned_IPs": "10.0.0.1"}), 200)
+        r = self.run_qbt("ban-list", "add", "10.0.0.7", env=env)
+        self.assertEqual((r.returncode, r.stderr), (0, ""))
+        names = []
+        for entry in log.read_bytes().split(b"ARGV\0")[1:]:
+            argv = entry.split(b"ENV\0")[0].split(b"\0")
+            tool = Path(argv[0].decode()).name
+            if tool == "curl":
+                tool += " POST" if b"setPreferences" in entry.split(b"ENV\0")[0] else " GET"
+            names.append(tool)
+        get = names.index("curl GET")
+        post = names.index("curl POST")
+        self.assertLess(get, post)
+        self.assertEqual(names[get + 1:post].count("jq"), 1, names[get:post + 1])
+
+    def test_no_response_body_ever_touches_disk(self):
+        # Ruling EG: the preferences body holds every stored secret, so
+        # api_exec keeps it in memory only. TMPDIR is a fresh empty dir and
+        # must stay empty during every read, including a SIGKILL mid-request
+        # (nothing could clean up after that).
+        import signal
+        import subprocess
+        import time
+        tmpdir = Path(tempfile.mkdtemp(prefix="qbt-tmp-"))
+        self.addCleanup(__import__("shutil").rmtree, tmpdir, True)
+        env = {"TMPDIR": str(tmpdir), "TMP": str(tmpdir), "TEMP": str(tmpdir)}
+        self.assertEqual(self.run_qbt("prefs", env=env).returncode, 0)
+        self.secret_ok("proxy_password", "S3CRET-disk-1", env=env)
+        self.assertEqual(self.run_qbt("pref-set", "add_trackers", "--", "udp://a.example:1/x", env=env).returncode, 0)
+        self.assertEqual(self.run_qbt("ban-list", "add", "203.0.113.4", env=env).returncode, 0)
+        self.assertEqual(list(tmpdir.iterdir()), [])
+        for sig, group in ((signal.SIGKILL, True), (signal.SIGTERM, True), (signal.SIGTERM, False)):
+            self.control({"preferences": "sleep7"})
+            p = subprocess.Popen([QBT, "prefs"], env=dict(self.env, **env), stdout=subprocess.PIPE,
+                                 stderr=subprocess.PIPE, start_new_session=True)
+            deadline = time.monotonic() + 1.5
+            while time.monotonic() < deadline:
+                self.assertEqual(list(tmpdir.iterdir()), [], "nothing on disk mid-request")
+                time.sleep(0.05)
+            if group:
+                os.killpg(p.pid, sig)
+            else:
+                p.send_signal(sig)
+            p.wait(timeout=5)
+            p.stdout.close()
+            p.stderr.close()
+            self.assertEqual(list(tmpdir.iterdir()), [], f"{sig!r} group={group}")
+            self.control({})
+        # And nothing in api_exec can write one.
+        text = (ROOT / "qbt").read_text()
+        body = re.search(r"^api_exec\(\) \{\n(.*?)^\}", text, re.S | re.M).group(1)
+        for word in ("mktemp", "-o ", "tee", "> ", ">>"):
+            self.assertNotIn(word, re.sub(r"(?m)^\s*#.*$", "", body), word)
+
+    def test_api_exec_keeps_bodies_and_codes_apart(self):
+        # Ruling EG: the status is split off curl's stdout, so an error
+        # body, an empty body and an unreachable server all stay distinct.
+        self.control({"preferences": "409state"})
+        r = self.run_qbt("prefs")
+        self.assertEqual((r.returncode, r.stdout, r.stderr.strip()), (1, "", "qBittorrent refused it (HTTP 409)"))
+        self.control({})
+        r = self.run_qbt("prefs", env={"QBT_BASE": "http://127.0.0.1:9"})
+        self.assertEqual((r.returncode, r.stderr.strip()), (1, "qBittorrent refused it (couldn't reach qBittorrent)"))
+        self.assertEqual(self.run_qbt("pref-set", "dht", "--", "true").returncode, 0)
+        r = self.run_qbt("prefs")
+        self.assertEqual(json.loads(r.stdout), json.loads(r.stdout.strip()))
+        self.assertEqual(r.stdout.count("\n"), 1)
+
+    def test_secret_never_reaches_stdout_or_stderr(self):
+        value = "S3CRET-out-" + "z" * 5
+        outputs = []
+        for key, data, control in (("proxy_password", value, {}), ("proxy_password", value + "\n", {}),
+                                   ("proxy_password", value, {"setPreferences": "409secret"}),
+                                   ("proxy_password", value, {"preferences": "409state"}),
+                                   ("proxy_password", value, {"setPreferences": "noop"})):
+            self.control(control)
+            r = self.run_stdin(key, data)
+            outputs.append(r.stdout + r.stderr)
+        self.control({})
+        for out in outputs:
+            self.assertNotIn(value.encode(), out)
+            self.assertNotIn(b"S3CRET", out)
 
 
 if __name__ == "__main__":

@@ -1,4 +1,9 @@
 #!/usr/bin/env bash
+# An exported SHELLOPTS turns options on before this line runs: allexport
+# would put a secret read from stdin into every child's environment, and
+# xtrace would print it on stderr (Ruling EE). The group's stderr hides
+# the trace of this very line.
+{ set +o xtrace +o allexport; } 2>/dev/null
 set -euo pipefail
 
 HOME_DIR="${QBT_HOME:-$HOME}"
@@ -231,12 +236,23 @@ is_daemon() {
 }
 
 api_exec() {
-  local tmp code
-  tmp=$(mktemp)
-  code=$(curl -o "$tmp" -w '%{http_code}' "$@" || true)
-  local resp
-  resp=$(cat "$tmp")
-  rm -f "$tmp"
+  local out code resp
+  # Ruling EG: the body stays in memory, never in a file (for preferences
+  # it holds every stored secret, and a kill mid-curl would leave a file
+  # behind). curl appends "\n<status>" and the last line is split off; no
+  # output at all, or a last line that isn't three digits, counts as 000,
+  # never as a body.
+  out=$(curl -w '\n%{http_code}' "$@" || true)
+  if [[ $out == *$'\n'* ]]; then
+    code=${out##*$'\n'}
+    resp=${out%$'\n'*}
+  else
+    code=$out
+    resp=""
+  fi
+  [[ $code =~ ^[[:digit:]]{3}$ ]] || code=000
+  # As the old $(cat "$tmp") did: trailing newlines go.
+  while [[ $resp == *$'\n' ]]; do resp=${resp%$'\n'}; done
   if [[ $code == 403 ]]; then
     die "localhost auth is required"
   fi
@@ -1945,7 +1961,10 @@ PREF_LOCKED_VPN=(
   current_interface_address
   current_interface_name
 )
-# The WebUI OmaqBT itself talks to: "OmaqBT needs this as it is."
+# The WebUI OmaqBT itself talks to: "OmaqBT needs this as it is." The two
+# custom-header keys are eng 4b D8: 5.2.3 adds the headers to every WebUI
+# reply unfiltered (appcontroller.cpp:953), and a bad one cuts qbt and the
+# sidecar off from qBittorrent.
 PREF_LOCKED_WEBUI=(
   web_ui_address
   web_ui_port
@@ -1956,6 +1975,8 @@ PREF_LOCKED_WEBUI=(
   web_ui_domain_list
   'web_ui_reverse_prox*'
   'alternative_webui_*'
+  web_ui_use_custom_http_headers_enabled
+  web_ui_custom_http_headers
 )
 # A key the schema doesn't know (Other) is refused when it matches one.
 PREF_OTHER_REFUSED=(
@@ -1969,9 +1990,24 @@ PREF_OTHER_REFUSED=(
   '*secret*'
   '*api_key*'
 )
-# Printed as {"set": bool}, on top of the schema's secret flags, and never
-# written: web_ui_api_key is read-only in qBittorrent, the rest wait for 4b.
+# Printed as {"set": bool}, on top of the schema's secret flags.
+# web_ui_api_key is read-only in qBittorrent.
 PREF_SECRETS=(proxy_password dyndns_password mail_notification_password web_ui_api_key)
+# Eng 4b D7: the only secrets OmaqBT writes, and only from stdin (`pref-set
+# <key> --stdin`) or as "" (`--clear`). Checked before the schema is read,
+# so no schema can add one; a schema without secretWritable on one of them
+# refuses it too. tests/test_prefs.py pins this equal to the schema's.
+PREF_SECRET_WRITABLE=(
+  proxy_password
+  dyndns_password
+  mail_notification_password
+)
+# Every other key named like a secret is refused --stdin and --clear.
+PREF_SECRET_REFUSED=('*password*' '*token*' '*secret*' '*api_key*')
+# Ruling EB (eng 4b D9): OmaqBT's choice, not qBittorrent's, so it has its
+# own sentence and is checked before the schema like the locks.
+PREF_OMAQBT_READ_ONLY=bypass_auth_subnet_whitelist
+PREF_OMAQBT_READ_ONLY_SENTENCE="OmaqBT keeps this read-only: it has no effect while the Web UI only listens on 127.0.0.1."
 # Keys the schema doesn't know whose names sound secret (matched
 # case-insensitively) are printed as {"set": bool} too.
 PREF_SECRET_NAME_RE='password|token|secret|api_key'
@@ -2031,24 +2067,8 @@ cmd_prefs() {
         else . end)' <<<"$PREFS_JSON" 2>/dev/null || die "qBittorrent sent something unreadable"
 }
 
-# Validates and casts one value for one key. $other is "" for a schema key,
-# or the kind of an Other key's current value (boolean, integer, number,
-# string).
-# Prints {error} or {sent, label, type}; the value only ever
-# arrives through --arg and is cast by the schema's type, never its shape.
-PREF_CAST_JQ='
-def one_line: test("[\n\r]") | not;
-def whole: test("\\A(0|-?[1-9][0-9]{0,9})\\z");
-def sentinel_text: (.sentinels // {}) | to_entries
-  | map("\(.key | if . == "" then "nothing" else . end) for \(.value)")
-  | if length == 0 then "" else ", or " + join(" or ") end;
-def sentinel($n): (.sentinels // {}) | has($n | tostring);
-def low: . as $e | $e.min | until(. as $n | $e | sentinel($n) | not; . + 1);
-def high: . as $e | $e.max | until(. as $n | $e | sentinel($n) | not; . - 1);
-def range_text: "from \(low) to \(high)\(sentinel_text)";
-# A sentinel matches by value too, so "-1.0" is the -1 sentinel.
-def sentinel_hit($n): [(.sentinels // {}) | keys[] | select(test("\\A-?[0-9]+\\z")) | tonumber | select(. == $n)] | first;
-def in_range($n): (.sentinels // {} | has($v)) or (sentinel_hit($n) != null) or ($n >= .min and $n <= .max);
+# IPv4/IPv6 text, shared by pref-set's announce_ip and ban-list.
+PREF_IP_JQ='
 def dec_octet: "(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])";
 def ipv4: test("\\A(\(dec_octet)\\.){3}\(dec_octet)\\z");
 def hex16: test("\\A[0-9A-Fa-f]{1,4}\\z");
@@ -2065,13 +2085,81 @@ def ipv6:
       | (($hex | length) + (if $tail4 then 2 else 0 end)) as $n
       | ($hex | all(hex16)) and (if ($p | length) == 2 then $n <= 7 else $n == 8 end)
     end;
+def hexnum: ascii_downcase | explode | reduce .[] as $c (0; . * 16 + (if $c >= 97 then $c - 87 else $c - 48 end));
+# An IPv6 address (already validated when sent) as its 8 numbers, so
+# 2001:DB8::1 matches the 2001:db8::1 that QHostAddress::toString stores.
+def ip6_groups:
+  split("::") as $p
+  | [$p[] | [if . == "" then empty else split(":")[] end
+             | if test("\\.") then (split(".") | map(tonumber) | (.[0] * 256 + .[1]), (.[2] * 256 + .[3]))
+               else hexnum end]] as $g
+  | if ($g | length) == 2 then $g[0] + [range(8 - ($g[0] | length) - ($g[1] | length)) | 0] + $g[1] else $g[0] end;
+def hexstr: if . < 16 then "0123456789abcdef"[.:. + 1]
+  else (. / 16 | floor | hexstr) + ("0123456789abcdef"[. % 16:. % 16 + 1]) end;
+def dotted($hi; $lo): "\($hi / 256 | floor).\($hi % 256).\($lo / 256 | floor).\($lo % 256)";
+# A valid address as QHostAddress::toString writes it (checked against
+# Qt 6.11): IPv4 as it is (ipv4 already refuses leading zeros); IPv6
+# lowercase with the first longest run of 2+ zero groups as "::", a
+# mapped address as ::ffff:a.b.c.d, and one whose first 96 bits are zero
+# while its 7th group is not as ::a.b.c.d.
+def qt_addr:
+  if ipv4 then .
+  else ip6_groups as $g
+  | if ($g[0:5] | all(. == 0)) and $g[5] == 65535 then "::ffff:" + dotted($g[6]; $g[7])
+    elif ($g[0:6] | all(. == 0)) and $g[6] != 0 then "::" + dotted($g[6]; $g[7])
+    else
+      (reduce range(8) as $i ({at: -1, len: 0, run: -1, n: 0};
+         if $g[$i] == 0 then (if .run < 0 then .run = $i | .n = 1 else .n += 1 end)
+           | if .n > .len then .at = .run | .len = .n else . end
+         else .run = -1 | .n = 0 end)) as $z
+      | ($g | map(hexstr)) as $h
+      | if $z.len < 2 then $h | join(":")
+        else ($h[:$z.at] | join(":")) + "::" + ($h[$z.at + $z.len:] | join(":")) end
+    end
+  end;
+'
+
+# Validates and casts one value for one key. $other is "" for a schema key,
+# or the kind of an Other key's current value (boolean, integer, number,
+# string).
+# Prints {error} or {sent, label, type, exact}; the value only ever
+# arrives through --arg and is cast by the schema's type, never its shape.
+PREF_CAST_JQ="$PREF_IP_JQ"'
+def one_line: test("[\n\r]") | not;
+def whole: test("\\A(0|-?[1-9][0-9]{0,9})\\z");
+def sentinel_text: (.sentinels // {}) | to_entries
+  | map("\(.key | if . == "" then "nothing" else . end) for \(.value)")
+  | if length == 0 then "" else ", or " + join(" or ") end;
+def sentinel($n): (.sentinels // {}) | has($n | tostring);
+def low: . as $e | $e.min | until(. as $n | $e | sentinel($n) | not; . + 1);
+def high: . as $e | $e.max | until(. as $n | $e | sentinel($n) | not; . - 1);
+def range_text: "from \(low) to \(high)\(sentinel_text)";
+# A sentinel matches by value too, so "-1.0" is the -1 sentinel.
+def sentinel_hit($n): [(.sentinels // {}) | keys[] | select(test("\\A-?[0-9]+\\z")) | tonumber | select(. == $n)] | first;
+def in_range($n): (.sentinels // {} | has($v)) or (sentinel_hit($n) != null) or ($n >= .min and $n <= .max);
 # QDir::cleanPath would rewrite these, and the read-back would differ.
 def clean_path: test("//|/\\./|/\\.\\./|/\\.\\.?\\z") | not;
 def out($x): {sent: {($key): $x}};
 (if $other == "" then .keys[$key]
  else {label: $key, type: ({boolean: "bool", integer: "integer", number: "number", string: "text"}[$other])} end) as $e
 | $e
-| (if .type == "bool" then
+# Eng 4b D5/D10: a whole newline-joined list. Ruling EC: only the lines
+# not already stored ($stored, read just before) are checked per
+# tests/fixtures/list-rules-cases.json, so a line qBittorrent itself holds
+# goes back as it is. An empty tracker line is a tier break; a new empty
+# pattern is refused, a stored one kept.
+| (if .listKind == "trackerUrl" or .listKind == "pattern" then
+     ($stored | split("\n")) as $old
+     | [$v | split("\n")[] | . as $l | select(any($old[]; . == $l) | not)] as $new
+     | (if .listKind == "trackerUrl" then
+          if all($new[]; . == "" or (test("\\A(https?|udp)://[!-~]+\\z") and (contains("|") | not) and length <= 2048))
+          then null else "Use an http, https or udp tracker URL." end
+        else
+          first($new[] | if . == "" then "Use a pattern such as *.exe."
+                         elif test("\r") then "Keep each pattern to one line." else empty end) // null
+        end) as $err
+     | if $err then {error: $err} else out($v) + {exact: true} end
+   elif .type == "bool" then
      if $v == "true" or $v == "false" then out($v == "true") else {error: "Use true or false."} end
    elif .type == "int" or .type == "speed" then
      if ($v | whole) and in_range($v | tonumber) then
@@ -2117,44 +2205,155 @@ def out($x): {sent: {($key): $x}};
 # True when the re-read preferences (stdin) hold what was sent, per type
 # (Ruling DI, the same rule as SettingsView.js): numbers numerically,
 # strings trimmed, paths trimmed and without a trailing slash (the sent
-# path already has ~/ expanded); every key of a composite.
-PREF_SAME_JQ='
+# path already has ~/ expanded); every key of a composite. A list
+# (exact == "true") must come back exactly: tiers, empty entries and a
+# trailing newline included.
+PREF_SAME_JQ="$PREF_IP_JQ"'
 def trim_ws: sub("\\A\\s+"; "") | sub("\\s+\\z"; "");
 def clean: trim_ws | if . == "/" then . else sub("/+\\z"; "") end;
-def hexnum: ascii_downcase | explode | reduce .[] as $c (0; . * 16 + (if $c >= 97 then $c - 87 else $c - 48 end));
-# An IPv6 address (already validated when sent) as its 8 numbers, so
-# 2001:DB8::1 matches the 2001:db8::1 that QHostAddress::toString stores.
-def ip6_groups:
-  split("::") as $p
-  | [$p[] | [if . == "" then empty else split(":")[] end
-             | if test("\\.") then (split(".") | map(tonumber) | (.[0] * 256 + .[1]), (.[2] * 256 + .[3]))
-               else hexnum end]] as $g
-  | if ($g | length) == 2 then $g[0] + [range(8 - ($g[0] | length) - ($g[1] | length)) | 0] + $g[1] else $g[0] end;
 ($sent | fromjson) as $s | . as $p
 | all($s | to_entries[]; .value as $want | $p[.key] as $got
     | if ($want | type) == "boolean" then $got == $want
       elif ($want | type) == "number" then ($got | type) == "number" and $got == $want
       elif ($got | type) != "string" then false
+      elif $exact == "true" then $got == $want
       elif $type == "path" then ($got | clean) == ($want | clean)
       elif .key == "announce_ip" and ($want | contains(":")) then
         ($got | contains(":")) and ($got | ip6_groups) == ($want | ip6_groups)
       else ($got | trim_ws) == ($want | trim_ws) end)'
 
+# True when $1 is valid UTF-8 byte for byte: bash's regex under a UTF-8
+# locale, then a round trip through jq, which turns what the regex lets by
+# (a UTF-16 surrogate, an overlong form, a code point past U+10FFFF) into
+# U+FFFD, must give the same bytes back. The value only reaches jq through
+# builtin printf into a pipe. Status 2: no UTF-8 locale to check with.
+utf8_exact() {
+  local loc rt
+  loc=$(name_utf8_locale) || return 2
+  (LC_ALL=$loc; [[ $1 =~ ^.*$ ]]) 2>/dev/null || return 1
+  rt=$(printf '%s' "$1" | jq -Rrsj . 2>/dev/null; printf x)
+  local LC_ALL=C
+  [[ ${rt%x} == "$1" ]]
+}
+
+# Like api, but the form body comes from stdin (curl --data-binary @-), so
+# a secret is never on curl's argv. Prints the HTTP status only ("000" when
+# qBittorrent can't be reached); the response body and curl's own errors
+# are dropped. The caller runs assert_local_base first.
+api_stdin() {
+  local method=$1 path=$2
+  ensure_state_dir "$(dirname "$COOKIE_FILE")"
+  (umask 077; curl -sS -g --noproxy '*' --max-time 5 -o /dev/null -w '%{http_code}' -X "$method" \
+    -b "$COOKIE_FILE" -c "$COOKIE_FILE" -H "Content-Type: application/x-www-form-urlencoded" \
+    --data-binary @- "$(base_url)$path" 2>/dev/null) || true
+}
+
+# api_try's failure reason for an api_stdin status.
+api_stdin_fail() {
+  if [[ $1 == 403 ]]; then
+    printf 'localhost auth is required'
+  elif [[ $1 =~ ^[[:digit:]]{3}$ && $1 != 000 ]]; then
+    printf 'HTTP %s' "$1"
+  else
+    printf "couldn't reach qBittorrent"
+  fi
+}
+
+# Eng 4b D2/D7: `pref-set <key> --stdin` writes one of the three writable
+# secrets from stdin, and `--clear` writes "". The value is never on any
+# argv or in the environment: it lives in shell variables, reaches jq and
+# curl only through builtin printf into a pipe, and never passes through
+# uri, api or api_try. Nothing prints it.
+pref_set_secret() {
+  local key=$1 mode=$2
+  local schema label
+  schema=$(pref_schema_path)
+  [[ -f $schema ]] || die "The settings schema is missing."
+  label=$(jq -r --arg k "$key" '.keys[$k] | if .secretWritable == true then .label else "" end' "$schema" 2>/dev/null) \
+    || die "The settings schema is unreadable."
+  [[ -n $label ]] || die "OmaqBT doesn't change secrets yet."
+
+  local value="" rc=0
+  if [[ $mode == --stdin ]]; then
+    # Ruling EB, read once, raw: NUL is the delimiter, so read stops at a
+    # NUL (status 0) instead of dropping it the way a newline-delimited
+    # read would. A clean EOF is status 1 with every newline kept in the
+    # value, and a timeout is status > 128.
+    IFS= read -r -t 5 -d '' value || rc=$?
+    (( rc != 0 )) || die "Use a value without NUL characters."
+    (( rc < 128 )) || die "The value didn't arrive within 5 seconds."
+    [[ $value != *[$'\n\r']* ]] || die "Keep it to one line."
+    [[ -n $value ]] || die "Type a value, or use --clear."
+    # jq would turn invalid UTF-8 into U+FFFD and write something else.
+    rc=0
+    utf8_exact "$value" || rc=$?
+    (( rc != 2 )) || die "No UTF-8 locale is available to check the value."
+    (( rc == 0 )) || die "Use valid UTF-8 text."
+    # Code points, whatever the locale.
+    local count
+    count=$(printf '%s' "$value" | jq -Rs 'length' 2>/dev/null) || die "Couldn't check the value."
+    [[ $count =~ ^[[:digit:]]+$ ]] || die "Couldn't check the value."
+    (( count <= 1024 )) || die "Use at most 1024 characters."
+  fi
+
+  # The whole form body in one jq step, checked before anything is sent:
+  # a jq failure mid-pipe would otherwise POST an empty body.
+  local body
+  body=$(printf '%s' "$value" | jq -Rrsj --arg key "$key" '"json=" + ({($key): .} | tojson | @uri)' 2>/dev/null) \
+    || die "Couldn't check the value."
+  [[ $body == json=* ]] || die "Couldn't check the value."
+  assert_local_base
+  local code
+  code=$(printf '%s' "$body" | api_stdin POST "/api/v2/app/setPreferences") || true
+  body=""
+  [[ $code == 200 || $code == 204 ]] || die "qBittorrent refused it ($(api_stdin_fail "$code"))"
+
+  # The write may already have applied: a failed re-read can't say "refused".
+  api_try GET "/api/v2/app/preferences" || die "Couldn't confirm ${label} (${API_FAIL})"
+  PREFS_JSON=$API_BODY
+  printf '%s' "$PREFS_JSON" | jq -e 'type == "object"' >/dev/null 2>&1 \
+    || die "Couldn't confirm ${label} (qBittorrent sent something unreadable)"
+  # Exact, inside jq: the stored value arrives on stdin, the sent one on
+  # fd 3, and jq prints only true or false.
+  local same
+  same=$(printf '%s' "$PREFS_JSON" | jq -r --arg key "$key" --rawfile v /dev/fd/3 '.[$key] == $v' 3< <(printf '%s' "$value") 2>/dev/null) \
+    || same=false
+  PREFS_JSON="" API_BODY="" value=""
+  [[ $same == true ]] || die "qBittorrent ignored ${label}"
+  printf '%s\n' '{"ok":true}'
+}
+
 # Confirms are window-only by design (eng D4): qbt's gates are the locks and refusals below.
 cmd_pref_set() {
   local api_error_detail=code
-  local usage="usage: qbt pref-set <key> -- <value>"
-  [[ $# -eq 3 && $2 == -- ]] || die "$usage"
-  local key=$1 value=$3
+  local usage="usage: qbt pref-set <key> (-- <value> | --stdin | --clear)"
+  local mode
+  if [[ $# -eq 3 && $2 == -- ]]; then
+    mode=value
+  elif [[ $# -eq 2 && ( $2 == --stdin || $2 == --clear ) ]]; then
+    mode=$2
+  else
+    die "$usage"
+  fi
+  local key=$1 value=${3:-}
   (
     LC_ALL=C
     [[ $key =~ ^[A-Za-z][A-Za-z0-9_]{0,127}$ ]]
   ) || die "qBittorrent has no setting called that."
   pref_matches "$key" "${PREF_LOCKED_VPN[@]}" && die "Set by OmaqBT's setup."
   pref_matches "$key" "${PREF_LOCKED_WEBUI[@]}" && die "OmaqBT needs this as it is."
+  [[ $key == "$PREF_OMAQBT_READ_ONLY" ]] && die "$PREF_OMAQBT_READ_ONLY_SENTENCE"
   # Like the locks, before the schema: no schema can unlock a secret.
   [[ $key == web_ui_api_key ]] && die "qBittorrent doesn't let this be changed."
-  pref_matches "$key" "${PREF_SECRETS[@]}" && die "OmaqBT doesn't change secrets yet."
+  if [[ $mode != value ]]; then
+    if pref_matches "$key" "${PREF_SECRET_WRITABLE[@]}"; then
+      pref_set_secret "$key" "$mode"
+      return
+    fi
+    pref_matches "${key,,}" "${PREF_SECRET_REFUSED[@]}" && die "OmaqBT won't change this setting."
+    die "Only the proxy, Dynamic DNS and SMTP passwords take --stdin or --clear."
+  fi
+  pref_matches "$key" "${PREF_SECRET_WRITABLE[@]}" && die "Send this password with --stdin, never as an argument."
   pref_matches "${key,,}" '*password*' && die "OmaqBT won't change this setting."
 
   local schema
@@ -2166,25 +2365,29 @@ cmd_pref_set() {
     | if $e == null then "other"
       elif $e.readOnly then "readOnly" elif $e.secret or $e.type == "secret" then "secret"
       elif $e.hidden then "hidden" elif $e.deferred then "deferred"
-      elif $e.locked then "locked" elif $e.multiline then "multiline" else "ok" end' "$schema") || die "The settings schema is unreadable."
+      elif $e.locked then "locked"
+      elif $e.listKind == "trackerUrl" or $e.listKind == "pattern" then "list"
+      elif $e.multiline then "multiline" else "ok" end' "$schema") || die "The settings schema is unreadable."
   case $flags in
     readOnly) die "qBittorrent doesn't let this be changed." ;;
     secret) die "OmaqBT doesn't change secrets yet." ;;
     hidden) die "OmaqBT doesn't change this setting." ;;
     deferred) die "OmaqBT doesn't change this setting yet." ;;
-    # Ruling DH: multi-line text is read-only in 4a.
+    # A multi-line key that isn't a list OmaqBT edits (none in the schema
+    # today: tests/settings-schema.test.js pins that). Ruling DH's words.
     multiline) die "Editing multi-line settings arrives in 4b." ;;
     # A schema lock the hardcoded lists above don't cover: refuse anyway.
     locked) die "OmaqBT needs this as it is." ;;
-    ok|other) ;;
+    ok|other|list) ;;
     *) die "The settings schema is unreadable." ;;
   esac
 
   # jq replaces invalid UTF-8 with U+FFFD, which would send (and read back)
   # something other than what was typed.
-  local loc
-  loc=$(name_utf8_locale) || die "No UTF-8 locale is available to check the value."
-  (LC_ALL=$loc; [[ $value =~ ^.*$ ]]) 2>/dev/null || die "Use valid UTF-8 text."
+  local utf8=0
+  utf8_exact "$value" || utf8=$?
+  (( utf8 != 2 )) || die "No UTF-8 locale is available to check the value."
+  (( utf8 == 0 )) || die "Use valid UTF-8 text."
 
   local other=""
   if [[ $flags == other ]]; then
@@ -2205,14 +2408,25 @@ cmd_pref_set() {
   fi
 
   local cast err
-  cast=$(jq -c --arg key "$key" --arg v "$value" --arg other "$other" --arg home "${HOME%/}" "$PREF_CAST_JQ" "$schema" 2>/dev/null) \
+  # Ruling EC: a list's stored value, read just before the cast.
+  local stored=""
+  if [[ $flags == list ]]; then
+    pref_read
+    stored=$(jq -r --arg k "$key" '.[$k] | if type == "string" then . else "" end' <<<"$PREFS_JSON" 2>/dev/null \
+      && printf x) || true
+    [[ $stored == *$'\n'x ]] || die "qBittorrent sent something unreadable"
+    stored=${stored%$'\n'x}
+  fi
+  cast=$(jq -c --arg key "$key" --arg v "$value" --arg other "$other" --arg home "${HOME%/}" --arg stored "$stored" \
+    "$PREF_CAST_JQ" "$schema" 2>/dev/null) \
     || die "The settings schema is unreadable."
   err=$(jq -r '.error // empty' <<<"$cast")
   [[ -z $err ]] || die "$err"
-  local sent label type
+  local sent label type exact
   sent=$(jq -c '.sent' <<<"$cast")
   label=$(jq -r '.label' <<<"$cast")
   type=$(jq -r '.type' <<<"$cast")
+  exact=$(jq -r '.exact // false' <<<"$cast")
 
   api_try POST "/api/v2/app/setPreferences" "json=$(uri "$sent")" || die "qBittorrent refused it (${API_FAIL})"
   # The write may already have applied: a failed re-read can't say "refused".
@@ -2220,9 +2434,95 @@ cmd_pref_set() {
   PREFS_JSON=$API_BODY
   jq -e 'type == "object"' >/dev/null 2>&1 <<<"$PREFS_JSON" \
     || die "Couldn't confirm ${label} (qBittorrent sent something unreadable)"
-  jq -e --arg sent "$sent" --arg type "$type" "$PREF_SAME_JQ" >/dev/null 2>&1 <<<"$PREFS_JSON" \
+  jq -e --arg sent "$sent" --arg type "$type" --arg exact "$exact" "$PREF_SAME_JQ" >/dev/null 2>&1 <<<"$PREFS_JSON" \
     || die "qBittorrent ignored ${label}"
   printf '%s\n' '{"ok":true}'
+}
+
+# Eng 4b D3/D11: `qbt ban-list add|remove <ip>` changes one address in
+# banned_IPs. It re-reads the list just before writing, compares every
+# address in QHostAddress's form (what 5.2.3 stores: sessionimpl.cpp:4167),
+# and after the write reports a list that isn't what it wrote -- never
+# restoring anything. An address already banned (add) or not banned
+# (remove) writes nothing. qBittorrent has no compare-and-set: a change
+# made elsewhere between the read and the write is overwritten, and one
+# made after the write is reported.
+# One jq call between the read and the write (Ruling EE): it checks the
+# read, finds the address and builds the form body. Four lines out:
+# unreadable|invalid|noop|send, the address as compared, the body, and
+# the sent list as JSON. Ruling ED: remove also takes an address exactly
+# as stored, even one add refuses (a zone id from qBittorrent's own UI).
+BAN_PLAN_JQ="$PREF_IP_JQ"'
+def addr: . != "" and (ipv4 or ipv6);
+if type != "object" or (.banned_IPs | type) != "string" then "unreadable\n\n\n\n"
+else
+  (.banned_IPs | split("\n") | map(select(. != ""))) as $cur
+  | ($cur | map(if addr then qt_addr else . end)) as $curn
+  | (if $ip | addr then $ip | qt_addr
+     elif $op == "remove" and any($cur[]; . == $ip) then $ip
+     else null end) as $n
+  | if $n == null then "invalid\n\n\n\n"
+    else
+      (if $op == "add" then (if any($curn[]; . == $n) then null else $cur + [$n] end)
+       elif any($curn[]; . == $n) then [range($cur | length) | select($curn[.] != $n) | $cur[.]]
+       else null end) as $new
+      | if $new == null then "noop\n\($n)\n\n\n"
+        else ($new | join("\n")) as $send
+          | "send\n\($n)\n" + "json=" + ({banned_IPs: $send} | tojson | @uri) + "\n" + ($send | tojson) + "\n"
+        end
+    end
+end'
+BAN_CHECK_JQ="$PREF_IP_JQ"'
+# Entries qbt would refuse came from qBittorrent itself (Qt keeps a zone
+# id, for one), so they are carried as they are on both sides.
+def norm: split("\n") | map(select(. != "") | if ipv4 or ipv6 then qt_addr else . end) | unique;
+if (.banned_IPs | type) != "string" then "unreadable"
+else (.banned_IPs | norm) as $got
+  | if $got == ($sent | fromjson | norm) then "ok"
+    elif $op == "add" and (any($got[]; . == $ip) | not) then "missing"
+    elif $op == "remove" and any($got[]; . == $ip) then "present"
+    else "changed" end
+end'
+
+cmd_ban_list() {
+  local api_error_detail=code
+  [[ $# -eq 2 && ( $1 == add || $1 == remove ) ]] || die "usage: qbt ban-list add|remove <ip>"
+  local op=$1 ip=$2
+  # add: announce_ip's rule without the empty case, never trimmed
+  # (tests/fixtures/list-rules-cases.json, kind ip), before any request.
+  # remove: the same, or a line exactly as stored (checked in the plan).
+  [[ -n $ip && $ip != *$'\n'* ]] || die "Use an IPv4 or IPv6 address."
+  if [[ $op == add ]]; then
+    local valid
+    valid=$(jq -nr --arg v "$ip" "$PREF_IP_JQ"'$v | ipv4 or ipv6' 2>/dev/null) || valid=false
+    [[ $valid == true ]] || die "Use an IPv4 or IPv6 address."
+  fi
+
+  api_try GET "/api/v2/app/preferences" || die "qBittorrent refused it (${API_FAIL})"
+  local plan status="" norm="" body="" sent=""
+  plan=$(jq -rj --arg ip "$ip" --arg op "$op" "$BAN_PLAN_JQ" <<<"$API_BODY" 2>/dev/null) || plan=unreadable
+  { IFS= read -r status; IFS= read -r norm; IFS= read -r body; IFS= read -r sent; } <<<"$plan" || true
+  case $status in
+    send) api_or_die POST "/api/v2/app/setPreferences" "$body" ;;
+    noop) printf '%s\n' '{"ok":true}'; return ;;
+    invalid) die "Use an IPv4 or IPv6 address." ;;
+    *) die "qBittorrent sent something unreadable" ;;
+  esac
+
+  api_try GET "/api/v2/app/preferences" || die "Couldn't confirm Banned IPs (${API_FAIL})"
+  PREFS_JSON=$API_BODY
+  jq -e 'type == "object"' >/dev/null 2>&1 <<<"$PREFS_JSON" \
+    || die "Couldn't confirm Banned IPs (qBittorrent sent something unreadable)"
+  local verdict
+  verdict=$(jq -r --arg sent "$sent" --arg ip "$norm" --arg op "$op" "$BAN_CHECK_JQ" <<<"$PREFS_JSON" 2>/dev/null) \
+    || verdict=unreadable
+  case $verdict in
+    ok) printf '%s\n' '{"ok":true}' ;;
+    missing) die "qBittorrent didn't ban ${norm}." ;;
+    present) die "qBittorrent still bans ${norm}." ;;
+    changed) die "The ban list changed while OmaqBT saved it; check it." ;;
+    *) die "Couldn't confirm Banned IPs (qBittorrent sent something unreadable)" ;;
+  esac
 }
 
 case ${1:-} in
@@ -2262,6 +2562,7 @@ case ${1:-} in
   tags) shift; cmd_tags "$@" ;;
   prefs) shift; cmd_prefs "$@" ;;
   pref-set) shift; cmd_pref_set "$@" ;;
+  ban-list) shift; cmd_ban_list "$@" ;;
   magnet-paths) shift; cmd_magnet_paths "$@" ;;
   magnet-snapshot) shift; cmd_magnet_snapshot "$@" ;;
   magnet-inbox) shift; cmd_magnet_inbox "$@" ;;
@@ -2271,5 +2572,5 @@ case ${1:-} in
   magnet-pending-drop) shift; cmd_magnet_pending_drop "$@" ;;
   magnet-install-handler) shift; cmd_magnet_install_handler "$@" ;;
   magnet-uninstall-handler) shift; cmd_magnet_uninstall_handler "$@" ;;
-  *) die "usage: qbt status|probe|add|start|stop|recheck|set-location|delete|reannounce|tracker-add|tracker-edit|tracker-remove|ban-peer|fetch-metadata|files|prio|turtle|limit|sequential|first-last|sharelimit|share-limits|category-add|category-path|category-remove|category-rename|set-category|tag-add|tag-remove|tag-rename|tags|prefs|pref-set|install|start-daemon|stop-daemon|magnet-paths|magnet-inbox|magnet-drain|magnet-pending-list|magnet-pending-drop|magnet-install-handler|magnet-uninstall-handler" ;;
+  *) die "usage: qbt status|probe|add|start|stop|recheck|set-location|delete|reannounce|tracker-add|tracker-edit|tracker-remove|ban-peer|fetch-metadata|files|prio|turtle|limit|sequential|first-last|sharelimit|share-limits|category-add|category-path|category-remove|category-rename|set-category|tag-add|tag-remove|tag-rename|tags|prefs|pref-set|ban-list|install|start-daemon|stop-daemon|magnet-paths|magnet-inbox|magnet-drain|magnet-pending-list|magnet-pending-drop|magnet-install-handler|magnet-uninstall-handler" ;;
 esac
