@@ -2157,13 +2157,17 @@ test("dispatchPane: a Settings column passes through, whatever the torrent view 
 });
 
 test("paletteRows: :Settings is there and enabled; the Settings navigation rows are not", () => {
+  // Slice 4b Task 1: the palette shows the Settings actions (x clears a
+  // secret, u undoes, a/x in a list); from the torrents they can't run.
+  const actions = ["settings.clearSecret", "settings.undo", "list.add", "list.remove"];
   for (const pane of ["table", "filters", "inspector"]) {
     const rows = V.paletteRows("", Registry.commands, [], paletteState({ pane: pane }));
     const open = rows.find((r) => r.id === "settings.open");
     assert.equal(open.title, "Settings");
     assert.equal(open.keys, ",");
     assert.equal(open.enabled, true, pane);
-    assert.ok(!rows.some((r) => /^settings\.(?!open)/.test(r.id)), pane);
+    assert.ok(!rows.some((r) => /^(settings|list)\.(?!open)/.test(r.id) && !actions.includes(r.id)), pane);
+    for (const id of actions) assert.equal(rows.find((r) => r.id === id).enabled, false, pane + " " + id);
   }
   assert.equal(V.paletteRows("sett", Registry.commands, [], paletteState())[0].id, "settings.open");
 });

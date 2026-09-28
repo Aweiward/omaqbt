@@ -100,8 +100,9 @@ const CASES_DOC = [
   "(ok), then an int just past the list, -1 when it isn't a value, a non-number, or for string enums a wrong-case value,",
   "an unknown name and empty. times: HH:MM for each time composite; ok cases also carry the hour and min that are",
   "written together. paths: absolute and ~/ are ok, relative is not, empty only where \"\" is the path's sentinel.",
-  "texts: one-line and multiline text that must survive argv, jq, URL-encoding and the read-back unchanged; a newline",
-  "is refused in one-line text."
+  "texts: one-line text that must survive argv, jq, URL-encoding and the read-back unchanged; a newline is refused.",
+  "Multi-line keys have no case here (Ruling DM, slice 4b): they're list kinds (the schema's listKind), and their",
+  "per-line rules and whole-list round trips live in tests/fixtures/list-rules-cases.json."
 ].join(" ");
 
 function editable(e) {
@@ -182,7 +183,7 @@ function pathCases(key, e) {
   ];
 }
 
-function fidelityCases(key, multiline) {
+function fidelityCases(key) {
   const texts = [
     ["a&b=c", "ampersand and equals"],
     ["a+b", "plus"],
@@ -194,7 +195,7 @@ function fidelityCases(key, multiline) {
     ["$(true) `x` ${HOME}", "shell syntax, kept literal"]
   ];
   const out = texts.map(([input, why]) => ({ key, input, ok: true, why }));
-  out.push({ key, input: "line one\nline two", ok: multiline, why: multiline ? "newline in multiline text" : "newline in one-line text" });
+  out.push({ key, input: "line one\nline two", ok: false, why: "newline in one-line text" });
   return out;
 }
 
@@ -210,7 +211,9 @@ function buildCases(schema) {
     else if (e.type === "time") times.push(...timeCases(key));
     else if (e.type === "path") paths.push(...pathCases(key, e));
   }
-  const texts = [...fidelityCases("app_instance_name", false), ...fidelityCases("add_trackers", true)];
+  // Ruling DM: list keys (add_trackers, excluded_file_names) are validated
+  // per line from tests/fixtures/list-rules-cases.json, not as text.
+  const texts = fidelityCases("app_instance_name");
   return { _doc: CASES_DOC, numbers, choices, times, paths, texts };
 }
 

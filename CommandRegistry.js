@@ -177,12 +177,25 @@ var commands = [
   { id: "settings.open", title: "Settings", group: "App", keys: [","], modes: ["NORMAL"], panes: ["filters", "table", "inspector"], needs: "none" },
   { id: "settings.down", title: "Down", group: "View", keys: ["j", "Down"], modes: ["NORMAL"], panes: ["settingsSections", "settingsKeys"], needs: "none", paletteHidden: true },
   { id: "settings.up", title: "Up", group: "View", keys: ["k", "Up"], modes: ["NORMAL"], panes: ["settingsSections", "settingsKeys"], needs: "none", paletteHidden: true },
+  // Choosing a section: in a narrow window (slice 4b, D13) the sections
+  // column is the overlay, and the window closes it and focuses the settings.
   { id: "settings.enter", title: "Go to the settings", group: "View", keys: ["l", "Enter", "Tab"], modes: ["NORMAL"], panes: ["settingsSections"], needs: "none", paletteHidden: true },
-  { id: "settings.leave", title: "Back to the sections", group: "View", keys: ["h", "Shift-Tab"], modes: ["NORMAL"], panes: ["settingsKeys"], needs: "none", paletteHidden: true },
+  // Narrow (slice 4b, design D6 and eng D13): below the breakpoint the
+  // sections are a chip over the settings, and Tab, h and Shift-Tab open
+  // them as an overlay (the window focuses settingsSections while it
+  // shows). `when` makes these rows exist only while narrow, so h and
+  // Shift-Tab fall through to settings.leave (when: "wide") otherwise.
+  { id: "settings.sections", title: "Sections", group: "View", keys: ["Tab", "h", "Shift-Tab"], modes: ["NORMAL"], panes: ["settingsKeys"], needs: "narrow", when: "narrow", paletteHidden: true },
+  { id: "settings.leave", title: "Back to the sections", group: "View", keys: ["h", "Shift-Tab"], modes: ["NORMAL"], panes: ["settingsKeys"], needs: "none", when: "wide", paletteHidden: true },
   { id: "settings.search", title: "Search all settings", group: "View", keys: ["/"], modes: ["NORMAL"], panes: ["settingsSections", "settingsKeys"], needs: "none", paletteHidden: true },
+  // Narrow: Esc in the sections overlay closes it first (D13), before
+  // settings.back could clear a search or leave Settings.
+  { id: "settings.sectionsClose", title: "Close the sections", group: "View", keys: ["Esc"], modes: ["NORMAL"], panes: ["settingsSections"], needs: "narrow", when: "narrow", paletteHidden: true },
   // Esc clears an active search first, then leaves Settings (the window
-  // decides which; the registry only names the key).
-  { id: "settings.back", title: "Clear search, or back to torrents", group: "App", keys: ["Esc"], modes: ["NORMAL"], panes: ["settingsSections", "settingsKeys"], needs: "none", paletteHidden: true },
+  // decides which; the registry only names the key). Two rows so the
+  // sections' one can step aside for settingsSectionsClose while narrow.
+  { id: "settings.back", title: "Clear search, or back to torrents", group: "App", keys: ["Esc"], modes: ["NORMAL"], panes: ["settingsSections"], needs: "none", when: "wide", paletteHidden: true },
+  { id: "settings.back", title: "Clear search, or back to torrents", group: "App", keys: ["Esc"], modes: ["NORMAL"], panes: ["settingsKeys"], needs: "none", paletteHidden: true },
   // Task 6: the editors, on the setting under the cursor as it stood at
   // key time (args.settingKey). toggleRow/editableRow come from the window
   // (SettingsCommands.flags: SettingsView.editorFor, and no write of that
@@ -190,7 +203,33 @@ var commands = [
   // help line says why). Their CONFIRM's `y` resolves to settings.write,
   // which has no row at all, so no key and no palette entry can reach it.
   { id: "settings.toggle", title: "Toggle the setting", group: "App", keys: ["Space"], modes: ["NORMAL"], panes: ["settingsKeys"], needs: "toggleRow", paletteHidden: true },
+  // Slice 4b: Enter on a list row (the schema's listKind: add_trackers,
+  // excluded_file_names; banned IPs) opens the list editor, pane
+  // settingsList. Before settings.edit, and `when`-gated, so on any other
+  // row Enter falls through to settings.edit as in 4a. args.settingKey is
+  // the list's key at key time.
+  { id: "settings.openList", title: "Open the list", group: "App", keys: ["Enter"], modes: ["NORMAL"], panes: ["settingsKeys"], needs: "listRow", when: "listRow", paletteHidden: true },
   { id: "settings.edit", title: "Edit the setting", group: "App", keys: ["Enter"], modes: ["NORMAL"], panes: ["settingsKeys"], needs: "editableRow", paletteHidden: true },
+  // Slice 4b (design D8): x clears the secret under the cursor when it's
+  // one of the schema's secretWritable keys and is set (s.settingsSecretSet,
+  // from the window). The window asks first: it raises the CONFIRM with
+  // raiseConfirm(state, "settings.clearSecret", ...), whose y comes back
+  // here with confirmed: true. A key never carries confirmed.
+  { id: "settings.clearSecret", title: "Clear the secret", group: "App", keys: ["x"], modes: ["NORMAL"], panes: ["settingsKeys"], needs: "secretSet" },
+  // Slice 4b (design D3): u steps back through this visit's changes, from
+  // the settings and from a list. s.settingsUndoCount is how many are left.
+  { id: "settings.undo", title: "Undo the last settings change", group: "App", keys: ["u"], modes: ["NORMAL"], panes: ["settingsKeys", "settingsList"], needs: "undoEntry" },
+
+  // Slice 4b: the list editor (pane settingsList) for the list key
+  // s.settingsKey. a adds a line; x removes the line under the list cursor
+  // (s.listItem, captured at key time as args.listItem), with no confirm:
+  // u undoes it; Esc goes back. listEditable is false while a write of
+  // that list is saving.
+  { id: "list.down", title: "Down", group: "View", keys: ["j", "Down"], modes: ["NORMAL"], panes: ["settingsList"], needs: "none", paletteHidden: true },
+  { id: "list.up", title: "Up", group: "View", keys: ["k", "Up"], modes: ["NORMAL"], panes: ["settingsList"], needs: "none", paletteHidden: true },
+  { id: "list.add", title: "Add to the list", group: "App", keys: ["a"], modes: ["NORMAL"], panes: ["settingsList"], needs: "listEditable" },
+  { id: "list.remove", title: "Remove from the list", group: "App", keys: ["x"], modes: ["NORMAL"], panes: ["settingsList"], needs: "listItem" },
+  { id: "list.back", title: "Back to the settings", group: "View", keys: ["Esc"], modes: ["NORMAL"], panes: ["settingsList"], needs: "none", paletteHidden: true },
 
   // VISUAL (j/k/Space/x/X/e reuse the NORMAL,table rows above; this is the exit)
   { id: "visual.exit", title: "Exit visual", group: "View", keys: ["Esc", "V"], modes: ["VISUAL"], panes: ["table"], needs: "none" },
@@ -305,7 +344,20 @@ function normalizeState(state) {
     // toggles (Space) or edits (Enter) right now. Default off.
     settingsKey: s.settingsKey || null,
     settingsToggle: s.settingsToggle === true,
-    settingsEditable: s.settingsEditable === true
+    settingsEditable: s.settingsEditable === true,
+    // Slice 4b, all default off. settingsListRow: the cursor row is a list
+    // key (Enter opens it). settingsSecretSet: the cursor row is a
+    // secretWritable secret that's set and not saving (x clears it).
+    // settingsUndoCount: entries left in this visit's undo history.
+    // listEditable: the open list can be written (not saving). listItem:
+    // the line under the list cursor, {index, value, tierBreak}, or null.
+    // narrow: the window is below the breakpoint (D13).
+    settingsListRow: s.settingsListRow === true,
+    settingsSecretSet: s.settingsSecretSet === true,
+    settingsUndoCount: typeof s.settingsUndoCount === "number" ? s.settingsUndoCount : 0,
+    listEditable: s.listEditable === true,
+    listItem: s.listItem && typeof s.listItem === "object" ? s.listItem : null,
+    narrow: s.narrow === true
   };
 }
 
@@ -345,8 +397,8 @@ function matchLabel(label, ev) {
   }
 }
 
-// The Settings view's two columns (slice 4a).
-var SETTINGS_PANES = ["settingsSections", "settingsKeys"];
+// The Settings view's two columns (slice 4a) and the list editor (4b).
+var SETTINGS_PANES = ["settingsSections", "settingsKeys", "settingsList"];
 
 function isSettingsPane(pane) {
   return SETTINGS_PANES.indexOf(pane) !== -1;
@@ -380,9 +432,14 @@ function tabMatches(row, tab) {
 // it, so a key, the palette and `?` agree. startDownload: Info's Space on
 // a no-metadata torrent, unless the Limits cursor is on a toggle row;
 // limitSpace is its complement, so `?` lists one Space on Info.
+// narrow/wide (slice 4b, D13): the Settings rows remapped below the
+// breakpoint, and the rows they replace. listRow: Enter opens a list.
 var WHEN = {
   startDownload: function(s) { return s.cursorNoMetadata === true && s.limitToggle !== true; },
-  limitSpace: function(s) { return !(s.cursorNoMetadata === true && s.limitToggle !== true); }
+  limitSpace: function(s) { return !(s.cursorNoMetadata === true && s.limitToggle !== true); },
+  narrow: function(s) { return s.narrow === true; },
+  wide: function(s) { return s.narrow !== true; },
+  listRow: function(s) { return s.settingsListRow === true; }
 };
 
 function whenMatches(row, s) {
@@ -473,6 +530,12 @@ function preconditionMet(needs, s) {
   if (needs === "limitToggle") return s.limitToggle === true;
   if (needs === "toggleRow") return s.settingsToggle === true;
   if (needs === "editableRow") return s.settingsEditable === true;
+  if (needs === "listRow") return s.settingsListRow === true;
+  if (needs === "secretSet") return s.settingsSecretSet === true;
+  if (needs === "undoEntry") return typeof s.settingsUndoCount === "number" && s.settingsUndoCount > 0;
+  if (needs === "listEditable") return s.listEditable === true;
+  if (needs === "listItem") return s.listEditable === true && !!s.listItem && typeof s.listItem === "object";
+  if (needs === "narrow") return s.narrow === true;
   if (Object.prototype.hasOwnProperty.call(LIBRARY_NEEDS, needs)) return libraryKind(s, LIBRARY_NEEDS[needs]);
   return true;
 }
@@ -490,6 +553,9 @@ function needsReason(needs, s) {
   if (needs === "libraryGroup" || needs === "libraryName") return "focus a category or tag";
   if (needs === "limitRow" || needs === "limitToggle") return "";
   if (needs === "toggleRow" || needs === "editableRow") return "";
+  // Slice 4b: the row, list or width already shows why; only undo speaks.
+  if (needs === "listRow" || needs === "secretSet" || needs === "listEditable" || needs === "listItem" || needs === "narrow") return "";
+  if (needs === "undoEntry") return "nothing to undo";
   if (needs === "noMetadata") {
     if (s.cursorPendingMagnet === true) return "already fetching metadata";
     if (s.hasTorrent === true) return "already has metadata";
@@ -539,6 +605,17 @@ function copyTarget(t) {
   return Object.freeze(out);
 }
 
+// copyListItem(item) -> a frozen {index, value, tierBreak} copy of the list
+// line under the cursor (slice 4b), so a refresh can't change what x removes.
+function copyListItem(item) {
+  if (!item || typeof item !== "object") return null;
+  return Object.freeze({
+    index: Number(item.index),
+    value: String(item.value === undefined || item.value === null ? "" : item.value),
+    tierBreak: item.tierBreak === true
+  });
+}
+
 function buildArgs(row, s) {
   var args = {};
   // A tracker/peer command acts on the row under the inspector cursor as
@@ -555,10 +632,14 @@ function buildArgs(row, s) {
   if (row.needs === "limitRow" || row.needs === "limitToggle") {
     args.limitKey = s.limitCursorKey;
   }
-  // The setting under the Settings cursor, as it stood at key time.
-  if (row.needs === "toggleRow" || row.needs === "editableRow") {
+  // The setting under the Settings cursor (or the open list's key), as it
+  // stood at key time.
+  if (row.needs === "toggleRow" || row.needs === "editableRow" || row.needs === "listRow" || row.needs === "secretSet" ||
+      row.needs === "listEditable" || row.needs === "listItem") {
     args.settingKey = s.settingsKey;
   }
+  // The list line under the list cursor, frozen like a target.
+  if (row.needs === "listItem") args.listItem = copyListItem(s.listItem);
   // ":" on a VISUAL range: the palette acts on that range (the window keeps it).
   if (row.id === "palette.open" && s.mode === "VISUAL") args.range = true;
   if (EXTEND_IDS[row.id] === true && s.mode === "VISUAL") {

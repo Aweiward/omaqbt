@@ -1,5 +1,5 @@
 {
- "_doc": "Settings value boundary cases, GENERATED from settings-schema.json by tools/gen-settings-schema.js (don't edit). Read by qbt's bash tests (Task 2) and the Settings view's node tests (Task 4); both must accept exactly the ok ones. Every case is {key, input, ok, why}, plus only: \"qbt\" on the cases the window doesn't consume. input is the text as passed to `qbt pref-set <key> -- <input>`, in the schema's wire units. Speed cases are all only: \"qbt\": they're argv bytes/s, while the window reads a bare number as KiB/s (LimitsView) and rounds to whole KiB for step-1024 keys (Ruling DE), so the step refusal (1536) is qbt's alone. numbers: each editable int/float/speed key's min, max and sentinels (ok), then the values just outside (below min unless that's a sentinel, below the lowest negative sentinel, above max), a non-number, a decimal (ok only for floats), a speed that isn't a multiple of its step, and empty. choices: each value (ok), then an int just past the list, -1 when it isn't a value, a non-number, or for string enums a wrong-case value, an unknown name and empty. times: HH:MM for each time composite; ok cases also carry the hour and min that are written together. paths: absolute and ~/ are ok, relative is not, empty only where \"\" is the path's sentinel. texts: one-line and multiline text that must survive argv, jq, URL-encoding and the read-back unchanged; a newline is refused in one-line text.",
+ "_doc": "Settings value boundary cases, GENERATED from settings-schema.json by tools/gen-settings-schema.js (don't edit). Read by qbt's bash tests (Task 2) and the Settings view's node tests (Task 4); both must accept exactly the ok ones. Every case is {key, input, ok, why}, plus only: \"qbt\" on the cases the window doesn't consume. input is the text as passed to `qbt pref-set <key> -- <input>`, in the schema's wire units. Speed cases are all only: \"qbt\": they're argv bytes/s, while the window reads a bare number as KiB/s (LimitsView) and rounds to whole KiB for step-1024 keys (Ruling DE), so the step refusal (1536) is qbt's alone. numbers: each editable int/float/speed key's min, max and sentinels (ok), then the values just outside (below min unless that's a sentinel, below the lowest negative sentinel, above max), a non-number, a decimal (ok only for floats), a speed that isn't a multiple of its step, and empty. choices: each value (ok), then an int just past the list, -1 when it isn't a value, a non-number, or for string enums a wrong-case value, an unknown name and empty. times: HH:MM for each time composite; ok cases also carry the hour and min that are written together. paths: absolute and ~/ are ok, relative is not, empty only where \"\" is the path's sentinel. texts: one-line text that must survive argv, jq, URL-encoding and the read-back unchanged; a newline is refused. Multi-line keys have no case here (Ruling DM, slice 4b): they're list kinds (the schema's listKind), and their per-line rules and whole-list round trips live in tests/fixtures/list-rules-cases.json.",
  "numbers": [
   {
    "key": "listen_port",
@@ -3922,60 +3922,6 @@
    "input": "line one\nline two",
    "ok": false,
    "why": "newline in one-line text"
-  },
-  {
-   "key": "add_trackers",
-   "input": "a&b=c",
-   "ok": true,
-   "why": "ampersand and equals"
-  },
-  {
-   "key": "add_trackers",
-   "input": "a+b",
-   "ok": true,
-   "why": "plus"
-  },
-  {
-   "key": "add_trackers",
-   "input": "100% 20%20",
-   "ok": true,
-   "why": "percent and an encoded-looking escape"
-  },
-  {
-   "key": "add_trackers",
-   "input": "say \"hi\" 'there'",
-   "ok": true,
-   "why": "quotes"
-  },
-  {
-   "key": "add_trackers",
-   "input": "-leading-dash",
-   "ok": true,
-   "why": "leading dash, after --"
-  },
-  {
-   "key": "add_trackers",
-   "input": "back\\slash",
-   "ok": true,
-   "why": "backslash"
-  },
-  {
-   "key": "add_trackers",
-   "input": "café 🦊",
-   "ok": true,
-   "why": "accented and non-BMP characters"
-  },
-  {
-   "key": "add_trackers",
-   "input": "$(true) `x` ${HOME}",
-   "ok": true,
-   "why": "shell syntax, kept literal"
-  },
-  {
-   "key": "add_trackers",
-   "input": "line one\nline two",
-   "ok": true,
-   "why": "newline in multiline text"
   }
  ]
 }

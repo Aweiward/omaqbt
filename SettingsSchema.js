@@ -227,6 +227,7 @@ var SCHEMA = {
   "help": "One pattern per line, for example *.exe.",
   "type": "text",
   "multiline": true,
+  "listKind": "pattern",
   "dependsOn": {
    "key": "excluded_file_names_enabled",
    "value": true
@@ -312,6 +313,7 @@ var SCHEMA = {
   "help": "The SMTP password. Shown only as set or not set.",
   "type": "secret",
   "secret": true,
+  "secretWritable": true,
   "dependsOn": {
    "key": "mail_notification_auth_enabled",
    "value": true
@@ -635,6 +637,7 @@ var SCHEMA = {
   "help": "The proxy password. Shown only as set or not set.",
   "type": "secret",
   "secret": true,
+  "secretWritable": true,
   "dependsOn": {
    "key": "proxy_type",
    "value": [
@@ -767,7 +770,8 @@ var SCHEMA = {
   "help": "Addresses banned by hand, one per line. Edited in its own section.",
   "type": "text",
   "hidden": true,
-  "multiline": true
+  "multiline": true,
+  "listKind": "ip"
  },
  "dl_limit": {
   "section": "Speed",
@@ -1283,9 +1287,11 @@ var SCHEMA = {
   "section": "BitTorrent",
   "group": "Add trackers",
   "label": "Trackers to add",
-  "help": "One tracker URL per line.",
+  "help": "One tracker URL per line; a blank line starts the next tier.",
   "type": "text",
   "multiline": true,
+  "listKind": "trackerUrl",
+  "tierBreaks": true,
   "dependsOn": {
    "key": "add_trackers_enabled",
    "value": true
@@ -1534,8 +1540,9 @@ var SCHEMA = {
   "section": "Web UI",
   "group": "Authentication",
   "label": "Subnets",
-  "help": "One subnet per line, such as 192.168.0.0/24.",
+  "help": "Has no effect while the Web UI only listens on 127.0.0.1.",
   "type": "text",
+  "readOnly": true,
   "multiline": true,
   "dependsOn": {
    "key": "bypass_auth_subnet_whitelist_enabled",
@@ -1635,15 +1642,17 @@ var SCHEMA = {
   "section": "Web UI",
   "group": "Custom HTTP headers",
   "label": "Custom HTTP headers",
-  "help": "Add the headers below to every Web UI response.",
-  "type": "bool"
+  "help": "Add the headers below to every Web UI response. Locked: a bad header cuts OmaqBT off from qBittorrent.",
+  "type": "bool",
+  "locked": true
  },
  "web_ui_custom_http_headers": {
   "section": "Web UI",
   "group": "Custom HTTP headers",
   "label": "Headers",
-  "help": "One header per line, as Name: value.",
+  "help": "One header per line, as Name: value. Locked: a bad header cuts OmaqBT off from qBittorrent.",
   "type": "text",
+  "locked": true,
   "multiline": true,
   "dependsOn": {
    "key": "web_ui_use_custom_http_headers_enabled",
@@ -1733,6 +1742,7 @@ var SCHEMA = {
   "help": "The DNS service password. Shown only as set or not set.",
   "type": "secret",
   "secret": true,
+  "secretWritable": true,
   "dependsOn": {
    "key": "dyndns_enabled",
    "value": true
@@ -2821,7 +2831,9 @@ var LOCKED = [
  "web_ui_host_header_validation_enabled",
  "web_ui_domain_list",
  "web_ui_reverse_prox*",
- "alternative_webui_*"
+ "alternative_webui_*",
+ "web_ui_use_custom_http_headers_enabled",
+ "web_ui_custom_http_headers"
 ];
 
 // Unknown keys matching these globs are refused in the Other section.

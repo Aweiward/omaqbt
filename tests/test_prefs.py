@@ -158,13 +158,21 @@ def qbt_array(name):
     return [line.strip().strip("'") for line in m.group(1).splitlines() if line.strip()]
 
 
+# Slice 4b Task 1 flagged the custom-header keys locked (eng 4b D8) in the
+# schema; qbt already refuses them through the schema's entry flag ("OmaqBT
+# needs this as it is."). Task 2 adds them to PREF_LOCKED_WEBUI: it must then
+# empty this set (the tripwires below fail until it does).
+PENDING_TASK2_LOCKS = {"web_ui_use_custom_http_headers_enabled", "web_ui_custom_http_headers"}
+
+
 class HardcodedListsTest(unittest.TestCase):
     """Ruling DB: the schema's locked set equals qbt's hardcoded lists."""
 
     def test_locked_equals_schema(self):
         mine = qbt_array("PREF_LOCKED_VPN") + qbt_array("PREF_LOCKED_WEBUI")
         self.assertEqual(len(mine), len(set(mine)))
-        self.assertEqual(set(mine), set(SCHEMA["locked"]))
+        self.assertFalse(PENDING_TASK2_LOCKS & set(mine), "Task 2: empty PENDING_TASK2_LOCKS now that qbt has them")
+        self.assertEqual(set(mine), set(SCHEMA["locked"]) - PENDING_TASK2_LOCKS)
         self.assertEqual(set(qbt_array("PREF_LOCKED_VPN")), set(VPN_LOCKS))
         self.assertIn("web_ui_reverse_prox*", mine)  # Ruling DD
 
@@ -173,7 +181,8 @@ class HardcodedListsTest(unittest.TestCase):
         mine = qbt_array("PREF_LOCKED_VPN") + qbt_array("PREF_LOCKED_WEBUI")
         flagged = {k for k, e in SCHEMA["keys"].items() if e.get("locked")}
         matched = {k for k in SCHEMA["keys"] if any(fnmatch.fnmatchcase(k, g) for g in mine)}
-        self.assertEqual(flagged, matched)
+        self.assertFalse(PENDING_TASK2_LOCKS & matched, "Task 2: empty PENDING_TASK2_LOCKS now that qbt has them")
+        self.assertEqual(flagged - PENDING_TASK2_LOCKS, matched)
         self.assertIn("web_ui_reverse_proxies_list", matched)
 
     def test_other_refused_equals_schema(self):
@@ -425,10 +434,10 @@ class PrefSetFidelityTest(PrefsCase):
         self.set_refused("save_path", "/srv/a\nb", "Use an absolute path or one starting with ~/.")
 
     def test_multiline_keys_are_read_only_in_4a(self):
+        # Slice 4b Task 1: the headers are locked (D8), the whitelist read-only (D9).
         keys = [k for k, e in SCHEMA["keys"].items()
-                if e.get("multiline") and not (e.get("hidden") or e.get("deferred") or e.get("readOnly"))]
-        self.assertEqual(sorted(keys), sorted(["excluded_file_names", "add_trackers",
-                                               "bypass_auth_subnet_whitelist", "web_ui_custom_http_headers"]))
+                if e.get("multiline") and not (e.get("hidden") or e.get("deferred") or e.get("readOnly") or e.get("locked"))]
+        self.assertEqual(sorted(keys), sorted(["excluded_file_names", "add_trackers"]))
         for key in keys:
             for value in ("one", "a\nb", ""):
                 self.set_refused(key, value, MULTILINE_MESSAGE)

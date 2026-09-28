@@ -1,5 +1,5 @@
 {
- "_doc": "OmaqBT's settings schema for qBittorrent 5.2.3's /app/preferences: the one source that qbt (through jq) and the Settings view (through the generated SettingsSchema.js) both read. After editing, run `node tools/gen-settings-schema.js` to regenerate SettingsSchema.js and tests/fixtures/settings-cases.json. keys is in display order. Each entry: section, group, label, help (one line), type (bool, int, float, speed [bytes/s], choice-int, choice-string, time [a composite], path, text, secret); optional unit, min, max, step (values must be multiples of it), sentinels ({value: label}, special values outside or at the edge of the range; for a path, \"\" is its only sentinel), choices ([{value, label}]), locked, readOnly (no setter in setPreferences), hidden (never shown, not even in Other), deferred (a later slice), multiline, secret, restart (qBittorrent's own UI says it requires a restart), confirm ({text, values?, byValue?}: ask first when the new value is one of values, or on every change without values; byValue maps a value (as a string) to the text used for it instead of text), dependsOn ({key, value}: dimmed unless key holds value, or one of value when it's an array), composite ({hour, min}: a time written as its two hidden member keys in one request). locked lists the keys qbt refuses to write (globs, * only); otherRefusedPatterns lists the unknown-key patterns the Other section refuses.",
+ "_doc": "OmaqBT's settings schema for qBittorrent 5.2.3's /app/preferences: the one source that qbt (through jq) and the Settings view (through the generated SettingsSchema.js) both read. After editing, run `node tools/gen-settings-schema.js` to regenerate SettingsSchema.js and tests/fixtures/settings-cases.json. keys is in display order. Each entry: section, group, label, help (one line), type (bool, int, float, speed [bytes/s], choice-int, choice-string, time [a composite], path, text, secret); optional unit, min, max, step (values must be multiples of it), sentinels ({value: label}, special values outside or at the edge of the range; for a path, \"\" is its only sentinel), choices ([{value, label}]), locked, readOnly (no setter in setPreferences, or kept read-only by OmaqBT: bypass_auth_subnet_whitelist, eng 4b D9), hidden (never shown, not even in Other), deferred (a later slice), multiline (a newline-joined value), listKind (ip, trackerUrl or pattern: a multiline key edited as a list of lines, each validated by tests/fixtures/list-rules-cases.json), tierBreaks (blank lines are tracker tier breaks, kept as they are), secret, secretWritable (a secret OmaqBT may set through `qbt pref-set <key> --stdin` and clear with --clear, eng 4b D2/D7), restart (qBittorrent's own UI says it requires a restart), confirm ({text, values?, byValue?}: ask first when the new value is one of values, or on every change without values; byValue maps a value (as a string) to the text used for it instead of text), dependsOn ({key, value}: dimmed unless key holds value, or one of value when it's an array), composite ({hour, min}: a time written as its two hidden member keys in one request). locked lists the keys qbt refuses to write (globs, * only); otherRefusedPatterns lists the unknown-key patterns the Other section refuses.",
  "qbittorrent": "5.2.3",
  "sections": [
   "Downloads",
@@ -22,7 +22,9 @@
   "web_ui_host_header_validation_enabled",
   "web_ui_domain_list",
   "web_ui_reverse_prox*",
-  "alternative_webui_*"
+  "alternative_webui_*",
+  "web_ui_use_custom_http_headers_enabled",
+  "web_ui_custom_http_headers"
  ],
  "otherRefusedPatterns": [
   "web_ui_*",
@@ -250,6 +252,7 @@
    "help": "One pattern per line, for example *.exe.",
    "type": "text",
    "multiline": true,
+   "listKind": "pattern",
    "dependsOn": {
     "key": "excluded_file_names_enabled",
     "value": true
@@ -335,6 +338,7 @@
    "help": "The SMTP password. Shown only as set or not set.",
    "type": "secret",
    "secret": true,
+   "secretWritable": true,
    "dependsOn": {
     "key": "mail_notification_auth_enabled",
     "value": true
@@ -658,6 +662,7 @@
    "help": "The proxy password. Shown only as set or not set.",
    "type": "secret",
    "secret": true,
+   "secretWritable": true,
    "dependsOn": {
     "key": "proxy_type",
     "value": [
@@ -790,7 +795,8 @@
    "help": "Addresses banned by hand, one per line. Edited in its own section.",
    "type": "text",
    "hidden": true,
-   "multiline": true
+   "multiline": true,
+   "listKind": "ip"
   },
   "dl_limit": {
    "section": "Speed",
@@ -1306,9 +1312,11 @@
    "section": "BitTorrent",
    "group": "Add trackers",
    "label": "Trackers to add",
-   "help": "One tracker URL per line.",
+   "help": "One tracker URL per line; a blank line starts the next tier.",
    "type": "text",
    "multiline": true,
+   "listKind": "trackerUrl",
+   "tierBreaks": true,
    "dependsOn": {
     "key": "add_trackers_enabled",
     "value": true
@@ -1557,8 +1565,9 @@
    "section": "Web UI",
    "group": "Authentication",
    "label": "Subnets",
-   "help": "One subnet per line, such as 192.168.0.0/24.",
+   "help": "Has no effect while the Web UI only listens on 127.0.0.1.",
    "type": "text",
+   "readOnly": true,
    "multiline": true,
    "dependsOn": {
     "key": "bypass_auth_subnet_whitelist_enabled",
@@ -1658,15 +1667,17 @@
    "section": "Web UI",
    "group": "Custom HTTP headers",
    "label": "Custom HTTP headers",
-   "help": "Add the headers below to every Web UI response.",
-   "type": "bool"
+   "help": "Add the headers below to every Web UI response. Locked: a bad header cuts OmaqBT off from qBittorrent.",
+   "type": "bool",
+   "locked": true
   },
   "web_ui_custom_http_headers": {
    "section": "Web UI",
    "group": "Custom HTTP headers",
    "label": "Headers",
-   "help": "One header per line, as Name: value.",
+   "help": "One header per line, as Name: value. Locked: a bad header cuts OmaqBT off from qBittorrent.",
    "type": "text",
+   "locked": true,
    "multiline": true,
    "dependsOn": {
     "key": "web_ui_use_custom_http_headers_enabled",
@@ -1756,6 +1767,7 @@
    "help": "The DNS service password. Shown only as set or not set.",
    "type": "secret",
    "secret": true,
+   "secretWritable": true,
    "dependsOn": {
     "key": "dyndns_enabled",
     "value": true

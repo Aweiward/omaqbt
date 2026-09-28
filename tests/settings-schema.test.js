@@ -105,6 +105,10 @@ const SETTERS = [
 // current_interface_name :393, web_ui_api_key :351 (rotated by its own
 // endpoint, :1341), add_trackers_url_list :328 (fetched from the URL).
 const READ_ONLY = ["add_trackers_url_list", "current_interface_name", "web_ui_api_key"];
+// Keys with a setter that OmaqBT still keeps read-only (eng 4b D9): the
+// login-bypass whitelist has no effect while the Web UI only listens on
+// 127.0.0.1.
+const OMAQBT_READ_ONLY = ["bypass_auth_subnet_whitelist"];
 
 // Each choice key: how appcontroller.cpp's setter converts the value (the
 // pattern must match its setter line), and the values that conversion
@@ -161,7 +165,9 @@ const LOCKED = [
   "current_network_interface", "current_interface_address", "current_interface_name",
   "web_ui_address", "web_ui_port", "bypass_local_auth", "use_https",
   "web_ui_https_*", "web_ui_host_header_validation_enabled", "web_ui_domain_list",
-  "web_ui_reverse_prox*", "alternative_webui_*"
+  "web_ui_reverse_prox*", "alternative_webui_*",
+  // eng 4b D8: custom headers go on every Web UI reply unfiltered.
+  "web_ui_use_custom_http_headers_enabled", "web_ui_custom_http_headers"
 ];
 const OTHER_REFUSED = ["web_ui_*", "proxy_*", "*interface*", "*password*", "*https*", "autorun*",
   "*token*", "*secret*", "*api_key*"];
@@ -191,7 +197,7 @@ const TYPES = ["bool", "int", "float", "speed", "choice-int", "choice-string", "
 const NUMERIC = ["int", "float", "speed"];
 const FIELDS = ["section", "group", "label", "help", "type", "unit", "min", "max", "step", "sentinels",
   "choices", "locked", "readOnly", "hidden", "deferred", "multiline", "secret", "restart", "confirm",
-  "dependsOn", "composite"];
+  "dependsOn", "composite", "listKind", "tierBreaks", "secretWritable"];
 
 function glob(key, pattern) {
   const re = new RegExp("^" + pattern.split("*").map((s) => s.replace(/[.+?^${}()|[\]\\]/g, "\\$&")).join(".*") + "$");
@@ -252,7 +258,7 @@ test("entries use only the documented fields and types", () => {
     assert.equal(typeof e.help, "string", k);
     assert.ok(e.help.length > 0 && !e.help.includes("\n"), `${k} help is one line`);
     assert.equal(typeof e.group, "string", k);
-    for (const flag of ["locked", "readOnly", "hidden", "deferred", "multiline", "secret", "restart"]) {
+    for (const flag of ["locked", "readOnly", "hidden", "deferred", "multiline", "secret", "restart", "tierBreaks", "secretWritable"]) {
       if (flag in e) assert.equal(e[flag], true, `${k}.${flag} is present only as true`);
     }
   }
@@ -287,9 +293,9 @@ test("hidden keys are exactly the composite members, the derived and deprecated 
 test("a key is read-only exactly when setPreferences has no setter for it", () => {
   const setters = new Set(SETTERS);
   for (const k of Object.keys(DUMP)) {
-    assert.equal(!!KEYS[k].readOnly, !setters.has(k), k);
+    assert.equal(!!KEYS[k].readOnly, !setters.has(k) || OMAQBT_READ_ONLY.includes(k), k);
   }
-  assert.deepEqual(Object.keys(KEYS).filter((k) => KEYS[k].readOnly).sort(), READ_ONLY);
+  assert.deepEqual(Object.keys(KEYS).filter((k) => KEYS[k].readOnly).sort(), [...READ_ONLY, ...OMAQBT_READ_ONLY].sort());
 });
 
 test("source: SETTERS is exactly setPreferencesAction's hasKey and constFind keys", { skip: SKIP_SRC }, () => {
@@ -607,4 +613,230 @@ test("the committed dump carries no real home directory", () => {
   const text = fs.readFileSync(path.join(__dirname, "fixtures", "preferences-5.2.3.json"), "utf8");
   assert.doesNotMatch(text, /\/home\/(?!user\/)/);
   assert.equal(DUMP.save_path, "/home/user/Downloads");
+});
+
+// --- Slice 4b contract (Task 1) ------------------------------------------------------
+
+const LIST_RULES_FILE = path.join(__dirname, "fixtures", "list-rules-cases.json");
+const LIST_KINDS = { banned_IPs: "ip", add_trackers: "trackerUrl", excluded_file_names: "pattern" };
+const SECRET_WRITABLE = ["proxy_password", "dyndns_password", "mail_notification_password"];
+const HEADER_LOCKS = ["web_ui_use_custom_http_headers_enabled", "web_ui_custom_http_headers"];
+
+// The exact messages both lanes show (list-rules-cases.json).
+const LIST_MESSAGES = {
+  ip: ["Use an IPv4 or IPv6 address."],
+  trackerUrl: ["Use an http, https or udp tracker URL."],
+  pattern: ["Use a pattern such as *.exe.", "Keep each pattern to one line."],
+  secret: ["Type a value, or use --clear.", "Keep it to one line.", "Use a value without NUL characters.",
+    "Use at most 1024 characters."]
+};
+
+test("4b: listKind is exactly banned_IPs ip, add_trackers trackerUrl and excluded_file_names pattern", () => {
+  const got = {};
+  for (const [k, e] of Object.entries(KEYS)) if ("listKind" in e) got[k] = e.listKind;
+  assert.deepEqual(got, LIST_KINDS);
+  for (const k of Object.keys(LIST_KINDS)) {
+    // Stored as one newline-joined string: still multiline and text.
+    assert.equal(KEYS[k].type, "text", k);
+    assert.equal(KEYS[k].multiline, true, k);
+    assert.ok(!KEYS[k].readOnly && !KEYS[k].locked && !KEYS[k].deferred, k);
+  }
+});
+
+test("4b: only add_trackers has tier breaks (blank lines, appcontroller.cpp:883, sessionimpl.cpp:3971)", () => {
+  assert.deepEqual(Object.keys(KEYS).filter((k) => KEYS[k].tierBreaks), ["add_trackers"]);
+});
+
+test("4b: every multiline key is a list kind or can't be edited (headers and the whitelist lose multi-line editing)", () => {
+  for (const [k, e] of Object.entries(KEYS)) {
+    if (!e.multiline || e.listKind) continue;
+    assert.ok(e.readOnly || e.locked || e.deferred, k);
+  }
+});
+
+test("4b: secretWritable is exactly the three allowlisted secrets (eng 4b D2/D7)", () => {
+  assert.deepEqual(Object.keys(KEYS).filter((k) => KEYS[k].secretWritable).sort(), [...SECRET_WRITABLE].sort());
+  for (const k of SECRET_WRITABLE) {
+    assert.equal(KEYS[k].type, "secret", k);
+    assert.ok(!KEYS[k].readOnly && !KEYS[k].locked, k);
+  }
+  assert.ok(!KEYS.web_ui_api_key.secretWritable, "the API key stays read-only");
+});
+
+test("4b: the custom-header keys are locked, and their help names OmaqBT (eng 4b D8)", () => {
+  for (const k of HEADER_LOCKS) {
+    assert.equal(KEYS[k].locked, true, k);
+    assert.ok(SCHEMA.locked.includes(k), k + " in the top-level locked list");
+    assert.match(KEYS[k].help, /OmaqBT/, k);
+  }
+});
+
+test("4b: the login-bypass whitelist is read-only with the D9 help", () => {
+  const e = KEYS.bypass_auth_subnet_whitelist;
+  assert.equal(e.readOnly, true);
+  assert.equal(e.help, "Has no effect while the Web UI only listens on 127.0.0.1.");
+});
+
+test("4b: the schema _doc describes the new fields", () => {
+  for (const f of ["listKind", "tierBreaks", "secretWritable"]) assert.match(SCHEMA._doc, new RegExp(f), f);
+});
+
+test("4b (Ruling DM): settings-cases has no case for a list key; texts are one-line text", () => {
+  const cases = JSON.parse(fs.readFileSync(CASES_FILE, "utf8"));
+  for (const group of ["numbers", "choices", "times", "paths", "texts"]) {
+    for (const c of cases[group]) {
+      assert.ok(!KEYS[c.key].multiline, `${group} ${c.key}: multi-line keys are list kinds (list-rules-cases.json)`);
+    }
+  }
+  assert.ok(cases.texts.length > 0);
+  assert.doesNotMatch(cases._doc, /multiline text that must survive/);
+});
+
+// --- list-rules-cases.json -----------------------------------------------------------
+
+// A reference for the rules, only to keep the hand-written cases honest;
+// qbt (Task 2) and SettingsView (Task 3) each implement them and test
+// against the file itself.
+function refIPv4(s) {
+  const oct = "(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])";
+  return new RegExp("^(" + oct + "\\.){3}" + oct + "$").test(s);
+}
+function refIPv6(s) {
+  const p = s.split("::");
+  if (p.length > 2) return false;
+  const all = [].concat(...p.map((x) => (x === "" ? [] : x.split(":"))));
+  const tail4 = !(all.length === 0 || (p.length === 2 && p[1] === "")) && refIPv4(all[all.length - 1]);
+  const hex = tail4 ? all.slice(0, -1) : all;
+  const n = hex.length + (tail4 ? 2 : 0);
+  return hex.every((h) => /^[0-9A-Fa-f]{1,4}$/.test(h)) && (p.length === 2 ? n <= 7 : n === 8);
+}
+function refRule(kind, input) {
+  const no = (message) => ({ ok: false, message });
+  if (kind === "ip") return refIPv4(input) || refIPv6(input) ? { ok: true } : no(LIST_MESSAGES.ip[0]);
+  if (kind === "trackerUrl") {
+    if (input === "") return { ok: true }; // a tier break
+    const good = input.length <= 2048 && /^(http|https|udp):\/\/[!-~]+$/.test(input) && !input.includes("|");
+    return good ? { ok: true } : no(LIST_MESSAGES.trackerUrl[0]);
+  }
+  if (kind === "pattern") {
+    if (input === "") return no("Use a pattern such as *.exe.");
+    return /[\n\r]/.test(input) ? no("Keep each pattern to one line.") : { ok: true };
+  }
+  if (kind === "secret") {
+    if (input === "") return no("Type a value, or use --clear.");
+    if (input.includes("\u0000")) return no("Use a value without NUL characters.");
+    if (/[\n\r]/.test(input)) return no("Keep it to one line.");
+    return [...input].length <= 1024 ? { ok: true } : no("Use at most 1024 characters.");
+  }
+  throw new Error("unknown kind " + kind);
+}
+
+// server.py's _qt_address (QHostAddress::toString), run as it is.
+function qtAddresses(inputs) {
+  const prog = [
+    "import json, re, sys",
+    "src = open(sys.argv[1]).read()",
+    "ns = {}",
+    "exec(re.search(r'^def _qt_address\\(.*?(?=^\\S)', src, re.S | re.M).group(0), ns)",
+    "print(json.dumps([ns['_qt_address'](s) for s in json.load(sys.stdin)]))"
+  ].join("\n");
+  return JSON.parse(execFileSync("python3", ["-c", prog, path.join(__dirname, "fixtures", "server.py")],
+    { input: JSON.stringify(inputs), encoding: "utf8" }));
+}
+
+function listRules() {
+  return JSON.parse(fs.readFileSync(LIST_RULES_FILE, "utf8"));
+}
+
+test("list-rules: the documented shape", () => {
+  const f = listRules();
+  assert.deepEqual(Object.keys(f), ["_doc", "cases", "lists"]);
+  for (const word of ["kind", "input", "ok", "normalised", "message", "why", "lists", "QHostAddress", "tier"]) {
+    assert.ok(f._doc.includes(word), "_doc mentions " + word);
+  }
+  for (const c of f.cases) {
+    const label = c.kind + " " + JSON.stringify(c.input);
+    assert.deepEqual(Object.keys(c), c.ok ? ["kind", "input", "ok", "normalised", "why"] : ["kind", "input", "ok", "message", "why"], label);
+    assert.ok(Object.keys(LIST_MESSAGES).includes(c.kind), label);
+    assert.equal(typeof c.input, "string", label);
+    assert.ok(typeof c.why === "string" && c.why.length > 0, label);
+    if (!c.ok) assert.ok(LIST_MESSAGES[c.kind].includes(c.message), label + ": " + c.message);
+  }
+  for (const l of f.lists) {
+    assert.deepEqual(Object.keys(l), ["key", "kind", "input", "normalised", "why"], l.why);
+    assert.equal(LIST_KINDS[l.key], l.kind, l.why);
+  }
+});
+
+test("list-rules: every case follows the rules, and every message is used", () => {
+  const used = new Set();
+  for (const c of listRules().cases) {
+    const want = refRule(c.kind, c.input);
+    assert.equal(c.ok, want.ok, c.kind + " " + JSON.stringify(c.input) + " (" + c.why + ")");
+    if (!c.ok) {
+      assert.equal(c.message, want.message, c.why);
+      used.add(c.message);
+    }
+  }
+  for (const msgs of Object.values(LIST_MESSAGES)) for (const m of msgs) assert.ok(used.has(m), "a case shows " + m);
+});
+
+test("list-rules: an ok case's normalised is what qBittorrent keeps (IPs through QHostAddress, the rest unchanged)", () => {
+  const cases = listRules().cases.filter((c) => c.ok);
+  const ips = cases.filter((c) => c.kind === "ip");
+  const qt = qtAddresses(ips.map((c) => c.input));
+  ips.forEach((c, i) => assert.equal(c.normalised, qt[i], c.input));
+  for (const c of cases.filter((x) => x.kind !== "ip")) assert.equal(c.normalised, c.input, c.kind + " " + c.why);
+});
+
+test("list-rules: the cases cover what the brief asks for", () => {
+  const cases = listRules().cases;
+  const has = (kind, pred, what) => assert.ok(cases.some((c) => c.kind === kind && pred(c)), kind + ": " + what);
+  has("ip", (c) => c.ok && refIPv4(c.input), "IPv4");
+  has("ip", (c) => c.ok && c.input.includes(":") && c.normalised !== c.input, "IPv6 that normalises");
+  has("ip", (c) => c.ok && /[A-F]/.test(c.input), "mixed case");
+  has("ip", (c) => !c.ok && c.input !== c.input.trim(), "surrounding spaces");
+  has("ip", (c) => !c.ok && c.input === "", "empty");
+  for (const scheme of ["http://", "https://", "udp://"]) has("trackerUrl", (c) => c.ok && c.input.startsWith(scheme), scheme);
+  has("trackerUrl", (c) => !c.ok && c.input.startsWith("wss://"), "wss is not offered");
+  has("trackerUrl", (c) => !c.ok && c.input.includes(" "), "a space");
+  has("trackerUrl", (c) => !c.ok && c.input.includes("\n"), "a newline");
+  has("trackerUrl", (c) => c.ok && c.input === "", "empty is a tier break");
+  has("trackerUrl", (c) => !c.ok && c.input.includes("next tier"), "the tier-break marker, typed");
+  has("pattern", (c) => c.ok && c.input.includes("\u{1F98A}"), "non-BMP fidelity");
+  has("pattern", (c) => !c.ok && c.input.includes("\n"), "a newline");
+  has("secret", (c) => !c.ok && c.input === "", "empty");
+  has("secret", (c) => !c.ok && c.input.includes("\u0000"), "NUL");
+  has("secret", (c) => !c.ok && c.input.includes("\n"), "newline");
+  has("secret", (c) => c.ok && [...c.input].length === 1024 && c.input.length === 2048, "1024 non-BMP characters (code points, not UTF-16 units)");
+  has("secret", (c) => !c.ok && [...c.input].length === 1025, "one past the cap");
+  has("secret", (c) => c.ok && /[^\x00-\x7f]/.test(c.input), "non-ASCII");
+  has("secret", (c) => c.ok && c.input !== c.input.trim(), "surrounding spaces kept (IFS= read)");
+  has("secret", (c) => c.ok && c.input.includes("\\"), "a backslash kept (read -r)");
+});
+
+test("list-rules: whole-list values round-trip as 5.2.3 stores them", () => {
+  const lists = listRules().lists;
+  for (const l of lists.filter((x) => x.kind !== "ip")) {
+    // add_trackers is raw text (appcontroller.cpp:883); excluded_file_names
+    // is split on \n keeping empty entries and joined back (:670, :203).
+    assert.equal(l.normalised, l.input, l.why);
+  }
+  // banned_IPs (sessionimpl.cpp:4167): skip empty parts (appcontroller.cpp:783),
+  // drop invalid, QHostAddress form, QStringList::sort (code units), dedupe.
+  const ipLists = lists.filter((x) => x.kind === "ip");
+  for (const l of ipLists) {
+    const parts = l.input.split("\n").filter((s) => s !== "");
+    const qt = qtAddresses(parts).filter((s) => s !== "");
+    const want = [...new Set(qt)].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)).join("\n");
+    assert.equal(l.normalised, want, l.why);
+  }
+  const by = (key, pred, what) => assert.ok(lists.some((l) => l.key === key && pred(l)), key + ": " + what);
+  by("add_trackers", (l) => (l.input.match(/\n\n/g) || []).length >= 2, "three tiers");
+  by("add_trackers", (l) => l.input.includes("\n\n\n"), "a double blank line");
+  by("excluded_file_names", (l) => l.input.includes("\n\n"), "an empty entry");
+  by("excluded_file_names", (l) => l.input.endsWith("\n"), "a trailing empty entry");
+  by("banned_IPs", (l) => l.normalised !== l.input && l.input.split("\n").length > l.normalised.split("\n").length, "de-duplicated");
+  by("banned_IPs", (l) => /^10\./.test(l.normalised) && l.normalised.includes("\n9."), "sorted as strings");
+  by("banned_IPs", (l) => /[A-F]/.test(l.input) && !/[A-F]/.test(l.normalised), "lowercase IPv6");
 });

@@ -707,7 +707,9 @@ test("every command row has the documented shape", () => {
   // libraryGroup/libraryName/categoryName: slice 3a (Task 5's filters-pane rows).
   // limitRow/limitToggle: slice 3b Task 4, for Task 5's Info-tab Limits cursor.
   // toggleRow/editableRow: slice 4a Task 6, the Settings editors.
-  const validNeeds = ["none", "torrent", "selection", "tracker", "peer", "trackersTab", "noMetadata", "libraryGroup", "libraryName", "categoryName", "limitRow", "limitToggle", "toggleRow", "editableRow"];
+  // listRow/secretSet/undoEntry/listEditable/listItem/narrow: slice 4b Task 1.
+  const validNeeds = ["none", "torrent", "selection", "tracker", "peer", "trackersTab", "noMetadata", "libraryGroup", "libraryName", "categoryName", "limitRow", "limitToggle", "toggleRow", "editableRow",
+    "listRow", "secretSet", "undoEntry", "listEditable", "listItem", "narrow"];
   const validTabs = ["info", "trackers", "peers", "files", "chart"];
   for (const row of commands) {
     assert.ok(row.id === null || typeof row.id === "string");
@@ -1817,7 +1819,9 @@ test(": opens the palette from VISUAL too, remembering it was a range", () => {
 
 // --- Settings (slice 4a Task 5) ---------------------------------------------
 
+// The two columns (slice 4a); slice 4b adds the list editor's pane.
 const SETTINGS_PANES = ["settingsSections", "settingsKeys"];
+const ALL_SETTINGS_PANES = SETTINGS_PANES.concat(["settingsList"]);
 const TORRENT_PANES = ["filters", "table", "inspector"];
 
 // An event that matches `label` exactly as matchLabel reads it.
@@ -1911,8 +1915,8 @@ test("any-pane audit: the NORMAL/VISUAL any-pane rows are exactly the audited li
   assert.deepEqual(ids, ANY_PANE_TORRENT_ROWS.slice().sort(), "a new any-pane row needs a Settings decision here");
 });
 
-test("any-pane audit: only : and ? stay live inside Settings; every other any-pane key is dead in both columns", () => {
-  for (const pane of SETTINGS_PANES) {
+test("any-pane audit: only : and ? stay live inside Settings; every other any-pane key is dead in both columns and the list", () => {
+  for (const pane of ALL_SETTINGS_PANES) {
     for (const row of anyPaneViewRows()) {
       for (const label of row.keys) {
         if (label === "g g" || label === "Esc Esc") continue;
@@ -1922,7 +1926,7 @@ test("any-pane audit: only : and ? stay live inside Settings; every other any-pa
             assert.equal(r.commandId, row.id, pane + " " + mode + " " + label);
           } else {
             assert.notEqual(r.commandId, row.id, row.id + " must be dead in " + pane + " (" + mode + " " + label + ")");
-            assert.ok(r.commandId === null || /^settings\./.test(r.commandId), row.id + " " + label + " resolved to " + r.commandId);
+            assert.ok(r.commandId === null || /^(settings|list)\./.test(r.commandId), row.id + " " + label + " resolved to " + r.commandId);
             assert.equal(r.blocked, undefined, row.id + " " + label + " says nothing");
           }
         }
@@ -1941,7 +1945,7 @@ test("any-pane audit: the torrent panes keep every any-pane row", () => {
 });
 
 test("any-pane audit: the modal rows stay live inside Settings", () => {
-  for (const pane of SETTINGS_PANES) {
+  for (const pane of ALL_SETTINGS_PANES) {
     assert.equal(dispatch(state({ pane: pane, mode: "INSERT" }), evFor("Esc")).commandId, "insert.cancel", pane);
     assert.equal(dispatch(state({ pane: pane, mode: "INSERT" }), evFor("Enter")).commandId, "insert.commit", pane);
     assert.equal(dispatch(state({ pane: pane, mode: "COMMAND" }), evFor("Esc")).commandId, "palette.close", pane);
@@ -1958,17 +1962,24 @@ test("? in Settings lists the Settings keys, plus : and ?", () => {
     const ids = Array.from(new Set(helpFor("NORMAL", pane).map((r) => r.id))).sort();
     const want = ["help.toggle", "palette.open", "settings.back", "settings.down", "settings.search", "settings.up",
       pane === "settingsSections" ? "settings.enter" : "settings.leave"]
-      .concat(pane === "settingsKeys" ? ["settings.edit", "settings.toggle"] : []).sort();
+      // slice 4b: x clears a set secret and u undoes (settings.openList and
+      // the narrow rows need their `when`, so the empty state leaves them out).
+      .concat(pane === "settingsKeys" ? ["settings.edit", "settings.toggle", "settings.clearSecret", "settings.undo"] : []).sort();
     assert.deepEqual(ids, want, pane);
   }
   assert.ok(helpFor("NORMAL", "table").some((r) => r.id === "settings.open"), "the torrent view's ? lists ,");
   assert.ok(!helpFor("NORMAL", "table").some((r) => /^settings\.(?!open)/.test(r.id)), "and none of the Settings keys");
 });
 
-test("the Settings navigation rows stay out of the palette; only :Settings is there", () => {
-  for (const row of commands.filter((r) => /^settings\./.test(r.id))) {
-    assert.equal(row.paletteHidden === true, row.id !== "settings.open", row.id);
-    for (const p of row.panes) assert.ok(row.id === "settings.open" ? TORRENT_PANES.includes(p) : SETTINGS_PANES.includes(p), row.id + " " + p);
+// Slice 4b: the palette shows the Settings actions (clear a secret, undo,
+// add and remove a list line) besides :Settings; navigation and the edit
+// rows stay palette-hidden (Ruling DP).
+const SETTINGS_PALETTE_VISIBLE = ["settings.open", "settings.clearSecret", "settings.undo", "list.add", "list.remove"];
+
+test("the Settings navigation rows stay out of the palette; :Settings and the 4b actions are there", () => {
+  for (const row of commands.filter((r) => /^(settings|list)\./.test(r.id))) {
+    assert.equal(row.paletteHidden === true, !SETTINGS_PALETTE_VISIBLE.includes(row.id), row.id);
+    for (const p of row.panes) assert.ok(row.id === "settings.open" ? TORRENT_PANES.includes(p) : ALL_SETTINGS_PANES.includes(p), row.id + " " + p);
   }
 });
 
@@ -2032,3 +2043,197 @@ test("Settings: settings.write has no key or palette row; only its CONFIRM's y r
 });
 
 function assign(a, b) { return Object.assign({}, a, b); }
+
+// --- Settings 4b contract (slice 4b, Task 1) ---------------------------------------------
+
+// Every key the Settings panes care about, plus the ones that must stay dead.
+const KEYS_4B = ["j", "k", "Down", "Up", "l", "h", "Enter", "Tab", "Shift-Tab", "Esc", "/", "Space", "x", "a", "u", "?", ":",
+  "t", "s", "q", "r", "1", "Ctrl-l", "Ctrl-h"];
+
+// Every flag on: each row's need is met, except settingsListRow (Enter's
+// list/edit split is pinned on its own below).
+const ALL_ON = {
+  settingsKey: "proxy_password", settingsToggle: true, settingsEditable: true, settingsSecretSet: true,
+  settingsUndoCount: 2, listEditable: true, listItem: { index: 0, value: "203.0.113.5", tierBreak: false }
+};
+
+const SECTIONS_WIDE = { j: "settings.down", Down: "settings.down", k: "settings.up", Up: "settings.up",
+  l: "settings.enter", Enter: "settings.enter", Tab: "settings.enter", Esc: "settings.back", "/": "settings.search",
+  "?": "help.toggle", ":": "palette.open" };
+const KEYS_WIDE = { j: "settings.down", Down: "settings.down", k: "settings.up", Up: "settings.up",
+  h: "settings.leave", "Shift-Tab": "settings.leave", Enter: "settings.edit", Esc: "settings.back", "/": "settings.search",
+  Space: "settings.toggle", x: "settings.clearSecret", u: "settings.undo", "?": "help.toggle", ":": "palette.open" };
+const LIST_ANY = { j: "list.down", Down: "list.down", k: "list.up", Up: "list.up", a: "list.add", x: "list.remove",
+  Esc: "list.back", u: "settings.undo", "?": "help.toggle", ":": "palette.open" };
+// D13: narrow remaps Tab, h and Shift-Tab (settings list) to the sections
+// overlay, and Esc in the overlay (the sections column) closes it first.
+const KEY_MAP_4B = {
+  settingsSections: { wide: SECTIONS_WIDE, narrow: Object.assign({}, SECTIONS_WIDE, { Esc: "settings.sectionsClose" }) },
+  settingsKeys: { wide: KEYS_WIDE, narrow: Object.assign({}, KEYS_WIDE, { h: "settings.sections", Tab: "settings.sections", "Shift-Tab": "settings.sections" }) },
+  settingsList: { wide: LIST_ANY, narrow: LIST_ANY }
+};
+
+test("4b: every key x Settings pane x narrow resolves as pinned, and nothing else resolves", () => {
+  for (const pane of ALL_SETTINGS_PANES) {
+    for (const width of ["wide", "narrow"]) {
+      const want = KEY_MAP_4B[pane][width];
+      for (const label of KEYS_4B) {
+        const r = dispatch(state(Object.assign({ pane: pane, narrow: width === "narrow" }, ALL_ON)), evFor(label));
+        assert.equal(r.commandId, want[label] || null, pane + " " + width + " " + label);
+      }
+    }
+  }
+});
+
+test("4b: narrow never changes a torrent pane's keys", () => {
+  for (const pane of TORRENT_PANES) {
+    for (const tab of pane === "inspector" ? ["info", "trackers", "peers", "files", "chart"] : [""]) {
+      for (const label of KEYS_4B.concat(["V", "C", "T", "o", "y", "m", "e", "f", "b", "R", "c", "p", "G", ","])) {
+        const base = state(Object.assign({ pane: pane, inspectorTab: tab }, ALL_ON));
+        const wide = dispatch(base, evFor(label));
+        const narrow = dispatch(Object.assign({}, base, { narrow: true }), evFor(label));
+        assert.deepEqual(narrow.commandId, wide.commandId, pane + " " + tab + " " + label);
+        assert.deepEqual(narrow.blocked, wide.blocked, pane + " " + tab + " " + label);
+      }
+    }
+  }
+});
+
+test("4b: Enter on a list row opens the list (settings.openList, before settings.edit), with the key captured", () => {
+  const r = dispatch(state({ pane: "settingsKeys", settingsKey: "add_trackers", settingsListRow: true }), evFor("Enter"));
+  assert.equal(r.commandId, "settings.openList");
+  assert.deepEqual(r.args, { settingKey: "add_trackers" });
+  assert.equal(r.state.mode, "NORMAL", "the window focuses settingsList");
+  // Even when the window also calls the row editable, the list wins.
+  assert.equal(dispatch(state({ pane: "settingsKeys", settingsKey: "add_trackers", settingsListRow: true, settingsEditable: true }), evFor("Enter")).commandId, "settings.openList");
+  // Not a list row: Enter is settings.edit as in 4a, or blocked silently.
+  assert.equal(dispatch(state({ pane: "settingsKeys", settingsKey: "listen_port", settingsEditable: true }), evFor("Enter")).commandId, "settings.edit");
+  const none = dispatch(state({ pane: "settingsKeys", settingsKey: "web_ui_port" }), evFor("Enter"));
+  assert.deepEqual([none.commandId, none.blocked], [null, ""]);
+  // Only in the settings list: the sections' Enter stays settings.enter.
+  assert.equal(dispatch(state({ pane: "settingsSections", settingsListRow: true }), evFor("Enter")).commandId, "settings.enter");
+  const row = commands.find((c) => c.id === "settings.openList");
+  assert.ok(commands.indexOf(row) < commands.indexOf(commands.find((c) => c.id === "settings.edit")));
+  assert.deepEqual([row.keys, row.panes, row.needs, row.when], [["Enter"], ["settingsKeys"], "listRow", "listRow"]);
+});
+
+test("4b: x clears a set, writable secret; the window confirms, so a key never carries confirmed", () => {
+  const r = dispatch(state({ pane: "settingsKeys", settingsKey: "dyndns_password", settingsSecretSet: true }), evFor("x"));
+  assert.equal(r.commandId, "settings.clearSecret");
+  assert.deepEqual(r.args, { settingKey: "dyndns_password" });
+  assert.equal(r.state.mode, "NORMAL");
+  assert.equal(r.confirm, undefined, "the window raises the confirm (design D8)");
+  // Not set, not writable, saving or not a secret: silent (the row says why).
+  const off = dispatch(state({ pane: "settingsKeys", settingsKey: "dyndns_password" }), evFor("x"));
+  assert.deepEqual([off.commandId, off.blocked], [null, ""]);
+  // The window's confirm: y resolves to settings.clearSecret with confirmed.
+  const c = Registry.raiseConfirm(state({ pane: "settingsKeys" }), "settings.clearSecret", "secretClear", { settingKey: "dyndns_password" });
+  const y = dispatch(c.state, evFor("y"));
+  assert.equal(y.commandId, "settings.clearSecret");
+  assert.deepEqual(y.args, { settingKey: "dyndns_password", confirmed: true });
+  assert.equal(dispatch(c.state, evFor("n")).commandId, "confirm.cancel");
+  const p = Registry.dispatchCommand(state({ pane: "settingsKeys", settingsKey: "proxy_password", settingsSecretSet: true }), "settings.clearSecret");
+  assert.deepEqual([p.commandId, p.args.confirmed], ["settings.clearSecret", undefined]);
+});
+
+test("4b: u undoes in the settings list and the list editor, and says so when there's nothing to undo", () => {
+  for (const pane of ["settingsKeys", "settingsList"]) {
+    const r = dispatch(state({ pane: pane, settingsUndoCount: 1 }), evFor("u"));
+    assert.equal(r.commandId, "settings.undo", pane);
+    assert.deepEqual(r.args, {}, pane);
+    assert.equal(r.state.mode, "NORMAL", pane);
+    const none = dispatch(state({ pane: pane, settingsUndoCount: 0 }), evFor("u"));
+    assert.deepEqual([none.commandId, none.blocked], [null, "nothing to undo"], pane);
+    assert.equal(Registry.dispatchCommand(state({ pane: pane, settingsUndoCount: 3 }), "settings.undo").commandId, "settings.undo", pane);
+  }
+  assert.equal(dispatch(state({ pane: "settingsSections", settingsUndoCount: 1 }), evFor("u")).commandId, null, "not from the sections");
+  for (const pane of TORRENT_PANES) {
+    assert.equal(Registry.dispatchCommand(state({ pane: pane, settingsUndoCount: 1 }), "settings.undo").commandId, null, pane);
+  }
+});
+
+test("4b: the list editor's a, x and Esc, with the list's key and the line captured at key time", () => {
+  const item = { index: 2, value: "", tierBreak: true, extra: "dropped" };
+  const s = state({ pane: "settingsList", settingsKey: "add_trackers", listEditable: true, listItem: item });
+  const add = dispatch(s, evFor("a"));
+  assert.equal(add.commandId, "list.add");
+  assert.deepEqual(add.args, { settingKey: "add_trackers" });
+  assert.equal(add.state.mode, "NORMAL", "the window opens INSERT");
+  const rm = dispatch(s, evFor("x"));
+  assert.equal(rm.commandId, "list.remove");
+  assert.deepEqual(rm.args, { settingKey: "add_trackers", listItem: { index: 2, value: "", tierBreak: true } });
+  assert.ok(Object.isFrozen(rm.args.listItem), "a later refresh can't change what x removes");
+  item.value = "changed";
+  assert.equal(rm.args.listItem.value, "");
+  assert.equal(rm.confirm, undefined, "no confirm: unbanning and removals are undoable (design, D11)");
+  const back = dispatch(s, evFor("Esc"));
+  assert.deepEqual([back.commandId, back.state.prefix], ["list.back", null]);
+  // A stale Esc prefix never reaches filter.reset from the list.
+  assert.equal(dispatch(state({ pane: "settingsList", prefix: "Esc", prefixAt: 0 }), ev("\u001b", KEY.Escape, undefined, 10)).commandId, "list.back");
+  // Not editable (saving) or no line under the cursor: silent.
+  for (const [over, label] of [[{ listEditable: false }, "a"], [{ listEditable: false }, "x"], [{ listItem: null }, "x"]]) {
+    const r = dispatch(Object.assign({}, s, over), evFor(label));
+    assert.deepEqual([r.commandId, r.blocked], [null, ""], JSON.stringify(over) + " " + label);
+  }
+  // The empty list still adds.
+  assert.equal(dispatch(state({ pane: "settingsList", settingsKey: "banned_IPs", listEditable: true }), evFor("a")).commandId, "list.add");
+});
+
+test("4b: narrow's rows: Tab, h and Shift-Tab open the sections; Esc in the overlay closes it first", () => {
+  for (const label of ["Tab", "h", "Shift-Tab"]) {
+    const r = dispatch(state({ pane: "settingsKeys", narrow: true }), evFor(label));
+    assert.deepEqual([r.commandId, r.args, r.state.mode], ["settings.sections", {}, "NORMAL"], label);
+  }
+  const close = dispatch(state({ pane: "settingsSections", narrow: true }), evFor("Esc"));
+  assert.equal(close.commandId, "settings.sectionsClose");
+  assert.equal(close.state.prefix, null);
+  // Choosing a section is settings.enter, as when wide; the window closes the overlay.
+  assert.equal(dispatch(state({ pane: "settingsSections", narrow: true }), evFor("Enter")).commandId, "settings.enter");
+  // In the settings list, Esc is still settings.back.
+  assert.equal(dispatch(state({ pane: "settingsKeys", narrow: true }), evFor("Esc")).commandId, "settings.back");
+  for (const id of ["settings.sections", "settings.sectionsClose"]) {
+    const row = commands.find((c) => c.id === id);
+    assert.deepEqual([row.needs, row.when, row.paletteHidden], ["narrow", "narrow", true], id);
+  }
+});
+
+test("4b: ? follows the width and the cursor row (helpFor's state)", () => {
+  const ids = (pane, st) => Array.from(new Set(helpFor("NORMAL", pane, undefined, st).map((r) => r.id))).sort();
+  assert.deepEqual(ids("settingsKeys", { narrow: true }), ["help.toggle", "palette.open", "settings.back", "settings.clearSecret",
+    "settings.down", "settings.edit", "settings.search", "settings.sections", "settings.toggle", "settings.undo", "settings.up"]);
+  assert.ok(ids("settingsKeys", { settingsListRow: true }).includes("settings.openList"));
+  assert.deepEqual(ids("settingsSections", { narrow: true }), ["help.toggle", "palette.open", "settings.down", "settings.enter",
+    "settings.search", "settings.sectionsClose", "settings.up"]);
+  for (const st of [{}, { narrow: true }]) {
+    assert.deepEqual(ids("settingsList", st), ["help.toggle", "list.add", "list.back", "list.down", "list.remove", "list.up",
+      "palette.open", "settings.undo"], JSON.stringify(st));
+  }
+  const titles = {};
+  for (const r of helpFor("NORMAL", "settingsList")) titles[r.id] = r.title;
+  assert.equal(titles["list.add"], "Add to the list");
+  assert.equal(titles["list.remove"], "Remove from the list");
+  assert.equal(helpFor("NORMAL", "settingsKeys").find((r) => r.id === "settings.undo").title, "Undo the last settings change");
+  assert.equal(helpFor("NORMAL", "settingsKeys").find((r) => r.id === "settings.clearSecret").title, "Clear the secret");
+});
+
+test("4b: settingsList is a Settings pane", () => {
+  assert.deepEqual(Registry.SETTINGS_PANES, ALL_SETTINGS_PANES);
+  assert.equal(Registry.isSettingsPane("settingsList"), true);
+});
+
+test("4b: the new needs default unmet, and only undo names a reason", () => {
+  for (const need of ["listRow", "secretSet", "undoEntry", "listEditable", "listItem", "narrow"]) {
+    assert.equal(Registry.preconditionMet(need, {}), false, need);
+  }
+  assert.equal(Registry.preconditionMet("listRow", { settingsListRow: true }), true);
+  assert.equal(Registry.preconditionMet("secretSet", { settingsSecretSet: true }), true);
+  assert.equal(Registry.preconditionMet("undoEntry", { settingsUndoCount: 1 }), true);
+  assert.equal(Registry.preconditionMet("undoEntry", { settingsUndoCount: "1" }), false, "a number, never a string");
+  assert.equal(Registry.preconditionMet("listEditable", { listEditable: true }), true);
+  assert.equal(Registry.preconditionMet("listItem", { listEditable: true, listItem: { index: 0, value: "x" } }), true);
+  assert.equal(Registry.preconditionMet("listItem", { listEditable: false, listItem: { index: 0, value: "x" } }), false);
+  assert.equal(Registry.preconditionMet("narrow", { narrow: true }), true);
+  for (const need of ["listRow", "secretSet", "listEditable", "listItem", "narrow"]) assert.equal(Registry.needsReason(need, {}), "", need);
+  assert.equal(Registry.needsReason("undoEntry", {}), "nothing to undo");
+  assert.equal(Registry.needsReason("undoEntry", { settingsUndoCount: 1 }), "");
+});

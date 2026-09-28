@@ -378,7 +378,9 @@ test("parseInput: every window case in settings-cases.json", () => {
     }
   }
   assert.ok(n > 400, "window cases: " + n);
-  assert.ok(multi >= 9, "multiline cases: " + multi);
+  // Ruling DM (slice 4b Task 1): list keys have no settings-cases; their
+  // per-line rules are in list-rules-cases.json.
+  assert.equal(multi, 0, "multiline cases: " + multi);
 });
 
 test("parseInput: the number messages name the range and the sentinels", () => {
@@ -651,12 +653,15 @@ test("rows: a locked row is never dimmed; the lock is its reason", () => {
 
 // --- Ruling DH: multiline keys are read-only in 4a -------------------------------------
 
-const MULTI = ["excluded_file_names", "add_trackers", "bypass_auth_subnet_whitelist", "web_ui_custom_http_headers"];
+// Slice 4b Task 1: the custom headers are locked (eng 4b D8) and the
+// login-bypass whitelist is read-only (D9), so two keys wait for 4b's list
+// editor (Task 3).
+const MULTI = ["excluded_file_names", "add_trackers"];
 
-test("multiline: exactly the four editable-in-4b keys are the schema's multiline, non-hidden, non-deferred, writable keys", () => {
+test("multiline: exactly the two editable-in-4b keys are the schema's multiline, non-hidden, non-deferred, writable keys", () => {
   const found = Schema.KEY_ORDER.filter((k) => {
     const e = Schema.SCHEMA[k];
-    return e.multiline && !e.hidden && !e.deferred && !e.readOnly;
+    return e.multiline && !e.hidden && !e.deferred && !e.readOnly && !e.locked;
   });
   assert.deepEqual(found.sort(), MULTI.slice().sort());
 });
