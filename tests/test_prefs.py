@@ -13,6 +13,7 @@ value is ever printed.
 import json
 import os
 import re
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -997,15 +998,21 @@ class SecretStdinTest(StdinCase):
         self.control({})
 
     def test_write_timeout(self):
+        # B3: status 000 on the secret POST means qBittorrent may have
+        # already applied it -- only the read-back can say, so this reads
+        # "couldn't confirm", not "refused".
         self.control({"setPreferences": "sleep7"})
-        self.secret_refused("proxy_password", "SLOWSECRET-2", "qBittorrent refused it (couldn't reach qBittorrent)",
-                            posts=1)
+        self.secret_refused("proxy_password", "SLOWSECRET-2",
+                            "Couldn't confirm Proxy password (couldn't reach qBittorrent)", posts=1)
         self.control({})
 
     def test_unreachable(self):
+        # Also status 000 (curl never connected): api_stdin can't tell this
+        # apart from a timeout after the body went out, so it reads the
+        # same "couldn't confirm" as test_write_timeout.
         env = {"QBT_BASE": "http://127.0.0.1:9"}
-        self.secret_refused("proxy_password", "DOWNSECRET-3", "qBittorrent refused it (couldn't reach qBittorrent)",
-                            env=env)
+        self.secret_refused("proxy_password", "DOWNSECRET-3",
+                            "Couldn't confirm Proxy password (couldn't reach qBittorrent)", env=env)
         self.secret_refused("proxy_password", "x", "refusing non-localhost host (base must be http://127.0.0.1:<port>)",
                             env={"QBT_BASE": "http://127.0.0.2:1"})
 
@@ -1346,6 +1353,95 @@ class FixtureBannedIpsTest(FinalFixCase):
     def test_qt_dotted_tail(self):
         self.assertEqual(self.post_raw({"banned_IPs": "::0:102:304\n::1:0\n::0.0.1.0\n::ffff:c000:201"}), 200)
         self.assertEqual(self.state()["banned_IPs"], "::0.1.0.0\n::1.2.3.4\n::100\n::ffff:192.0.2.1")
+
+
+class LargeBodyTest(FinalFixCase):
+    """Final fix wave (B1/B2). With banned_IPs well past bash 5.3's ~64 KiB
+    here-string pipe-buffer threshold, a here-string that still carries
+    PREFS_JSON or API_BODY would spill to a sh-thd.* temp file for the
+    microseconds it takes jq to read it -- long enough, at review-caught
+    odds, to hold a just-set secret on disk. And the same big list,
+    URI-encoded, is well past MAX_ARG_STRLEN (~128 KiB): a single curl or
+    jq argument that size makes exec fail with E2BIG."""
+
+    # 12,000 distinct, valid IPv4 addresses. URI-encoded (each "\n" becomes
+    # "%0A") this list is comfortably past both thresholds above.
+    MANY_IPS = [f"203.{hi}.{lo}.1" for hi in range(1, 50) for lo in range(256)][:12000]
+
+    def setUp(self):
+        self.assertEqual(len(self.MANY_IPS), 12000)
+        self.assertEqual(len(self.MANY_IPS), len(set(self.MANY_IPS)))
+        self.assertEqual(self.post_raw({"banned_IPs": "\n".join(self.MANY_IPS)}), 200)
+        self.addCleanup(self.post_raw, {"banned_IPs": ""})
+
+    def run_bounded(self, *args, env=None, input=None):
+        # A file-size cap well under bash's ~64 KiB here-string
+        # pipe-buffer threshold. A here-string over that threshold spills
+        # to a temp file, which this cap turns into a loud failure
+        # (SIGXFSZ, or bash's own "cannot create temp file for
+        # here-document") instead of a silent one; a fixed here-string
+        # (piped instead) never touches a file, so it's unaffected. A
+        # 50 ms poll on a fresh TMPDIR can miss a file that lives for
+        # microseconds (that's how the reviewer's own finding was this
+        # narrow); this doesn't rely on timing at all.
+        full = dict(self.env)
+        full.update(env or {})
+        return subprocess.run(["bash", "-c", 'ulimit -f 32 && exec "$0" "$@"', QBT, *args],
+                              env=full, input=input, capture_output=True)
+
+    def test_ulimit_mechanism_would_catch_a_spilled_here_string(self):
+        # Self-check, on this machine's bash, that the cap actually bites
+        # on a spilled here-string -- so a pass below means what it says.
+        probe = subprocess.run(
+            ["bash", "-c", 'ulimit -f 32; x=$(head -c 100000 /dev/zero | tr "\\0" a); cat <<<"$x" >/dev/null'],
+            capture_output=True)
+        self.assertNotEqual(probe.returncode, 0)
+        self.assertIn(b"temp file", probe.stderr)
+
+    def test_prefs_secret_write_and_ban_list_never_spill_a_here_string(self):
+        r = self.run_bounded("prefs")
+        self.assertEqual((r.returncode, r.stderr), (0, b""), r.stderr)
+        r = self.run_bounded("pref-set", "proxy_password", "--stdin", input=b"S3CRET-large-body")
+        self.assertEqual((r.returncode, r.stdout.strip(), r.stderr), (0, b'{"ok":true}', b""))
+        r = self.run_bounded("ban-list", "add", "198.51.100.77")
+        self.assertEqual((r.returncode, r.stdout.strip(), r.stderr), (0, b'{"ok":true}', b""))
+        self.assertIn("198.51.100.77", self.state()["banned_IPs"].split("\n"))
+        r = self.run_bounded("ban-list", "remove", "198.51.100.77")
+        self.assertEqual((r.returncode, r.stdout.strip(), r.stderr), (0, b'{"ok":true}', b""))
+        self.assertNotIn("198.51.100.77", self.state()["banned_IPs"].split("\n"))
+
+    def test_prefs_and_ban_list_touch_no_file_in_a_fresh_tmpdir(self):
+        # Weaker than the ulimit checks above (a microsecond-lived file
+        # can slip past a post-hoc iterdir()), kept alongside them as a
+        # second signal against a file left behind.
+        tmpdir = Path(tempfile.mkdtemp(prefix="qbt-tmp-"))
+        self.addCleanup(__import__("shutil").rmtree, tmpdir, True)
+        env = {"TMPDIR": str(tmpdir), "TMP": str(tmpdir), "TEMP": str(tmpdir)}
+        self.assertEqual(self.run_qbt("prefs", env=env).returncode, 0)
+        r = subprocess.run([QBT, "pref-set", "proxy_password", "--stdin"], env=dict(self.env, **env),
+                           input=b"S3CRET-tmpdir-body", capture_output=True)
+        self.assertEqual((r.returncode, r.stderr), (0, b""))
+        self.assertEqual(self.run_qbt("ban-list", "add", "198.51.100.78", env=env).returncode, 0)
+        self.assertEqual(self.run_qbt("ban-list", "remove", "198.51.100.78", env=env).returncode, 0)
+        self.assertEqual(list(tmpdir.iterdir()), [])
+
+    def test_ban_list_add_remove_past_max_arg_strlen(self):
+        # 12,000 IPv4 addresses, URI-encoded, is well past MAX_ARG_STRLEN
+        # (128 KiB): the whole list must never be a single curl or jq
+        # argument.
+        r = self.run_qbt("ban-list", "add", "198.51.100.99")
+        self.assertEqual((r.returncode, r.stdout.strip(), r.stderr), (0, '{"ok":true}', ""))
+        stored = self.state()["banned_IPs"].split("\n")
+        self.assertIn("198.51.100.99", stored)
+        self.assertGreaterEqual(len(stored), 12000)
+        r = self.run_qbt("ban-list", "remove", "198.51.100.99")
+        self.assertEqual((r.returncode, r.stdout.strip(), r.stderr), (0, '{"ok":true}', ""))
+        self.assertNotIn("198.51.100.99", self.state()["banned_IPs"].split("\n"))
+
+    def test_no_here_string_carries_prefs_json_or_api_body(self):
+        text = (ROOT / "qbt").read_text()
+        self.assertNotIn('<<<"$PREFS_JSON"', text)
+        self.assertNotIn('<<<"$API_BODY"', text)
 
 
 # Every external command qbt may spawn. PATH holds only these shims, so a

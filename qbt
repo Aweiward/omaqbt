@@ -2042,7 +2042,7 @@ pref_secret_names() {
 pref_read() {
   api_try GET "/api/v2/app/preferences" || die "qBittorrent refused it (${API_FAIL})"
   PREFS_JSON=$API_BODY
-  jq -e 'type == "object"' >/dev/null 2>&1 <<<"$PREFS_JSON" || die "qBittorrent sent something unreadable"
+  printf '%s' "$PREFS_JSON" | jq -e 'type == "object"' >/dev/null 2>&1 || die "qBittorrent sent something unreadable"
 }
 
 cmd_prefs() {
@@ -2058,13 +2058,13 @@ cmd_prefs() {
   # Secrets by name, plus any key the schema doesn't know that sounds like
   # a password, token, secret or API key (a schema key such as
   # bdecode_token_limit keeps its value). The values go through stdin only.
-  jq -c --arg names "$secrets" --arg known "$known" --arg re "$PREF_SECRET_NAME_RE" '
+  printf '%s' "$PREFS_JSON" | jq -c --arg names "$secrets" --arg known "$known" --arg re "$PREF_SECRET_NAME_RE" '
     ($names | fromjson) as $s | ($known | fromjson) as $k
     | with_entries(
         if (.key as $n | $s | index([$n]))
            or ((.key as $n | $k | index([$n]) | not) and (.key | test($re; "i")))
         then .value = {set: (.value != null and .value != "" and .value != false)}
-        else . end)' <<<"$PREFS_JSON" 2>/dev/null || die "qBittorrent sent something unreadable"
+        else . end)' 2>/dev/null || die "qBittorrent sent something unreadable"
 }
 
 # IPv4/IPv6 text, shared by pref-set's announce_ip and ban-list.
@@ -2306,7 +2306,16 @@ pref_set_secret() {
   local code
   code=$(printf '%s' "$body" | api_stdin POST "/api/v2/app/setPreferences") || true
   body=""
-  [[ $code == 200 || $code == 204 ]] || die "qBittorrent refused it ($(api_stdin_fail "$code"))"
+  if [[ $code != 200 && $code != 204 ]]; then
+    # Eng 4b fix wave (B3): anything other than a plain HTTP status (000,
+    # or curl never printing one at all) means curl never got a response,
+    # not that qBittorrent refused the write -- the body may have already
+    # gone out and applied. Only the confirm read-back below can say for
+    # sure, so this reports the same "can't confirm" shape it uses.
+    [[ $code =~ ^[[:digit:]]{3}$ && $code != 000 ]] \
+      || die "Couldn't confirm ${label} (couldn't reach qBittorrent)"
+    die "qBittorrent refused it ($(api_stdin_fail "$code"))"
+  fi
 
   # The write may already have applied: a failed re-read can't say "refused".
   api_try GET "/api/v2/app/preferences" || die "Couldn't confirm ${label} (${API_FAIL})"
@@ -2395,10 +2404,10 @@ cmd_pref_set() {
     pref_matches "${key,,}" "${PREF_OTHER_REFUSED[@]}" && die "OmaqBT won't change this setting."
     pref_read
     # A whole number stays whole: an integer's Other value refuses decimals.
-    other=$(jq -r --arg k "$key" '
+    other=$(printf '%s' "$PREFS_JSON" | jq -r --arg k "$key" '
       if has($k) | not then "missing"
       elif (.[$k] | type) == "number" and .[$k] == (.[$k] | floor) then "integer"
-      else .[$k] | type end' <<<"$PREFS_JSON" 2>/dev/null) \
+      else .[$k] | type end' 2>/dev/null) \
       || die "qBittorrent sent something unreadable"
     case $other in
       missing) die "qBittorrent has no setting called ${key}." ;;
@@ -2412,7 +2421,7 @@ cmd_pref_set() {
   local stored=""
   if [[ $flags == list ]]; then
     pref_read
-    stored=$(jq -r --arg k "$key" '.[$k] | if type == "string" then . else "" end' <<<"$PREFS_JSON" 2>/dev/null \
+    stored=$(printf '%s' "$PREFS_JSON" | jq -r --arg k "$key" '.[$k] | if type == "string" then . else "" end' 2>/dev/null \
       && printf x) || true
     [[ $stored == *$'\n'x ]] || die "qBittorrent sent something unreadable"
     stored=${stored%$'\n'x}
@@ -2428,13 +2437,26 @@ cmd_pref_set() {
   type=$(jq -r '.type' <<<"$cast")
   exact=$(jq -r '.exact // false' <<<"$cast")
 
-  api_try POST "/api/v2/app/setPreferences" "json=$(uri "$sent")" || die "qBittorrent refused it (${API_FAIL})"
+  local body="json=$(uri "$sent")"
+  if [[ $flags == list ]]; then
+    # Eng 4b fix wave (B2): a whole list's URI-encoded body can exceed a
+    # single curl argument's limit (MAX_ARG_STRLEN, ~128 KiB); send it on
+    # stdin, the way a secret's body already goes (pref_set_secret above).
+    assert_local_base
+    local code
+    code=$(printf '%s' "$body" | api_stdin POST "/api/v2/app/setPreferences") || true
+    body=""
+    [[ $code == 200 || $code == 204 ]] || die "qBittorrent refused it ($(api_stdin_fail "$code"))"
+  else
+    api_try POST "/api/v2/app/setPreferences" "$body" || die "qBittorrent refused it (${API_FAIL})"
+  fi
   # The write may already have applied: a failed re-read can't say "refused".
   api_try GET "/api/v2/app/preferences" || die "Couldn't confirm ${label} (${API_FAIL})"
   PREFS_JSON=$API_BODY
-  jq -e 'type == "object"' >/dev/null 2>&1 <<<"$PREFS_JSON" \
+  printf '%s' "$PREFS_JSON" | jq -e 'type == "object"' >/dev/null 2>&1 \
     || die "Couldn't confirm ${label} (qBittorrent sent something unreadable)"
-  jq -e --arg sent "$sent" --arg type "$type" --arg exact "$exact" "$PREF_SAME_JQ" >/dev/null 2>&1 <<<"$PREFS_JSON" \
+  printf '%s' "$PREFS_JSON" | jq -e --arg type "$type" --arg exact "$exact" --rawfile sent /dev/fd/3 \
+    "$PREF_SAME_JQ" 3< <(printf '%s' "$sent") >/dev/null 2>&1 \
     || die "qBittorrent ignored ${label}"
   printf '%s\n' '{"ok":true}'
 }
@@ -2500,10 +2522,19 @@ cmd_ban_list() {
 
   api_try GET "/api/v2/app/preferences" || die "qBittorrent refused it (${API_FAIL})"
   local plan status="" norm="" body="" sent=""
-  plan=$(jq -rj --arg ip "$ip" --arg op "$op" "$BAN_PLAN_JQ" <<<"$API_BODY" 2>/dev/null) || plan=unreadable
-  { IFS= read -r status; IFS= read -r norm; IFS= read -r body; IFS= read -r sent; } <<<"$plan" || true
+  plan=$(printf '%s' "$API_BODY" | jq -rj --arg ip "$ip" --arg op "$op" "$BAN_PLAN_JQ" 2>/dev/null) || plan=unreadable
+  { IFS= read -r status; IFS= read -r norm; IFS= read -r body; IFS= read -r sent; } < <(printf '%s\n' "$plan") || true
   case $status in
-    send) api_or_die POST "/api/v2/app/setPreferences" "$body" ;;
+    send)
+      # Eng 4b fix wave (B2): the URI-encoded whole ban list can exceed a
+      # single curl argument's limit (MAX_ARG_STRLEN, ~128 KiB); send it on
+      # stdin, the way a secret's body already goes.
+      assert_local_base
+      local code
+      code=$(printf '%s' "$body" | api_stdin POST "/api/v2/app/setPreferences") || true
+      body=""
+      [[ $code == 200 || $code == 204 ]] || die "qBittorrent refused it ($(api_stdin_fail "$code"))"
+      ;;
     noop) printf '%s\n' '{"ok":true}'; return ;;
     invalid) die "Use an IPv4 or IPv6 address." ;;
     *) die "qBittorrent sent something unreadable" ;;
@@ -2511,11 +2542,11 @@ cmd_ban_list() {
 
   api_try GET "/api/v2/app/preferences" || die "Couldn't confirm Banned IPs (${API_FAIL})"
   PREFS_JSON=$API_BODY
-  jq -e 'type == "object"' >/dev/null 2>&1 <<<"$PREFS_JSON" \
+  printf '%s' "$PREFS_JSON" | jq -e 'type == "object"' >/dev/null 2>&1 \
     || die "Couldn't confirm Banned IPs (qBittorrent sent something unreadable)"
   local verdict
-  verdict=$(jq -r --arg sent "$sent" --arg ip "$norm" --arg op "$op" "$BAN_CHECK_JQ" <<<"$PREFS_JSON" 2>/dev/null) \
-    || verdict=unreadable
+  verdict=$(printf '%s' "$PREFS_JSON" | jq -r --arg ip "$norm" --arg op "$op" --rawfile sent /dev/fd/3 \
+    "$BAN_CHECK_JQ" 3< <(printf '%s' "$sent") 2>/dev/null) || verdict=unreadable
   case $verdict in
     ok) printf '%s\n' '{"ok":true}' ;;
     missing) die "qBittorrent didn't ban ${norm}." ;;
