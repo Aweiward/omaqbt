@@ -1,7 +1,9 @@
 """Slice 4a, Task 2: `qbt prefs` and `qbt pref-set` against the fixture's
 state-backed /app/preferences (QBT_FIXTURE_PREFS), which behaves like
-qBittorrent 5.2.3's setPreferences: always 200, unknown keys and bad values
-dropped without a word, scheduler times only as an hour+minute pair.
+qBittorrent 5.2.3's setPreferences: 200 (400 only for a bad
+web_ui_username), unknown keys and bad values dropped without a word,
+scheduler times only as an hour+minute pair, paths cleaned like
+QDir::cleanPath, announce_ip stored as QHostAddress::toString writes it.
 
 The gate under test: no locked, read-only, hidden, deferred or secret key
 and no dangerous Other key ever reaches setPreferences; every value arrives
@@ -14,6 +16,7 @@ import re
 import sys
 import tempfile
 import unittest
+import urllib.error
 import urllib.request
 from pathlib import Path
 from urllib.parse import parse_qs
@@ -38,6 +41,11 @@ SECRET_VALUES = {
     "web_ui_api_key": "APIKEYSECRET-0123456789",
     # Unknown to the schema, but it sounds like a password.
     "backup_password_extra": "OTHERPASSWORDSECRET",
+    # Ruling DT: unknown keys that sound like a token, secret or API key.
+    "future_token": "TOKENSECRET-5",
+    "Auth_TOKEN": "TOKENSECRET-6",
+    "client_Secret_x": "SECRETSECRET-7",
+    "my_api_key": "APIKEYSECRET-8",
 }
 
 # Keys the schema doesn't know (the Other section), seeded into the dump.
@@ -438,8 +446,20 @@ class PrefSetFidelityTest(PrefsCase):
         self.set_refused("export_dir", "rel", "Use an absolute path or one starting with ~/, or nothing for off.")
 
     def test_trimmed_strings_count_as_taken(self):
+        # Ruling DT: 5.2.3 trims only autorun_program,
+        # autorun_on_torrent_added_program, announce_ip and
+        # current_interface_address (appcontroller.cpp:696, :701, :1019,
+        # :1178); a trimmed read-back still counts as taken.
+        self.assertEqual(self.set_ok("autorun_program", "  run %N  "), {"autorun_program": "  run %N  "})
+        self.assertEqual(self.state()["autorun_program"], "run %N")
+        self.assertEqual(self.set_ok("autorun_on_torrent_added_program", " add %N "),
+                         {"autorun_on_torrent_added_program": " add %N "})
+        self.assertEqual(self.state()["autorun_on_torrent_added_program"], "add %N")
+        # Every other string is stored exactly as sent.
         self.assertEqual(self.set_ok("app_instance_name", "  padded  "), {"app_instance_name": "  padded  "})
-        self.assertEqual(self.state()["app_instance_name"], "padded")
+        self.assertEqual(self.state()["app_instance_name"], "  padded  ")
+        self.assertEqual(self.set_ok("future_name", " spaced "), {"future_name": " spaced "})
+        self.assertEqual(self.state()["future_name"], " spaced ")
 
     def test_step_1024(self):
         self.set_refused("dl_limit", "1536", "Use whole KiB.")
@@ -477,11 +497,16 @@ class PrefSetIgnoredTest(PrefsCase):
     """RED first: qBittorrent answers 200 and drops the value; pref-set must say so."""
 
     def test_value_qbittorrent_drops(self):
-        # 5.2.3 turns anything that isn't an IP address into "" (:1178).
+        # 200, but the read-back holds something else: pref-set says so.
+        self.control({"prefs_override": {"announce_ip": ""}})
         before = len(self.log())
-        r = self.run_qbt("pref-set", "announce_ip", "--", "not.an.ip")
+        r = self.run_qbt("pref-set", "announce_ip", "--", "203.0.113.7")
         self.assertEqual((r.returncode, r.stdout, r.stderr.strip()), (1, "", "qBittorrent ignored IP reported to trackers"))
         self.assertEqual(len(self.posts_since(before)), 1)
+        self.control({"prefs_override": {"announce_ip": "2001:db8::2"}})
+        r = self.run_qbt("pref-set", "announce_ip", "--", "2001:DB8::1")
+        self.assertEqual((r.returncode, r.stderr.strip()), (1, "qBittorrent ignored IP reported to trackers"))
+        self.control({})
         self.assertEqual(self.set_ok("announce_ip", "203.0.113.7"), {"announce_ip": "203.0.113.7"})
 
     def test_noop_write(self):
@@ -521,6 +546,222 @@ class PrefSetIgnoredTest(PrefsCase):
         self.control({"preferences": "unreadable"})
         r = self.run_qbt("pref-set", "dht", "--", "true")
         self.assertEqual(r.stderr.strip(), "Couldn't confirm DHT (qBittorrent sent something unreadable)")
+
+
+CLEAN_PATH_MESSAGE = "Use a clean path without //, /./ or /../."
+ANNOUNCE_IP_MESSAGE = "Use an IPv4 or IPv6 address, or leave it empty."
+USERNAME_MESSAGE = "Use at least 3 characters and no colon."
+
+
+class FinalFixCase(PrefsCase):
+    def post_raw(self, obj):
+        """setPreferences straight to the fixture, bypassing qbt."""
+        from urllib.parse import quote
+        req = urllib.request.Request(f"http://127.0.0.1:{self.port}/api/v2/app/setPreferences",
+                                     data=f"json={quote(json.dumps(obj))}".encode(), method="POST")
+        try:
+            with urllib.request.urlopen(req, timeout=5) as r:
+                return r.status
+        except urllib.error.HTTPError as e:
+            with e:
+                return e.code
+
+
+class CleanPathTest(FinalFixCase):
+    """Ruling DQ: 5.2.3 stores Path(value), i.e. QDir::cleanPath
+    (appcontroller.cpp:560, :607, :611, :615, :617), so an unclean path
+    would read back different and be reported as ignored."""
+
+    def test_unclean_paths_are_refused_before_any_write(self):
+        for bad in ("/srv//dl", "//srv", "/srv/dl//", "/srv/./x", "/srv/../x", "/srv/x/.", "/srv/x/..",
+                    "/.", "/..", "/srv//dl/./x", "~/a/../dl", "~/./x", "~//x", "~/x/."):
+            self.set_refused("save_path", bad, CLEAN_PATH_MESSAGE)
+        self.set_refused("export_dir", "/srv/../x", CLEAN_PATH_MESSAGE)
+        self.set_refused("python_executable_path", "/usr//bin/python3", CLEAN_PATH_MESSAGE)
+        # After ~/ expansion: a $HOME with a "." part is unclean too.
+        self.set_refused("save_path", "~/x", CLEAN_PATH_MESSAGE, env={"HOME": "/home/./u"})
+
+    def test_dots_inside_names_are_fine(self):
+        for good in ("/srv/.hidden/x", "/srv/x..y", "/srv/..x", "/srv/x.", "/srv/...", "/", "/srv/t/"):
+            self.assertEqual(self.set_ok("save_path", good), {"save_path": good})
+
+    def test_reviewer_repro_is_refused_not_ignored(self):
+        # The final review's repro: the real value is the cleaned path.
+        for value, real in (("/srv//dl/./x", "/srv/dl/x"), ("~/a/../dl", os.environ["HOME"] + "/dl")):
+            self.control({"prefs_override": {"save_path": real}})
+            self.set_refused("save_path", value, CLEAN_PATH_MESSAGE)
+
+    def test_fixture_cleans_like_qdir(self):
+        for sent, stored in (("/srv//dl/./x/../y/", "/srv/dl/y"), ("//srv", "/srv"), ("/..", "/"),
+                             ("/srv/t/", "/srv/t"), ("/", "/"), (" /srv/x ", " /srv/x ")):
+            self.assertEqual(self.post_raw({"save_path": sent}), 200)
+            self.assertEqual(self.state()["save_path"], stored, sent)
+        self.assertEqual(self.post_raw({"export_dir": ""}), 200)
+        self.assertEqual(self.state()["export_dir"], "")
+
+
+class AnnounceIpTest(FinalFixCase):
+    """Ruling DR: QHostAddress{value.trimmed()}; toString() when it parses,
+    "" otherwise (appcontroller.cpp:1178)."""
+
+    GOOD = ("", "203.0.113.7", "0.0.0.0", "255.255.255.255", "10.0.0.1", "2001:DB8::1", "2001:db8::1",
+            "2001:0DB8:0000:0:0:0:0:0001", "::", "::1", "1::", "::ffff:192.0.2.1", "::FFFF:192.0.2.1",
+            "1:2:3:4:5:6:7:8", "1:2:3:4:5:6:7::", "::2:3:4:5:6:7:8", "fe80::1:2", "1:2:3:4:5:6:1.2.3.4",
+            "::1.2.3.4", "abcd:EF01::")
+    BAD = ("not.an.ip", "256.1.1.1", "1.2.3.256", "01.2.3.4", "1.2.3", "127.1", "1.2.3.4.5", "1.2.3.",
+           " 1.2.3.4", "1.2.3.4 ", "1:2:3:4:5:6:7:8:9", "1:2:3:4:5:6:7", "1::2::3", ":1::", "1:::2", ":::",
+           "12345::", "g::1", "fe80::1%eth0", "::1.2.3.4:5", "1.2.3.4::", "1:2:3:4:5:6:7:1.2.3.4",
+           "::256.1.1.1", "::01.2.3.4", "localhost", "1:2:3:4::5:6:7:8", ":", "1:", ":1", "[::1]", "0x1.2.3.4")
+
+    def test_addresses_and_empty_are_taken(self):
+        for good in self.GOOD:
+            self.assertEqual(self.set_ok("announce_ip", good), {"announce_ip": good})
+
+    def test_anything_else_is_refused(self):
+        for bad in self.BAD:
+            self.set_refused("announce_ip", bad, ANNOUNCE_IP_MESSAGE)
+
+    def test_reviewer_repro_uppercase_ipv6(self):
+        self.control({"prefs_override": {"announce_ip": "2001:db8::1"}})
+        self.assertEqual(self.set_ok("announce_ip", "2001:DB8::1"), {"announce_ip": "2001:DB8::1"})
+        self.control({})
+        # And without the override, the fixture itself stores Qt's form.
+        self.set_ok("announce_ip", "2001:0DB8:0:0:0:0:0:1")
+        self.assertEqual(self.state()["announce_ip"], "2001:db8::1")
+        self.set_ok("announce_ip", "::FFFF:192.0.2.1")
+        self.assertEqual(self.state()["announce_ip"], "::ffff:192.0.2.1")
+        # Sent in hex, stored dotted: only a by-value comparison takes it.
+        self.assertEqual(self.set_ok("announce_ip", "::ffff:c000:201"), {"announce_ip": "::ffff:c000:201"})
+        self.assertEqual(self.state()["announce_ip"], "::ffff:192.0.2.1")
+
+    def test_fixture_mimics_qt(self):
+        for sent, stored in (("not.an.ip", ""), (" 203.0.113.7 ", "203.0.113.7"), ("2001:DB8::1", "2001:db8::1"),
+                             ("::ffff:192.0.2.1", "::ffff:192.0.2.1"), ("01.2.3.4", ""), ("", "")):
+            self.assertEqual(self.post_raw({"announce_ip": sent}), 200)
+            self.assertEqual(self.state()["announce_ip"], stored, sent)
+
+
+class UsernameTest(FinalFixCase):
+    """Ruling DS: 5.2.3 answers 400 for a username under 3 characters or
+    with a colon (appcontroller.cpp:907-913)."""
+
+    def test_short_or_colon_is_refused(self):
+        for bad in ("", "a", "ab", "a:b", "user:name", ":::"):
+            self.set_refused("web_ui_username", bad, USERNAME_MESSAGE)
+
+    def test_good_names_are_taken(self):
+        for good in ("abc", "admin", "ünï", "a b"):
+            self.assertEqual(self.set_ok("web_ui_username", good), {"web_ui_username": good})
+        self.assertEqual(self.set_ok("web_ui_username", "admin"), {"web_ui_username": "admin"})
+
+    def test_fixture_answers_400(self):
+        for bad in ("ab", "a:bc"):
+            self.assertEqual(self.post_raw({"web_ui_username": bad}), 400, bad)
+            self.assertEqual(self.state()["web_ui_username"], "admin")
+        self.assertEqual(self.post_raw({"web_ui_username": "root"}), 200)
+        self.assertEqual(self.state()["web_ui_username"], "root")
+        self.assertEqual(self.post_raw({"web_ui_username": "admin"}), 200)
+
+
+class DerivedKeysTest(FinalFixCase):
+    """Ruling DT: 5.2.3 derives these on every GET (appcontroller.cpp:237,
+    :316-321) and treats a write of them as the setter (:705, :849-858)."""
+
+    def test_recomputed_after_a_write(self):
+        self.set_ok("max_ratio", "2")
+        self.assertIs(self.state()["max_ratio_enabled"], True)
+        self.set_ok("max_ratio", "-1")
+        self.assertIs(self.state()["max_ratio_enabled"], False)
+        self.set_ok("max_seeding_time", "60")
+        self.assertIs(self.state()["max_seeding_time_enabled"], True)
+        self.set_ok("max_seeding_time", "-1")
+        self.assertIs(self.state()["max_seeding_time_enabled"], False)
+        self.set_ok("max_inactive_seeding_time", "0")
+        self.assertIs(self.state()["max_inactive_seeding_time_enabled"], True)
+        self.set_ok("max_inactive_seeding_time", "-1")
+        self.assertIs(self.state()["max_inactive_seeding_time_enabled"], False)
+        self.set_ok("listen_port", "0")
+        self.assertIs(self.state()["random_port"], True)
+        self.set_ok("listen_port", "35763")
+        self.assertIs(self.state()["random_port"], False)
+
+    def test_writing_a_derived_key_is_the_setter(self):
+        self.post_raw({"max_ratio": 3})
+        self.post_raw({"max_ratio_enabled": False, "max_ratio": 5})
+        st = self.state()
+        self.assertEqual((st["max_ratio"], st["max_ratio_enabled"]), (-1, False))
+        self.post_raw({"max_ratio_enabled": True})
+        self.assertEqual(self.state()["max_ratio"], -1, "true alone changes nothing")
+        self.post_raw({"random_port": True, "listen_port": 5000})
+        st = self.state()
+        self.assertEqual((st["listen_port"], st["random_port"]), (0, True))
+        self.post_raw({"random_port": False, "listen_port": 5000})
+        st = self.state()
+        self.assertEqual((st["listen_port"], st["random_port"]), (5000, False))
+
+
+class SentinelFormsTest(FinalFixCase):
+    def test_minus_one_point_zero_is_the_sentinel(self):
+        for form in ("-1.0", "-1.00", "-1"):
+            before = len(self.log())
+            self.assertEqual(self.set_ok("max_ratio", form), {"max_ratio": -1})
+            self.assertEqual(self.posts_since(before)[0]["body"], "json=%7B%22max_ratio%22%3A-1%7D", form)
+        for bad in ("-1.5", "-1.01", "-2.0", "-01.0", "-1.000"):
+            self.set_refused("max_ratio", bad, "Use a number from 0 to 9998, or -1 for none, with at most 2 decimals.")
+        # Whole-number keys still take whole numbers only.
+        self.set_refused("max_seeding_time", "-1.0", "Use a whole number from 0 to 525600, or -1 for none.")
+
+
+class SecretsBeforeSchemaTest(FinalFixCase):
+    """Ruling DT: the secrets and *password* are refused before the schema
+    is read, so a missing or edited schema can't unlock them."""
+
+    def copy_qbt(self, schema=None):
+        import shutil
+        d = Path(tempfile.mkdtemp(prefix="qbt-noschema-"))
+        self.addCleanup(shutil.rmtree, d, True)
+        shutil.copy2(QBT, d / "qbt")
+        if schema is not None:
+            (d / "settings-schema.json").write_text(json.dumps(schema))
+        return str(d / "qbt")
+
+    def refused_by(self, qbt, key, message):
+        import subprocess
+        before = len(self.log())
+        r = subprocess.run([qbt, "pref-set", key, "--", "x1"], env=self.env, text=True, capture_output=True)
+        self.assertEqual((r.returncode, r.stdout, r.stderr.strip()), (1, "", message), key)
+        self.assertEqual(self.log()[before:], [], f"{key}: no request at all")
+
+    def check(self, qbt):
+        for key in ("proxy_password", "dyndns_password", "mail_notification_password"):
+            self.refused_by(qbt, key, "OmaqBT doesn't change secrets yet.")
+        self.refused_by(qbt, "web_ui_api_key", "qBittorrent doesn't let this be changed.")
+        for key in ("backup_password_extra", "X_PassWord", "web_ui_password", "password"):
+            self.refused_by(qbt, key, "OmaqBT won't change this setting.")
+
+    def test_without_a_schema(self):
+        self.check(self.copy_qbt())
+
+    def test_with_a_schema_that_unlocks_them(self):
+        schema = json.loads(json.dumps(SCHEMA))
+        for key in ("proxy_password", "dyndns_password", "mail_notification_password", "web_ui_api_key"):
+            schema["keys"][key] = {"label": key, "type": "text"}
+        schema["keys"]["backup_password_extra"] = {"label": "b", "type": "text"}
+        self.check(self.copy_qbt(schema))
+
+
+class RedactionTest(PrefsCase):
+    def test_token_secret_api_key_are_redacted_but_not_schema_keys(self):
+        r = self.run_qbt("prefs")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        got = json.loads(r.stdout)
+        for key in ("future_token", "Auth_TOKEN", "client_Secret_x", "my_api_key", "backup_password_extra"):
+            self.assertEqual(got[key], {"set": True}, key)
+        # A schema key that only sounds like one stays its value.
+        self.assertEqual(got["bdecode_token_limit"], DUMP["bdecode_token_limit"])
+        self.assertIsInstance(got["bdecode_token_limit"], int)
+        for secret in SECRET_VALUES.values():
+            self.assertNotIn(secret, r.stdout + r.stderr)
 
 
 class SecretArgvTest(PrefsCase):

@@ -1930,11 +1930,13 @@ cmd_rename() {
 
 # ---------------------------------------------------------------------------
 # Slice 4a: qBittorrent's preferences. settings-schema.json (plugin root,
-# next to this script) types every key; the locks and Other's refused
-# patterns are hardcoded here on purpose, so an edited or missing schema
-# can never unlock a key (tests/test_prefs.py pins them equal to the
-# schema's). Secret values never reach stdout, stderr or any argv; API
-# failures report the HTTP code only.
+# next to this script) types every key; the locks, the secrets, any
+# *password* key and Other's refused patterns are hardcoded here on
+# purpose, and the locks, secrets and *password* are checked before the
+# schema is read, so an edited or missing schema can never unlock them
+# (tests/test_prefs.py pins the lists equal to the schema's). Secret values
+# never reach stdout, stderr or any argv; API failures report the HTTP
+# code only.
 # ---------------------------------------------------------------------------
 
 # The VPN binding: "Set by OmaqBT's setup."
@@ -1964,8 +1966,12 @@ PREF_OTHER_REFUSED=(
   '*https*'
   'autorun*'
 )
-# Printed as {"set": bool}, on top of the schema's secret flags.
+# Printed as {"set": bool}, on top of the schema's secret flags, and never
+# written: web_ui_api_key is read-only in qBittorrent, the rest wait for 4b.
 PREF_SECRETS=(proxy_password dyndns_password mail_notification_password web_ui_api_key)
+# Keys the schema doesn't know whose names sound secret (matched
+# case-insensitively) are printed as {"set": bool} too.
+PREF_SECRET_NAME_RE='password|token|secret|api_key'
 
 pref_schema_path() {
   local exec_path
@@ -2007,13 +2013,17 @@ cmd_prefs() {
   schema=$(pref_schema_path)
   [[ -f $schema ]] || die "The settings schema is missing."
   secrets=$(pref_secret_names "$schema") || die "The settings schema is unreadable."
+  local known
+  known=$(jq -c '.keys | keys' "$schema") || die "The settings schema is unreadable."
   pref_read
-  # Secrets by name, plus any key that sounds like a password. The values
-  # go through stdin only.
-  jq -c --arg names "$secrets" '
-    ($names | fromjson) as $s
+  # Secrets by name, plus any key the schema doesn't know that sounds like
+  # a password, token, secret or API key (a schema key such as
+  # bdecode_token_limit keeps its value). The values go through stdin only.
+  jq -c --arg names "$secrets" --arg known "$known" --arg re "$PREF_SECRET_NAME_RE" '
+    ($names | fromjson) as $s | ($known | fromjson) as $k
     | with_entries(
-        if (.key as $k | $s | index([$k])) or (.key | test("password"; "i"))
+        if (.key as $n | $s | index([$n]))
+           or ((.key as $n | $k | index([$n]) | not) and (.key | test($re; "i")))
         then .value = {set: (.value != null and .value != "" and .value != false)}
         else . end)' <<<"$PREFS_JSON" 2>/dev/null || die "qBittorrent sent something unreadable"
 }
@@ -2033,7 +2043,27 @@ def sentinel($n): (.sentinels // {}) | has($n | tostring);
 def low: . as $e | $e.min | until(. as $n | $e | sentinel($n) | not; . + 1);
 def high: . as $e | $e.max | until(. as $n | $e | sentinel($n) | not; . - 1);
 def range_text: "from \(low) to \(high)\(sentinel_text)";
-def in_range($n): (.sentinels // {} | has($v)) or ($n >= .min and $n <= .max);
+# A sentinel matches by value too, so "-1.0" is the -1 sentinel.
+def sentinel_hit($n): [(.sentinels // {}) | keys[] | select(test("\\A-?[0-9]+\\z")) | tonumber | select(. == $n)] | first;
+def in_range($n): (.sentinels // {} | has($v)) or (sentinel_hit($n) != null) or ($n >= .min and $n <= .max);
+def dec_octet: "(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])";
+def ipv4: test("\\A(\(dec_octet)\\.){3}\(dec_octet)\\z");
+def hex16: test("\\A[0-9A-Fa-f]{1,4}\\z");
+# RFC 4291 text: 8 groups, or at most 7 around one "::"; the last group
+# may be a dotted IPv4 (two groups). No zone id, no brackets.
+def ipv6:
+  split("::") as $p
+  | if ($p | length) > 2 then false
+    else
+      ([$p[] | if . == "" then [] else split(":") end] | add // []) as $all
+      | (if ($all | length) == 0 or (($p | length) == 2 and $p[1] == "") then false
+         else $all[-1] | ipv4 end) as $tail4
+      | (if $tail4 then $all[:-1] else $all end) as $hex
+      | (($hex | length) + (if $tail4 then 2 else 0 end)) as $n
+      | ($hex | all(hex16)) and (if ($p | length) == 2 then $n <= 7 else $n == 8 end)
+    end;
+# QDir::cleanPath would rewrite these, and the read-back would differ.
+def clean_path: test("//|/\\./|/\\.\\./|/\\.\\.?\\z") | not;
 def out($x): {sent: {($key): $x}};
 (if $other == "" then .keys[$key]
  else {label: $key, type: ({boolean: "bool", integer: "integer", number: "number", string: "text"}[$other])} end) as $e
@@ -2047,7 +2077,7 @@ def out($x): {sent: {($key): $x}};
      else {error: "Use a whole number \(range_text)."} end
    elif .type == "float" then
      if ($v | test("\\A(0|-?[1-9][0-9]{0,9})(\\.[0-9]{1,2})?\\z")) and in_range($v | tonumber)
-     then out($v | tonumber)
+     then out(sentinel_hit($v | tonumber) // ($v | tonumber))
      else {error: "Use a number \(range_text), with at most 2 decimals."} end
    elif .type == "integer" then
      if $v | whole then out($v | tonumber) else {error: "Use a whole number."} end
@@ -2067,11 +2097,17 @@ def out($x): {sent: {($key): $x}};
      else {error: "Use HH:MM, from 00:00 to 23:59."} end
    elif .type == "path" then
      if $v == "" and (.sentinels // {} | has("")) then out("")
-     elif ($v | one_line) and ($v | startswith("/")) then out($v)
-     elif ($v | one_line) and ($v | startswith("~/")) then out($home + $v[1:])
+     elif ($v | one_line) and (($v | startswith("/")) or ($v | startswith("~/"))) then
+       (if $v | startswith("~/") then $home + $v[1:] else $v end) as $p
+       | if $p | clean_path then out($p) else {error: "Use a clean path without //, /./ or /../."} end
      else {error: "Use an absolute path or one starting with ~/\(sentinel_text)."} end
    elif .type == "text" then
-     if $v | one_line then out($v) else {error: "Keep it to one line."} end
+     if $v | one_line | not then {error: "Keep it to one line."}
+     elif $key == "announce_ip" and ($v != "" and ($v | ipv4 | not) and ($v | ipv6 | not))
+     then {error: "Use an IPv4 or IPv6 address, or leave it empty."}
+     elif $key == "web_ui_username" and (($v | length) < 3 or ($v | contains(":")))
+     then {error: "Use at least 3 characters and no colon."}
+     else out($v) end
    else {error: "OmaqBT doesn'"'"'t change this setting."} end)
 | . + {label: $e.label, type: $e.type}'
 
@@ -2082,12 +2118,23 @@ def out($x): {sent: {($key): $x}};
 PREF_SAME_JQ='
 def trim_ws: sub("\\A\\s+"; "") | sub("\\s+\\z"; "");
 def clean: trim_ws | if . == "/" then . else sub("/+\\z"; "") end;
+def hexnum: ascii_downcase | explode | reduce .[] as $c (0; . * 16 + (if $c >= 97 then $c - 87 else $c - 48 end));
+# An IPv6 address (already validated when sent) as its 8 numbers, so
+# 2001:DB8::1 matches the 2001:db8::1 that QHostAddress::toString stores.
+def ip6_groups:
+  split("::") as $p
+  | [$p[] | [if . == "" then empty else split(":")[] end
+             | if test("\\.") then (split(".") | map(tonumber) | (.[0] * 256 + .[1]), (.[2] * 256 + .[3]))
+               else hexnum end]] as $g
+  | if ($g | length) == 2 then $g[0] + [range(8 - ($g[0] | length) - ($g[1] | length)) | 0] + $g[1] else $g[0] end;
 ($sent | fromjson) as $s | . as $p
 | all($s | to_entries[]; .value as $want | $p[.key] as $got
     | if ($want | type) == "boolean" then $got == $want
       elif ($want | type) == "number" then ($got | type) == "number" and $got == $want
       elif ($got | type) != "string" then false
       elif $type == "path" then ($got | clean) == ($want | clean)
+      elif .key == "announce_ip" and ($want | contains(":")) then
+        ($got | contains(":")) and ($got | ip6_groups) == ($want | ip6_groups)
       else ($got | trim_ws) == ($want | trim_ws) end)'
 
 # Confirms are window-only by design (eng D4): qbt's gates are the locks and refusals below.
@@ -2102,6 +2149,10 @@ cmd_pref_set() {
   ) || die "qBittorrent has no setting called that."
   pref_matches "$key" "${PREF_LOCKED_VPN[@]}" && die "Set by OmaqBT's setup."
   pref_matches "$key" "${PREF_LOCKED_WEBUI[@]}" && die "OmaqBT needs this as it is."
+  # Like the locks, before the schema: no schema can unlock a secret.
+  [[ $key == web_ui_api_key ]] && die "qBittorrent doesn't let this be changed."
+  pref_matches "$key" "${PREF_SECRETS[@]}" && die "OmaqBT doesn't change secrets yet."
+  pref_matches "${key,,}" '*password*' && die "OmaqBT won't change this setting."
 
   local schema
   schema=$(pref_schema_path)

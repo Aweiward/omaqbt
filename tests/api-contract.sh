@@ -689,7 +689,7 @@ PY
 # fixture's contract that tests/test_prefs.py leans on), and qbt prefs'
 # shape against the whole 223-key dump.
 python3 - <<'PY'
-import json, subprocess, sys, urllib.request
+import json, subprocess, sys, urllib.error, urllib.request
 from pathlib import Path
 from urllib.parse import quote
 
@@ -729,10 +729,23 @@ with harness.fixture_server(extra_env={"QBT_FIXTURE_PREFS": str(DUMP_PATH)}) as 
     post('{"schedule_from_hour": 3, "schedule_from_min": 7}')
     got = get()
     check("setPreferences: hour and minute together apply", (got["schedule_from_hour"], got["schedule_from_min"]) == (3, 7))
-    post('{"dl_limit": 1536, "app_instance_name": "  x  ", "save_path": "/srv/t/"}')
+    post('{"dl_limit": 1536, "app_instance_name": "  x  ", "autorun_program": "  y  ", "save_path": "/srv//t/./u/../"}')
     got = get()
-    check("setPreferences: speeds store whole KiB, strings trimmed, paths lose the trailing slash",
-          (got["dl_limit"], got["app_instance_name"], got["save_path"]) == (1024, "x", "/srv/t"))
+    check("setPreferences: speeds store whole KiB, only 5.2.3's four keys are trimmed, paths are cleaned",
+          (got["dl_limit"], got["app_instance_name"], got["autorun_program"], got["save_path"]) == (1024, "  x  ", "y", "/srv/t"))
+    post('{"announce_ip": "2001:DB8:0:0:0:0:0:1"}')
+    a = get()["announce_ip"]
+    post('{"announce_ip": "not.an.ip"}')
+    check("setPreferences: announce_ip stored as Qt writes it, \"\" when invalid", (a, get()["announce_ip"]) == ("2001:db8::1", ""))
+    try:
+        post('{"web_ui_username": "ab"}')
+        code = 200
+    except urllib.error.HTTPError as e:
+        code = e.code
+    check("setPreferences: a short web_ui_username is 400 and changes nothing", code == 400 and get()["web_ui_username"] == DUMP["web_ui_username"])
+    post('{"max_ratio": 2, "listen_port": 0}')
+    got = get()
+    check("setPreferences: derived keys are recomputed", (got["max_ratio_enabled"], got["random_port"]) == (True, True))
 
     r = subprocess.run(["./qbt", "prefs"], env=env, text=True, capture_output=True)
     out = json.loads(r.stdout) if r.returncode == 0 else {}

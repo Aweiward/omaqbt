@@ -2,6 +2,7 @@
 import copy
 import json
 import os
+import posixpath
 import re
 import sys
 import threading
@@ -476,18 +477,51 @@ def _is_number(v):
     return isinstance(v, (int, float)) and not isinstance(v, bool)
 
 
+# The only keys 5.2.3 trims before storing (appcontroller.cpp:696, :701,
+# :1019, :1178); every other string is stored as sent.
+_TRIMMED = ("autorun_program", "autorun_on_torrent_added_program", "announce_ip", "current_interface_address")
+# Keys 5.2.3 derives on every GET (:237, :316-321) from the key they gate.
+_DERIVED = {
+    "random_port": ("listen_port", lambda v: v == 0),
+    "max_ratio_enabled": ("max_ratio", lambda v: v >= 0),
+    "max_seeding_time_enabled": ("max_seeding_time", lambda v: v >= 0),
+    "max_inactive_seeding_time_enabled": ("max_inactive_seeding_time", lambda v: v >= 0),
+}
+
+
 def _clean_path(p):
-    """Path()'s normalisation, as far as the tests need: no trailing slash."""
-    while len(p) > 1 and p.endswith("/"):
-        p = p[:-1]
-    return p
+    """Path(): QDir::cleanPath on Unix. "//" collapses, "." and ".." parts
+    resolve, a trailing slash goes; "" stays ""."""
+    if p == "":
+        return p
+    cleaned = posixpath.normpath(p)
+    # POSIX keeps a leading "//"; Qt on Unix doesn't.
+    return "/" + cleaned.lstrip("/") if cleaned.startswith("//") else cleaned
+
+
+def _qt_address(text):
+    """QHostAddress{text}.toString(), or "" when it doesn't parse: IPv6
+    lowercased and compressed, a v4-mapped address kept dotted."""
+    import ipaddress
+    try:
+        addr = ipaddress.ip_address(text)
+    except ValueError:
+        return ""
+    if isinstance(addr, ipaddress.IPv6Address) and addr.ipv4_mapped is not None:
+        return f"::ffff:{addr.ipv4_mapped}"
+    return str(addr)
+
+
+def _utf16_len(text):
+    return len(text.encode("utf-16-le")) // 2
 
 
 def _pref_value(key, value):
     """5.2.3's setter for one key: (True, stored) when it applies, (False,
-    None) when qBittorrent would drop it. Strings are trimmed, global
-    speeds are stored in whole KiB (sessionimpl.cpp:3480), announce_ip must
-    be an IP address or becomes "" (appcontroller.cpp:1178)."""
+    None) when the fixture drops it. Only _TRIMMED keys are trimmed, paths
+    are cleaned (Path(), :560-617), global speeds are stored in whole KiB
+    (sessionimpl.cpp:3480), announce_ip must be an IP address or becomes
+    "" (:1178)."""
     entry = _SCHEMA.get(key)
     if entry is None:
         current = PREFS_STATE[key]
@@ -496,7 +530,7 @@ def _pref_value(key, value):
         if _is_number(current):
             return (True, value) if _is_number(value) else (False, None)
         if isinstance(current, str):
-            return (True, value.strip()) if isinstance(value, str) else (False, None)
+            return (True, value) if isinstance(value, str) else (False, None)
         return False, None
     if entry.get("readOnly") or entry.get("composite"):
         return False, None
@@ -517,24 +551,32 @@ def _pref_value(key, value):
         return False, None
     if kind == "choice-string":
         return (True, value) if value in [c["value"] for c in entry["choices"]] else (False, None)
-    value = value.strip()
+    if key in _TRIMMED:
+        value = value.strip()
     if kind == "path":
         return True, _clean_path(value)
     if key in ("announce_ip", "current_interface_address"):
-        import ipaddress
-        try:
-            return True, str(ipaddress.ip_address(value))
-        except ValueError:
-            return True, ""
+        return True, _qt_address(value)
     return True, value
 
 
 def _set_preferences(body):
-    """setPreferencesAction (:513): always 200. Unknown keys, values of the
-    wrong kind and malformed JSON are dropped without a word; a scheduler
-    time applies only when its hour and minute arrive together (:807-812).
-    The control file's "prefs_override" ({key: value}) is applied after the
-    write, simulating qBittorrent changing a value on its own."""
+    """setPreferencesAction (:513): 200, or 400 for a web_ui_username under
+    3 UTF-16 units or with a colon (:907-913). 5.2.3 throws mid-loop, after
+    the keys its code handles earlier have applied; qbt sends one key per
+    request, so the fixture applies nothing on a 400. Unknown keys and
+    malformed JSON are dropped without a word. 5.2.3 converts every value
+    with QVariant's toBool/toInt/toReal/toString, so a value of the wrong
+    kind is coerced (a string "yes" becomes false, "abc" becomes 0) rather
+    than dropped; the fixture drops it instead, since qbt always sends the
+    schema's kind and a coerced value would read back as "ignored" anyway.
+    A scheduler time applies only when its hour and minute arrive together
+    (:807-812). A write of a derived key is its setter (random_port true
+    sets the port to 0, :705; a *_enabled false sets its limit to -1,
+    :849-858), and every derived key is recomputed after the write, as
+    5.2.3's GET does. The control file's "prefs_override" ({key: value}) is
+    applied last, simulating qBittorrent changing a value on its own.
+    Returns (HTTP status, body)."""
     raw = (parse_qs(body, keep_blank_values=True).get("json") or [""])[0]
     try:
         m = json.loads(raw)
@@ -542,19 +584,38 @@ def _set_preferences(body):
         m = None
     if not isinstance(m, dict):
         m = {}
+    name = m.get("web_ui_username")
+    if isinstance(name, str) and _utf16_len(name) < 3:
+        return 400, "WebUI username must be at least 3 characters long"
+    if isinstance(name, str) and ":" in name:
+        return 400, "WebUI username cannot contain a colon"
     with _PREFS_LOCK:
         for key, value in m.items():
-            if key not in PREFS_STATE or any(key in pair for pair in _SCHEDULE_PAIRS):
+            if key not in PREFS_STATE or key in _DERIVED or any(key in pair for pair in _SCHEDULE_PAIRS):
+                continue
+            if any(m.get(flag) is False and gated == key for flag, (gated, _) in _DERIVED.items()
+                   if flag != "random_port"):
+                continue
+            if key == "listen_port" and m.get("random_port") is True:
                 continue
             ok, stored = _pref_value(key, value)
             if ok:
                 PREFS_STATE[key] = stored
+        if m.get("random_port") is True and "listen_port" in PREFS_STATE:
+            PREFS_STATE["listen_port"] = 0
+        for flag, (gated, _) in _DERIVED.items():
+            if flag != "random_port" and m.get(flag) is False and gated in PREFS_STATE:
+                PREFS_STATE[gated] = -1
+        for flag, (gated, derive) in _DERIVED.items():
+            if flag in PREFS_STATE and _is_number(PREFS_STATE.get(gated)):
+                PREFS_STATE[flag] = derive(PREFS_STATE[gated])
         for hour, minute in _SCHEDULE_PAIRS:
             if hour in m and minute in m and _is_int(m[hour]) and _is_int(m[minute]):
                 PREFS_STATE[hour], PREFS_STATE[minute] = m[hour], m[minute]
         override = _control().get("prefs_override")
         if isinstance(override, dict):
             PREFS_STATE.update(override)
+    return 200, ""
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -847,8 +908,8 @@ class Handler(BaseHTTPRequestHandler):
             if fault and fault != "unreadable":
                 self._fault_reply(fault)
                 return
-            _set_preferences(body)
-            self._send(200, b"")
+            code, text = _set_preferences(body)
+            self._send(code, text.encode(), content_type="text/plain")
             return
         if parsed.path in ("/api/v2/torrents/pause", "/api/v2/torrents/resume"):
             self._send(404, b"gone")
