@@ -2373,13 +2373,13 @@ const SEARCH_ON = {
   searchPlugin: { name: "example", fullName: "Example", version: "1.2", enabled: true, url: "https://example.org" },
   searchPluginCount: 2, searchEnabledPlugins: 1
 };
-const KEYS_5A = ["j", "k", "Down", "Up", "l", "h", "Enter", "Tab", "Shift-Tab", "Esc", "/", "Space", "x", "y", "d", "s", "S", "P", "i", "U", "u", "a",
+const KEYS_5A = ["j", "k", "Down", "Up", "l", "h", "Enter", "Tab", "Shift-Tab", "Esc", "/", "c", "Space", "x", "y", "d", "s", "S", "P", "i", "U", "u", "a",
   "?", ":", "t", "z", "r", "q", "1", "4", "F", ",", "Ctrl-l", "Ctrl-h", "g", "G", "V"];
 const RESULTS_WIDE = { j: "search.down", Down: "search.down", k: "search.up", Up: "search.up", h: "search.focusPlugins", "Shift-Tab": "search.focusPlugins",
-  Enter: "search.add", Esc: "search.back", "/": "search.new", y: "search.copyLink", d: "search.openPage", s: "search.sort", S: "search.sortReverse",
+  Enter: "search.add", Esc: "search.back", "/": "search.new", c: "search.category", y: "search.copyLink", d: "search.openPage", s: "search.sort", S: "search.sortReverse",
   P: "search.plugins", "?": "help.toggle", ":": "palette.open" };
 const PLUGINS_WIDE = { j: "search.down", Down: "search.down", k: "search.up", Up: "search.up", l: "search.focusResults", Enter: "search.focusResults",
-  Tab: "search.focusResults", Esc: "search.back", "/": "search.new", P: "search.plugins", "?": "help.toggle", ":": "palette.open" };
+  Tab: "search.focusResults", Esc: "search.back", "/": "search.new", c: "search.category", P: "search.plugins", "?": "help.toggle", ":": "palette.open" };
 const PLUGIN_LIST = { j: "plugin.down", Down: "plugin.down", k: "plugin.up", Up: "plugin.up", Space: "plugin.toggle", i: "plugin.install",
   x: "plugin.uninstall", U: "plugin.updateAll", Esc: "plugin.close", "?": "help.toggle", ":": "palette.open" };
 const KEY_MAP_5A = {
@@ -2470,7 +2470,7 @@ test("search: the new needs default unmet, with their reasons", () => {
 });
 
 // The palette shows Search's actions; its navigation rows stay hidden.
-const SEARCH_PALETTE_VISIBLE = ["search.open", "search.new", "search.add", "search.copyLink", "search.openPage", "search.sort", "search.sortReverse",
+const SEARCH_PALETTE_VISIBLE = ["search.open", "search.new", "search.category", "search.add", "search.copyLink", "search.openPage", "search.sort", "search.sortReverse",
   "search.plugins", "plugin.toggle", "plugin.install", "plugin.uninstall", "plugin.updateAll", "plugin.copyListUrl"];
 
 test("search: the palette lists the Search actions; navigation stays hidden; only the opener lives outside Search", () => {
@@ -2488,15 +2488,36 @@ test("search: the palette lists the Search actions; navigation stays hidden; onl
 
 test("search: ? lists each Search pane's keys, plus : and ?", () => {
   const ids = (pane, st) => Array.from(new Set(helpFor("NORMAL", pane, undefined, st).map((r) => r.id))).sort();
-  assert.deepEqual(ids("searchResults", {}), ["help.toggle", "palette.open", "search.add", "search.back", "search.copyLink", "search.down", "search.focusPlugins",
+  assert.deepEqual(ids("searchResults", {}), ["help.toggle", "palette.open", "search.add", "search.back", "search.category", "search.copyLink", "search.down", "search.focusPlugins",
     "search.new", "search.openPage", "search.plugins", "search.sort", "search.sortReverse", "search.up"]);
   assert.ok(ids("searchResults", { narrow: true }).includes("search.pluginsOverlay"));
   assert.ok(!ids("searchResults", { narrow: true }).includes("search.focusPlugins"));
-  assert.deepEqual(ids("searchPlugins", {}), ["help.toggle", "palette.open", "search.back", "search.down", "search.focusResults", "search.new", "search.plugins", "search.up"]);
-  assert.deepEqual(ids("searchPlugins", { narrow: true }), ["help.toggle", "palette.open", "search.down", "search.focusResults", "search.new", "search.plugins",
+  assert.deepEqual(ids("searchPlugins", {}), ["help.toggle", "palette.open", "search.back", "search.category", "search.down", "search.focusResults", "search.new", "search.plugins", "search.up"]);
+  assert.deepEqual(ids("searchPlugins", { narrow: true }), ["help.toggle", "palette.open", "search.category", "search.down", "search.focusResults", "search.new", "search.plugins",
     "search.pluginsClose", "search.up"]);
   assert.deepEqual(ids("searchPluginList", {}), ["help.toggle", "palette.open", "plugin.close", "plugin.down", "plugin.install", "plugin.toggle", "plugin.uninstall",
     "plugin.up", "plugin.updateAll"]);
   assert.ok(helpFor("NORMAL", "table").some((r) => r.id === "search.open"), "the torrent view's ? lists F");
   assert.ok(!helpFor("NORMAL", "table").some((r) => /^(search\.(?!open)|plugin\.)/.test(r.id)), "and none of Search's keys");
+});
+
+test("search: c opens the category picker (Ruling FB) from the results and the Plugins column, and needs an enabled plugin", () => {
+  const row = commands.find((r) => r.id === "search.category");
+  assert.deepEqual([row.keys, row.title, row.group, row.panes, row.needs, row.paletteHidden], [["c"], "Category", "App", ["searchResults", "searchPlugins"], "searchPluginOn", undefined]);
+  for (const pane of ["searchResults", "searchPlugins"]) {
+    const r = dispatch(state({ pane: pane, searchPluginCount: 2, searchEnabledPlugins: 1 }), evFor("c"));
+    assert.deepEqual([r.commandId, r.args, r.state.mode], ["search.category", {}, "NORMAL"], pane + ": the Search view opens PICKER itself");
+    const off = dispatch(state({ pane: pane, searchPluginCount: 2, searchEnabledPlugins: 0 }), evFor("c"));
+    assert.deepEqual([off.commandId, off.blocked], [null, "all plugins are off (P)"], pane);
+    const none = dispatch(state({ pane: pane }), evFor("c"));
+    assert.deepEqual([none.commandId, none.blocked], [null, "no search plugins yet (P)"], pane);
+  }
+  assert.equal(dispatch(state({ pane: "searchPluginList", searchEnabledPlugins: 1 }), evFor("c")).commandId, null, "not in the plugins overlay");
+  // The picker's own keys are the shared PICKER rows, live in every Search pane.
+  for (const pane of SEARCH_PANES) {
+    assert.equal(dispatch(state({ pane: pane, mode: "PICKER" }), evFor("Enter")).commandId, "picker.accept", pane);
+    assert.equal(dispatch(state({ pane: pane, mode: "PICKER" }), evFor("Esc")).commandId, "picker.cancel", pane);
+    assert.equal(dispatch(state({ pane: pane, mode: "PICKER" }), evFor("Down")).commandId, "picker.down", pane);
+    assert.equal(dispatch(state({ pane: pane, mode: "PICKER", pickerQueryEmpty: true, pickerMulti: false }), evFor("Space")).commandId, null, pane + ": single choice");
+  }
 });

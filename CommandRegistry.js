@@ -263,6 +263,10 @@ var commands = [
   // `/` opens the query INSERT (purpose searchQuery); OV8: it needs an
   // enabled plugin.
   { id: "search.new", title: "New search", group: "App", keys: ["/"], modes: ["NORMAL"], panes: ["searchResults", "searchPlugins"], needs: "searchPluginOn" },
+  // `c` (Ruling FB): the category picker (PICKER, opened by the Search
+  // view): "all" plus the categories the enabled plugins support; the
+  // choice goes to the next `qbt search start --category`.
+  { id: "search.category", title: "Category", group: "App", keys: ["c"], modes: ["NORMAL"], panes: ["searchResults", "searchPlugins"], needs: "searchPluginOn" },
   { id: "search.add", title: "Add the result", group: "App", keys: ["Enter"], modes: ["NORMAL"], panes: ["searchResults"], needs: "searchResult" },
   { id: "search.copyLink", title: "Copy the result's link", group: "App", keys: ["y"], modes: ["NORMAL"], panes: ["searchResults"], needs: "searchResult" },
   { id: "search.openPage", title: "Open the result's page", group: "App", keys: ["d"], modes: ["NORMAL"], panes: ["searchResults"], needs: "searchResult" },

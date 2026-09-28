@@ -572,6 +572,8 @@ QtObject {
 
   function openPicker() {
     if (settingsCommands && settingsCommands.pickerOpen) return settingsCommands.picker
+    // Slice 5a: Search's category picker (SearchPane's hook).
+    if (searchView && searchView.pickerOpen) return searchView.picker
     return pickerKind === "category" ? categoryPicker : (pickerKind === "tag" ? tagPicker : null)
   }
 
@@ -604,6 +606,7 @@ QtObject {
   // Esc, a scrim click, or an accept: nothing is left open.
   function closePicker() {
     if (settingsCommands) settingsCommands.dropPicker()
+    if (searchView) searchView.dropPicker()
     pickerKind = ""
     pickerTargets = []
     setMode("NORMAL")
@@ -623,6 +626,7 @@ QtObject {
   // T: send what the toggles changed, nothing when unchanged.
   function acceptPicker() {
     if (settingsCommands && settingsCommands.pickerOpen) { settingsCommands.acceptPicker(); return }
+    if (searchView && searchView.pickerOpen) { searchView.acceptPicker(); return }
     var c = client
     var svc = c.service
     var targets = pickerTargets

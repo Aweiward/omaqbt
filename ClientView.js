@@ -902,7 +902,8 @@ function settingsFooterKeys(column, searching, editor, ctx) {
 
 // searchFooterKeys(pane, flags) -> [{key, label}] for the focused Search
 // pane's footer. flags is the Search view's dispatch flags (SearchPane.flags:
-// {narrow, result, plugin, plugins, enabledPlugins, pluginsBusy, running}).
+// {narrow, result, plugin, plugins, enabledPlugins, pluginsBusy, running,
+// category}). `c` (the category picker) shows with `/`: both need a plugin on.
 // The results: move, add and open a page (with a result under the cursor),
 // a new search (with a plugin on), the plugins, and Esc, which stops a
 // running search before it leaves. The Plugins column filters with j/k;
@@ -924,13 +925,15 @@ function searchFooterKeys(pane, flags) {
   }
   if (pane === "searchPlugins") {
     var col = [{ key: "j/k", label: "filter" }, { key: "l", label: "results" }];
-    if (canSearch) col.push({ key: "/", label: "search" });
+    if (canSearch) col.push({ key: "/", label: "search" }, { key: "c", label: "category" });
     col.push({ key: "P", label: "plugins" });
-    return col.concat([f.narrow === true && f.running !== true ? { key: "Esc", label: "close" } : esc]);
+    // Narrow, the column is an overlay and Esc only closes it
+    // (search.pluginsClose), running or not.
+    return col.concat([f.narrow === true ? { key: "Esc", label: "close" } : esc]);
   }
   var out = [{ key: "j/k", label: "move" }];
   if (f.result) out.push({ key: "Enter", label: "add" }, { key: "d", label: "page" });
-  if (canSearch) out.push({ key: "/", label: "search" });
+  if (canSearch) out.push({ key: "/", label: "search" }, { key: "c", label: "category" });
   out.push({ key: f.narrow === true ? "Tab" : "h", label: "plugins column" }, { key: "P", label: "plugins" });
   return out.concat([esc]);
 }

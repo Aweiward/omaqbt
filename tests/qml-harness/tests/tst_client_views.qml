@@ -1,6 +1,7 @@
 import QtQuick
 import QtTest
 import "../../.."
+import "../../../CommandRegistry.js" as Registry
 
 // Slice 5a (Task 1): the regression pins for the one-active-view refactor.
 // Written against 5aa9adc before Client.activeView existed, so they pass
@@ -583,5 +584,70 @@ TestCase {
     verify(!shows(o, "Start/stop all"))
     esc(o)
     compare(o.c.activeView, "search")
+  }
+
+  // ---- fix round 1 (Ruling FB): the category picker and closing on a CONFIRM ------------
+
+  function test_c_opens_the_category_picker_and_enter_takes_a_row() {
+    var o = make()
+    openSearch(o)
+    var sp = searchPane(o)
+    key(o.c, "c")
+    compare(o.c.mode, "NORMAL", "no plugin on: c is blocked")
+    compare(o.c.statusMessage.text, "No search plugins yet (P).")
+    sp.plugins = 2
+    sp.enabledPlugins = 0
+    key(o.c, "c")
+    compare(o.c.statusMessage.text, "All plugins are off (P).")
+    sp.enabledPlugins = 1
+    key(o.c, "c")
+    compare(o.c.mode, "PICKER")
+    verify(sp.pickerOpen)
+    compare(sp.picker.objectName, "searchCategoryPicker")
+    compare(sp.picker.rows[0].value, "all")
+    compare(o.c.typingField(), sp.picker.inputField, "the picker's field has the keys")
+    key(o.c, "", 0x01000015)
+    enter(o)
+    compare(o.c.mode, "NORMAL")
+    verify(!sp.pickerOpen)
+    compare(sp.category, "all")
+    compare(o.c.keyPane, "searchResults")
+    key(o.c, "h")
+    key(o.c, "c")
+    compare(o.c.mode, "PICKER", "from the Plugins column too")
+    esc(o)
+    compare(o.c.mode, "NORMAL")
+    verify(!sp.pickerOpen)
+    compare(o.c.activeView, "search", "Esc closes only the picker")
+    compare(o.c.keyPane, "searchPlugins")
+  }
+
+  function test_closing_the_window_drops_an_open_category_picker() {
+    var o = make()
+    openSearch(o)
+    searchPane(o).enabledPlugins = 1
+    key(o.c, "c")
+    compare(o.c.mode, "PICKER")
+    o.c.close()
+    compare(o.c.mode, "NORMAL")
+    verify(!searchPane(o).pickerOpen)
+    o.c.open("")
+    backFromSearch(o, "table", "reopened")
+  }
+
+  function test_closing_the_window_drops_a_search_confirm() {
+    var o = make()
+    openSearch(o)
+    var r = Registry.raiseConfirm(o.c.regState, "search.add", "searchAdd", { result: { fileName: "debian.iso" } })
+    o.c.regState = r.state
+    o.c.confirmHashes = []
+    o.c.confirm = { commandId: "search.add", kind: "searchAdd", line: "Add debian.iso (650 MiB) from example.org?" }
+    compare(o.c.mode, "CONFIRM")
+    o.c.close()
+    compare(o.c.mode, "NORMAL", "the question never outlives the window")
+    compare(o.c.confirm, null)
+    compare(o.c.regState.pending, null)
+    o.c.open("")
+    backFromSearch(o, "table", "reopened")
   }
 }

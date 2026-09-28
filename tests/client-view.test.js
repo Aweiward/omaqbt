@@ -2511,11 +2511,19 @@ test("5a: the Search footers", () => {
   const plugin = { name: "p" };
   assert.deepEqual(f("searchResults", {}), ["j/k move", "h plugins column", "P plugins", "Esc back"]);
   assert.deepEqual(f("searchResults", { result: {}, enabledPlugins: 1, running: true }),
-    ["j/k move", "Enter add", "d page", "/ search", "h plugins column", "P plugins", "Esc stop"]);
-  assert.deepEqual(f("searchResults", { narrow: true, enabledPlugins: 1 }), ["j/k move", "/ search", "Tab plugins column", "P plugins", "Esc back"]);
-  assert.deepEqual(f("searchPlugins", { enabledPlugins: 1 }), ["j/k filter", "l results", "/ search", "P plugins", "Esc back"]);
+    ["j/k move", "Enter add", "d page", "/ search", "c category", "h plugins column", "P plugins", "Esc stop"]);
+  assert.deepEqual(f("searchResults", { narrow: true, enabledPlugins: 1 }), ["j/k move", "/ search", "c category", "Tab plugins column", "P plugins", "Esc back"]);
+  assert.deepEqual(f("searchPlugins", { enabledPlugins: 1 }), ["j/k filter", "l results", "/ search", "c category", "P plugins", "Esc back"]);
+  assert.deepEqual(f("searchPlugins", { enabledPlugins: 1, running: true }), ["j/k filter", "l results", "/ search", "c category", "P plugins", "Esc stop"]);
   assert.deepEqual(f("searchPlugins", { narrow: true }), ["j/k filter", "l results", "P plugins", "Esc close"]);
-  assert.deepEqual(f("searchPlugins", { narrow: true, running: true }), ["j/k filter", "l results", "P plugins", "Esc stop"]);
+  // Narrow, Esc in the Plugins column closes it (search.pluginsClose), even
+  // while a search runs: the footer says what the registry does.
+  assert.deepEqual(f("searchPlugins", { narrow: true, running: true }), ["j/k filter", "l results", "P plugins", "Esc close"]);
+  for (const [pane, narrow, running] of [["searchPlugins", true, true], ["searchPlugins", false, true], ["searchResults", true, true], ["searchResults", false, false]]) {
+    const esc = V.searchFooterKeys(pane, { narrow: narrow, running: running }).find((h) => h.key === "Esc").label;
+    const id = Registry.dispatch({ mode: "NORMAL", pane: pane, narrow: narrow }, V.keyEvent(Registry.KEY.Escape, "\u001b", 0, 0)).commandId;
+    assert.equal(esc, id === "search.pluginsClose" ? "close" : (running ? "stop" : "back"), pane + " narrow " + narrow + " running " + running + ": " + id);
+  }
   assert.deepEqual(f("searchPluginList", {}), ["j/k move", "i install", "Esc close"]);
   assert.deepEqual(f("searchPluginList", { plugin: plugin, plugins: 2 }), ["j/k move", "Space on/off", "i install", "x uninstall", "U update all", "Esc close"]);
   assert.deepEqual(f("searchPluginList", { plugin: plugin, plugins: 2, pluginsBusy: true }), ["j/k move", "Esc close"]);
@@ -2559,7 +2567,7 @@ test("5a: paletteState takes the active view (4b's true still means Settings)", 
 
 function rowOf(rows, id) { return rows.find((r) => r.id === id); }
 
-const SEARCH_ACTIONS = ["search.new", "search.add", "search.copyLink", "search.openPage", "search.sort", "search.sortReverse", "search.plugins",
+const SEARCH_ACTIONS = ["search.new", "search.category", "search.add", "search.copyLink", "search.openPage", "search.sort", "search.sortReverse", "search.plugins",
   "plugin.toggle", "plugin.install", "plugin.uninstall", "plugin.updateAll", "plugin.copyListUrl"];
 
 test("5a: outside Search the palette lists only :Search of Search's rows, so the torrent and Settings palettes are unchanged", () => {
@@ -2583,9 +2591,10 @@ test("5a: outside Search the palette lists only :Search of Search's rows, so the
 test("5a: the palette in Search judges Search's rows from its pane, with their reasons", () => {
   const flags = { result: { fileName: "x" }, plugin: { name: "p" }, plugins: 2, enabledPlugins: 1 };
   const inResults = V.paletteRows("", Registry.commands, [], V.paletteState("rows", true, {}, "table", "search", null, "searchResults", flags));
-  for (const id of ["search.new", "search.add", "search.copyLink", "search.openPage", "search.sort", "search.sortReverse", "search.plugins", "plugin.copyListUrl"]) {
+  for (const id of ["search.new", "search.category", "search.add", "search.copyLink", "search.openPage", "search.sort", "search.sortReverse", "search.plugins", "plugin.copyListUrl"]) {
     assert.equal(rowOf(inResults, id).enabled, true, id);
   }
+  assert.equal(rowOf(inResults, "search.category").keys, "c");
   assert.deepEqual([rowOf(inResults, "search.open").enabled, rowOf(inResults, "search.open").reason], [false, "already open"]);
   assert.equal(rowOf(inResults, "settings.open").enabled, true, ":Settings runs (the window leaves Search first)");
   for (const id of ["plugin.toggle", "plugin.install", "plugin.uninstall", "plugin.updateAll"]) {
@@ -2594,6 +2603,7 @@ test("5a: the palette in Search judges Search's rows from its pane, with their r
   const noResult = V.paletteRows("", Registry.commands, [], V.paletteState("rows", true, {}, "table", "search", null, "searchResults", { enabledPlugins: 0, plugins: 1 }));
   assert.equal(rowOf(noResult, "search.add").reason, "needs a result");
   assert.equal(rowOf(noResult, "search.new").reason, "all plugins are off (P)");
+  assert.equal(rowOf(noResult, "search.category").reason, "all plugins are off (P)");
   const inPlugins = V.paletteRows("", Registry.commands, [], V.paletteState("rows", true, {}, "table", "search", null, "searchPlugins", flags));
   assert.deepEqual([rowOf(inPlugins, "search.add").enabled, rowOf(inPlugins, "search.add").reason], [false, "focus the results"]);
   assert.equal(rowOf(inPlugins, "search.new").enabled, true);

@@ -3,6 +3,22 @@
 Written by Task 1 (wave 0, eng OV9) before the two lanes start. Task 2 (the backend lane: `qbt`, `qbt-serve`, `lib/`, `tests/fixtures/server.py`, python tests) and Task 3 (the window lane: `SearchView.js`, `SearchPane.qml`, `SearchCommands.qml`, `Service.qml`, `Sidecar.qml`, node and harness tests) both build against this file. A lane that needs something this file doesn't say stops and asks; it doesn't invent a shape.
 
 - **Rules and exact sentences** live in [`search-rules-cases.json`](search-rules-cases.json). Its `cases` hold the rules, its `sentences` hold every other line `qbt` prints, and its `window` holds the window's copy. Both lanes read that file in their tests and never retype a message. Every sentence quoted below is copied from it, and a node test checks that it matches.
+- **URLs are parsed by the case file's text rule, never by a URL library** (Ruling FB). Both lanes split every URL (plugin URL, page link, add link) the same way:
+  1. The scheme, matched case-insensitively.
+  2. `://`.
+  3. The authority: everything up to the first `/`, `?` or `#`, or the end.
+  4. The path: from that `/` up to the first `?` or `#`. Its last segment is what follows the last `/`.
+
+  Within the authority:
+  - An `@` anywhere is userinfo, and is refused.
+  - What's left is `host[:port]`:
+    - an IPv6 literal (`[`, hex digits, `:` and `.` with at least one `:`, then `]`), optionally followed by `:port`;
+    - or a name with at most one `:`, the part after it being the port.
+  - A port is 1 to 5 digits with a value from 1 to 65535. An empty port is refused.
+  - A name is lowercased, and each label containing a non-ASCII character becomes `xn--` plus its RFC 3492 punycode (no other IDNA mapping). The result must be 1 to 253 characters of dot-separated labels. Each label is 1 to 63 characters of `[a-z0-9-]`, not starting or ending with `-`. There is no trailing dot.
+  - So a `%`-escape in the host, a trailing dot and an empty label are refused. An IPv4 literal (`192.0.2.10`) and a single-label host (`localhost`) are accepted as names.
+  - A backslash is refused anywhere in every URL kind, because browsers read it as `/`.
+  - The exact messages are the `pluginUrl`, `pageLink` and `addLink` cases. qbt may do the punycode step in `lib/` (python); the window implements RFC 3492 in `SearchView.js`.
 - **The registry rows, footers, palette entries and the mount point** are already in `CommandRegistry.js`, `ClientView.js` and `Client.qml`. What the window's Search view must provide is documented at the top of `SearchPane.qml`.
 
 qBittorrent 5.2.3 facts (from `searchcontroller.cpp`, `searchpluginmanager.cpp` and `searchhandler.cpp`):
@@ -89,7 +105,8 @@ With a wrong subcommand or arguments it prints "usage: qbt search-plugin list|in
   - when a new `/` starts (`start` does it);
   - right after the final read of a Stopped job (OV14);
   - when the window closes (`SearchPane.windowClosed`).
-  So the file only ever names a running job, or one a crash left behind for the next `start`.
+  So the file only ever names a running job, or one a crash left behind.
+- **A crash leftover is deleted by the next `qbt search start`** (step 3 above). Nothing reads `search.id` when Service starts: Ruling FB dropped A5's "next Service start" cleanup.
 
 ## The sidecar's search watch (`qbt-serve`)
 
@@ -106,7 +123,9 @@ The window owns the offset (OV7). The sidecar keeps only the current watch: `{id
 - `id: null` drops the watch, with no reply.
 - A restarted sidecar has no watch until the window (Service) sends its command again.
 
-**Polling.** About every second while it watches, the sidecar reads GET `search/status?id=N`, then GET `search/results?id=N&offset=<offset>&limit=<L>`, where `L = min(500, 2000 - offset)`. The sidecar never asks past row 2000 (OV15: the 2000-row cap is the sidecar's, so extra rows never cross into QML). Once `offset` reaches 2000, only the status is read.
+**Polling.** About every second while it watches, the sidecar reads GET `search/results?id=N&offset=<offset>&limit=<L>`, where `L = min(500, 2000 - offset)`. The reply's `status`, `total` and `rows` all come from that one `results` response (`{status, total, results}`), so they always agree.
+
+The sidecar never asks past row 2000 (OV15: the 2000-row cap is the sidecar's, so extra rows never cross into QML). Once `offset` reaches 2000, it reads GET `search/status?id=N` instead, for `status` and `total`, and `rows` is `[]`. The switch matters because a `results` read with `limit` 0 would return every row.
 
 **The reply** (stdout, one line):
 
@@ -114,15 +133,15 @@ The window owns the offset (OV7). The sidecar keeps only the current watch: `{id
 {"type":"search","id":N,"status":"Running","total":T,"offset":k,"rows":[...],"capped":false}
 ```
 
-- `status` is qBittorrent's `Running` or `Stopped`, and `total` is its `total` (every row it holds, past 2000 too).
-- `offset` is where these rows start: the watch's offset before this reply.
+- `status` is qBittorrent's `Running` or `Stopped`, and `total` is its `total` (every row it holds, past 2000 too). Both come from the `results` response (from `status` once at the cap).
+- `reply.offset` is the offset before the reply's rows: the watch's offset when this read was made, where `rows[0]` sits.
 - `rows` holds qBittorrent's result objects exactly as received, `{fileName, fileUrl, fileSize, nbSeeders, nbLeechers, engineName, siteUrl, descrLink, pubDate}`. There are at most 500, and never enough to pass row 2000. The sidecar passes rows through untouched; sanitising lives only in `SearchView.js` (OV9).
 - `capped` is true when `total` > 2000, so the window says "showing 2000 of <n>".
 - After a reply, the watch's offset advances by `rows.length`.
-- A reply is sent after every command, whenever `rows` is non-empty, and whenever `status` or `total` changed since the last reply. Otherwise nothing is sent.
+- A reply is sent after every command, whenever `rows` is non-empty, and whenever `status` or `total` changed since the last reply. Otherwise nothing is sent. The final reply (below) is always sent.
 - **The window's side:** it appends a reply's rows only when `reply.offset` equals the number of rows it holds, and otherwise re-sends `{"cmd":"search","id":N,"offset":<rows it holds>}`. So a duplicate or a gap can't survive a restart.
 
-**When the job ends.** A reply with `status` `Stopped` and the offset at `min(total, 2000)` is the final read. The sidecar sends it and drops the watch. The window then runs `qbt search delete <id>` (OV14).
+**When the job ends (Ruling FB).** A reply is **final** when `status` is `"Stopped"` AND `offset + rows.length == min(total, 2000)`. The sidecar always sends the final reply, even with zero rows, and then drops the watch. The window applies it (appends its rows by the offset rule above), then deletes the job with `qbt search delete <id>` (OV14). A reply that is `Stopped` but not final (more rows are still to read) is not final: the watch continues from the advanced offset.
 
 **404.** The job is gone, for example after a qBittorrent restart:
 
@@ -135,6 +154,12 @@ The sidecar drops the watch, and the window says "The search ended when qBittorr
 ## The window (Task 3), against the mount point
 
 - **`F` or ":Search"** makes Search the active view (`Client.activeView`). It works from the torrent panes only, like `,`. ":Search" from Settings leaves Settings first. Esc stops a running search (`qbt search stop`), then leaves.
+- **`c`** (`search.category`, in the results and the Plugins column) opens a single-choice picker (ListOverlay in PICKER mode, like Settings' choice picker; `SearchPane` documents the hook). Its rows:
+  - `all` (qBittorrent's "All categories") first, then each category id that at least one **enabled** plugin lists in `supportedCategories`, once each;
+  - in qBittorrent's table order: anime, books, games, movies, music, pictures, software, tv;
+  - each titled with qBittorrent's name for it (`supportedCategories[].name`: "Anime", "Books", "Games", "Movies", "Music", "Pictures", "Software", "TV shows").
+
+  The default is `all`. The chosen id goes to the next `qbt search start --category <id>`. A chosen category no enabled plugin supports any more falls back to `all`. `c` needs an enabled plugin (the dim reason "all plugins are off (P)").
 - **Enter** (A1) raises a one-line CONFIRM, "Add <name> (<size>) from <host>?" with `y` add, unless the result is already in the library (OV11, `magnetHash`), in which case it notes "Already in your library." `y` runs `qbt search add <fileUrl> [<engineName>]` (the plugin only when `engineName` is non-empty).
 - **The done notes.** Only the window says something was added:
   - "Added <name>." is shown once a magnet's hash appears in the library (`via:"add"` for a magnet).

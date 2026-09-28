@@ -77,3 +77,48 @@ test("search cases: the 409 sentences and the done notes are the brief's", () =>
   assert.equal(data.window.sent, "Sent <name> to qBittorrent · it appears when its download finishes.");
   assert.equal(data.window.gone, "The search ended when qBittorrent restarted.");
 });
+
+test("search cases, Ruling FB: a backslash is refused in every URL kind, and the host rule is pinned", () => {
+  const find = (kind, input) => data.cases.find((c) => c.kind === kind && JSON.stringify(c.input) === JSON.stringify(input));
+  for (const kind of ["pluginUrl", "pageLink", "addLink"]) {
+    assert.ok(data.cases.some((c) => c.kind === kind && JSON.stringify(c.input).includes("\\\\") && !c.ok), kind + " refuses a backslash");
+  }
+  const want = [
+    ["pluginUrl", "https://exa%6dple.org/jackett.py", false],
+    ["pluginUrl", "https://example.org./jackett.py", false],
+    ["pluginUrl", "https://192.0.2.10/jackett.py", true],
+    ["pluginUrl", "https://nas/jackett.py", true],
+    ["pluginUrl", "https://example.org:8443/eztv_v2.py", true],
+    ["pluginUrl", "https://example.org:65535/jackett.py", true],
+    ["pluginUrl", "https://example.org:65536/jackett.py", false],
+    ["pluginUrl", "https://example.org:0/jackett.py", false],
+    ["pluginUrl", "https://example.org:/jackett.py", false],
+    ["pageLink", "https://exa%6dple.org/t/1", false],
+    ["pageLink", "https://example.org./t/1", false],
+    ["pageLink", "http://192.0.2.10:8080/t/1", true],
+    ["pageLink", "http://localhost/t/1", true],
+    ["addLink", ["https://exa%6dple.org/dl/debian.torrent"], false],
+    ["addLink", ["https://example.org:8443/dl/debian.torrent"], true]
+  ];
+  for (const [kind, input, ok] of want) {
+    const c = find(kind, input);
+    assert.ok(c, kind + " " + JSON.stringify(input) + " is a case");
+    assert.equal(c.ok, ok, kind + " " + JSON.stringify(input));
+  }
+  // The length limit, pinned at the boundary.
+  const long = data.cases.filter((c) => c.kind === "pluginUrl" && c.input.length > 2000);
+  assert.deepEqual(long.map((c) => [c.input.length, c.ok]).sort(), [[2048, true], [2049, false]]);
+  assert.match(data._doc, /never by a URL library/);
+});
+
+test("search contract, Ruling FB: the final reply, total's source, and no Service-start cleanup are written down", () => {
+  assert.ok(contract.includes("A reply is **final** when `status` is `\"Stopped\"` AND `offset + rows.length == min(total, 2000)`"));
+  assert.ok(contract.includes("The sidecar always sends the final reply, even with zero rows, and then drops the watch."));
+  assert.ok(contract.includes("`reply.offset` is the offset before the reply's rows"));
+  assert.ok(contract.includes("then deletes the job with `qbt search delete <id>`"));
+  assert.ok(contract.includes("The reply's `status`, `total` and `rows` all come from that one `results` response"));
+  assert.ok(contract.includes("A crash leftover is deleted by the next `qbt search start`"));
+  assert.ok(contract.includes("Nothing reads `search.id` when Service starts"));
+  assert.ok(contract.includes("never by a URL library"));
+  assert.ok(contract.includes("**`c`** (`search.category`"));
+});
