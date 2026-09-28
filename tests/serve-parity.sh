@@ -60,6 +60,17 @@ PY
 jq -S 'del(.type) | .torrents |= sort_by(.hash)' "$QBT_RAW" >"$QBT_NORM"
 jq -S 'del(.type) | .torrents |= sort_by(.hash)' "$SERVE_RAW" >"$SERVE_NORM"
 
+# Ruling FG: both carry infohash_v1/v2 as strings, "" when qBittorrent
+# doesn't send one (maindata-full.json: debian.iso has only a v1).
+want='[["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",""],["bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","",""]]'
+for f in "$QBT_NORM" "$SERVE_NORM"; do
+  got=$(jq -c '[.torrents[] | [.hash, .infohash_v1, .infohash_v2]]' "$f")
+  if [[ $got != "$want" ]]; then
+    echo "serve-parity: infohash fields: $got" >&2
+    exit 1
+  fi
+done
+
 if diff -u "$QBT_NORM" "$SERVE_NORM"; then
   echo "serve-parity ok"
 else

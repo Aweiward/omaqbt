@@ -54,7 +54,7 @@ WATCH_PIECES_INTERVAL = 5.0
 SEARCH_POLL_INTERVAL = 1.0
 SEARCH_CAP = 2000
 SEARCH_PAGE = 500
-SEARCH_TIMEOUT = 2
+SEARCH_TIMEOUT = 1
 SEARCH_ID_MAX = 2147483647
 
 _HASH_RE = re.compile(r"[0-9a-fA-F]{40}|[0-9a-fA-F]{64}")
@@ -441,6 +441,11 @@ def handle_command(cmd, state):
     if name == "search":
         # The window owns the offset (OV7): the watch is only the latest
         # command's {id, offset} plus what was last reported.
+        # The id key must be present (null or an int): a bare
+        # {"cmd":"search"} is a bad command, never a stop.
+        if "id" not in cmd:
+            emit({"type": "error", "id": None, "error": "bad command"})
+            return
         jid = cmd.get("id")
         if jid is None:
             state["search"] = None

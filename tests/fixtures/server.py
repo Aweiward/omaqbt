@@ -168,7 +168,9 @@ def _write_fault(key):
     fault, _, nth = value.partition("@")
     if nth and (not nth.isdigit() or int(nth) != n):
         return None
-    return fault if fault in ("404", "409", "500", "409secret", "noop", "unreadable", "sleep7") else None
+    # "202": qBittorrent's Async status, which only torrents/add may treat
+    # as success (Ruling FG, B1); on any other route it must be refused.
+    return fault if fault in ("202", "404", "409", "500", "409secret", "noop", "unreadable", "sleep7") else None
 
 
 def _torrent_rows():
@@ -1149,8 +1151,18 @@ class Handler(BaseHTTPRequestHandler):
                     if m and len(m.group(1)) == 40:
                         h = m.group(1).lower()
                         ADDED.append({"hash": h, "infohash_v1": h, "name": h, "size": 0, "total_size": 0})
+            # qBittorrent 5.2.3 (torrentscontroller.cpp addAction) answers a
+            # URL it must download first (anything that isn't a magnet,
+            # e.g. an https .torrent) as pending: 202 (APIStatus::Async)
+            # with the counts as JSON, and nothing is added yet.
+            pending = sum(1 for raw in urls if not unquote_plus(raw).lower().startswith("magnet:"))
             if fault == "fails":
                 self._send(200, b"Fails.")
+            elif fault is None and pending:
+                self._send(202, json.dumps({
+                    "success_count": len(urls) - pending, "failure_count": 0,
+                    "pending_count": pending, "added_torrent_ids": [],
+                }).encode(), content_type="application/json")
             elif fault == "oddbody":
                 self._send(200, b'{"added":1}', content_type="application/json")
             else:

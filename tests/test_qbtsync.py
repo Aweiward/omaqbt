@@ -78,6 +78,34 @@ class MergeMaindataTests(unittest.TestCase):
         self.assertIn("deadbeef" * 8, torrents)
         self.assertEqual(rows[0]["hash"], "deadbeef" * 8)
 
+    def test_rows_carry_both_infohashes_as_strings(self):
+        # Ruling FG: the window's library match (OV11) reads these; "" when
+        # qBittorrent doesn't send one (or sends something that isn't a string).
+        v1, v2 = "ab" * 20, "cd" * 32
+        raw = {
+            "full_update": True,
+            "torrents": {
+                v1: {"name": "hybrid", "infohash_v1": v1, "infohash_v2": v2},
+                "v2key": {"name": "v2only", "infohash_v1": "", "infohash_v2": v2[:62] + "ef"},
+                "ef" * 20: {"name": "v1only", "infohash_v1": "ef" * 20},
+                "12" * 20: {"name": "odd", "infohash_v1": None, "infohash_v2": 5},
+            },
+        }
+        _, rows = qbtsync.merge_maindata(raw, {})
+        got = {r["name"]: (r["infohash_v1"], r["infohash_v2"]) for r in rows}
+        self.assertEqual(got, {
+            "hybrid": (v1, v2),
+            "v2only": ("", v2[:62] + "ef"),
+            "v1only": ("ef" * 20, ""),
+            "odd": ("", ""),
+        })
+
+    def test_a_delta_keeps_the_infohashes(self):
+        cache_map, _ = qbtsync.merge_maindata(self.full, {})
+        _, rows = qbtsync.merge_maindata(self.delta, cache_map)
+        row = next(r for r in rows if r["hash"] == "a" * 40)
+        self.assertEqual((row["infohash_v1"], row["infohash_v2"]), ("a" * 40, ""))
+
     def test_delta_merges_and_keeps_unresent_fields(self):
         cache_map, _ = qbtsync.merge_maindata(self.full, {})
         torrents, rows = qbtsync.merge_maindata(self.delta, cache_map)

@@ -19,9 +19,12 @@ import unicodedata
 
 # The case file's BAD class, plus U+DC80-DCFF: invalid UTF-8 from argv,
 # decoded with surrogateescape, is refused like a control character.
+# U+00AD (soft hyphen) and the IDNA dot variants U+3002, U+FF0E, U+FF61
+# are in it too (Ruling FG): a dot variant inside a host would otherwise
+# punycode into one label and pass the host rule.
 _BAD = re.compile(
-    "[\u0000- \u007f-   -‏ - "
-    " -⁯　﻿\\\\\udc80-\udcff]"
+    "[\u0000-\u0020\u007f-\u00a0\u00ad\u1680\u2000-\u200f\u2028-\u202f"
+    "\u205f-\u206f\u3000\u3002\ufeff\uff0e\uff61\\\\\udc80-\udcff]"
 )
 _CONTROL = re.compile("[\u0000-\u001f\u007f-\u009f\udc80-\udcff]")
 _PLUGIN_NAME = re.compile("[A-Za-z0-9_]+")

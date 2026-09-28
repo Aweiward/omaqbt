@@ -121,6 +121,7 @@ The window owns the offset (OV7). The sidecar keeps only the current watch: `{id
 
 - `id: N` replaces any watch with job `N` from `offset` `k` (0 to start, or how many rows the window already holds).
 - `id: null` drops the watch, with no reply.
+- The `id` key must be present, null or an integer (Ruling FG). `{"cmd":"search"}` without it is not `id: null`: like any other malformed search command, it answers `{"type":"error","id":<its id, or null>,"error":"bad command"}` and leaves the watch as it was.
 - A restarted sidecar has no watch until the window (Service) sends its command again.
 
 **Polling.** About every second while it watches, the sidecar reads GET `search/results?id=N&offset=<offset>&limit=<L>`, where `L = min(500, 2000 - offset)`. The reply's `status`, `total` and `rows` all come from that one `results` response (`{status, total, results}`), so they always agree.
@@ -161,6 +162,7 @@ The sidecar drops the watch, and the window says "The search ended when qBittorr
 
   The default is `all`. The chosen id goes to the next `qbt search start --category <id>`. A chosen category no enabled plugin supports any more falls back to `all`. `c` needs an enabled plugin (the dim reason "all plugins are off (P)").
 - **Enter** (A1) raises a one-line CONFIRM, "Add <name> (<size>) from <host>?" with `y` add, unless the result is already in the library (OV11, `magnetHash`), in which case it notes "Already in your library." `y` runs `qbt search add <fileUrl> [<engineName>]` (the plugin only when `engineName` is non-empty).
+  - **The library match reads the status rows (Ruling FG).** Each torrent row in the sidecar's `status` line (and `qbt status`, from `lib/qbtsync.py` `merge_maindata`) carries qBittorrent's `infohash_v1` and `infohash_v2`, always strings, `""` when qBittorrent doesn't send one (a v1 torrent has no v2 hash and the reverse; the fixture's `debian.iso` has only a v1). A magnet's `v1` (its btih) matches a row whose `hash` or `infohash_v1` equals it; its `v2` (its btmh with `1220` stripped) matches a row whose `infohash_v2` equals it.
 - **The done notes.** Only the window says something was added:
   - "Added <name>." is shown once a magnet's hash appears in the library (`via:"add"` for a magnet).
   - "Sent <name> to qBittorrent · it appears when its download finishes." is shown for `via:"plugin"`, and for an https `.torrent` added through `via:"add"`, whose hash isn't known in advance.
