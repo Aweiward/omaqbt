@@ -294,6 +294,18 @@ def handle_command(cmd, state):
         state["next_tick"] = time.monotonic() + clamped / 1000.0
         return
 
+    if name == "refresh-slow":
+        # Forces the SlowCache's next `due()` check to reread
+        # /app/preferences (Service sends this after a successful
+        # setPref), and pulls the next tick forward to now rather than
+        # waiting out whatever cadence interval is already in flight --
+        # the same "reschedule right away" trick `cadence` uses above.
+        # No probe reprobe and no reply of its own: the caller sees the
+        # refreshed preferences on the status line that follows.
+        state["slow"].fetched_at = None
+        state["next_tick"] = time.monotonic()
+        return
+
     if name == "files":
         h = cmd.get("hash")
         if not isinstance(h, str) or not _HASH_RE.fullmatch(h):
