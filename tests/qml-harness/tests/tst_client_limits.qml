@@ -76,6 +76,7 @@ TestCase {
       function setSequential(h, on, o) { return rec("setSequential", [h, on, o]) }
       function setFirstLast(h, on, o) { return rec("setFirstLast", [h, on, o]) }
       function setSpeedLimit(h, k, b, o) { return rec("setSpeedLimit", [h, k, b, o]) }
+      function deleteHash(h, f, o) { return rec("delete", [h, f, o]) }
     }
   }
 
@@ -421,7 +422,9 @@ TestCase {
 
   function test_d8_confirm_resolves_the_category_and_global_chain() {
     // The torrent defers everything: its category removes, the global stops.
-    var o = make([tt(hh("b"), "beta", { state: "stalledUP", progress: 1, ratio: 2, seedingTime: 7200, category: "anime/2026" })], {
+    // ratioLimit 5 (Task 6, Ruling CL 2): typing "g" over a -2 prefill is
+    // now no change and sends nothing, so the torrent starts off default.
+    var o = make([tt(hh("b"), "beta", { state: "stalledUP", progress: 1, ratio: 2, seedingTime: 7200, category: "anime/2026", ratioLimit: 5 })], {
       categoryLimits: { anime: { ratioLimit: -2, seedingTimeLimit: -2, shareLimitAction: "Remove" } },
       shareDefaults: { ratio: 1, seedingTime: -1, action: "Stop" }
     })
@@ -607,5 +610,313 @@ TestCase {
     o.c.setPane("table")
     verify(!shows(o.c, "turn on"))
     verify(shows(o.c, "Start download"))
+  }
+
+  // ---- slice 3b, Task 6: the palette's bulk limits -------------------------------------
+
+  function pal(c) {
+    return (function find(obj) {
+      if (!obj) return null
+      if (obj.totalCount !== undefined) return obj
+      for (var i = 0; i < (obj.children || []).length; i++) { var r = find(obj.children[i]); if (r) return r }
+      return null
+    })(winOf(c).contentItem)
+  }
+  // ":" then the row titled `title`, then Enter.
+  function palette(o, title) {
+    key(o.c, ":", 0x3a)
+    compare(o.c.mode, "COMMAND")
+    var p = pal(o.c)
+    p.setQuery(title)
+    compare(p.currentRow().title, title)
+    enter(o)
+  }
+  function three() {
+    return [
+      tt(hh("a"), "alpha", { addedOn: 3 }),
+      tt(hh("b"), "beta", { addedOn: 2 }),
+      tt(hh("c"), "gamma", { addedOn: 1 })
+    ]
+  }
+  // V on the first row, j j: the three rows.
+  function range3(o) {
+    o.c.setCursor(hh("a"))
+    key(o.c, "V", 0x56, 0x02000000)
+    key(o.c, "j"); key(o.c, "j")
+    compare(o.c.mode, "VISUAL")
+    compare(o.c.visualHashes.length, 3)
+  }
+  function many(n, extra) {
+    var out = []
+    for (var i = 0; i < n; i++) {
+      var h = ("0000000000" + i.toString(16)).slice(-10)
+      out.push(tt(h + h + h + h, "t" + i, Object.assign({ addedOn: 5000 - i }, extra ? extra(i) : {})))
+    }
+    return out
+  }
+
+  function test_palette_sets_the_download_limit_on_a_visual_range() {
+    var o = make(three())
+    range3(o)
+    key(o.c, ":", 0x3a)
+    compare(o.c.mode, "COMMAND")
+    compare(Object.keys(o.c.rangeHashes).length, 3, "the range stays painted while the palette is up")
+    var p = pal(o.c)
+    p.setQuery("Set download limit")
+    compare(p.currentRow().title, "Set download limit")
+    compare(p.currentRow().keys, "")
+    // A status tick while the palette is up can't change what it acts on.
+    o.svc.torrents = three().concat([tt(hh("d"), "delta", { addedOn: 0 })])
+    enter(o)
+    compare(o.c.mode, "INSERT")
+    compare(prompt(o), "Download limit for 3 torrents")
+    compare(line(o.c).inputValue(), "", "no prefill for a range")
+    compare(Object.keys(o.c.rangeHashes).length, 3, "and while its INSERT is up")
+    type(o, "abc")
+    enter(o)
+    compare(o.c.mode, "INSERT", "a parse error stays in INSERT")
+    compare(writes(o.svc).length, 0)
+    type(o, "500K")
+    enter(o)
+    compare(o.c.mode, "NORMAL")
+    compare(calls(o.svc, "setSpeedLimit").length, 1)
+    var call = lastCall(o.svc, "setSpeedLimit")
+    compare(call.args[0], [hh("a"), hh("b"), hh("c")].join("|"))
+    compare(call.args[1], "dl")
+    compare(call.args[2], 512000)
+    compare(call.args[3].origin, "window")
+    compare(call.args[3].hashes, [hh("a"), hh("b"), hh("c")])
+    compare(o.c.messageLine.text, "Setting the ↓ limit…")
+    finish(o, true)
+    compare(o.c.messageLine.text, "↓ limit set to 500 KiB/s on 3 torrents")
+  }
+
+  function test_palette_sets_the_upload_limit_on_the_cursor_row() {
+    var o = make(three())
+    palette(o, "Set upload limit")
+    compare(o.c.mode, "INSERT")
+    compare(prompt(o), "Upload limit for alpha")
+    type(o, "u")
+    enter(o)
+    var call = lastCall(o.svc, "setSpeedLimit")
+    compare(call.args[0], hh("a"))
+    compare(call.args[1], "up")
+    compare(call.args[2], 0)
+    finish(o, true)
+    compare(o.c.messageLine.text, "↑ limit set to unlimited")
+  }
+
+  function test_palette_bulk_esc_sends_nothing() {
+    var o = make(three())
+    range3(o)
+    key(o.c, ":", 0x3a)
+    esc(o)
+    compare(o.c.mode, "NORMAL", "Esc on the palette ends it and the range")
+    compare(Object.keys(o.c.rangeHashes).length, 0)
+    range3(o)
+    palette(o, "Set ratio limit")
+    compare(o.c.mode, "INSERT")
+    compare(prompt(o), "Ratio limit for 3 torrents")
+    type(o, "1.5")
+    esc(o)
+    compare(o.c.mode, "NORMAL")
+    compare(Object.keys(o.c.rangeHashes).length, 0)
+    palette(o, "Set download limit")
+    type(o, "1M")
+    esc(o)
+    compare(writes(o.svc).length, 0)
+  }
+
+  // D8 over a mixed range: alpha downloads, beta seeds past the new ratio
+  // and removes itself with its files, gamma seeds below it.
+  function test_palette_ratio_over_a_mixed_range_asks_once_and_freezes_force() {
+    var o = make([
+      tt(hh("a"), "alpha", { addedOn: 3 }),
+      tt(hh("b"), "beta", { addedOn: 2, state: "stalledUP", progress: 1, ratio: 2, seedingTime: 7200, shareLimitAction: "RemoveWithContent" }),
+      tt(hh("c"), "gamma", { addedOn: 1, state: "stalledUP", progress: 1, ratio: 0.5, seedingTime: 60 })
+    ])
+    range3(o)
+    palette(o, "Set ratio limit")
+    type(o, "1")
+    enter(o)
+    compare(o.c.mode, "CONFIRM")
+    compare(o.c.confirm.line, "Set the ratio limit to 1? 1 torrent already meets it and will be removed with its files.")
+    compare(Object.keys(o.c.rangeHashes).length, 3, "the confirm paints the whole range")
+    compare(writes(o.svc).length, 0)
+    key(o.c, "n")
+    compare(writes(o.svc).length, 0, "n sends nothing")
+    range3(o)
+    palette(o, "Set ratio limit")
+    type(o, "1")
+    enter(o)
+    esc(o)
+    compare(o.c.mode, "NORMAL")
+    compare(writes(o.svc).length, 0, "Esc sends nothing")
+    range3(o)
+    palette(o, "Set ratio limit")
+    type(o, "1")
+    enter(o)
+    // A tick that makes beta Stop before y: the frozen args still say force.
+    o.svc.torrents = o.svc.torrents.map(function(t) { return t.hash === hh("b") ? tt(hh("b"), "beta", { addedOn: 2, state: "stalledUP", progress: 1, ratio: 2 }) : t })
+    key(o.c, "y")
+    compare(calls(o.svc, "setShareLimits").length, 1, "one write, one CONFIRM")
+    var call = lastCall(o.svc, "setShareLimits")
+    compare(call.args[0], [hh("a"), hh("b"), hh("c")].join("|"))
+    compare(call.args[1], { ratio: 1 })
+    compare(call.args[2], true, "force frozen from the confirm")
+    finish(o, true)
+    compare(o.c.messageLine.text, "Ratio limit set to 1.00 on 3 torrents")
+    // Only a Stop outcome: a confirm, and no force.
+    range3(o)
+    palette(o, "Set ratio limit")
+    type(o, "1")
+    enter(o)
+    compare(o.c.confirm.line, "Set the ratio limit to 1? 1 torrent already meets it and will be stopped.")
+    key(o.c, "y")
+    compare(lastCall(o.svc, "setShareLimits").args[2], false)
+    // Nothing met: no confirm.
+    range3(o)
+    palette(o, "Set ratio limit")
+    type(o, "5")
+    enter(o)
+    compare(o.c.mode, "NORMAL")
+    compare(lastCall(o.svc, "setShareLimits").args[1], { ratio: 5 })
+    compare(lastCall(o.svc, "setShareLimits").args[2], false)
+  }
+
+  function test_palette_ratio_waits_for_the_preferences_at_the_key_and_at_enter() {
+    var o = make(three(), { defaultSavePath: "" })
+    palette(o, "Set ratio limit")
+    compare(o.c.mode, "NORMAL")
+    compare(o.c.messageLine.text, notReady)
+    palette(o, "Set download limit")
+    compare(o.c.mode, "INSERT", "speeds need no gate")
+    esc(o)
+    o.svc.defaultSavePath = "/dl"
+    palette(o, "Set ratio limit")
+    compare(o.c.mode, "INSERT")
+    type(o, "2")
+    o.svc.api = false
+    enter(o)
+    compare(o.c.mode, "INSERT")
+    compare(o.c.messageLine.text, notReady)
+    compare(writes(o.svc).length, 0)
+  }
+
+  function test_palette_bulk_over_1001_chunks_and_tallies_a_partial_failure() {
+    var list = many(1001)
+    var o = make(list)
+    key(o.c, "V", 0x56, 0x02000000)
+    o.c.setCursor(list[1000].hash)
+    compare(o.c.visualHashes.length, 1001)
+    palette(o, "Set upload limit")
+    compare(prompt(o), "Upload limit for 1001 torrents")
+    type(o, "1M")
+    enter(o)
+    var sent = calls(o.svc, "setSpeedLimit")
+    compare(sent.length, 2, "two chunks")
+    compare(sent[0].args[0].split("|").length, 1000)
+    compare(sent[1].args[0].split("|").length, 1)
+    compare(sent[0].args[3].hashes.length, 1000)
+    var refreshes = calls(o.svc, "refresh").length
+    o.svc.actionFinished(o.svc.seq - 1, true, "", "window", [])
+    compare(o.c.messageLine.text, "Setting the ↑ limit…", "still running")
+    o.svc.actionFinished(o.svc.seq, false, "qBittorrent refused it (HTTP 409)", "window", [])
+    compare(o.c.messageLine.text, "↑ limit set on 1000 of 1001 torrents; the rest failed (HTTP 409)")
+    compare(o.c.messageLine.tone, "urgent")
+    compare(calls(o.svc, "refresh").length, refreshes + 1, "one refresh")
+    // Every chunk lands: the done note with the count.
+    key(o.c, "V", 0x56, 0x02000000)
+    o.c.setCursor(list[0].hash)
+    palette(o, "Set upload limit")
+    type(o, "1M")
+    enter(o)
+    o.svc.actionFinished(o.svc.seq - 1, true, "", "window", [])
+    o.svc.actionFinished(o.svc.seq, true, "", "window", [])
+    compare(o.c.messageLine.text, "↑ limit set to 1 MiB/s on 1001 torrents")
+  }
+
+  function test_palette_ratio_over_1001_sends_force_in_every_chunk() {
+    var list = many(1001, function(i) { return i === 1000 ? { state: "stalledUP", progress: 1, ratio: 3, shareLimitAction: "Remove" } : {} })
+    var o = make(list)
+    key(o.c, "V", 0x56, 0x02000000)
+    o.c.setCursor(list[1000].hash)
+    palette(o, "Set ratio limit")
+    type(o, "2")
+    enter(o)
+    compare(o.c.confirm.line, "Set the ratio limit to 2? 1 torrent already meets it and will be removed.")
+    key(o.c, "y")
+    var sent = calls(o.svc, "setShareLimits")
+    compare(sent.length, 2)
+    compare(sent[0].args[2], true)
+    compare(sent[1].args[2], true)
+    compare(sent[1].args[0], list[1000].hash)
+  }
+
+  // ---- Ruling CL -----------------------------------------------------------------------
+
+  function test_enter_on_an_unchanged_prefill_sends_nothing() {
+    var o = make()
+    onInfo(o)
+    enter(o)
+    compare(o.c.mode, "INSERT")
+    compare(line(o.c).inputValue(), "u")
+    enter(o)
+    compare(o.c.mode, "NORMAL")
+    compare(writes(o.svc).length, 0, "the prefill as it was: nothing to set")
+    compare(o.c.messageLine.text, "")
+    toRow(o, "ratioLimit")
+    enter(o)
+    compare(line(o.c).inputValue(), "g")
+    enter(o)
+    compare(writes(o.svc).length, 0)
+  }
+
+  function test_palette_on_a_no_metadata_info_tab_offers_start_download() {
+    var o = make([tt(hh("m"), "magnet", { state: "stoppedDL", size: 0, progress: 0 })])
+    onInfo(o)
+    palette(o, "Start download")
+    compare(o.c.mode, "NORMAL")
+    compare(lastCall(o.svc, "start").args[0], hh("m"))
+  }
+
+  function test_j_k_keep_the_limits_cursor_in_view() {
+    var o = make()
+    var w = winOf(o.c)
+    w.height = 260
+    onInfo(o)
+    wait(50)
+    var flick = findName(w.contentItem, "infoFlick")
+    verify(flick !== null)
+    toRow(o, "firstLast")
+    var fills = cursorFills(o)
+    compare(fills.length, 1)
+    var top = fills[0].mapToItem(flick, 0, 0).y
+    verify(flick.contentHeight > flick.height, "the Info tab scrolls at this height")
+    verify(top >= -0.5 && top + fills[0].height <= flick.height + 0.5, "the cursor row shows (y " + top + " in " + flick.height + ")")
+    for (var i = 0; i < 5; i++) key(o.c, "k")
+    compare(cursorKey(o), "dlLimit")
+    fills = cursorFills(o)
+    top = fills[0].mapToItem(flick, 0, 0).y
+    verify(top >= -0.5 && top + fills[0].height <= flick.height + 0.5, "back up, still showing (y " + top + ")")
+  }
+
+  // A palette opened on a range runs every range command on it, as its key
+  // would: Remove's CONFIRM counts the range and y removes exactly it.
+  function test_a_palette_opened_on_a_range_removes_the_range_it_counted() {
+    var o = make(three())
+    range3(o)
+    palette(o, "Remove")
+    compare(o.c.mode, "CONFIRM")
+    compare(o.c.confirm.count, 3)
+    key(o.c, "y")
+    var call = lastCall(o.svc, "delete")
+    compare(call.args[0], [hh("a"), hh("b"), hh("c")].join("|"))
+    compare(call.args[1], false)
+    // A command with no range form runs as from NORMAL.
+    range3(o)
+    palette(o, "Sort")
+    compare(o.c.mode, "NORMAL")
+    compare(o.c.sortMode !== "added", true)
   }
 }

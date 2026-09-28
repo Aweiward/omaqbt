@@ -726,7 +726,11 @@ var LIMIT_PROMPTS = {
   "limit:dlLimit": ["↓ limit", "500K, 1.5M, 0 or u"],
   "limit:upLimit": ["↑ limit", "500K, 1.5M, 0 or u"],
   "limit:ratioLimit": ["Ratio limit", "1.5, g or n"],
-  "limit:seedingTimeLimit": ["Seed time", "90m, 2h, 3d, g or n"]
+  "limit:seedingTimeLimit": ["Seed time", "90m, 2h, 3d, g or n"],
+  // The palette's bulk limits (Task 6); `shown` is "3 torrents" or the name.
+  "limit:bulk:dlLimit": ["Download limit", "500K, 1.5M, 0 or u"],
+  "limit:bulk:upLimit": ["Upload limit", "500K, 1.5M, 0 or u"],
+  "limit:bulk:ratioLimit": ["Ratio limit", "1.5, g or n"]
 };
 function inputPrompt(purpose, shown) {
   if (purpose === "move") return { prompt: "move to", placeholder: "/absolute/path" };
@@ -1051,7 +1055,7 @@ function copyMessages(m) {
   var groups = {};
   for (var g in s.groups || {}) {
     var src = s.groups[g];
-    groups[g] = { left: src.left, failed: src.failed, error: src.error };
+    groups[g] = { left: src.left, failed: src.failed, error: src.error, done: src.done || 0, total: src.total || 0 };
   }
   return {
     tickets: tickets,
@@ -1108,9 +1112,12 @@ var BUSY_NOTE = "Busy, try again.";
 // anime → animation"); raw shows the failure as the error text alone (qbt's
 // own sentence, e.g. "Rename incomplete (12 of 21 moved); …"); fail names
 // the action first ("Deleting category anime failed: HTTP 409"). guard
-// (slice 3b, share limits) keeps `fail` for qbt's bare "qBittorrent
-// refused it (…)" only; any other error is qbt's own sentence (the D8
-// guard's refusal, a partial write) and shows as it is.
+// (slice 3b, share limits) shows qbt's D8 refusal and its partial write as
+// they are (isLimitSentence, Ruling CL 1); every other error gets `fail`.
+// tally (slice 3b, a limit write over several chunks): the head of the
+// line that says how many torrents changed when a chunk fails after
+// another landed ("↓ limit set on 1000 of 1001 torrents; the rest failed
+// (HTTP 409)").
 function msgTrack(m, ticket, kind, count, hashes, copy) {
   var list = Array.isArray(ticket) ? ticket : [ticket];
   var ids = [];
@@ -1126,10 +1133,16 @@ function msgTrack(m, ticket, kind, count, hashes, copy) {
   var text = cp.progress ? String(cp.progress) : progressText(kind, count);
   var group = ids[0];
   var own = (hashes || []).slice();
+  // A tally copy: each ticket's chunk size (list[i] ran Model.chunkHashes'
+  // chunk i), so msgFinish can count the torrents in chunks that landed.
+  var tally = cp.tally ? String(cp.tally) : "";
+  var chunks = tally !== "" ? Model.chunkHashes(own) : [];
+  var sizes = {};
+  for (var c = 0; c < list.length; c++) if ((Number(list[c]) || 0) > 0) sizes[String(Number(list[c]))] = chunks[c] ? chunks[c].length : 0;
   for (var j = 0; j < ids.length; j++) {
-    next.tickets[ids[j]] = { kind: kind, count: Number(count) || 0, hashes: own, text: text, group: group, done: cp.done ? String(cp.done) : "", raw: cp.raw === true, fail: cp.fail ? String(cp.fail) : "", guard: cp.guard === true };
+    next.tickets[ids[j]] = { kind: kind, count: Number(count) || 0, hashes: own, text: text, group: group, done: cp.done ? String(cp.done) : "", raw: cp.raw === true, fail: cp.fail ? String(cp.fail) : "", guard: cp.guard === true, tally: tally, size: sizes[ids[j]] || 0 };
   }
-  next.groups[group] = { left: ids.length, failed: false, error: "" };
+  next.groups[group] = { left: ids.length, failed: false, error: "", done: 0, total: own.length };
   next.progress = text;
   return next;
 }
@@ -1230,8 +1243,9 @@ function msgFinish(m, ticket, ok, error) {
   for (var k in next.tickets) last = next.tickets[k].text;
   next.progress = last;
   var gid = entry.group !== undefined ? String(entry.group) : String(ticket);
-  var group = next.groups[gid] || { left: 1, failed: false, error: "" };
+  var group = next.groups[gid] || { left: 1, failed: false, error: "", done: 0, total: 0 };
   group.left = group.left - 1;
+  if (ok === true) group.done = (group.done || 0) + (entry.size || 0);
   if (ok !== true && !group.failed) {
     group.failed = true;
     group.error = String(error || "").trim();
@@ -1248,13 +1262,26 @@ function msgFinish(m, ticket, ok, error) {
   }
   if (group.failed) {
     var err = group.error;
-    if (entry.raw === true && err !== "") next.error = err;
-    else if (entry.guard === true && err !== "" && refusalDetail(err) === err) next.error = err;
+    var detail = refusalDetail(err);
+    if (entry.tally && group.done > 0 && group.done < group.total) {
+      next.error = entry.tally + " on " + group.done + " of " + group.total + " torrents; the rest failed" + (detail === "" ? "." : " (" + detail.replace(/\.$/, "") + ")");
+    } else if (entry.raw === true && err !== "") next.error = err;
+    else if (entry.guard === true && isLimitSentence(err)) next.error = err;
     else if (entry.fail) next.error = entry.fail + (err !== "" ? ": " + refusalDetail(err) : ".");
     else next.error = failureText(entry.kind, entry.count) + (err !== "" ? ": " + err : ".");
     next.errorHashes = entry.hashes.slice();
   }
   return next;
+}
+
+// Ruling CL 1: the only share-limit failures that name their action
+// themselves, and so show as they are: qbt's D8 guard refusal ("N torrents
+// already meet that limit, and qBittorrent would remove them.") and its
+// partial write ("Share limits set on K of N torrents; …"). Every other
+// failure ("2 of those torrents are gone.", a usage line) gets the lead.
+function isLimitSentence(err) {
+  var e = String(err || "");
+  return e.indexOf(" already meet") !== -1 || e.indexOf("Share limits set on ") === 0;
 }
 
 // qbt's bare "qBittorrent refused it (HTTP 409)" -> "HTTP 409"; any other
@@ -1675,6 +1702,23 @@ function paletteCommandEntries(commandsTable) {
   return out;
 }
 
+// paletteEntryFor(entry, state) -> the entry as it stands in `state`
+// (Ruling CL 3): a command with several rows shows the first one that
+// exists here -- its tab matches and its `when` holds, as dispatch decides
+// -- so its title, tabs and needs are that row's (a no-metadata Info tab's
+// Space row is "Start download"). With no such row, the entry as it is
+// (its first row), which paletteRowFrom then dims.
+function paletteEntryFor(entry, state) {
+  var s = state || {};
+  for (var i = 0; i < entry.rows.length; i++) {
+    var row = entry.rows[i];
+    if (!Registry.tabMatches(row, s.inspectorTab) || !Registry.whenMatches(row, s)) continue;
+    if (i === 0) return entry;
+    return { id: entry.id, title: row.title, group: row.group, needs: row.needs, tabs: row.tabs, rows: entry.rows };
+  }
+  return entry;
+}
+
 // paletteTabsReason(tabs) -> "focus the X tab" (one tab) or "focus the X, Y
 // or Z tab" (several), the palette's dimmed-row text for a command whose
 // rows (D7) don't cover the inspector's current tab.
@@ -1725,7 +1769,7 @@ function paletteRowFrom(entry, state, indices) {
   } else if (!Registry.preconditionMet(entry.needs, state)) {
     enabled = false;
     reason = Registry.needsReason(entry.needs, state);
-  } else if (entry.id === "file.cycle" && state.cursorNoMetadata === true) {
+  } else if (entry.id === "file.cycle" && (entry.tabs || []).indexOf("files") !== -1 && state.cursorNoMetadata === true) {
     // A no-metadata torrent has no files: Space there is Start download
     // (Deviation 3), which this row's title doesn't say.
     enabled = false;
@@ -1770,7 +1814,7 @@ function paletteTitleAsc(a, b) {
 // `modes` include "NORMAL" -- the same table `commands` (as passed in)
 // that helpFor/dispatch read.
 function paletteRows(query, commands, mru, state) {
-  var entries = paletteCommandEntries(commands);
+  var entries = paletteCommandEntries(commands).map(function(e) { return paletteEntryFor(e, state); });
   var byId = {};
   var i;
   for (i = 0; i < entries.length; i++) byId[entries[i].id] = entries[i];
@@ -1915,6 +1959,31 @@ function palettePane(commandsTable, id, pane) {
     if (Registry.paneMatches(row, pane)) return String(pane);
   }
   return "table";
+}
+
+// paletteRangeCommand(commandsTable, id) -> whether a palette opened on a
+// VISUAL range runs `id` on that range: it has a VISUAL row acting on the
+// selection (Space/x/X/e, C/T, the bulk limits). Anything else runs as
+// from NORMAL.
+function paletteRangeCommand(commandsTable, id) {
+  var list = commandsTable || [];
+  for (var i = 0; i < list.length; i++) {
+    var row = list[i];
+    if (row && row.id === id && row.needs === "selection" && row.modes.indexOf("VISUAL") !== -1) return true;
+  }
+  return false;
+}
+
+// rangeState(st, count) -> a dispatch state as if in VISUAL over count
+// rows (a palette opened on a range, whose own mode is NORMAL by then).
+function rangeState(st, count) {
+  var out = {};
+  for (var k in st || {}) {
+    if (Object.prototype.hasOwnProperty.call(st, k)) out[k] = st[k];
+  }
+  out.mode = "VISUAL";
+  out.selectionCount = Number(count) || 0;
+  return out;
 }
 
 // paletteOwnsKey(ev) -> whether the palette's text field hands this key to
@@ -2073,6 +2142,8 @@ if (typeof module !== "undefined" && module.exports) {
     paletteOwnsKey: paletteOwnsKey,
     overlayOwnsKey: overlayOwnsKey,
     paletteReasonNote: paletteReasonNote,
+    paletteRangeCommand: paletteRangeCommand,
+    rangeState: rangeState,
     paletteEmptyText: paletteEmptyText,
     MAGNET_FETCHING_NOTE: MAGNET_FETCHING_NOTE,
     magnetItemKey: magnetItemKey,

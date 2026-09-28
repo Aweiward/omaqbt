@@ -489,11 +489,21 @@ var ACTION_NAMES = {
   firstLast: "first and last pieces first"
 };
 
+var TALLY_HEADS = {
+  dlLimit: "↓ limit set",
+  upLimit: "↑ limit set",
+  ratioLimit: "Ratio limit set",
+  seedingTimeLimit: "Seed time limit set",
+  seqDl: "Sequential download set",
+  firstLast: "First and last pieces first set"
+};
+
 // limitCopy(key, value, row, count) -> ClientView.msgTrack's copy for one
 // limit write: {progress, done, fail} ("Setting the ratio limit…",
 // doneNote, "Setting the ratio limit failed"), or null for an unknown key.
 // count > 1 (Task 6's palette commands on a range) appends " on N
-// torrents" to the done note, which then skips its per-row suffix. A share
+// torrents" to the done note, which then skips its per-row suffix, and
+// adds `tally` (see TALLY_HEADS). A share
 // limit carries guard: true: qbt's own sentences (the D8 guard's refusal,
 // a partial write) show as they are; only its bare "qBittorrent refused
 // it (…)" gets the fail lead ("Setting the ratio limit failed: HTTP 409").
@@ -507,6 +517,10 @@ function limitCopy(key, value, row, count) {
     fail: "Setting " + name + " failed"
   };
   if (key === "ratioLimit" || key === "seedingTimeLimit") copy.guard = true;
+  // Several torrents may take several qbt calls (1000 hashes each): the
+  // head of the line that says how many changed when one fails part-way
+  // (ClientView.msgFinish: "↓ limit set on 1000 of 1001 torrents; …").
+  if (n > 1) copy.tally = TALLY_HEADS[key];
   return copy;
 }
 

@@ -1816,8 +1816,12 @@ test("paletteRows: Cycle file priority is dimmed on a no-metadata Files tab (Spa
   assert.equal(paletteRow(noMeta, "file.cycle").reason, "no files yet");
   const withFiles = V.paletteState("rows", true, V.inspectorDispatch(insp({ tab: "files", noMeta: false })), "inspector");
   assert.equal(paletteRow(withFiles, "file.cycle").enabled, true);
+  // Slice 3b Task 6, Ruling CL 3: the palette applies `when` like dispatch
+  // does, so a no-metadata Info tab offers Space's Start download row
+  // (was: dimmed "focus the files tab"). See the CL 3 test below.
   const onInfo = V.paletteState("rows", true, V.inspectorDispatch(insp({ tab: "info", noMeta: true })), "inspector");
-  assert.equal(paletteRow(onInfo, "file.cycle").reason, "focus the files tab");
+  assert.equal(paletteRow(onInfo, "file.cycle").enabled, true);
+  assert.equal(paletteRow(onInfo, "file.cycle").title, "Start download");
 });
 
 // --- slice 3a, Task 5: the filters pane's categories and tags -----------------
@@ -2053,4 +2057,89 @@ test("msgTrack/msgFinish: a guard copy prefixes only qBittorrent's bare refusal;
 test("paletteReasonNote: a row blocked with no note says nothing (the Limits rows, D12)", () => {
   assert.equal(V.paletteReasonNote({ title: "Toggle limit", reason: "" }), "");
   assert.equal(V.paletteReasonNote({ title: "Edit limit", reason: "focus the info tab" }), "Edit limit: focus the info tab.");
+});
+
+// --- slice 3b, Task 6: bulk limits, and Ruling CL's fold-ins ---------------------
+
+test("CL 1: a limit failure shows qbt's guard sentence and its partial write as they are; everything else gets the action", () => {
+  const copy = { progress: "Setting the ratio limit…", done: "Ratio limit set to 0", fail: "Setting the ratio limit failed", guard: true };
+  const m = V.msgTrack(V.emptyMessages(), 7, "library", 1, [H("a")], copy);
+  const fin = (err) => V.messageLine(V.msgFinish(m, 7, false, err)).text;
+  assert.equal(fin("3 torrents already meet that limit, and qBittorrent would remove them."), "3 torrents already meet that limit, and qBittorrent would remove them.");
+  assert.equal(fin("Share limits set on 3 of 5 torrents; qBittorrent refused the rest (couldn't reach qBittorrent)"), "Share limits set on 3 of 5 torrents; qBittorrent refused the rest (couldn't reach qBittorrent)");
+  assert.equal(fin("2 of those torrents are gone."), "Setting the ratio limit failed: 2 of those torrents are gone.");
+  assert.equal(fin("usage: qbt share-limits <hash|list> [--ratio R]"), "Setting the ratio limit failed: usage: qbt share-limits <hash|list> [--ratio R]");
+  assert.equal(fin("Could not run the qbt helper"), "Setting the ratio limit failed: Could not run the qbt helper");
+});
+
+test("CL 3: the palette applies each row's `when`, taking the title and needs of the row that exists here", () => {
+  const onInfo = V.paletteState("rows", true, V.inspectorDispatch(insp({ tab: "info", noMeta: true })), "inspector");
+  const row = paletteRow(onInfo, "file.cycle");
+  assert.equal(row.title, "Start download");
+  assert.equal(row.enabled, true);
+  assert.equal(row.keys, "Space");
+  // Typing matches the title shown, and the highlight follows it.
+  const typed = V.paletteRows("start dow", Registry.commands, [], onInfo).find((r) => r.id === "file.cycle");
+  assert.ok(typed, "Start download matches what it says");
+  assert.equal(typed.indices.map((i) => typed.title.charAt(i)).join("").toLowerCase(), "start dow");
+  // With metadata the Info row doesn't exist: the Files row, dimmed as before.
+  const withMeta = V.paletteState("rows", true, V.inspectorDispatch(insp({ tab: "info", noMeta: false })), "inspector");
+  assert.equal(paletteRow(withMeta, "file.cycle").title, "Cycle file priority");
+  assert.equal(paletteRow(withMeta, "file.cycle").reason, "focus the files tab");
+  // The Files tab keeps its own row and its "no files yet".
+  const onFiles = V.paletteState("rows", true, V.inspectorDispatch(insp({ tab: "files", noMeta: true })), "inspector");
+  assert.equal(paletteRow(onFiles, "file.cycle").title, "Cycle file priority");
+  assert.equal(paletteRow(onFiles, "file.cycle").reason, "no files yet");
+});
+
+test("the bulk limit rows show in the palette with no key, enabled on a cursor row", () => {
+  const st = V.paletteState("rows", true);
+  for (const [id, title] of [["limit.setDownload", "Set download limit"], ["limit.setUpload", "Set upload limit"], ["limit.setRatio", "Set ratio limit"]]) {
+    const row = paletteRow(st, id);
+    assert.equal(row.title, title);
+    assert.equal(row.keys, "");
+    assert.equal(row.enabled, true);
+    assert.equal(row.group, "Torrent");
+  }
+  assert.equal(paletteRow(V.paletteState("empty", false), "limit.setRatio").reason, "needs a selected torrent");
+});
+
+test("inputPrompt/modeHints: the bulk limit INSERT names the torrents", () => {
+  assert.deepEqual(V.inputPrompt("limit:bulk:dlLimit", "3 torrents"), { prompt: "Download limit for 3 torrents", placeholder: "500K, 1.5M, 0 or u" });
+  assert.deepEqual(V.inputPrompt("limit:bulk:upLimit", "debian.iso"), { prompt: "Upload limit for debian.iso", placeholder: "500K, 1.5M, 0 or u" });
+  assert.deepEqual(V.inputPrompt("limit:bulk:ratioLimit", "2 torrents"), { prompt: "Ratio limit for 2 torrents", placeholder: "1.5, g or n" });
+  for (const p of ["limit:bulk:dlLimit", "limit:bulk:upLimit", "limit:bulk:ratioLimit"]) {
+    assert.deepEqual(V.modeHints("INSERT", { purpose: p }), [{ key: "Enter", label: "set" }, { key: "Esc", label: "cancel" }], p);
+  }
+});
+
+test("msgTrack/msgFinish: a chunked limit write that fails part-way says how many changed", () => {
+  const many = [];
+  for (let i = 0; i < 1001; i++) many.push(("0000000000" + i.toString(16)).slice(-10).repeat(4));
+  const copy = { progress: "Setting the ↓ limit…", done: "↓ limit set to 500 KiB/s on 1001 torrents", fail: "Setting the ↓ limit failed", tally: "↓ limit set" };
+  const m = V.msgTrack(V.emptyMessages(), [5, 6], "library", 1001, many, copy);
+  // the second chunk (1 torrent) fails
+  let a = V.msgFinish(m, 5, true, "");
+  assert.equal(V.messageLine(a).text, "Setting the ↓ limit…", "still running");
+  a = V.msgFinish(a, 6, false, "qBittorrent refused it (HTTP 409)");
+  assert.equal(V.messageLine(a).text, "↓ limit set on 1000 of 1001 torrents; the rest failed (HTTP 409)");
+  assert.equal(V.messageLine(a).tone, "urgent");
+  // the first chunk fails, the second lands: 1 of 1001
+  let b = V.msgFinish(m, 5, false, "qBittorrent refused it (HTTP 409)");
+  b = V.msgFinish(b, 6, true, "");
+  assert.equal(V.messageLine(b).text, "↓ limit set on 1 of 1001 torrents; the rest failed (HTTP 409)");
+  // every chunk fails: the plain failure line
+  let c = V.msgFinish(m, 5, false, "qBittorrent refused it (HTTP 409)");
+  c = V.msgFinish(c, 6, false, "qBittorrent refused it (HTTP 403)");
+  assert.equal(V.messageLine(c).text, "Setting the ↓ limit failed: HTTP 409");
+  // all land: the done note
+  let d = V.msgFinish(V.msgFinish(m, 5, true, ""), 6, true, "");
+  assert.equal(V.messageLine(d).text, "↓ limit set to 500 KiB/s on 1001 torrents");
+  // a guard sentence in a later chunk, after one that landed, is the reason
+  const g = V.msgTrack(V.emptyMessages(), [8, 9], "library", 1001, many, Object.assign({}, copy, { guard: true, tally: "Ratio limit set" }));
+  const ge = V.msgFinish(V.msgFinish(g, 8, true, ""), 9, false, "1 torrent already meets that limit, and qBittorrent would remove it.");
+  assert.equal(V.messageLine(ge).text, "Ratio limit set on 1000 of 1001 torrents; the rest failed (1 torrent already meets that limit, and qBittorrent would remove it)");
+  // a busy (refused) chunk counts as not landed
+  const r = V.msgTrack(V.emptyMessages(), [0, 11], "library", 1001, many, copy);
+  assert.equal(V.messageLine(V.msgFinish(r, 11, false, "qBittorrent refused it (HTTP 409)")).text, "Setting the ↓ limit failed: HTTP 409");
 });

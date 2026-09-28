@@ -712,7 +712,8 @@ test("every command row has the documented shape", () => {
     assert.ok(row.id === null || typeof row.id === "string");
     assert.equal(typeof row.title, "string");
     assert.ok(validGroups.includes(row.group), row.id + " group " + row.group);
-    assert.ok(Array.isArray(row.keys) && row.keys.length > 0, row.id);
+    // A palette-only row (slice 3b Task 6's bulk limits) has no key.
+    assert.ok(Array.isArray(row.keys) && (row.keys.length > 0) !== (row.paletteOnly === true), row.id);
     assert.ok(Array.isArray(row.modes) && row.modes.length > 0, row.id);
     assert.ok(Array.isArray(row.panes) && row.panes.length > 0, row.id);
     assert.ok(validNeeds.includes(row.needs), row.id + " needs " + row.needs);
@@ -921,8 +922,11 @@ test(": opens the command palette from every pane, in NORMAL only", () => {
   }
 });
 
-test(": does nothing outside NORMAL", () => {
-  for (const mode of ["VISUAL", "INSERT"]) {
+// Slice 3b Task 6: VISUAL opens the palette too (its bulk limit rows act on
+// the range; see ": opens the palette from VISUAL too" below), so only
+// INSERT is left here.
+test(": does nothing in INSERT", () => {
+  for (const mode of ["INSERT"]) {
     const r = dispatch(state({ mode }), ev(":", 0x3a));
     assert.equal(r.commandId, null, mode);
   }
@@ -1752,4 +1756,60 @@ test("limit.edit captures the Limits row under the cursor at key time", () => {
   const r = dispatch(onTab("info", { limitCursorKey: "ratioLimit" }), ev("\r", KEY.Return));
   assert.equal(r.commandId, "limit.edit");
   assert.equal(r.args.limitKey, "ratioLimit");
+});
+
+// --- slice 3b, Task 6: the palette's bulk limits ------------------------------
+
+const BULK = { "limit.setDownload": "Set download limit", "limit.setUpload": "Set upload limit", "limit.setRatio": "Set ratio limit" };
+
+test("the bulk limit rows: palette-only, NORMAL and VISUAL, table and inspector, need a selection", () => {
+  for (const id of Object.keys(BULK)) {
+    const rows = rowsFor(id);
+    assert.equal(rows.length, 1, id);
+    assert.equal(rows[0].title, BULK[id]);
+    assert.equal(rows[0].group, "Torrent");
+    assert.deepEqual(rows[0].keys, [], id + " has no key");
+    assert.equal(rows[0].paletteOnly, true);
+    assert.deepEqual(rows[0].modes, ["NORMAL", "VISUAL"]);
+    assert.deepEqual(rows[0].panes, ["table", "inspector"]);
+    assert.equal(rows[0].needs, "selection");
+  }
+});
+
+test("the bulk limit rows resolve from the palette on the cursor row or a VISUAL range, and leave VISUAL", () => {
+  for (const id of Object.keys(BULK)) {
+    const one = Registry.dispatchCommand(state({ hasTorrent: true }), id);
+    assert.equal(one.commandId, id);
+    assert.equal(one.args.count, 1);
+    assert.equal(one.state.mode, "NORMAL", "the window opens INSERT itself");
+    const range = Registry.dispatchCommand(state({ mode: "VISUAL", hasTorrent: true, selectionCount: 3 }), id);
+    assert.equal(range.commandId, id);
+    assert.equal(range.args.count, 3);
+    assert.equal(range.args.range, true);
+    assert.equal(range.state.mode, "NORMAL", "acting on the range ends VISUAL");
+    assert.equal(range.state.selectionCount, 0, "no stale range count");
+    const none = Registry.dispatchCommand(state({ hasTorrent: false }), id);
+    assert.equal(none.commandId, null);
+    assert.equal(none.blocked, "needs a selected torrent");
+    assert.equal(Registry.dispatchCommand(state({ pane: "inspector", hasTorrent: true, inspectorTab: "info" }), id).commandId, id);
+  }
+});
+
+test("no key reaches a palette-only row, and ? leaves them out", () => {
+  for (const mode of ["NORMAL", "VISUAL"]) {
+    for (const pane of ["table", "inspector"]) {
+      const ids = helpFor(mode, pane).map((r) => r.id);
+      for (const id of Object.keys(BULK)) assert.ok(!ids.includes(id), mode + " " + pane + " " + id);
+    }
+  }
+});
+
+test(": opens the palette from VISUAL too, remembering it was a range", () => {
+  const r = dispatch(state({ mode: "VISUAL", selectionCount: 3 }), ev(":", 0x3a));
+  assert.equal(r.commandId, "palette.open");
+  assert.equal(r.state.mode, "COMMAND");
+  assert.equal(r.state.selectionCount, 0, "COMMAND never carries the range count");
+  assert.equal(r.args.range, true, "the window keeps the range it captured");
+  const n = dispatch(state({}), ev(":", 0x3a));
+  assert.equal(n.args.range, undefined, "NORMAL has no range");
 });

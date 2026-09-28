@@ -840,7 +840,7 @@ Panel {
                     if (!t) return
                     if (modelData.action === "dlLimit") root.qbt.setLimit(t.hash, "dl", Model.cycleLimit(t.dlLimit))
                     else if (modelData.action === "upLimit") root.qbt.setLimit(t.hash, "up", Model.cycleLimit(t.upLimit))
-                    else if (modelData.action === "sequential") root.qbt.toggleSequential(t.hash)
+                    else if (modelData.action === "sequential") root.qbt.setSequential(t.hash, !t.seqDl, undefined, "")
                     else if (modelData.action === "shareRatio") root.qbt.setShareRatio(t.hash, Model.cycleRatioLimit(t.ratioLimit))
                   }
                 }

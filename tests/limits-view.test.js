@@ -730,3 +730,14 @@ test("footerKeys: j/k plus Enter on a value row, Space on a toggle row, nothing 
 test("NOT_READY names the share limits, not the folders", () => {
   assert.equal(V.NOT_READY, "Still reading qBittorrent's share limits; try again in a moment.");
 });
+
+// --- slice 3b, Task 6 -------------------------------------------------------------
+
+test("limitCopy on several torrents carries the tally head for a chunked write's partial line", () => {
+  assert.equal(V.limitCopy("dlLimit", 512000, null, 3).tally, "↓ limit set");
+  assert.equal(V.limitCopy("upLimit", 0, null, 1001).tally, "↑ limit set");
+  assert.equal(V.limitCopy("ratioLimit", 1.5, null, 2).tally, "Ratio limit set");
+  assert.equal(V.limitCopy("ratioLimit", 1.5, null, 2).guard, true);
+  assert.equal(V.limitCopy("dlLimit", 512000, null, 1).tally, undefined, "one torrent is one call");
+  assert.equal(V.limitCopy("dlLimit", 512000, null).tally, undefined);
+});

@@ -629,10 +629,12 @@ Scope {
     return runAction(cmd, "Setting share limits…", opts)
   }
 
-  function setSequential(hashes, on, opts) {
+  // statusText (optional, Ruling CF): the widget's status while it runs;
+  // the widget's Sequential click passes "" (it never showed one).
+  function setSequential(hashes, on, opts, statusText) {
     var list = Library.hashList(hashes).join("|")
     if (list === "") return 0
-    return runAction([helperPath, "sequential", list, on ? "on" : "off"], "Setting sequential download…", opts)
+    return runAction([helperPath, "sequential", list, on ? "on" : "off"], statusText === undefined ? "Setting sequential download…" : String(statusText), opts)
   }
 
   function setFirstLast(hashes, on, opts) {

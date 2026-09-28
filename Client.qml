@@ -84,9 +84,9 @@ Item {
   property string anchorHash: ""
   readonly property var visualHashes: mode === "VISUAL" ? View.visualRange(tableRows, anchorHash, cursorHash) : []
   // The rows painted with Style.selectionFill: the live range in VISUAL,
-  // and the fixed range a CONFIRM or a C/T picker raised from VISUAL will act on.
+  // and the fixed range a CONFIRM, a C/T picker or the palette will act on.
   readonly property var rangeHashes: View.hashSet(mode === "VISUAL" ? visualHashes
-    : (mode === "CONFIRM" && confirmHashes.length > 1 ? confirmHashes : (mode === "PICKER" ? commands.pickerTargets : [])))
+    : (mode === "CONFIRM" && confirmHashes.length > 1 ? confirmHashes : (mode === "PICKER" ? commands.pickerTargets : commands.heldRange)))
   readonly property var errorHashes: View.hashSet(messages.errorHashes)
 
   // ---- filter pane -------------------------------------------------------------
@@ -464,10 +464,11 @@ Item {
 
   // Resolves a key (Registry.dispatch) or a palette command
   // (Registry.dispatchCommand) against the current state and applies it.
-  function dispatchWith(resolve, ev) {
+  // fixed: targets captured earlier (a palette opened on a VISUAL range).
+  function dispatchWith(resolve, ev, fixed) {
     // Targets are fixed before dispatch: Space/x/X/e from VISUAL come back
     // in NORMAL or CONFIRM, and must still act on the range as it stood.
-    var targets = View.targetHashes(regState.mode, tableRows, cursorHash, anchorHash)
+    var targets = fixed || View.targetHashes(regState.mode, tableRows, cursorHash, anchorHash)
     var res = resolve(registryState(targets))
 
     regState = res.state

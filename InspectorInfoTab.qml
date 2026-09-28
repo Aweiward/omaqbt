@@ -36,6 +36,33 @@ Item {
     return View.toneColor(tone, Color)
   }
 
+  function limitCursorItem(item) {
+    if (!item) return null
+    if (item.objectName === "limitCursor" && item.visible) return item
+    var kids = item.children || []
+    for (var i = 0; i < kids.length; i++) {
+      var found = limitCursorItem(kids[i])
+      if (found) return found
+    }
+    return null
+  }
+
+  // Scrolls the least distance that shows the Limits cursor row (Ruling CL
+  // 4). The columns around it are laid out first, so a cursor that just
+  // moved is measured where it now sits.
+  function positionLimit() {
+    var cur = limitCursorItem(infoColumn)
+    if (!cur) return
+    for (var p = cur.parent; p && p !== infoFlick.contentItem; p = p.parent) {
+      if (typeof p.forceLayout === "function") p.forceLayout()
+    }
+    var top = cur.mapToItem(infoColumn, 0, 0).y
+    var bottom = top + cur.height
+    var maxY = Math.max(0, infoFlick.contentHeight - infoFlick.height)
+    if (top < infoFlick.contentY) infoFlick.contentY = Math.max(0, top)
+    else if (bottom > infoFlick.contentY + infoFlick.height) infoFlick.contentY = Math.min(maxY, bottom - infoFlick.height)
+  }
+
   Flickable {
     id: infoFlick
     objectName: "infoFlick"

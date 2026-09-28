@@ -70,6 +70,13 @@ var commands = [
   // open PICKER; C's Enter may raise a move CONFIRM (G8).
   { id: "torrent.category", title: "Set category", group: "Torrent", keys: ["C"], modes: ["NORMAL", "VISUAL"], panes: ["table"], needs: "selection" },
   { id: "torrent.tags", title: "Edit tags", group: "Torrent", keys: ["T"], modes: ["NORMAL", "VISUAL"], panes: ["table"], needs: "selection" },
+  // The palette's bulk limits (slice 3b, L5): INSERT on the cursor row or
+  // the VISUAL range (the window captures the targets at key time, or when
+  // ":" opened the palette on a range). paletteOnly: no key reaches them
+  // (keys is empty) and `?` leaves them out.
+  { id: "limit.setDownload", title: "Set download limit", group: "Torrent", keys: [], paletteOnly: true, modes: ["NORMAL", "VISUAL"], panes: ["table", "inspector"], needs: "selection" },
+  { id: "limit.setUpload", title: "Set upload limit", group: "Torrent", keys: [], paletteOnly: true, modes: ["NORMAL", "VISUAL"], panes: ["table", "inspector"], needs: "selection" },
+  { id: "limit.setRatio", title: "Set ratio limit", group: "Torrent", keys: [], paletteOnly: true, modes: ["NORMAL", "VISUAL"], panes: ["table", "inspector"], needs: "selection" },
 
   // NORMAL, any pane
   { id: "all.toggle", title: "Start/stop all", group: "Library", keys: ["t"], modes: ["NORMAL"], panes: [PANE_ANY], needs: "none" },
@@ -89,7 +96,9 @@ var commands = [
   { id: "window.close", title: "Close window", group: "App", keys: ["q"], modes: ["NORMAL"], panes: [PANE_ANY], needs: "none" },
   { id: "filter.clearText", title: "Clear filter", group: "View", keys: ["Esc"], modes: ["NORMAL"], panes: [PANE_ANY], needs: "none" },
   { id: "filter.reset", title: "Reset filters", group: "View", keys: ["Esc Esc"], modes: ["NORMAL"], panes: [PANE_ANY], needs: "none" },
-  { id: "palette.open", title: "Command palette", group: "App", keys: [":"], modes: ["NORMAL"], panes: [PANE_ANY], needs: "none" },
+  // From VISUAL too (Task 6): the palette then runs a range command on the
+  // range (args.range tells the window to keep what it captured).
+  { id: "palette.open", title: "Command palette", group: "App", keys: [":"], modes: ["NORMAL", "VISUAL"], panes: [PANE_ANY], needs: "none" },
 
   // COMMAND (the palette's TextField owns typing; these are the only keys
   // dispatch resolves itself).
@@ -213,7 +222,10 @@ var EXITS_VISUAL = {
   "torrent.toggle": true,
   "torrent.remove": true,
   "torrent.delete": true,
-  "torrent.recheck": true
+  "torrent.recheck": true,
+  "limit.setDownload": true,
+  "limit.setUpload": true,
+  "limit.setRatio": true
 };
 
 var EXTEND_IDS = { "cursor.down": true, "cursor.up": true };
@@ -494,6 +506,8 @@ function buildArgs(row, s) {
   if (row.needs === "limitRow" || row.needs === "limitToggle") {
     args.limitKey = s.limitCursorKey;
   }
+  // ":" on a VISUAL range: the palette acts on that range (the window keeps it).
+  if (row.id === "palette.open" && s.mode === "VISUAL") args.range = true;
   if (EXTEND_IDS[row.id] === true && s.mode === "VISUAL") {
     args.extend = true;
   }
@@ -729,7 +743,7 @@ function helpFor(mode, pane, tab, state) {
   var s = normalizeState(state);
   for (i = 0; i < commands.length; i++) {
     row = commands[i];
-    if (row.id === null) continue;
+    if (row.id === null || row.paletteOnly === true) continue;
     if (row.modes.indexOf(mode) === -1) continue;
     if (!paneMatches(row, pane)) continue;
     if (tab !== undefined && !tabMatches(row, tab)) continue;
@@ -752,6 +766,7 @@ if (typeof module !== "undefined" && module.exports) {
     needsReason: needsReason,
     needsConfirm: needsConfirm,
     paneMatches: paneMatches,
-    tabMatches: tabMatches
+    tabMatches: tabMatches,
+    whenMatches: whenMatches
   };
 }

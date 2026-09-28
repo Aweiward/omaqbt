@@ -921,10 +921,13 @@ TestCase {
     key(o.c, ":")
     var p = pal(o.c)
     p.setQuery("stp")
-    compare(p.rows.length, 1)
+    // Slice 3b Task 6: "Set upload limit" also has s-t-p in order, below
+    // Start/stop all (was: all.toggle alone).
+    compare(p.rows.length, 2)
     compare(p.rows[0].id, "all.toggle")
     compare(p.rows[0].indices, [0, 1, 9])
-    compare(p.matchCount, 1)
+    compare(p.rows[1].id, "limit.setUpload")
+    compare(p.matchCount, 2)
     verify(p.totalCount > 1)
     p.setQuery("zzzz")
     compare(p.rows.length, 0)

@@ -346,8 +346,10 @@ QtObject {
     var c = client
     var own = hashes || []
     c.messages = View.msgTrack(c.messages, ticket, "library", own.length, own, copy)
-    if (!watch) return
-    var list = Array.isArray(ticket) ? ticket : [ticket]
+    if (watch) watchTickets(Array.isArray(ticket) ? ticket : [ticket], watch)
+  }
+
+  function watchTickets(list, watch) {
     var n = ({})
     for (var k in libraryWatches) n[k] = libraryWatches[k]
     for (var i = 0; i < list.length; i++) if (Number(list[i]) > 0) n[String(list[i])] = watch
@@ -396,7 +398,9 @@ QtObject {
   readonly property var infoGroups: InspectorView.withLimits(client.infoTab.groups, limitRows, shownLimitRow ? shownLimitRow.key : "")
   readonly property var limitFooterKeys: Limits.footerKeys(shownLimitRow)
   // The torrents and row an open Limits INSERT acts on, captured when
-  // Enter was pressed: {key, hashes, name}. The commit reads only this.
+  // Enter (or a palette bulk row) was pressed: {key, hashes, name, prefill}.
+  // prefill is the text INSERT opened with (null for a bulk row): Enter on
+  // it unchanged sends nothing (Ruling CL 2). The commit reads only this.
   property var limitInput: null
 
   function isLimitPurpose(purpose) {
@@ -424,6 +428,8 @@ QtObject {
     for (var k in limitCursors) n[k] = limitCursors[k]
     n[client.cursorHash] = rows[next].key
     limitCursors = n
+    // Ruling CL 4: scroll the Info tab so the cursor row shows.
+    inspectorPane.positionLimit()
   }
 
   // Enter on a Limits value row (key and torrent captured at key time):
@@ -434,8 +440,22 @@ QtObject {
     var row = rowsFor([hash])[0]
     if (!row || Limits.editText(key, row) === "") return
     if (isShareKey(key) && !readyAtEnter()) { c.note(Limits.NOT_READY, "urgent"); return }
-    limitInput = { key: key, hashes: [hash], name: String(row.name || "") }
-    startInput("limit:" + key, Limits.editText(key, row))
+    var prefill = Limits.editText(key, row)
+    limitInput = { key: key, hashes: [hash], name: String(row.name || ""), prefill: prefill }
+    startInput("limit:" + key, prefill)
+  }
+
+  // A palette bulk row (Task 6) on the targets captured when it ran (the
+  // VISUAL range ":" opened on, or the cursor row): an empty INSERT, parsed
+  // and confirmed like Enter's. A ratio waits for the preferences (CG).
+  function startBulkLimit(key, targets) {
+    var c = client
+    if (targets.length === 0) return
+    if (isShareKey(key) && !readyAtEnter()) { c.note(Limits.NOT_READY, "urgent"); return }
+    var rows = rowsFor(targets)
+    var name = targets.length === 1 && rows.length === 1 ? String(rows[0].name || "") : targets.length + " torrents"
+    limitInput = { key: key, hashes: targets.slice(), name: name, prefill: null }
+    startInput("limit:bulk:" + key, "")
   }
 
   // Enter on a Limits INSERT. raw is the field exactly as typed (the
@@ -445,6 +465,7 @@ QtObject {
   function commitLimit(raw) {
     var c = client
     var t = limitInput
+    if (t.prefill !== null && t.prefill !== undefined && raw === t.prefill) { limitInput = null; endInput(); return }
     if (isShareKey(t.key) && !readyAtEnter()) { refuseInput(Limits.NOT_READY); return }
     var parsed = t.key === "ratioLimit" ? Limits.parseRatio(raw) : (t.key === "seedingTimeLimit" ? Limits.parseSeedTime(raw) : Limits.parseSpeed(raw))
     if (parsed.error) { refuseInput(parsed.error); return }
@@ -493,7 +514,12 @@ QtObject {
       if (k === "seedingTimeLimit") return svc.setShareLimits(joined, { seedingTime: v }, args.force === true, o)
       return k === "seqDl" ? svc.setSequential(joined, v, o) : svc.setFirstLast(joined, v, o)
     })
-    trackLibrary(tickets, copy, { refresh: true }, hashes)
+    // The refresh watch goes on the last chunk only: one refresh after a
+    // failure (Service refreshes after a success anyway).
+    trackLibrary(tickets, copy, null, hashes)
+    var last = 0
+    for (var i = 0; i < tickets.length; i++) if (Number(tickets[i]) > 0) last = Number(tickets[i])
+    if (last > 0) watchTickets([last], { refresh: true })
   }
 
   // Space on Sequential or First/last: the value the row shows, negated
@@ -815,7 +841,17 @@ QtObject {
 
   // ---- COMMAND (the palette) ----------------------------------------------------
 
+  // The VISUAL range ":" opened the palette on (captured then; [] when it
+  // opened from NORMAL): a range command run from it acts on this range,
+  // as its key would have (Task 6).
+  property var paletteRange: []
+  // The rows the table paints as held while the palette, or a bulk limit
+  // INSERT, acts on more than one torrent.
+  readonly property var heldRange: client.mode === "COMMAND" ? paletteRange
+    : (client.mode === "INSERT" && limitInput && limitInput.hashes.length > 1 ? limitInput.hashes : [])
+
   function closePalette() {
+    paletteRange = []
     setMode("NORMAL")
     keyItem.forceActiveFocus()
   }
@@ -832,6 +868,7 @@ QtObject {
       palette.focusField()
       return
     }
+    var range = paletteRange
     closePalette()
     c.paletteMru = View.mruPush(c.paletteMru, row.id)
     c.setPane(View.palettePane(Registry.commands, row.id, c.pane))
@@ -839,6 +876,12 @@ QtObject {
     // A neutral event: the Enter that ran the palette must not also count
     // as Enter for the command (Files would start the daemon).
     var ev = View.keyEvent(0, "", 0, Date.now())
+    // Opened on a range: a range command resolves as in VISUAL (a CONFIRM
+    // counts the range) on the range captured at ":".
+    if (range.length > 0 && View.paletteRangeCommand(Registry.commands, row.id)) {
+      c.dispatchWith(function(st) { return Registry.dispatchCommand(View.rangeState(st, range.length), row.id) }, ev, range)
+      return
+    }
     c.dispatchWith(function(st) { return Registry.dispatchCommand(st, row.id) }, ev)
   }
 
@@ -1062,6 +1105,19 @@ QtObject {
       toggleLimit(targets[0], args.limitKey)
       return
 
+    // The palette's bulk limits (Task 6): the cursor row or the range.
+    case "limit.setDownload":
+      startBulkLimit("dlLimit", targets)
+      return
+
+    case "limit.setUpload":
+      startBulkLimit("upLimit", targets)
+      return
+
+    case "limit.setRatio":
+      startBulkLimit("ratioLimit", targets)
+      return
+
     // The trackers tab (Deviation 4: R too). The registry only lets these
     // through there, so targets[0] is the torrent whose trackers show.
     case "tracker.reannounce":
@@ -1198,6 +1254,7 @@ QtObject {
       return
 
     case "palette.open":
+      paletteRange = args.range === true ? targets.slice() : []
       palette.open()
       return
 

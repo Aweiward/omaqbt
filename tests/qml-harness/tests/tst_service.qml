@@ -754,4 +754,34 @@ TestCase {
       { defaultSavePath: "/dl", categoryPaths: {}, relocation: { torrentChanged: true, categoryPathChanged: false } }),
       [{ hash: hh("a"), from: "/dl/anime", to: "/dl" }])
   }
+
+  // ---- slice 3b, Task 6: the widget ------------------------------------------------
+
+  // The widget's ratio row runs `sharelimit`; when qbt's D8 guard refuses,
+  // its sentence is the widget's lastError (Panel shows lastError).
+  function test_widget_ratio_row_shows_qbts_guard_refusal() {
+    var o = idleService(), svc = o.svc, p = o.p
+    var h = hh("a")
+    svc.setShareRatio(h, 1)
+    compare(p.command, [svc.helperPath, "sharelimit", h, "1"])
+    finish(p, 1, "", "1 torrent already meets that limit, and qBittorrent would remove it with its files.\n")
+    compare(svc.lastError, "1 torrent already meets that limit, and qBittorrent would remove it with its files.")
+    compare(svc.actionStatus, "")
+  }
+
+  // Ruling CF: setSequential takes an optional status text; the widget
+  // passes "" and gets no new status line, the window keeps today's text.
+  function test_setSequential_takes_an_optional_status_text() {
+    var o = idleService(), svc = o.svc, p = o.p
+    var h = hh("a")
+    svc.actionStatus = ""
+    svc.setSequential(h, true, undefined, "")
+    compare(p.command, [svc.helperPath, "sequential", h, "on"])
+    compare(svc.actionStatus, "", "the widget's click shows no new status text")
+    finish(p, 0, "{\"ok\":true}", "")
+    svc.setSequential(h, false)
+    compare(p.command, [svc.helperPath, "sequential", h, "off"])
+    compare(svc.actionStatus, "Setting sequential download…", "without the argument, today's text")
+    finish(p, 0, "{\"ok\":true}", "")
+  }
 }

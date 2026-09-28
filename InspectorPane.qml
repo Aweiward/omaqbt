@@ -64,6 +64,11 @@ Item {
     filesTab.positionAt(index)
   }
 
+  // j/k on Info: scroll so the Limits cursor row shows (Ruling CL 4).
+  function positionLimit() {
+    infoTab.positionLimit()
+  }
+
   function positionRow(tab, index) {
     if (tab === "trackers") trackersTab.positionAt(index)
     else peersTab.positionAt(index)
