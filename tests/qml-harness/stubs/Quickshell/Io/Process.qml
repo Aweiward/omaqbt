@@ -11,5 +11,8 @@ QtObject {
   // stdin-driven Process (the sidecar) was told without a real child.
   property var writes: []
   signal exited(int exitCode, int exitStatus)
+  // Quickshell emits started once the child runs (slice 4b's secret
+  // Process writes its stdin then); a test emits it by hand.
+  signal started()
   function write(s) { var w = writes.slice(); w.push(s); writes = w }
 }

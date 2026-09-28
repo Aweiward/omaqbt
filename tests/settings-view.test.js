@@ -45,21 +45,24 @@ const rowOf = (key, p) => {
 
 // --- sections ----------------------------------------------------------------
 
-test("sections: the seven in order with T1's counts, then a dimmed RSS; no Other when every key is mapped", () => {
+// Slice 4b: Banned IPs (a list section, its count the bans) after Advanced.
+test("sections: the seven in order with T1's counts, Banned IPs, then a dimmed RSS; no Other when every key is mapped", () => {
   const s = V.sections(prefs());
   assert.deepEqual(s.map((x) => [x.name, x.count]), [
     ["Downloads", 33], ["Connection", 27], ["Speed", 11], ["BitTorrent", 23],
-    ["Behaviour", 12], ["Web UI", 30], ["Advanced", 72], ["RSS", 0]
+    ["Behaviour", 12], ["Web UI", 30], ["Advanced", 72], ["Banned IPs", 0], ["RSS", 0]
   ]);
-  assert.equal(s[7].label, "RSS · slice 5");
-  assert.equal(s[7].dimmed, true);
+  assert.equal(s[7].list, "banned_IPs");
+  assert.equal(s[7].dimmed, false);
+  assert.equal(s[8].label, "RSS · slice 5");
+  assert.equal(s[8].dimmed, true);
   assert.equal(s[0].label, "Downloads");
   assert.equal(s[0].dimmed, false);
 });
 
 test("sections: Other appears before RSS when prefs hold an unknown key", () => {
   const s = V.sections(prefs({ brand_new_toggle: true, other_number: 5 }));
-  assert.deepEqual(s.slice(7).map((x) => [x.name, x.count]), [["Other", 2], ["RSS", 0]]);
+  assert.deepEqual(s.slice(7).map((x) => [x.name, x.count]), [["Banned IPs", 0], ["Other", 2], ["RSS", 0]]);
 });
 
 test("sections: while loading (no prefs) the counts come from the schema", () => {
@@ -323,7 +326,8 @@ test("editorFor: none for locked, read-only, secret, dimmed, loading and unknown
   assert.deepEqual(why("web_ui_port"), { kind: "none", why: "locked" });
   assert.deepEqual(why("current_interface_name"), { kind: "none", why: "locked" });
   assert.deepEqual(why("add_trackers_url_list"), { kind: "none", why: "readOnly" });
-  assert.deepEqual(why("proxy_password", prefs({ proxy_type: "HTTP" })), { kind: "none", why: "secret" });
+  // Slice 4b: the three writable secrets have an editor; the API key doesn't.
+  assert.deepEqual(why("proxy_password", prefs({ proxy_type: "HTTP" })), { kind: "secret", key: "Enter", set: false });
   assert.deepEqual(why("web_ui_api_key"), { kind: "none", why: "secret" });
   assert.deepEqual(why("schedule_from"), { kind: "none", why: "dimmed" });
   assert.deepEqual(why("dht", null), { kind: "none", why: "loading" });
@@ -549,7 +553,8 @@ test("formatValue: per type", () => {
   assert.equal(f("export_dir", ""), "off");
   assert.equal(f("save_path", "/x"), "/x");
   assert.equal(f("locale", ""), "empty");
-  assert.equal(f("excluded_file_names", "a\nb\nc"), "a (+2 more)");
+  // Slice 4b: a list key shows its count, not its first line.
+  assert.equal(f("excluded_file_names", "a\nb\nc"), "3 patterns");
   assert.equal(f("proxy_password", { set: true }), "set");
   assert.equal(f("proxy_password", { set: false }), "not set");
   assert.equal(f("proxy_password", "leak"), "set");
@@ -666,23 +671,26 @@ test("multiline: exactly the two editable-in-4b keys are the schema's multiline,
   assert.deepEqual(found.sort(), MULTI.slice().sort());
 });
 
-test("multiline: rows say multi-line and read-only, with the 4b note after the schema help", () => {
+// Slice 4b replaces Ruling DH: the two list keys open the list editor.
+test("multiline: the list keys say list, are writable, keep the schema help and open with Enter", () => {
   const on = prefs({
     excluded_file_names_enabled: true, add_trackers_enabled: true,
     bypass_auth_subnet_whitelist_enabled: true, web_ui_use_custom_http_headers_enabled: true
   });
   for (const k of MULTI) {
     const r = rowOf(k, on);
-    assert.equal(r.typeTag, "multi-line", k);
-    assert.equal(r.readOnly, true, k);
-    assert.equal(r.help, Schema.SCHEMA[k].help + " Editing multi-line settings arrives in 4b.", k);
-    assert.deepEqual(V.editorFor(k, on), { kind: "none", why: "multiline" }, k);
-    // before the dimmed check
-    assert.deepEqual(V.editorFor(k, prefs()), { kind: "none", why: "multiline" }, k);
+    assert.equal(r.typeTag, "list", k);
+    assert.equal(r.readOnly, false, k);
+    assert.equal(r.help, Schema.SCHEMA[k].help, k);
+    assert.deepEqual(V.editorFor(k, on), { kind: "list", key: "Enter" }, k);
+    // a dimmed list doesn't open (4a's dim rule)
+    assert.deepEqual(V.editorFor(k, prefs()), { kind: "none", why: "dimmed" }, k);
+    // a list is never written as one typed value
     assert.deepEqual(V.parseInput(k, "x", on), { error: V.CANT_CHANGE }, k);
   }
-  assert.equal(V.MULTILINE_NOTE, " Editing multi-line settings arrives in 4b.");
+  assert.equal("MULTILINE_NOTE" in V, false, "the 4a note is gone");
   assert.equal(rowOf("bypass_auth_subnet_whitelist", on).value, "127.0.0.1/32 (+1 more)");
+  assert.equal(rowOf("bypass_auth_subnet_whitelist", on).typeTag, "read-only");
 });
 
 test("multiline: add_trackers_url_list keeps its permanent read-only tag and help", () => {
@@ -699,12 +707,13 @@ test("multiline: section counts are unchanged", () => {
 
 // --- Final fix wave (Ruling DU) --------------------------------------------------------
 
-test("secret rows: the help says editing secrets arrives in 4b; the API key keeps its own text", () => {
+test("secret rows: the schema help alone (4b edits them); the API key keeps its own text", () => {
   for (const k of ["proxy_password", "dyndns_password", "mail_notification_password"]) {
     const r = V.rowFor(k, prefs());
-    assert.equal(r.help, Schema.SCHEMA[k].help + " Editing secrets arrives in 4b.", k);
+    assert.equal(r.help, Schema.SCHEMA[k].help, k);
+    assert.equal(r.typeTag, "secret", k);
   }
-  assert.equal(V.SECRET_NOTE, " Editing secrets arrives in 4b.");
+  assert.equal("SECRET_NOTE" in V, false);
   assert.equal(V.rowFor("web_ui_api_key", prefs()).help, Schema.SCHEMA.web_ui_api_key.help);
 });
 
@@ -797,4 +806,186 @@ test("Other numbers: qbt's limits, no exponents, at most 10 integer digits and 6
   for (const ok of ["0", "1234567890", "1234567890.123456", "-0.5", "0.000001", "-3", "2.25"]) {
     assert.deepEqual(V.parseInput("zz_ratio", ok, p), { value: Number(ok) }, ok);
   }
+});
+
+// --- Slice 4b: the list editor, secrets and Banned IPs (Task 3) -------------------------
+
+const LIST_RULES = JSON.parse(fs.readFileSync(path.join(__dirname, "fixtures", "list-rules-cases.json"), "utf8"));
+
+test("4b parseListLine: every list-rules case, with its exact message and normalised value", () => {
+  for (const c of LIST_RULES.cases) {
+    const label = c.kind + " " + JSON.stringify(c.input) + " (" + c.why + ")";
+    const r = V.parseListLine(c.kind, c.input);
+    if (!c.ok) {
+      assert.deepEqual(r, { error: c.message }, label);
+      continue;
+    }
+    assert.equal(r.error, undefined, label);
+    assert.equal(r.value, c.normalised, label);
+    assert.equal(r.tierBreak === true, c.kind === "trackerUrl" && c.input === "", label + ": only an empty tracker is a tier break");
+  }
+});
+
+test("4b parseListLine: the messages are the case file's, and a secret counts code points", () => {
+  const used = new Set(LIST_RULES.cases.filter((c) => !c.ok).map((c) => c.message));
+  assert.deepEqual(new Set(Object.values(V.LIST_ERRORS)), used);
+  assert.equal(V.parseListLine("secret", "\u{1F98A}".repeat(1024)).value.length, 2048);
+  assert.deepEqual(V.parseListLine("secret", "a".repeat(1025)), { error: "Use at most 1024 characters." });
+  assert.deepEqual(V.parseListLine("nope", "x"), { error: V.CANT_CHANGE });
+});
+
+test("4b normaliseIp: QHostAddress's form (server.py's _qt_address), '' when not an address", () => {
+  for (const c of LIST_RULES.cases.filter((x) => x.kind === "ip" && x.ok)) assert.equal(V.normaliseIp(c.input), c.normalised, c.input);
+  assert.equal(V.normaliseIp("::"), "::");
+  assert.equal(V.normaliseIp("1:0:0:2:0:0:0:3"), "1:0:0:2::3", "the longest zero run wins");
+  // Qt 6.11 (task-2-report.md, not Python's ipaddress): the first 96 bits
+  // zero and group 7 non-zero keeps a dotted tail.
+  assert.equal(V.normaliseIp("::1.2.3.4"), "::1.2.3.4");
+  assert.equal(V.normaliseIp("::1:0"), "::0.1.0.0");
+  assert.equal(V.normaliseIp("::0.0.1.0"), "::100");
+  assert.equal(V.normaliseIp("::FFFF:c000:201"), "::ffff:192.0.2.1");
+  assert.equal(V.normaliseIp("::2:3:4:5:6:7:8"), "0:2:3:4:5:6:7:8");
+  assert.equal(V.normaliseIp("::1"), "::1");
+  assert.equal(V.normaliseIp("0:0:0:0:0:FFFF:0102:0304"), "::ffff:1.2.3.4");
+  assert.equal(V.normaliseIp("not-an-ip"), "");
+});
+
+test("4b listItems: add_trackers keeps tier breaks as rows; patterns keep empty entries; bans skip them", () => {
+  const items = V.listItems("add_trackers", "udp://a\n\nhttp://b\n\n\nhttps://c");
+  assert.deepEqual(items.map((i) => [i.index, i.value, i.tierBreak, i.text]), [
+    [0, "udp://a", false, "udp://a"],
+    [1, "", true, "— next tier —"],
+    [2, "http://b", false, "http://b"],
+    [3, "", true, "— next tier —"],
+    [4, "", true, "— next tier —"],
+    [5, "https://c", false, "https://c"]
+  ]);
+  assert.deepEqual(V.listItems("excluded_file_names", "*.exe\n\n*.scr").map((i) => [i.value, i.tierBreak, i.text]),
+    [["*.exe", false, "*.exe"], ["", false, "(empty line)"], ["*.scr", false, "*.scr"]]);
+  assert.deepEqual(V.listItems("banned_IPs", "1.2.3.4\n\n5.6.7.8\n").map((i) => [i.index, i.value]), [[0, "1.2.3.4"], [1, "5.6.7.8"]]);
+  for (const k of ["banned_IPs", "add_trackers", "excluded_file_names"]) {
+    assert.deepEqual(V.listItems(k, ""), [], k);
+    assert.deepEqual(V.listItems(k, undefined), [], k);
+  }
+});
+
+test("4b listWithAdded / listWithout: the lists round-trip exactly, and untouched lines never change", () => {
+  for (const l of LIST_RULES.lists.filter((x) => x.key !== "banned_IPs")) {
+    const items = V.listItems(l.key, l.input);
+    assert.equal(V.joinList(items.map((i) => i.value)), l.input, l.why + ": split then join");
+    // Add after every position, then remove it again: back to the input.
+    for (let at = -1; at < items.length; at++) {
+      const added = V.listWithAdded(l.key, l.input, at, "udp://new.example/announce");
+      const back = V.listWithout(l.key, added.value, { index: at + 1, value: "udp://new.example/announce", tierBreak: false });
+      assert.equal(back.value, l.input, l.why + " at " + at);
+    }
+    // Removing any one line leaves the others exactly as they were.
+    items.forEach((it) => {
+      const r = V.listWithout(l.key, l.input, it);
+      const want = items.filter((x) => x.index !== it.index).map((x) => x.value);
+      assert.deepEqual(r, { value: want.join("\n") }, l.why + " without " + it.index);
+    });
+  }
+});
+
+test("4b listWithAdded: after the cursor line; a tier break is an empty line; nothing into an empty list", () => {
+  assert.deepEqual(V.listWithAdded("add_trackers", "udp://a\n\nhttp://b", 0, "udp://c"), { value: "udp://a\nudp://c\n\nhttp://b", index: 1 });
+  assert.deepEqual(V.listWithAdded("add_trackers", "udp://a\nhttp://b", 0, ""), { value: "udp://a\n\nhttp://b", index: 1 });
+  assert.deepEqual(V.listWithAdded("add_trackers", "udp://a", 0, ""), { value: "udp://a\n", index: 1 }, "a trailing tier break");
+  assert.deepEqual(V.listWithAdded("add_trackers", "", -1, "udp://a"), { value: "udp://a", index: 0 });
+  assert.deepEqual(V.listWithAdded("add_trackers", "", -1, ""), { same: true }, "a tier break alone would read back as nothing");
+  assert.deepEqual(V.listWithAdded("excluded_file_names", "*.exe", 5, "*.scr"), { value: "*.exe\n*.scr", index: 1 }, "past the end appends");
+  assert.deepEqual(V.listWithAdded("excluded_file_names", "*.exe\n*.scr", 1, "*.exe"), { same: true, note: "*.exe is already in the list." });
+  assert.deepEqual(V.listWithAdded("add_trackers", "udp://a", 0, "udp://a"), { same: true, note: "udp://a is already in the list." });
+});
+
+test("4b listWithout: refuses a stale line (the list changed under the cursor)", () => {
+  assert.deepEqual(V.listWithout("excluded_file_names", "*.exe\n*.scr", { index: 1, value: "*.bat", tierBreak: false }), { stale: true });
+  assert.deepEqual(V.listWithout("excluded_file_names", "*.exe", { index: 3, value: "*.exe", tierBreak: false }), { stale: true });
+  assert.deepEqual(V.listWithout("add_trackers", "udp://a\n\nhttp://b", { index: 1, value: "", tierBreak: true }), { value: "udp://a\nhttp://b" });
+});
+
+test("4b banHas: compares in QHostAddress form", () => {
+  assert.equal(V.banHas("10.0.0.1\n2001:db8::1", "2001:DB8:0:0:0:0:0:1"), true);
+  assert.equal(V.banHas("10.0.0.1", "10.0.0.2"), false);
+  assert.equal(V.banHas("", "10.0.0.2"), false);
+});
+
+test("4b list copy: the empty states, prompts, titles and done notes", () => {
+  assert.equal(V.listEmptyText("banned_IPs"), "No banned IPs. Ban a peer with b on the Peers tab, or a to add one here.");
+  assert.equal(V.listEmptyText("add_trackers"), "No trackers to add. Press a to add a tracker URL.");
+  assert.equal(V.listEmptyText("excluded_file_names"), "No excluded file names. Press a to add a pattern such as *.exe.");
+  assert.equal(V.listPrompt("banned_IPs"), "Ban an IP address");
+  assert.equal(V.listPrompt("add_trackers"), "Add a tracker URL (empty: next tier)");
+  assert.equal(V.listPrompt("excluded_file_names"), "Add a file name pattern");
+  assert.equal(V.listTitle("banned_IPs"), "Banned IPs");
+  assert.equal(V.listTitle("add_trackers"), "Trackers to add");
+  assert.equal(V.listDoneNote("banned_IPs", "add", "1.2.3.4"), "Banned 1.2.3.4");
+  assert.equal(V.listDoneNote("banned_IPs", "remove", "1.2.3.4"), "Unbanned 1.2.3.4");
+  assert.equal(V.listDoneNote("add_trackers", "add", ""), "Next tier added to Trackers to add");
+  assert.equal(V.listDoneNote("add_trackers", "remove", ""), "Tier break removed from Trackers to add");
+  assert.equal(V.listDoneNote("excluded_file_names", "add", "*.exe"), "Added *.exe to Excluded file names");
+  assert.equal(V.listDoneNote("excluded_file_names", "remove", "*.exe"), "Removed *.exe from Excluded file names");
+  assert.equal(V.listDoneNote("excluded_file_names", "remove", ""), "Removed an empty line from Excluded file names");
+});
+
+test("4b formatValue: a list key shows its count", () => {
+  const f = V.formatValue;
+  assert.equal(f("add_trackers", ""), "empty");
+  assert.equal(f("add_trackers", "udp://a"), "1 tracker");
+  assert.equal(f("add_trackers", "udp://a\nudp://b\n\nhttp://c"), "3 trackers in 2 tiers");
+  assert.equal(f("excluded_file_names", "*.exe"), "1 pattern");
+  assert.equal(f("excluded_file_names", "*.exe\n\n*.scr"), "2 patterns");
+  assert.equal(f("banned_IPs", "1.2.3.4\n5.6.7.8"), "2 addresses");
+});
+
+test("4b Banned IPs section: counts the bans; rows are empty (the column is the list)", () => {
+  const s = V.sections(prefs({ banned_IPs: "1.2.3.4\n5.6.7.8" }));
+  const b = s.find((x) => x.name === "Banned IPs");
+  assert.deepEqual(b, { name: "Banned IPs", label: "Banned IPs", count: 2, dimmed: false, list: "banned_IPs" });
+  assert.deepEqual(V.rows("Banned IPs", prefs()), []);
+  assert.equal(V.sections(null).find((x) => x.name === "Banned IPs").count, 0);
+  assert.equal(V.search("banned", prefs()).rows.some((r) => r.key === "banned_IPs"), false, "still never a row");
+  // An older qBittorrent without the key: no section.
+  const p = prefs();
+  delete p.banned_IPs;
+  assert.equal(V.sections(p).some((x) => x.name === "Banned IPs"), false);
+});
+
+test("4b editorFor: writable secrets edit (set or not) unless dimmed; the API key never", () => {
+  const on = prefs({ proxy_type: "SOCKS5", proxy_password: { set: true }, dyndns_enabled: true,
+    mail_notification_enabled: true, mail_notification_auth_enabled: true });
+  assert.deepEqual(V.editorFor("proxy_password", on), { kind: "secret", key: "Enter", set: true });
+  assert.deepEqual(V.editorFor("dyndns_password", on), { kind: "secret", key: "Enter", set: false });
+  assert.deepEqual(V.editorFor("mail_notification_password", on), { kind: "secret", key: "Enter", set: false });
+  // Ruling EB: a dimmed secret still shows set / not set but doesn't edit.
+  const off = prefs({ proxy_password: { set: true } });
+  assert.deepEqual(V.editorFor("proxy_password", off), { kind: "none", why: "dimmed" });
+  assert.equal(rowOf("proxy_password", off).text, "set (set the proxy type first)");
+  assert.deepEqual(V.editorFor("web_ui_api_key", prefs({ web_ui_api_key: { set: true } })), { kind: "none", why: "secret" });
+  assert.deepEqual(V.parseInput("proxy_password", "x", on), { error: V.CANT_CHANGE }, "a secret never goes through pref-set --");
+});
+
+test("4b secretQuestion / secretDoneNote: name the secret, never a value", () => {
+  assert.equal(V.secretQuestion("proxy_password"), "Clear the proxy password?");
+  assert.equal(V.secretQuestion("dyndns_password"), "Clear the dynamic DNS password?");
+  assert.equal(V.secretQuestion("mail_notification_password"), "Clear the SMTP password?");
+  assert.equal(V.secretDoneNote("proxy_password", "set"), "Proxy password set");
+  assert.equal(V.secretDoneNote("dyndns_password", "clear"), "Dynamic DNS password cleared");
+  assert.equal(V.secretDoneNote("mail_notification_password", "set"), "SMTP password set");
+});
+
+test("4b listBadLine: the first line qbt would refuse in a whole list (it checks every line)", () => {
+  assert.equal(V.listBadLine("add_trackers", "udp://a\n\nhttp://b"), null);
+  assert.deepEqual(V.listBadLine("add_trackers", "udp://a\nhttp://has space/announce\n\nwss://c"),
+    { index: 1, value: "http://has space/announce", error: "Use an http, https or udp tracker URL." });
+  assert.equal(V.listBadLine("excluded_file_names", "*.exe\n\n*.scr"), null, "empty patterns are kept, not refused");
+  assert.deepEqual(V.listBadLine("excluded_file_names", "*.exe\n*.b\rat"), { index: 1, value: "*.b\rat", error: "Keep each pattern to one line." });
+  assert.equal(V.listBadLine("banned_IPs", "fe80::1%eth0"), null, "bans aren't written whole");
+  assert.equal(V.listBadLine("add_trackers", ""), null);
+});
+
+test("4b listBadNote: names the line to remove and qbt's reason", () => {
+  assert.equal(V.listBadNote({ index: 1, value: "http://x y", error: "Use an http, https or udp tracker URL." }),
+    "Remove http://x y first: Use an http, https or udp tracker URL.");
 });

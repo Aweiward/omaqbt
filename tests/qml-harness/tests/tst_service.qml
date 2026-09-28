@@ -1090,4 +1090,214 @@ TestCase {
     finish(p, 1, "", "qBittorrent ignored Listening port")
     compare(wireCmds(wire, "refresh-slow").length, 0, "a failed write asks for nothing fresh")
   }
+
+  // ---- slice 4b: secrets, the ban list and list writes (Task 3) ------------------
+
+  // The secret Process (unique property: secretKey).
+  function secretProc(svc) {
+    for (var i = 0; i < svc.data.length; i++) {
+      var o = svc.data[i]
+      if (o && o.secretKey !== undefined) return o
+    }
+    return null
+  }
+  Component { id: secretSpyComp; SignalSpy { signalName: "secretFinished" } }
+  function secretSpy(svc) { var sp = createTemporaryObject(secretSpyComp, tc); sp.target = svc; return sp }
+  readonly property string secretValue: " hunter2 \\ \u{1F98A} "
+  // Every Process under the Service: none may carry the value in argv.
+  function argvHolds(svc, value) {
+    for (var i = 0; i < svc.data.length; i++) {
+      var o = svc.data[i]
+      if (!o || o.command === undefined) continue
+      var cmd = o.command || []
+      for (var j = 0; j < cmd.length; j++) if (String(cmd[j]).indexOf(value) !== -1) return true
+    }
+    return false
+  }
+
+  function test_setSecret_runs_its_own_process_and_writes_stdin_only_once_started() {
+    var o = idleService(), svc = o.svc, p = o.p
+    var q = secretProc(svc)
+    verify(q !== null, "a Process of its own")
+    var spy = secretSpy(svc)
+    var actions = spyOn(svc)
+    var t = svc.setSecret("proxy_password", secretValue, { origin: "window", hashes: [] })
+    verify(t > 0)
+    compare(q.command, [svc.helperPath, "pref-set", "proxy_password", "--stdin"])
+    compare(q.running, true)
+    compare(q.stdinEnabled, true)
+    compare(q.writes, [], "nothing is written before the process starts")
+    compare(svc.actionQueue.length, 0, "never the action queue")
+    compare(svc.currentAction, null)
+    compare(p.running, false, "the action Process stays idle")
+    verify(!argvHolds(svc, secretValue), "never in argv")
+    q.started()
+    compare(q.writes, [secretValue], "the value, exactly, with no newline")
+    compare(q.stdinEnabled, false, "stdin is closed once written")
+    q.started()
+    compare(q.writes.length, 1, "written once")
+    q.stdout.text = "{\"ok\":true}"
+    q.running = false
+    q.exited(0, 0)
+    compare(spy.count, 1)
+    compare(spy.signalArguments[0][0], t)
+    compare(spy.signalArguments[0][1], true)
+    compare(spy.signalArguments[0][2], "")
+    compare(actions.count, 0, "not an actionFinished: the window's ticket arrives on secretFinished")
+    compare(svc.lastError, "")
+    compare(svc.actionStatus, "")
+  }
+
+  function test_setSecret_failure_reports_qbts_line_and_never_touches_lastError() {
+    var o = idleService(), svc = o.svc
+    var q = secretProc(svc)
+    var spy = secretSpy(svc)
+    var t = svc.setSecret("dyndns_password", secretValue, { origin: "window" })
+    q.started()
+    q.stderr.text = "Keep it to one line.\n"
+    q.running = false
+    q.exited(1, 0)
+    compare(spy.count, 1)
+    compare(spy.signalArguments[0][0], t)
+    compare(spy.signalArguments[0][1], false)
+    compare(spy.signalArguments[0][2], "Keep it to one line.")
+    compare(svc.lastError, "")
+  }
+
+  function test_setSecret_that_never_starts_answers_could_not_run_and_drops_the_value() {
+    var o = idleService(), svc = o.svc
+    var q = secretProc(svc)
+    var spy = secretSpy(svc)
+    var t = svc.setSecret("proxy_password", secretValue, { origin: "window" })
+    q.running = false
+    wait(0)
+    compare(spy.count, 1)
+    compare(spy.signalArguments[0][0], t)
+    compare(spy.signalArguments[0][1], false)
+    compare(spy.signalArguments[0][2], "Could not run the qbt helper")
+    q.started()
+    compare(q.writes, [], "a late started writes nothing: the value is gone")
+    verify(svc.setSecret("proxy_password", "next", { origin: "window" }) > 0, "free for the next one")
+  }
+
+  function test_setSecret_refuses_while_one_runs_other_keys_and_a_stopped_service() {
+    var o = idleService(), svc = o.svc
+    var q = secretProc(svc)
+    verify(svc.setSecret("proxy_password", "a", { origin: "window" }) > 0)
+    compare(svc.setSecret("proxy_password", "b", { origin: "window" }), 0, "one at a time: busy")
+    q.started()
+    q.running = false
+    q.exited(0, 0)
+    for (var k of ["web_ui_password", "web_ui_api_key", "listen_port", ""]) {
+      compare(svc.setSecret(k, "x", { origin: "window" }), 0, k)
+    }
+    compare(q.command[2], "proxy_password")
+    var idle = createTemporaryObject(serviceComp, tc, { active: false })
+    compare(idle.setSecret("proxy_password", "x", { origin: "window" }), 0, "an inactive Service starts nothing")
+    compare(secretProc(idle).running, false)
+  }
+
+  function test_setSecret_success_asks_the_sidecar_for_fresh_preferences() {
+    var o = idleService(), svc = o.svc
+    var wire = sidecarWire(svc)
+    svc.handleSidecarLine(statusLine([hh("a")]))
+    var before = wireCmds(wire, "refresh-slow").length
+    var q = secretProc(svc)
+    svc.setSecret("proxy_password", "x", { origin: "window" })
+    q.started()
+    q.running = false
+    q.exited(0, 0)
+    compare(wireCmds(wire, "refresh-slow").length, before + 1)
+    for (var i = 0; i < wire.writes.length; i++) verify(String(wire.writes[i]).indexOf("\"x\"") === -1)
+  }
+
+  function test_clearSecret_is_a_ticketed_pref_set_clear_for_the_three_secrets_only() {
+    var o = idleService(), svc = o.svc, p = o.p
+    var spy = spyOn(svc)
+    var t = svc.clearSecret("mail_notification_password", { origin: "window" })
+    verify(t > 0)
+    compare(p.command, [svc.helperPath, "pref-set", "mail_notification_password", "--clear"])
+    finish(p, 0, "{\"ok\":true}", "")
+    compare(spy.signalArguments[0][0], t)
+    compare(spy.signalArguments[0][1], true)
+    compare(svc.clearSecret("web_ui_password", { origin: "window" }), 0)
+    compare(svc.clearSecret("web_ui_api_key", { origin: "window" }), 0)
+  }
+
+  function test_banList_is_a_ticketed_ban_list_add_or_remove() {
+    var o = idleService(), svc = o.svc, p = o.p
+    var spy = spyOn(svc)
+    var t = svc.banList("add", "2001:db8::1", { origin: "window" })
+    compare(p.command, [svc.helperPath, "ban-list", "add", "2001:db8::1"])
+    finish(p, 0, "{\"ok\":true}", "")
+    var u = svc.banList("remove", "10.0.0.1", { origin: "window" })
+    compare(p.command, [svc.helperPath, "ban-list", "remove", "10.0.0.1"])
+    finish(p, 1, "", "10.0.0.1 isn't banned.")
+    compare(spy.signalArguments[0][0], t)
+    compare(spy.signalArguments[1][0], u)
+    compare(spy.signalArguments[1][1], false)
+    compare(spy.signalArguments[1][2], "10.0.0.1 isn't banned.")
+    compare(svc.banList("drop", "10.0.0.1", { origin: "window" }), 0)
+    compare(svc.banList("add", "", { origin: "window" }), 0)
+  }
+
+  // The value never lands in a Service property (or a property of one of
+  // its Processes), on success or failure. The stub Process's `writes` is
+  // its record of stdin, the one place it may be; it's checked apart.
+  function holds(v, s, depth) {
+    var d = depth === undefined ? 6 : depth
+    if (v === null || v === undefined || d < 0) return false
+    if (typeof v === "string") return v.indexOf(s) !== -1
+    if (typeof v !== "object" || v.objectName !== undefined) return false
+    for (var k in v) {
+      var x
+      try { x = v[k] } catch (e) { continue }
+      if (holds(x, s, d - 1)) return true
+    }
+    return false
+  }
+  function sweepService(svc, s) {
+    var hits = []
+    var objs = [svc]
+    for (var i = 0; i < svc.data.length; i++) objs.push(svc.data[i])
+    for (var j = 0; j < objs.length; j++) {
+      var o = objs[j]
+      if (!o) continue
+      for (var k in o) {
+        if (k === "writes" || k === "data" || k === "parent") continue
+        var v
+        try { v = o[k] } catch (e) { continue }
+        if (typeof v === "function") continue
+        if (v && typeof v === "object" && v.objectName !== undefined) {
+          // A collector (stdout/stderr): its text.
+          if (typeof v.text === "string" && v.text.indexOf(s) !== -1) hits.push(j + "." + k + ".text")
+          continue
+        }
+        if (holds(v, s)) hits.push(j + "." + k)
+      }
+    }
+    return hits
+  }
+
+  function test_setSecret_leaves_the_value_in_no_service_property() {
+    var o = idleService(), svc = o.svc
+    compare(sweepService(svc, secretValue), [])
+    svc.lastError = "x" + secretValue
+    verify(sweepService(svc, secretValue).length > 0, "a planted value is caught")
+    svc.lastError = ""
+    var q = secretProc(svc)
+    svc.setSecret("proxy_password", secretValue, { origin: "window" })
+    compare(sweepService(svc, secretValue), [], "while it runs")
+    q.started()
+    compare(sweepService(svc, secretValue), [], "once written")
+    compare(q.writes, [secretValue])
+    q.stderr.text = "Keep it to one line."
+    q.running = false
+    q.exited(1, 0)
+    compare(sweepService(svc, secretValue), [], "after a failure")
+    svc.setSecret("proxy_password", secretValue, { origin: "window" })
+    q.running = false
+    wait(0)
+    compare(sweepService(svc, secretValue), [], "after a run that never started")
+  }
 }

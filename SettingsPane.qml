@@ -20,6 +20,15 @@ import "ClientView.js" as View
 // settingsKeys) through ClientCommands, which calls the functions below.
 // Every value shown is SettingsView's, as PlainText.
 //
+// Slice 4b: a third column state, settingsList, shows one list setting's
+// lines (SettingsList.qml) in place of the settings: Enter on a list row
+// opens it, and the Banned IPs section's column is always its list (l or
+// Enter from the sections focuses it). In a narrow window (`narrow`,
+// View.settingsNarrow) the sections column is an overlay over the left edge
+// while it has focus (ClientPane's collapsed overlay) and a chip ("Speed ▾")
+// above the settings stands for it; type tags hide, labels truncate before
+// values and the help line wraps.
+//
 // Preferences are read (Service.readPrefs) each time the view opens; rows
 // show "—" until they arrive. A failed read shows the torrent view's own
 // down screen (TorrentTable's state copy, View.settingsDownCopy). None of
@@ -34,8 +43,15 @@ Item {
   property string tableState: "rows"
 
   property bool open: false
-  // The focused column, the registry pane keys dispatch in.
+  // Below the breakpoint (the Client's View.settingsNarrow).
+  property bool narrow: false
+  // The focused column, the registry pane keys dispatch in:
+  // settingsSections, settingsKeys or settingsList.
   property string column: "settingsSections"
+  // The open list's key while column is settingsList, else "".
+  property string listKey: ""
+  // Each list's cursor, by key (a line index into listItems).
+  property var listCursors: ({})
   // `qbt prefs` output; null while loading (SettingsView shows "—").
   property var prefs: null
   // The last read failed (error: its one-line reason).
@@ -72,7 +88,16 @@ Item {
   readonly property var entries: View.settingsEntries(shownRows, searching)
   readonly property var title: View.settingsTitle(section.label, shownRows.length, query)
   // The cursor row's editor kind (Space/Enter hints), "none" while it saves.
-  readonly property string editorKind: cursorRow && saving[cursorRow.key] === undefined ? SettingsView.editorFor(cursorRow.key, prefs).kind : "none"
+  readonly property var cursorEditor: cursorRow && saving[cursorRow.key] === undefined ? SettingsView.editorFor(cursorRow.key, prefs) : ({ kind: "none" })
+  readonly property string editorKind: cursorEditor.kind
+  // The list the settings column shows: the open one, or the Banned IPs
+  // section's (a preview while the sections have focus); "" for settings.
+  readonly property string listShown: column === "settingsList" ? listKey : (section.list ? String(section.list) : "")
+  readonly property var listItems: listShown !== "" && prefs ? SettingsView.listItems(listShown, prefs[listShown]) : []
+  readonly property int listIndex: View.moveIndex(listItems.length, listCursors[listShown] || 0, 0)
+  // The line under the list cursor, or null.
+  readonly property var listItem: column === "settingsList" && listIndex < listItems.length ? listItems[listIndex] : null
+  readonly property bool listSaving: listShown !== "" && saving[listShown] !== undefined
 
   readonly property int padX: Style.space(12)
   readonly property int rowHeight: Style.space(28)
@@ -85,7 +110,9 @@ Item {
 
   function openView() {
     open = true
-    column = "settingsSections"
+    // Narrow, the sections are a chip: the settings take the keys.
+    column = narrow ? "settingsKeys" : "settingsSections"
+    listKey = ""
     query = ""
     searchIndex = 0
     reload(false)
@@ -97,8 +124,13 @@ Item {
     query = ""
     searchIndex = 0
     column = "settingsSections"
+    listKey = ""
     readSeq = readSeq + 1
   }
+
+  // A resize below the breakpoint while the sections have focus hands it
+  // to what they show (the 1b pattern: a collapsing pane gives focus back).
+  onNarrowChanged: if (narrow && open && column === "settingsSections") closeSections()
 
   // Reads preferences again. keep: leave the current values up until the
   // answer (a re-read after a write), rather than "—".
@@ -160,10 +192,56 @@ Item {
     Qt.callLater(settings.revealCursor)
   }
 
+  // l/Enter/Tab on a section: its settings, or the Banned IPs list. Narrow,
+  // this also closes the overlay (the sections lose focus).
   function enter() {
     if (failed) return
+    if (section.list) { openList(String(section.list)); return }
+    listKey = ""
     column = "settingsKeys"
     Qt.callLater(settings.revealCursor)
+  }
+
+  // ---- narrow: the sections overlay (slice 4b, D13) ---------------------------
+
+  // Tab/h/Shift-Tab from the settings: the overlay (the sections column).
+  function openSections() {
+    if (failed) return
+    column = "settingsSections"
+  }
+
+  // Esc on the overlay: closed, back to what the section shows.
+  function closeSections() {
+    if (section.list) openList(String(section.list))
+    else { listKey = ""; column = "settingsKeys" }
+  }
+
+  // ---- the list editor (slice 4b) --------------------------------------------------
+
+  function openList(k) {
+    if (failed || !k) return
+    listKey = k
+    column = "settingsList"
+  }
+
+  // Esc in a list: back to its row; the Banned IPs list (a section) back to
+  // the sections -- narrow, that's the overlay.
+  function closeList() {
+    var k = listKey
+    listKey = ""
+    column = k === SettingsView.BAN_KEY ? "settingsSections" : "settingsKeys"
+  }
+
+  function setListCursor(k, index) {
+    var c = {}
+    for (var s in listCursors) c[s] = listCursors[s]
+    c[k] = Math.max(0, Number(index) || 0)
+    listCursors = c
+  }
+
+  function listMove(delta) {
+    if (column !== "settingsList") return
+    setListCursor(listKey, View.moveIndex(listItems.length, listIndex, delta))
   }
 
   // h from the settings: back to the sections, ending a search.
@@ -284,10 +362,16 @@ Item {
     property bool focused: false
     property bool showSection: false
     property bool saving: false
+    // Narrow (slice 4b, D6): no type tag or "after restart", and the value
+    // keeps its width while the label truncates first.
+    property bool compact: false
     signal clicked()
     readonly property color dim: Util.alpha(Color.foreground, Style.normalBorderAlpha)
-    readonly property int labelWidth: Math.min(Style.space(300), Math.round(width * 0.45))
-    readonly property int tagWidth: Style.space(78)
+    readonly property int labelWidth: compact
+      ? Math.max(Math.round(width * 0.25), Math.min(rowLabel.implicitWidth + Style.space(12) + (showSection ? rowSection.implicitWidth : 0) + Style.space(8),
+        width - rowValue.implicitWidth - Style.space(32)))
+      : Math.min(Style.space(300), Math.round(width * 0.45))
+    readonly property int tagWidth: compact ? 0 : Style.space(78)
 
     Rectangle {
       visible: rowItem.current
@@ -329,10 +413,11 @@ Item {
       color: Color.muted
     }
     Text {
+      id: rowValue
       objectName: "settingsValue"
       x: rowItem.labelWidth + Style.space(8)
-      anchors.right: rowRestart.visible ? rowRestart.left : rowTag.left
-      anchors.rightMargin: Style.space(8)
+      anchors.right: rowRestart.visible ? rowRestart.left : (rowTag.visible ? rowTag.left : parent.right)
+      anchors.rightMargin: rowTag.visible ? Style.space(8) : Style.space(12)
       anchors.verticalCenter: parent.verticalCenter
       elide: Text.ElideRight
       text: rowItem.saving ? "saving…" : String(rowItem.row.text === undefined ? "" : rowItem.row.text)
@@ -344,7 +429,7 @@ Item {
     Text {
       id: rowRestart
       objectName: "settingsRestart"
-      visible: rowItem.row.restart === true
+      visible: rowItem.row.restart === true && !rowItem.compact
       anchors.right: rowTag.left
       anchors.rightMargin: Style.space(8)
       anchors.verticalCenter: parent.verticalCenter
@@ -357,6 +442,7 @@ Item {
     Text {
       id: rowTag
       objectName: "settingsTag"
+      visible: !rowItem.compact
       anchors.right: parent.right
       anchors.rightMargin: Style.space(12)
       anchors.verticalCenter: parent.verticalCenter
@@ -386,6 +472,7 @@ Item {
     width: Style.space(220)
     title: "Settings"
     focusedPane: settings.column === "settingsSections"
+    collapsed: settings.narrow
     swappedOut: settings.failed
 
     Flickable {
@@ -463,7 +550,7 @@ Item {
 
     KeyFooter {
       id: sectionsFooter
-      keys: View.settingsFooterKeys("settingsSections", settings.searching)
+      keys: View.settingsFooterKeys("settingsSections", settings.searching, "none", { narrow: settings.narrow })
     }
   }
 
@@ -471,21 +558,80 @@ Item {
 
   ClientPane {
     id: keysPane
-    anchors.left: sectionsPane.right
+    anchors.left: settings.narrow ? parent.left : sectionsPane.right
     anchors.right: parent.right
     anchors.top: parent.top
     anchors.bottom: parent.bottom
-    title: settings.title.title
-    titleRight: settings.title.right
-    focusedPane: settings.column === "settingsKeys"
+    title: settings.listShown !== "" ? SettingsView.listTitle(settings.listShown) : settings.title.title
+    titleRight: settings.listShown === "" ? settings.title.right
+      : (settings.listSaving ? "saving…" : View.plural(settings.listItems.length, "line", "lines"))
+    focusedPane: settings.column === "settingsKeys" || settings.column === "settingsList"
     rightLine: false
     swappedOut: settings.failed
 
-    Flickable {
-      id: keyFlick
+    // Narrow: the sections chip ("Speed ▾"); Tab or a click opens them.
+    Item {
+      id: sectionChip
+      objectName: "settingsChip"
+      visible: settings.narrow
       anchors.left: parent.left
       anchors.right: parent.right
       anchors.top: parent.top
+      height: visible ? chipText.implicitHeight + Style.space(12) : 0
+
+      Text {
+        id: chipText
+        anchors.left: parent.left
+        anchors.leftMargin: settings.padX
+        anchors.right: parent.right
+        anchors.rightMargin: settings.padX
+        anchors.verticalCenter: parent.verticalCenter
+        elide: Text.ElideRight
+        text: View.settingsChip(settings.section.label)
+        textFormat: Text.PlainText
+        font.family: Style.fontFamily
+        font.pixelSize: Style.font.body
+        color: Color.accent
+      }
+      Rectangle {
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.bottom: parent.bottom
+        height: 1
+        color: settings.lineColor
+      }
+      MouseArea {
+        anchors.fill: parent
+        acceptedButtons: Qt.LeftButton
+        onClicked: settings.openSections()
+      }
+    }
+
+    // A list setting's lines (slice 4b), in place of the settings.
+    SettingsList {
+      id: listColumn
+      visible: settings.listShown !== ""
+      anchors.left: parent.left
+      anchors.right: parent.right
+      anchors.top: sectionChip.bottom
+      anchors.bottom: helpPanel.top
+      items: settings.listItems
+      cursor: settings.listIndex
+      focused: settings.column === "settingsList"
+      saving: settings.listSaving
+      emptyText: settings.prefs ? SettingsView.listEmptyText(settings.listShown) : SettingsView.LOADING
+      onRowClicked: function(index) {
+        settings.openList(settings.listShown)
+        settings.setListCursor(settings.listShown, index)
+      }
+    }
+
+    Flickable {
+      id: keyFlick
+      visible: settings.listShown === ""
+      anchors.left: parent.left
+      anchors.right: parent.right
+      anchors.top: sectionChip.bottom
       anchors.bottom: helpPanel.top
       clip: true
       contentWidth: width
@@ -529,6 +675,7 @@ Item {
               current: entryItem.isRow && entryItem.entryIndex === settings.keyIndex
               focused: keysPane.focusedPane
               showSection: settings.searching
+              compact: settings.narrow
               saving: entryItem.isRow && settings.saving[entryItem.modelData.row.key] !== undefined
               onClicked: {
                 settings.column = "settingsKeys"
@@ -568,7 +715,9 @@ Item {
       anchors.left: parent.left
       anchors.right: parent.right
       anchors.bottom: keysFooter.top
-      height: settings.cursorRow !== null ? Math.max(helpLabel.implicitHeight, helpText.implicitHeight) + Style.space(18) : 0
+      // Narrow: the label on its own line, the help wrapping under it.
+      height: settings.cursorRow === null ? 0 : (settings.narrow ? helpLabel.implicitHeight + helpText.implicitHeight + Style.space(22)
+        : Math.max(helpLabel.implicitHeight, helpText.implicitHeight) + Style.space(18))
 
       Rectangle {
         anchors.left: parent.left
@@ -583,9 +732,9 @@ Item {
         anchors.leftMargin: settings.padX
         anchors.top: parent.top
         anchors.topMargin: Style.space(9)
-        width: Math.min(implicitWidth, parent.width * 0.4)
+        width: Math.min(implicitWidth, parent.width * (settings.narrow ? 1 : 0.4) - (settings.narrow ? 2 * settings.padX : 0))
         elide: Text.ElideRight
-        text: settings.cursorRow ? settings.cursorRow.label + " · " : ""
+        text: settings.cursorRow ? settings.cursorRow.label + (settings.narrow ? "" : " · ") : ""
         textFormat: Text.PlainText
         font.family: Style.fontFamily
         font.pixelSize: Style.font.bodySmall
@@ -594,12 +743,11 @@ Item {
       Text {
         id: helpText
         objectName: "settingsHelp"
-        anchors.left: helpLabel.right
-        anchors.right: parent.right
-        anchors.rightMargin: settings.padX
-        anchors.top: helpLabel.top
+        x: settings.narrow ? settings.padX : helpLabel.x + helpLabel.width
+        width: Math.max(0, parent.width - x - settings.padX)
+        y: settings.narrow ? helpLabel.y + helpLabel.height + Style.space(4) : helpLabel.y
         wrapMode: Text.Wrap
-        maximumLineCount: 3
+        maximumLineCount: settings.narrow ? 6 : 3
         elide: Text.ElideRight
         text: settings.cursorRow ? settings.cursorRow.help : ""
         textFormat: Text.PlainText
@@ -611,7 +759,9 @@ Item {
 
     KeyFooter {
       id: keysFooter
-      keys: View.settingsFooterKeys("settingsKeys", settings.searching, settings.editorKind)
+      keys: View.settingsFooterKeys(settings.column === "settingsList" ? "settingsList" : "settingsKeys", settings.searching, settings.editorKind,
+        { narrow: settings.narrow, secretSet: settings.cursorEditor.set === true, listEditable: settings.prefs !== null && !settings.listSaving,
+          listItem: settings.listItem })
     }
   }
 

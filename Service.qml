@@ -181,6 +181,10 @@ Scope {
   // empty (an empty answer leaves clipboardText unchanged, so its change
   // signal can't tell a view that the read finished).
   signal clipboardRead(string text)
+  // Slice 4b: the end of a setSecret run (its own Process, not the action
+  // queue): the ticket setSecret returned, and qbt's one-line reason on a
+  // failure. Never the value.
+  signal secretFinished(int ticket, bool ok, string error)
 
   function clearError() { lastError = "" }
 
@@ -571,6 +575,71 @@ Scope {
   function setPref(key, value, opts) {
     if (!key) return 0
     return runAction([helperPath, "pref-set", String(key), "--", String(value)], "Saving setting…", opts)
+  }
+
+  // ---- slice 4b: secrets and the ban list (Task 3) ------------------------------
+
+  // The three secrets `qbt pref-set --stdin` may write (eng 4b D2/D7).
+  readonly property var secretKeys: ["proxy_password", "dyndns_password", "mail_notification_password"]
+
+  // `qbt pref-set <key> --stdin` in its own Process (secretProcess), never
+  // the ticketed action queue: the value goes to the child's stdin once it
+  // has started, then stdin closes. It is held only by the local closure
+  // below until then -- never a property, never argv, never logged -- and a
+  // run that never starts drops it. One at a time; 0 while one runs, for a
+  // key outside secretKeys, or on a Service that isn't started. Returns a
+  // ticket that secretFinished carries back.
+  function setSecret(key, value, opts) {
+    var k = String(key || "")
+    if (!started || secretKeys.indexOf(k) === -1 || secretProcess.running || secretProcess.ticket !== 0) return 0
+    var p = secretProcess
+    var armed = true
+    var feed = function() {
+      if (!armed) return
+      armed = false
+      p.started.disconnect(feed)
+      p.write(String(value))
+      p.stdinEnabled = false
+    }
+    // A run that ends (or never starts) with the value unwritten drops it.
+    var drop = function() {
+      if (p.running) return
+      p.runningChanged.disconnect(drop)
+      if (!armed) return
+      armed = false
+      p.started.disconnect(feed)
+    }
+    p.ticket = mintTicket()
+    p.secretKey = k
+    p.command = [helperPath, "pref-set", k, "--stdin"]
+    p.stdinEnabled = true
+    p.started.connect(feed)
+    p.runningChanged.connect(drop)
+    p.running = true
+    return p.ticket
+  }
+
+  function finishSecret(ok, err) {
+    var ticket = secretProcess.ticket
+    secretProcess.ticket = 0
+    secretProcess.secretKey = ""
+    if (ticket === 0) return
+    if (ok) refreshSlow()
+    secretFinished(ticket, ok, err)
+  }
+
+  // `qbt pref-set <key> --clear`: a normal ticketed write (no value).
+  function clearSecret(key, opts) {
+    var k = String(key || "")
+    if (secretKeys.indexOf(k) === -1) return 0
+    return runAction([helperPath, "pref-set", k, "--clear"], "Clearing secret…", opts)
+  }
+
+  // `qbt ban-list add|remove <ip>` (eng 4b D3/D11): qbt re-reads the list
+  // just before writing and reports a mismatch as an error.
+  function banList(op, ip, opts) {
+    if ((op !== "add" && op !== "remove") || !ip) return 0
+    return runAction([helperPath, "ban-list", op, String(ip)], op === "add" ? "Banning address…" : "Unbanning address…", opts)
   }
 
   function addTarget(target, stopped, savePath, opts) {
@@ -1436,6 +1505,34 @@ Scope {
       }
       if (cb) cb(result)
       root.pumpPrefsQueue()
+    }
+  }
+
+  // Slice 4b: `qbt pref-set <key> --stdin` (setSecret). stdinEnabled is
+  // set per run and closed right after the value is written; ticket is 0
+  // while idle. A run that never starts emits no exited, only running
+  // going false: deferred a turn, like prefsProcess.
+  Process {
+    id: secretProcess
+    property int ticket: 0
+    property string secretKey: ""
+    running: false
+    command: []
+    stdinEnabled: false
+    stdout: StdioCollector { id: secretOut; waitForEnd: true }
+    stderr: StdioCollector { id: secretErr; waitForEnd: true }
+    onRunningChanged: {
+      if (running || secretProcess.ticket === 0) return
+      var pending = secretProcess.ticket
+      Qt.callLater(function() {
+        if (secretProcess.running || secretProcess.ticket !== pending) return
+        root.finishSecret(false, "Could not run the qbt helper")
+      })
+    }
+    onExited: function(exitCode) {
+      secretProcess.stdinEnabled = false
+      if (exitCode !== 0) root.finishSecret(false, Model.sanitizeError(root.lastStderrLine(secretErr.text) || "Could not set the secret"))
+      else root.finishSecret(true, "")
     }
   }
 

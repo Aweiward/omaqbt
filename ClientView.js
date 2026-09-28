@@ -346,6 +346,20 @@ function overlayEscape(ev, mode, layout, pane) {
   return mode === "NORMAL" && e.key === Registry.KEY.Escape && overlayPane(layout, pane) !== "";
 }
 
+// settingsNarrow(width) -> whether Settings uses its narrow layout (design
+// D6, eng 4b D13): below the width the torrent view's filters collapse at
+// (LAYOUT_MEDIUM). A width of 0 or less (not laid out yet) is wide.
+function settingsNarrow(width) {
+  var w = Number(width) || 0;
+  return w > 0 && w < LAYOUT_MEDIUM;
+}
+
+// settingsChip(section) -> the narrow layout's sections chip ("Speed ▾").
+function settingsChip(section) {
+  var s = String(section || "");
+  return (s === "" ? "Sections" : s) + " ▾";
+}
+
 // filterChip(layout, filter) -> the status-line chip ("▸ Seeding") shown
 // while the filters are collapsed and the active filter isn't All.
 function filterChip(layout, filter) {
@@ -549,6 +563,10 @@ function confirmLine(confirm) {
   // schema's consequence (SettingsView.confirmFor).
   if (c.kind === "settingConfirm") {
     return { lead: String(c.line || "") + " ", strong: "", tail: String(c.detail || ""), accept: c.accept ? String(c.accept) : "set" };
+  }
+  // x on a set secret (slice 4b): SettingsView.secretQuestion's line.
+  if (c.kind === "secretClear") {
+    return { lead: String(c.line || "") + " ", strong: "", tail: "qBittorrent forgets it.", accept: "clear" };
   }
   var n = Number(c.count) || 0;
   var t = plural(n, "torrent", "torrents");
@@ -787,7 +805,7 @@ function modeHints(mode, ctx) {
       { key: "Esc", label: "cancel" }
     ];
   }
-  if (Registry.isSettingsPane(c.pane)) return settingsFooterKeys(c.pane, c.searching === true, c.editor).concat([{ key: "?", label: "keys" }]);
+  if (Registry.isSettingsPane(c.pane)) return settingsFooterKeys(c.pane, c.searching === true, c.editor, c).concat([{ key: "?", label: "keys" }]);
   if (c.pane === "filters") {
     return [
       { key: "j/k", label: "move" },
@@ -832,16 +850,33 @@ function modeHints(mode, ctx) {
 // Esc clears it first. editor (Task 6) is SettingsView.editorFor's kind for
 // the cursor row: a toggle adds "Space toggle", an input "Enter edit", a
 // picker "Enter choose"; none (or no row) adds nothing.
-var SETTINGS_EDITOR_KEYS = { toggle: { key: "Space", label: "toggle" }, input: { key: "Enter", label: "edit" }, picker: { key: "Enter", label: "choose" } };
-function settingsFooterKeys(column, searching, editor) {
+// Slice 4b: a list row "Enter open", a writable secret "Enter set" (and
+// "x clear" when ctx.secretSet); the list column (settingsList) "a add"
+// while ctx.listEditable, "x remove" with a ctx.listItem too; narrow
+// (ctx.narrow) the sections are an overlay: "Enter choose", "Esc close",
+// and the settings open it with Tab.
+var SETTINGS_EDITOR_KEYS = { toggle: { key: "Space", label: "toggle" }, input: { key: "Enter", label: "edit" }, picker: { key: "Enter", label: "choose" },
+  list: { key: "Enter", label: "open" }, secret: { key: "Enter", label: "set" } };
+function settingsFooterKeys(column, searching, editor, ctx) {
+  var c = ctx || {};
+  var esc = { key: "Esc", label: searching === true ? "clear search" : "back" };
+  if (column === "settingsList") {
+    var list = [{ key: "j/k", label: "move" }];
+    if (c.listEditable === true) list.push({ key: "a", label: "add" });
+    if (c.listEditable === true && c.listItem) list.push({ key: "x", label: "remove" });
+    return list.concat([{ key: "Esc", label: "back" }]);
+  }
   if (column === "settingsSections") {
-    return [{ key: "j/k", label: "section" }, { key: "l", label: "keys" }, { key: "/", label: "search all" },
-      { key: "Esc", label: searching === true ? "clear search" : "back" }];
+    if (c.narrow === true) {
+      return [{ key: "j/k", label: "section" }, { key: "Enter", label: "choose" }, { key: "/", label: "search all" },
+        { key: "Esc", label: searching === true ? "clear search" : "close" }];
+    }
+    return [{ key: "j/k", label: "section" }, { key: "l", label: "keys" }, { key: "/", label: "search all" }, esc];
   }
   var out = [{ key: "j/k", label: "move" }];
   if (Object.prototype.hasOwnProperty.call(SETTINGS_EDITOR_KEYS, editor)) out.push(SETTINGS_EDITOR_KEYS[editor]);
-  return out.concat([{ key: "h", label: "sections" }, { key: "/", label: "search" },
-    { key: "Esc", label: searching === true ? "clear search" : "back" }]);
+  if (editor === "secret" && c.secretSet === true) out.push({ key: "x", label: "clear" });
+  return out.concat([{ key: c.narrow === true ? "Tab" : "h", label: "sections" }, { key: "/", label: "search" }, esc]);
 }
 
 // settingQuestion(label, isBool, value, shown) -> {line, accept}: what a
@@ -858,13 +893,26 @@ function settingQuestion(label, isBool, value, shown) {
 
 // qbt pref-set's own sentences (tests/test_prefs.py pins them): each names
 // its setting or its reason already, so it shows as it is.
+// Slice 4b retires 4a's "OmaqBT doesn't change secrets yet." and "Editing
+// multi-line settings arrives in 4b." and adds Task 2's (task-2-report.md):
+// the whitelist's EB sentence, the --stdin and ban-list sentences and the
+// list-rules-cases.json messages.
 var PREF_SENTENCES = ["Set by OmaqBT's setup.", "OmaqBT needs this as it is.", "qBittorrent doesn't let this be changed.",
-  "OmaqBT doesn't change secrets yet.", "OmaqBT doesn't change this setting.", "OmaqBT doesn't change this setting yet.",
-  "Editing multi-line settings arrives in 4b.", "OmaqBT won't change this setting.",
+  "OmaqBT doesn't change this setting.", "OmaqBT doesn't change this setting yet.",
+  "OmaqBT won't change this setting.",
   "OmaqBT can only change on/off, number and text settings.",
   // Rulings DQ, DR, DS.
   "Use a clean path without //, /./ or /../.", "Use an IPv4 or IPv6 address, or leave it empty.",
-  "Use at least 3 characters and no colon."];
+  "Use at least 3 characters and no colon.",
+  // Slice 4b (Task 2's qbt).
+  "OmaqBT keeps this read-only: it has no effect while the Web UI only listens on 127.0.0.1.",
+  "Send this password with --stdin, never as an argument.",
+  "Only the proxy, Dynamic DNS and SMTP passwords take --stdin or --clear.",
+  "The value didn't arrive within 5 seconds.", "Use valid UTF-8 text.",
+  "The ban list changed while OmaqBT saved it; check it.",
+  "Use an IPv4 or IPv6 address.", "Use an http, https or udp tracker URL.",
+  "Keep each pattern to one line.", "Type a value, or use --clear.", "Keep it to one line.",
+  "Use a value without NUL characters.", "Use at most 1024 characters."];
 
 // settingFailure(label, error) -> the status line after a failed write:
 // qbt's sentence as it is ("qBittorrent ignored DHT", "Couldn't confirm DHT
@@ -873,7 +921,8 @@ var PREF_SENTENCES = ["Set by OmaqBT's setup.", "OmaqBT needs this as it is.", "
 function settingFailure(label, error) {
   var e = String(error || "").trim();
   if (e === "") return "Setting " + String(label) + " failed.";
-  if (PREF_SENTENCES.indexOf(e) !== -1 || e.indexOf("qBittorrent ignored ") === 0 || e.indexOf("Couldn't confirm ") === 0
+  if (PREF_SENTENCES.indexOf(e) !== -1 || e.indexOf("qBittorrent ignored ") === 0
+      || e.indexOf("qBittorrent didn't ban ") === 0 || e.indexOf("qBittorrent still bans ") === 0 || e.indexOf("Couldn't confirm ") === 0
       || e.indexOf("qBittorrent has no setting called ") === 0) return e;
   return "Setting " + String(label) + " failed: " + refusalDetail(e);
 }
@@ -1024,6 +1073,14 @@ function dispatchState(regState, pane, state, hasCursorRow, targets, inspector, 
   st.settingsKey = sv.key ? String(sv.key) : null;
   st.settingsToggle = sv.toggle === true;
   st.settingsEditable = sv.editable === true;
+  // Slice 4b (SettingsCommands.flags): Enter on a list row, x on a set
+  // secret, the open list's add/remove, u's history and the narrow layout.
+  st.settingsListRow = sv.listRow === true;
+  st.settingsSecretSet = sv.secretSet === true;
+  st.listEditable = sv.listEditable === true;
+  st.listItem = sv.listItem && typeof sv.listItem === "object" ? sv.listItem : null;
+  st.narrow = sv.narrow === true;
+  st.settingsUndoCount = typeof sv.undoCount === "number" ? sv.undoCount : 0;
   return st;
 }
 
@@ -1795,6 +1852,14 @@ function paletteRunsFrom(rows, pane) {
   return false;
 }
 
+function paletteRunsFromSettings(rows) {
+  for (var i = 0; i < rows.length; i++) {
+    var panes = rows[i].panes || [];
+    for (var j = 0; j < panes.length; j++) if (Registry.isSettingsPane(panes[j])) return true;
+  }
+  return false;
+}
+
 function paletteRunsFromTable(rows) {
   return paletteRunsFrom(rows, "table");
 }
@@ -1806,7 +1871,23 @@ function paletteRunsFromTable(rows) {
 // on a single pane, so the first one found is used.
 var PALETTE_FOCUS_REASON = { filters: "focus the filters", inspector: "focus the inspector" };
 
-function paletteFocusReason(rows) {
+// Slice 4b: a Settings action from elsewhere names the step it needs: a
+// settings row (x clears a secret, u undoes) wants Settings open, then
+// its settings column; a list row (a, x in a list) wants a list open.
+function paletteSettingsReason(rows, state) {
+  var keys = false, list = false;
+  for (var i = 0; i < rows.length; i++) {
+    var panes = rows[i].panes || [];
+    if (panes.indexOf("settingsKeys") !== -1) keys = true;
+    if (panes.indexOf("settingsList") !== -1) list = true;
+  }
+  if (keys) return state && state.settingsOpen === true ? "focus the settings" : "open Settings";
+  return list ? "open a list" : "";
+}
+
+function paletteFocusReason(rows, state) {
+  var settings = paletteSettingsReason(rows, state);
+  if (settings !== "") return settings;
   for (var i = 0; i < rows.length; i++) {
     var panes = rows[i].panes || [];
     for (var j = 0; j < panes.length; j++) {
@@ -1901,9 +1982,13 @@ function paletteRowFrom(entry, state, indices) {
   var enabled = true;
   var reason = "";
   var pane = state && state.pane ? String(state.pane) : "table";
+  // Slice 4b: a Settings row is judged from the Settings column the
+  // palette opened from (state.settingsPane); every other row from the
+  // torrent pane, as before.
+  if (state && state.settingsPane && paletteRunsFromSettings(entry.rows)) pane = String(state.settingsPane);
   if (!paletteRunsFromTable(entry.rows) && !paletteRunsFrom(entry.rows, pane)) {
     enabled = false;
-    reason = paletteFocusReason(entry.rows);
+    reason = paletteFocusReason(entry.rows, state);
   } else if (entry.tabs && !Registry.tabMatches({ tabs: entry.tabs }, state && state.inspectorTab)) {
     enabled = false;
     reason = paletteTabsReason(entry.tabs);
@@ -2015,9 +2100,13 @@ function paletteRows(query, commands, mru, state) {
 // opened from, "table" when omitted) is evaluated there, with the
 // inspector's fields (inspectorDispatch) so its reason can name the tab.
 // settingsOpen: the Settings view is showing (":Settings" is disabled).
-function paletteState(tableState, hasCursorRow, inspector, pane, settingsOpen) {
-  var st = dispatchState({ mode: "NORMAL" }, pane || "table", tableState, hasCursorRow, [], inspector);
+// settings (slice 4b): SettingsCommands.flags(), so a Settings action from
+// the palette is judged as its key would be; settingsPane: the Settings
+// column the palette opened from, which the Settings rows are judged in.
+function paletteState(tableState, hasCursorRow, inspector, pane, settingsOpen, settings, settingsPane) {
+  var st = dispatchState({ mode: "NORMAL" }, pane || "table", tableState, hasCursorRow, [], inspector, null, settings);
   st.settingsOpen = settingsOpen === true;
+  st.settingsPane = settingsOpen === true && settingsPane ? String(settingsPane) : "";
   return st;
 }
 
@@ -2201,6 +2290,8 @@ function isAbsolutePath(path) {
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     MOD: MOD,
+    settingsNarrow: settingsNarrow,
+    settingsChip: settingsChip,
     keyEvent: keyEvent,
     SORT_CYCLE: SORT_CYCLE,
     nextSort: nextSort,

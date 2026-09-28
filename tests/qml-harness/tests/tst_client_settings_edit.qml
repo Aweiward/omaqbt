@@ -579,15 +579,9 @@ TestCase {
     verify(findName(content(o), "settingsHelp").text.indexOf("OmaqBT") >= 0)
   }
 
-  function test_a_multiline_row_does_nothing() {
-    var o = make()
-    focusKey(o, "excluded_file_names")
-    enter(o)
-    space(o)
-    compare(o.c.mode, "NORMAL")
-    compare(writes(o).length, 0)
-    verify(findName(content(o), "settingsHelp").text.indexOf("4b") >= 0)
-  }
+  // test_a_multiline_row_does_nothing moved to tst_client_settings_lists.qml
+  // as test_enter_on_a_list_row_opens_its_lines_and_esc_goes_back (slice 4b
+  // lifts Ruling DH: Enter opens the list editor).
 
   function test_a_dimmed_row_and_a_loading_view_do_nothing() {
     var o = make(prefs({ scheduler_enabled: false }))
