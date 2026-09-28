@@ -143,17 +143,10 @@ Scope {
   // The plugin change running or waiting on the plugins lane: "install",
   // "uninstall", "toggle" (on/off), "update" or "". Kept here, not in the
   // window, so a reopened window still shows it and waits for it (Space,
-  // x, i and U; OV4's hold during an update).
-  readonly property string searchPluginChange: {
-    var items = [searchPluginItem].concat(searchPluginQueue)
-    for (var i = 0; i < items.length; i++) {
-      var c = items[i] ? items[i].cmd : null
-      if (!c || c.length < 3 || c[1] !== "search-plugin") continue
-      if (c[2] === "enable") return "toggle"
-      if (c[2] === "install" || c[2] === "uninstall" || c[2] === "update") return c[2]
-    }
-    return ""
-  }
+  // x, i and U; OV4's hold during an update). Set by syncPluginChange once
+  // the lane has settled (not a binding: a handler that asks for another
+  // run would re-enter it).
+  property string searchPluginChange: ""
 
   readonly property int refreshIntervalSec: {
     var n = parseInt(String(settings && settings.refreshIntervalSec != null ? settings.refreshIntervalSec : 5), 10)
@@ -1121,10 +1114,22 @@ Scope {
     if (p.running || (plugins ? searchPluginItem : searchJobItem) !== null) {
       if (plugins) searchPluginQueue = searchPluginQueue.concat([item])
       else searchJobQueue = searchJobQueue.concat([item])
-      return item.ticket
+    } else {
+      startSearchItem(plugins, item)
     }
-    startSearchItem(plugins, item)
+    if (plugins) syncPluginChange()
     return item.ticket
+  }
+
+  function syncPluginChange() {
+    var items = [searchPluginItem].concat(searchPluginQueue)
+    for (var i = 0; i < items.length; i++) {
+      var c = items[i] ? items[i].cmd : null
+      if (!c || c.length < 3 || c[1] !== "search-plugin") continue
+      if (c[2] === "enable") { searchPluginChange = "toggle"; return }
+      if (c[2] === "install" || c[2] === "uninstall" || c[2] === "update") { searchPluginChange = c[2]; return }
+    }
+    searchPluginChange = ""
   }
 
   function startSearchItem(plugins, item) {
@@ -1137,17 +1142,26 @@ Scope {
 
   // The end of a lane's run (exited, or never started): the next queued
   // run starts first, then the signal goes out.
+  // The lane's item goes straight from this run to the next one (never
+  // null in between), so a handler of searchPluginChange that asks for
+  // another run is queued behind it, never started over it.
   function finishSearchItem(plugins, ok, err, data) {
     var item = plugins ? searchPluginItem : searchJobItem
-    if (plugins) searchPluginItem = null
-    else searchJobItem = null
     var queue = plugins ? searchPluginQueue : searchJobQueue
-    if (queue.length > 0) {
+    if (queue.length > 0 && started) {
       if (plugins) searchPluginQueue = queue.slice(1)
       else searchJobQueue = queue.slice(1)
-      if (started) startSearchItem(plugins, queue[0])
-      else Qt.callLater(function() { root.searchFinished(queue[0].ticket, false, "qBittorrent isn't running.", null) })
+      startSearchItem(plugins, queue[0])
+    } else {
+      if (plugins) searchPluginItem = null
+      else searchJobItem = null
+      if (queue.length > 0) {
+        if (plugins) searchPluginQueue = queue.slice(1)
+        else searchJobQueue = queue.slice(1)
+        Qt.callLater(function() { root.searchFinished(queue[0].ticket, false, "qBittorrent isn't running.", null) })
+      }
     }
+    if (plugins) syncPluginChange()
     if (!item) return
     if (ok && item.cmd.length > 2 && item.cmd[1] === "search" && item.cmd[2] === "add") refresh()
     // A start the window gave up on (it closed while the start ran or

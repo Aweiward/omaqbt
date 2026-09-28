@@ -206,6 +206,31 @@ TestCase {
     compare(svc.searchPluginChange, "")
   }
 
+  // A window that reads the list the moment the change flag clears (as
+  // SearchPane does) is queued behind the list already waiting, never
+  // started over it: every run reports once, in order.
+  function test_a_list_asked_for_as_the_change_ends_is_queued() {
+    var svc = createTemporaryObject(serviceComp, tc)
+    var s = spy(finishedSpy, svc)
+    var plug = lane(svc, "plugins")
+    var h = svc.helperPath
+    var t1 = svc.searchPluginUpdate()
+    var t2 = svc.searchPluginList()
+    var asked = []
+    var hook = function() { if (svc.searchPluginChange === "" && asked.length === 0) asked.push(svc.searchPluginList()) }
+    svc.searchPluginChangeChanged.connect(hook)
+    finish(plug, 0, "")
+    svc.searchPluginChangeChanged.disconnect(hook)
+    compare(asked.length, 1)
+    compare(plug.command, [h, "search-plugin", "list"])
+    compare(svc.searchPluginQueue.length, 1, "the new list waits behind the queued one")
+    finish(plug, 0, "[]")
+    finish(plug, 0, "[]")
+    compare(s.count, 3)
+    compare([s.signalArguments[0][0], s.signalArguments[1][0], s.signalArguments[2][0]], [t1, t2, asked[0]])
+    verify(svc.searchPluginItem === null)
+  }
+
   function test_opens_are_detached_and_only_http() {
     var svc = createTemporaryObject(serviceComp, tc)
     verify(!svc.openUrl("javascript:alert(1)"))
