@@ -780,7 +780,10 @@ class Handler(BaseHTTPRequestHandler):
             if fault == "unreadable":
                 self._send(200, b"<html>not json</html>")
                 return
-            if fault and fault != "noop":
+            if fault == "sleep7":
+                # Past qbt's 5 s curl limit, holding the read open.
+                time.sleep(7)
+            elif fault and fault != "noop":
                 self._fault_reply(fault)
                 return
             with _PREFS_LOCK:

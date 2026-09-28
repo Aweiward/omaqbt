@@ -920,6 +920,9 @@ class SecretStdinTest(StdinCase):
         for env in (UTF8_ENV, C_ENV):
             self.secret_refused("proxy_password", b"pass\xffword", "Use valid UTF-8 text.", env=env)
             self.secret_refused("proxy_password", b"\xc3", "Use valid UTF-8 text.", env=env)
+            # Byte-exact (fix round 1): what bash's regex lets through.
+            for data in (b"a\xed\xa0\x80b", b"\xf4\x90\x80\x80", b"\xc0\xaf", b"\xed\xbf\xbf"):
+                self.secret_refused("proxy_password", data, "Use valid UTF-8 text.", env=env)
 
     def test_nul_anywhere_is_refused(self):
         for data in (b"\x00", b"\x00password", b"password\x00", b"pass\x00word\n", b"a\x00b\x00c"):
@@ -1024,6 +1027,9 @@ class ListWritesTest(FinalFixCase):
             seen += 1
             for env in (UTF8_ENV, C_ENV):
                 with self.subTest(key=case["key"], why=case["why"], env=env["LC_ALL"]):
+                    # Ruling EC: the lines already stored (here, every one)
+                    # go back as they are.
+                    self.assertEqual(self.post_raw({case["key"]: case["input"]}), 200)
                     self.assertEqual(self.set_ok(case["key"], case["input"], env=env), {case["key"]: case["input"]})
                     self.assertEqual(self.state()[case["key"]], case["normalised"])
         self.assertEqual(seen, 10)
@@ -1069,13 +1075,57 @@ class ListWritesTest(FinalFixCase):
 
     def test_invalid_utf8_is_refused(self):
         self.set_refused("excluded_file_names", "*.exe\na\udcffb", "Use valid UTF-8 text.")
+        # Byte-exact (fix round 1): a UTF-16 surrogate, past U+10FFFF, overlong.
+        for bad in ("a\udced\udca0\udc80b", "\udcf4\udc90\udc80\udc80", "\udcc0\udcaf"):
+            self.set_refused("excluded_file_names", "*.exe\n" + bad, "Use valid UTF-8 text.")
+            self.set_refused("app_instance_name", bad, "Use valid UTF-8 text.")
+
+    def test_only_lines_not_stored_are_checked(self):
+        # Ruling EC, the reviewer's repro: a line qBittorrent's own UI stored
+        # (wss://) doesn't block adding or removing others.
+        stored = "http://a.example/announce\nwss://ws.example/x\n\nudp://b.example:1/announce"
+        self.assertEqual(self.post_raw({"add_trackers": stored}), 200)
+        added = stored + "\nhttp://c.example/announce"
+        self.assertEqual(self.set_ok("add_trackers", added), {"add_trackers": added})
+        self.assertEqual(self.state()["add_trackers"], added)
+        removed = "wss://ws.example/x\n\nudp://b.example:1/announce\nhttp://c.example/announce"
+        self.assertEqual(self.set_ok("add_trackers", removed), {"add_trackers": removed})
+        self.assertEqual(self.state()["add_trackers"], removed)
+        # A new bad line is still refused.
+        self.set_refused("add_trackers", removed + "\nwss://new.example/x", TRACKER_MESSAGE)
+        # Patterns: a stored CR line is kept; a new one is refused.
+        self.assertEqual(self.post_raw({"excluded_file_names": "*.exe\na\rb"}), 200)
+        self.assertEqual(self.set_ok("excluded_file_names", "*.exe\na\rb\n*.scr"),
+                         {"excluded_file_names": "*.exe\na\rb\n*.scr"})
+        self.set_refused("excluded_file_names", "*.exe\na\rb\n*.scr\nc\rd", PATTERN_LINE_MESSAGE)
+
+    def test_a_new_empty_pattern_is_refused(self):
+        self.assertEqual(self.post_raw({"excluded_file_names": "*.exe"}), 200)
+        for bad in ("*.exe\n", "\n*.exe", "*.exe\n\n*.scr"):
+            self.set_refused("excluded_file_names", bad, "Use a pattern such as *.exe.")
+        # Stored empties keep round-tripping, and the empty list is fine.
+        self.assertEqual(self.post_raw({"excluded_file_names": "*.exe\n\n*.scr"}), 200)
+        self.assertEqual(self.set_ok("excluded_file_names", "*.exe\n\n*.scr\n*.bat"),
+                         {"excluded_file_names": "*.exe\n\n*.scr\n*.bat"})
+        self.assertEqual(self.set_ok("excluded_file_names", ""), {"excluded_file_names": ""})
+        # Tracker tier breaks are always fine.
+        self.assertEqual(self.post_raw({"add_trackers": "udp://a.example:1/x"}), 200)
+        self.assertEqual(self.set_ok("add_trackers", "udp://a.example:1/x\n\nudp://b.example:1/x"),
+                         {"add_trackers": "udp://a.example:1/x\n\nudp://b.example:1/x"})
+
+    def test_the_stored_read_fails_before_any_write(self):
+        self.control({"preferences": "409state"})
+        self.set_refused("add_trackers", "udp://a.example:1/x", "qBittorrent refused it (HTTP 409)")
+        self.control({"preferences": "unreadable"})
+        self.set_refused("excluded_file_names", "*.exe", "qBittorrent sent something unreadable")
+        self.control({})
 
     def test_read_back_is_exact(self):
         # 4a's rule trims strings; a list must come back exactly.
         for key, sent, got in (("add_trackers", "udp://a.example:1/announce\n", "udp://a.example:1/announce"),
                                ("add_trackers", "udp://a.example:1/announce\n\nhttp://b.example/x",
                                 "udp://a.example:1/announce\nhttp://b.example/x"),
-                               ("excluded_file_names", "\n*.exe", "*.exe"),
+                               ("excluded_file_names", "*.exe\n*.scr", "*.exe"),
                                ("excluded_file_names", " *.tmp ", "*.tmp")):
             self.control({"prefs_override": {key: got}})
             r = self.run_qbt("pref-set", key, "--", sent)
@@ -1149,8 +1199,10 @@ class BanListTest(FinalFixCase):
                     self.assertEqual(self.ban_ok("remove", case["input"]), [{"banned_IPs": ""}])
                     self.assertEqual(self.bans(), "")
                 else:
-                    for op in ("add", "remove"):
-                        self.ban_refused(op, case["input"], IP_MESSAGE, requests=0)
+                    self.ban_refused("add", case["input"], IP_MESSAGE, requests=0)
+                    # Ruling ED: remove first looks for it exactly as stored.
+                    self.ban_refused("remove", case["input"], IP_MESSAGE, posts=0,
+                                     requests=0 if case["input"] == "" or "\n" in case["input"] else 1)
         self.assertGreater(seen, 20)
 
     def test_add_keeps_every_other_ban(self):
@@ -1208,6 +1260,20 @@ class BanListTest(FinalFixCase):
         self.assertEqual(self.bans(), "10.0.0.1\n10.0.0.2\nfe80::1%eth0")
         self.assertEqual(self.ban_ok("remove", "10.0.0.1"), [{"banned_IPs": "10.0.0.2\nfe80::1%eth0"}])
         self.assertEqual(self.bans(), "10.0.0.2\nfe80::1%eth0")
+
+    def test_remove_takes_an_address_exactly_as_stored(self):
+        # Ruling ED: a zone id stored by qBittorrent's own UI can be unbanned,
+        # though add refuses it.
+        self.set_bans("fe80::1%eth0\n10.0.0.1")
+        self.ban_refused("add", "fe80::1%eth0", IP_MESSAGE, requests=0)
+        self.ban_refused("remove", "FE80::1%eth0", IP_MESSAGE, posts=0)
+        self.ban_refused("remove", "fe80::1%eth", IP_MESSAGE, posts=0)
+        self.assertEqual(self.ban_ok("remove", "fe80::1%eth0"), [{"banned_IPs": "10.0.0.1"}])
+        self.assertEqual(self.bans(), "10.0.0.1")
+        self.set_bans("fe80::1%eth0")
+        self.control({"prefs_override": {"banned_IPs": "fe80::1%eth0"}})
+        self.ban_refused("remove", "fe80::1%eth0", "qBittorrent still bans fe80::1%eth0.", posts=1)
+        self.control({})
 
     def test_lost_update_is_reported_never_restored(self):
         self.set_bans("10.0.0.1")
@@ -1310,6 +1376,8 @@ class SecretArgvTest(StdinCase):
             # Absolute paths only: PATH points back at the shims.
             shim.write_text(
                 "#!/bin/sh\n"
+                # An inherited SHELLOPTS=xtrace would trace the shim itself.
+                "{ set +o xtrace; } 2>/dev/null\n"
                 f"{{ printf 'ARGV\\0'; printf '%s\\0' \"$0\" \"$@\"; printf 'ENV\\0'; /usr/bin/cat /proc/$$/environ; }} >>'{log}'\n"
                 f"exec '{real}' \"$@\"\n")
             shim.chmod(0o755)
@@ -1395,6 +1463,75 @@ class SecretArgvTest(StdinCase):
         for value in stored:
             self.assertNotIn(value, logged)
         self.assertNotIn(b"S3CRET", logged)
+
+    def test_inherited_shellopts_never_leak(self):
+        # Fix round 1 (Ruling EE): an exported SHELLOPTS turns bash options
+        # on before qbt's first line runs. allexport would export the value
+        # to every child; xtrace would print it on stderr.
+        env, log = self.make_shims()
+        value = "S3CRET-opts-" + "w" * 6
+        for opts in ("allexport", "xtrace", "allexport:xtrace", "braceexpand:allexport:hashall:interactive-comments:xtrace"):
+            for key, mode, data in (("proxy_password", "--stdin", value), ("proxy_password", "--stdin", value + "\n"),
+                                    ("dyndns_password", "--clear", "")):
+                r = self.run_stdin(key, data, mode=mode, env=dict(env, SHELLOPTS=opts))
+                self.assertNotIn(value.encode(), r.stdout + r.stderr, opts)
+                if data == value:
+                    self.assertEqual((r.returncode, r.stderr), (0, b""), f"SHELLOPTS={opts}")
+            self.assertEqual(self.run_qbt("ban-list", "add", "203.0.113.8", env=dict(env, SHELLOPTS=opts)).stderr, "")
+        self.assertEqual(self.state()["proxy_password"], value)
+        logged = log.read_bytes()
+        self.assertIn(b"SHELLOPTS=", logged, "the shims saw the inherited SHELLOPTS")
+        self.assertNotIn(value.encode(), logged)
+        self.assertNotIn(b"S3CRET", logged)
+
+    def test_ban_list_runs_one_jq_between_its_read_and_its_write(self):
+        # Fix round 1: the plan, the address and the body are one jq call,
+        # so the read-to-write window holds no more spawns than it must.
+        env, log = self.make_shims()
+        self.assertEqual(FinalFixCase.post_raw(self, {"banned_IPs": "10.0.0.1"}), 200)
+        r = self.run_qbt("ban-list", "add", "10.0.0.7", env=env)
+        self.assertEqual((r.returncode, r.stderr), (0, ""))
+        names = []
+        for entry in log.read_bytes().split(b"ARGV\0")[1:]:
+            argv = entry.split(b"ENV\0")[0].split(b"\0")
+            tool = Path(argv[0].decode()).name
+            if tool == "curl":
+                tool += " POST" if b"setPreferences" in entry.split(b"ENV\0")[0] else " GET"
+            names.append(tool)
+        get = names.index("curl GET")
+        post = names.index("curl POST")
+        self.assertLess(get, post)
+        self.assertEqual(names[get + 1:post].count("jq"), 1, names[get:post + 1])
+
+    def test_a_killed_read_leaves_no_temp_file(self):
+        # Fix round 1: the preferences body (every secret) goes through a
+        # temp file; a signal mid-curl must not leave it behind.
+        import signal
+        import subprocess
+        import time
+        for group in (True, False):
+            tmpdir = Path(tempfile.mkdtemp(prefix="qbt-tmp-"))
+            self.addCleanup(__import__("shutil").rmtree, tmpdir, True)
+            full = dict(self.env, TMPDIR=str(tmpdir))
+            self.control({"preferences": "sleep7"})
+            p = subprocess.Popen([QBT, "prefs"], env=full, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                 start_new_session=True)
+            deadline = time.monotonic() + 4
+            while not any(tmpdir.iterdir()) and time.monotonic() < deadline:
+                time.sleep(0.05)
+            self.assertTrue(any(tmpdir.iterdir()), "the read's temp file exists mid-curl")
+            if group:
+                os.killpg(p.pid, signal.SIGTERM)
+            else:
+                p.send_signal(signal.SIGTERM)
+            p.wait(timeout=5)
+            p.stdout.close()
+            p.stderr.close()
+            deadline = time.monotonic() + 8
+            while any(tmpdir.iterdir()) and time.monotonic() < deadline:
+                time.sleep(0.1)
+            self.assertEqual(list(tmpdir.iterdir()), [], f"group kill: {group}")
+            self.control({})
 
     def test_secret_never_reaches_stdout_or_stderr(self):
         value = "S3CRET-out-" + "z" * 5

@@ -1,4 +1,9 @@
 #!/usr/bin/env bash
+# An exported SHELLOPTS turns options on before this line runs: allexport
+# would put a secret read from stdin into every child's environment, and
+# xtrace would print it on stderr (Ruling EE). The group's stderr hides
+# the trace of this very line.
+{ set +o xtrace +o allexport; } 2>/dev/null
 set -euo pipefail
 
 HOME_DIR="${QBT_HOME:-$HOME}"
@@ -231,12 +236,21 @@ is_daemon() {
 }
 
 api_exec() {
-  local tmp code
-  tmp=$(mktemp)
-  code=$(curl -o "$tmp" -w '%{http_code}' "$@" || true)
-  local resp
-  resp=$(cat "$tmp")
-  rm -f "$tmp"
+  local out code resp
+  # The response (for preferences, every secret) passes through a temp
+  # file. A subshell owns it and removes it when it ends, or on a signal
+  # (bash skips the EXIT trap when a signal trap exits, hence both), so a
+  # kill mid-curl leaves nothing behind (Ruling EE; SIGKILL excepted).
+  out=$(
+    tmp=$(mktemp) || exit 1
+    trap 'rm -f -- "$tmp"' EXIT
+    trap 'rm -f -- "$tmp"; exit 1' HUP INT TERM
+    printf '%s\n' "$(curl -o "$tmp" -w '%{http_code}' "$@" || true)"
+    cat -- "$tmp"
+  ) || true
+  code=${out%%$'\n'*}
+  resp=${out#*$'\n'}
+  [[ $out == *$'\n'* ]] || resp=""
   if [[ $code == 403 ]]; then
     die "localhost auth is required"
   fi
@@ -2127,14 +2141,22 @@ def out($x): {sent: {($key): $x}};
 (if $other == "" then .keys[$key]
  else {label: $key, type: ({boolean: "bool", integer: "integer", number: "number", string: "text"}[$other])} end) as $e
 | $e
-# Eng 4b D5/D10: a whole newline-joined list, each line checked per
-# tests/fixtures/list-rules-cases.json. An empty tracker line is a tier
-# break and an empty pattern an entry qBittorrent keeps, so both pass.
-| (if .listKind == "trackerUrl" then
-     if all($v | split("\n")[]; . == "" or (test("\\A(https?|udp)://[!-~]+\\z") and (contains("|") | not) and length <= 2048))
-     then out($v) + {exact: true} else {error: "Use an http, https or udp tracker URL."} end
-   elif .listKind == "pattern" then
-     if $v | test("\r") then {error: "Keep each pattern to one line."} else out($v) + {exact: true} end
+# Eng 4b D5/D10: a whole newline-joined list. Ruling EC: only the lines
+# not already stored ($stored, read just before) are checked per
+# tests/fixtures/list-rules-cases.json, so a line qBittorrent itself holds
+# goes back as it is. An empty tracker line is a tier break; a new empty
+# pattern is refused, a stored one kept.
+| (if .listKind == "trackerUrl" or .listKind == "pattern" then
+     ($stored | split("\n")) as $old
+     | [$v | split("\n")[] | . as $l | select(any($old[]; . == $l) | not)] as $new
+     | (if .listKind == "trackerUrl" then
+          if all($new[]; . == "" or (test("\\A(https?|udp)://[!-~]+\\z") and (contains("|") | not) and length <= 2048))
+          then null else "Use an http, https or udp tracker URL." end
+        else
+          first($new[] | if . == "" then "Use a pattern such as *.exe."
+                         elif test("\r") then "Keep each pattern to one line." else empty end) // null
+        end) as $err
+     | if $err then {error: $err} else out($v) + {exact: true} end
    elif .type == "bool" then
      if $v == "true" or $v == "false" then out($v == "true") else {error: "Use true or false."} end
    elif .type == "int" or .type == "speed" then
@@ -2198,6 +2220,20 @@ def clean: trim_ws | if . == "/" then . else sub("/+\\z"; "") end;
         ($got | contains(":")) and ($got | ip6_groups) == ($want | ip6_groups)
       else ($got | trim_ws) == ($want | trim_ws) end)'
 
+# True when $1 is valid UTF-8 byte for byte: bash's regex under a UTF-8
+# locale, then a round trip through jq, which turns what the regex lets by
+# (a UTF-16 surrogate, an overlong form, a code point past U+10FFFF) into
+# U+FFFD, must give the same bytes back. The value only reaches jq through
+# builtin printf into a pipe. Status 2: no UTF-8 locale to check with.
+utf8_exact() {
+  local loc rt
+  loc=$(name_utf8_locale) || return 2
+  (LC_ALL=$loc; [[ $1 =~ ^.*$ ]]) 2>/dev/null || return 1
+  rt=$(printf '%s' "$1" | jq -Rrsj . 2>/dev/null; printf x)
+  local LC_ALL=C
+  [[ ${rt%x} == "$1" ]]
+}
+
 # Like api, but the form body comes from stdin (curl --data-binary @-), so
 # a secret is never on curl's argv. Prints the HTTP status only ("000" when
 # qBittorrent can't be reached); the response body and curl's own errors
@@ -2247,9 +2283,10 @@ pref_set_secret() {
     [[ $value != *[$'\n\r']* ]] || die "Keep it to one line."
     [[ -n $value ]] || die "Type a value, or use --clear."
     # jq would turn invalid UTF-8 into U+FFFD and write something else.
-    local loc
-    loc=$(name_utf8_locale) || die "No UTF-8 locale is available to check the value."
-    (LC_ALL=$loc; [[ $value =~ ^.*$ ]]) 2>/dev/null || die "Use valid UTF-8 text."
+    rc=0
+    utf8_exact "$value" || rc=$?
+    (( rc != 2 )) || die "No UTF-8 locale is available to check the value."
+    (( rc == 0 )) || die "Use valid UTF-8 text."
     # Code points, whatever the locale.
     local count
     count=$(printf '%s' "$value" | jq -Rs 'length' 2>/dev/null) || die "Couldn't check the value."
@@ -2345,9 +2382,10 @@ cmd_pref_set() {
 
   # jq replaces invalid UTF-8 with U+FFFD, which would send (and read back)
   # something other than what was typed.
-  local loc
-  loc=$(name_utf8_locale) || die "No UTF-8 locale is available to check the value."
-  (LC_ALL=$loc; [[ $value =~ ^.*$ ]]) 2>/dev/null || die "Use valid UTF-8 text."
+  local utf8=0
+  utf8_exact "$value" || utf8=$?
+  (( utf8 != 2 )) || die "No UTF-8 locale is available to check the value."
+  (( utf8 == 0 )) || die "Use valid UTF-8 text."
 
   local other=""
   if [[ $flags == other ]]; then
@@ -2368,7 +2406,17 @@ cmd_pref_set() {
   fi
 
   local cast err
-  cast=$(jq -c --arg key "$key" --arg v "$value" --arg other "$other" --arg home "${HOME%/}" "$PREF_CAST_JQ" "$schema" 2>/dev/null) \
+  # Ruling EC: a list's stored value, read just before the cast.
+  local stored=""
+  if [[ $flags == list ]]; then
+    pref_read
+    stored=$(jq -r --arg k "$key" '.[$k] | if type == "string" then . else "" end' <<<"$PREFS_JSON" 2>/dev/null \
+      && printf x) || true
+    [[ $stored == *$'\n'x ]] || die "qBittorrent sent something unreadable"
+    stored=${stored%$'\n'x}
+  fi
+  cast=$(jq -c --arg key "$key" --arg v "$value" --arg other "$other" --arg home "${HOME%/}" --arg stored "$stored" \
+    "$PREF_CAST_JQ" "$schema" 2>/dev/null) \
     || die "The settings schema is unreadable."
   err=$(jq -r '.error // empty' <<<"$cast")
   [[ -z $err ]] || die "$err"
@@ -2397,19 +2445,30 @@ cmd_pref_set() {
 # (remove) writes nothing. qBittorrent has no compare-and-set: a change
 # made elsewhere between the read and the write is overwritten, and one
 # made after the write is reported.
+# One jq call between the read and the write (Ruling EE): it checks the
+# read, finds the address and builds the form body. Four lines out:
+# unreadable|invalid|noop|send, the address as compared, the body, and
+# the sent list as JSON. Ruling ED: remove also takes an address exactly
+# as stored, even one add refuses (a zone id from qBittorrent's own UI).
 BAN_PLAN_JQ="$PREF_IP_JQ"'
 def addr: . != "" and (ipv4 or ipv6);
-if (.banned_IPs | type) != "string" then {error: "unreadable"}
+if type != "object" or (.banned_IPs | type) != "string" then "unreadable\n\n\n\n"
 else
-  ($ip | qt_addr) as $n
-  | (.banned_IPs | split("\n") | map(select(. != ""))) as $cur
+  (.banned_IPs | split("\n") | map(select(. != ""))) as $cur
   | ($cur | map(if addr then qt_addr else . end)) as $curn
-  | {ip: $n}
-  + if $op == "add" then
-      if any($curn[]; . == $n) then {} else {send: ($cur + [$n] | join("\n"))} end
-    elif any($curn[]; . == $n) then
-      {send: ([range($cur | length) | select($curn[.] != $n) | $cur[.]] | join("\n"))}
-    else {} end
+  | (if $ip | addr then $ip | qt_addr
+     elif $op == "remove" and any($cur[]; . == $ip) then $ip
+     else null end) as $n
+  | if $n == null then "invalid\n\n\n\n"
+    else
+      (if $op == "add" then (if any($curn[]; . == $n) then null else $cur + [$n] end)
+       elif any($curn[]; . == $n) then [range($cur | length) | select($curn[.] != $n) | $cur[.]]
+       else null end) as $new
+      | if $new == null then "noop\n\($n)\n\n\n"
+        else ($new | join("\n")) as $send
+          | "send\n\($n)\n" + "json=" + ({banned_IPs: $send} | tojson | @uri) + "\n" + ($send | tojson) + "\n"
+        end
+    end
 end'
 BAN_CHECK_JQ="$PREF_IP_JQ"'
 # Entries qbt would refuse came from qBittorrent itself (Qt keeps a zone
@@ -2417,7 +2476,7 @@ BAN_CHECK_JQ="$PREF_IP_JQ"'
 def norm: split("\n") | map(select(. != "") | if ipv4 or ipv6 then qt_addr else . end) | unique;
 if (.banned_IPs | type) != "string" then "unreadable"
 else (.banned_IPs | norm) as $got
-  | if $got == ($sent | norm) then "ok"
+  | if $got == ($sent | fromjson | norm) then "ok"
     elif $op == "add" and (any($got[]; . == $ip) | not) then "missing"
     elif $op == "remove" and any($got[]; . == $ip) then "present"
     else "changed" end
@@ -2427,33 +2486,33 @@ cmd_ban_list() {
   local api_error_detail=code
   [[ $# -eq 2 && ( $1 == add || $1 == remove ) ]] || die "usage: qbt ban-list add|remove <ip>"
   local op=$1 ip=$2
-  # announce_ip's rule without the empty case, never trimmed
-  # (tests/fixtures/list-rules-cases.json, kind ip).
-  local valid
-  valid=$(jq -nr --arg v "$ip" "$PREF_IP_JQ"'$v | . != "" and (ipv4 or ipv6)' 2>/dev/null) || valid=false
-  [[ $valid == true ]] || die "Use an IPv4 or IPv6 address."
-
-  pref_read
-  local plan
-  plan=$(jq -c --arg ip "$ip" --arg op "$op" "$BAN_PLAN_JQ" <<<"$PREFS_JSON" 2>/dev/null) \
-    || die "qBittorrent sent something unreadable"
-  [[ $(jq -r '.error // empty' <<<"$plan") == "" ]] || die "qBittorrent sent something unreadable"
-  local norm
-  norm=$(jq -r '.ip' <<<"$plan")
-  if ! jq -e 'has("send")' >/dev/null <<<"$plan"; then
-    printf '%s\n' '{"ok":true}'
-    return
+  # add: announce_ip's rule without the empty case, never trimmed
+  # (tests/fixtures/list-rules-cases.json, kind ip), before any request.
+  # remove: the same, or a line exactly as stored (checked in the plan).
+  [[ -n $ip && $ip != *$'\n'* ]] || die "Use an IPv4 or IPv6 address."
+  if [[ $op == add ]]; then
+    local valid
+    valid=$(jq -nr --arg v "$ip" "$PREF_IP_JQ"'$v | ipv4 or ipv6' 2>/dev/null) || valid=false
+    [[ $valid == true ]] || die "Use an IPv4 or IPv6 address."
   fi
-  local send
-  send=$(jq -r '.send' <<<"$plan"; printf x)
-  send=${send%$'\n'x}
-  api_or_die POST "/api/v2/app/setPreferences" "json=$(uri "$(jq -nc --arg v "$send" '{banned_IPs: $v}')")"
+
+  api_try GET "/api/v2/app/preferences" || die "qBittorrent refused it (${API_FAIL})"
+  local plan status="" norm="" body="" sent=""
+  plan=$(jq -rj --arg ip "$ip" --arg op "$op" "$BAN_PLAN_JQ" <<<"$API_BODY" 2>/dev/null) || plan=unreadable
+  { IFS= read -r status; IFS= read -r norm; IFS= read -r body; IFS= read -r sent; } <<<"$plan" || true
+  case $status in
+    send) api_or_die POST "/api/v2/app/setPreferences" "$body" ;;
+    noop) printf '%s\n' '{"ok":true}'; return ;;
+    invalid) die "Use an IPv4 or IPv6 address." ;;
+    *) die "qBittorrent sent something unreadable" ;;
+  esac
+
   api_try GET "/api/v2/app/preferences" || die "Couldn't confirm Banned IPs (${API_FAIL})"
   PREFS_JSON=$API_BODY
   jq -e 'type == "object"' >/dev/null 2>&1 <<<"$PREFS_JSON" \
     || die "Couldn't confirm Banned IPs (qBittorrent sent something unreadable)"
   local verdict
-  verdict=$(jq -r --arg sent "$send" --arg ip "$norm" --arg op "$op" "$BAN_CHECK_JQ" <<<"$PREFS_JSON" 2>/dev/null) \
+  verdict=$(jq -r --arg sent "$sent" --arg ip "$norm" --arg op "$op" "$BAN_CHECK_JQ" <<<"$PREFS_JSON" 2>/dev/null) \
     || verdict=unreadable
   case $verdict in
     ok) printf '%s\n' '{"ok":true}' ;;
