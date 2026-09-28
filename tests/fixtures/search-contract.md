@@ -168,6 +168,14 @@ The sidecar drops the watch, and the window says "The search ended when qBittorr
 - **`i`** takes an https URL (`pluginUrl`), then asks "Install <name> from <host>?" with the detail "This runs Python code as qBittorrent, with access to your downloads." **`x`** asks "Uninstall <name>?".
 - **The query bar** reads "searching… · <k> results", "done · <k> results", or "stopped · <k> results" after Esc (OV1: no per-plugin progress).
 - **The empty states** are "No search plugins yet", "No results yet", and "No results for "<q>". Try fewer words, or check which plugins are on (P)."
+- **Added in Task 3's fix round 1** (Rulings FD, FE, FF):
+  - under "No search plugins yet": "qBittorrent searches through plugins it runs with Python on this machine. P manages them; i installs one from an https URL.";
+  - while a search is Running and the sidecar isn't up (never on reply silence): "No results are arriving; press Esc and try again.";
+  - a magnet whose hash isn't in the library 30 s after a successful add: "Couldn't confirm <name> was added.";
+  - a Plugins column filter that hides every row: "No results from <plugin>.";
+  - the plugins overlay's progress labels: "installing…", "updating…", "uninstalling…" and "saving…" (on/off).
+  - The pattern rule trims with Qt's QChar::isSpace set (Zs, Zl, Zp, U+0009-U+000D, U+0085, U+00A0; not U+FEFF), never String.prototype.trim (Ruling FE).
+  - A result with an empty `engineName` is the installed plugin whose `url` equals its `siteUrl`, for the counts and for `qbt search add`; otherwise it is "other" (Ruling FF).
 
 **Failure modes.**
 

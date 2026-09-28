@@ -547,7 +547,7 @@ Item {
     // Slice 4b: the list editor, secrets and narrow rows are SettingsCommands'.
     // Slice 5a: Search's rows (all but its opener) are SearchPane's.
     if (settingsCmds.owns(commandId)) settingsCmds.run(commandId, args)
-    else if (searchView.owns(commandId)) searchView.run(commandId, args)
+    else if (searchView.owns(commandId)) searchView.run(commandId, args, ev)
     else commands.run(commandId, args, ev, targets)
   }
 

@@ -17,6 +17,25 @@ Scope {
 
   signal line(string text)
   signal exited(int code)
+  // Slice 5a: a search watch's reply ({"type":"search", ...}, parsed),
+  // routed here because Model.parseServeLine knows only the older line
+  // types. Every other line still goes out as `line`.
+  signal searchLine(var data)
+
+  // route(text): a search reply goes to searchLine, anything else to line.
+  function route(text) {
+    var t = String(text)
+    // qbt-serve writes compact JSON (separators ",", ":").
+    if (t.indexOf("\"type\":\"search\"") !== -1) {
+      var obj = null
+      try { obj = JSON.parse(t) } catch (e) { obj = null }
+      if (obj && typeof obj === "object" && !Array.isArray(obj) && obj.type === "search") {
+        root.searchLine(obj)
+        return
+      }
+    }
+    root.line(t)
+  }
 
   function start() {
     if (proc.running || root.path === "") return
@@ -57,7 +76,7 @@ Scope {
     command: []
     stdinEnabled: true
     stdout: SplitParser {
-      onRead: function(data) { root.line(String(data)) }
+      onRead: function(data) { root.route(String(data)) }
     }
     // Drained line by line and dropped, so a chatty child never grows a
     // buffer for the shell's lifetime; the fatal line on stdout carries

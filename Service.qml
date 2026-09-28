@@ -130,6 +130,16 @@ Scope {
   // watch is never re-sent; null once the running sidecar has forgotten
   // it (a fresh process, or none running at all).
   property var lastSentWatch: null
+  // Slice 5a (Search): the two qbt search lanes' waiting runs, the job the
+  // sidecar watches for the window (0: none), and Recent (the last 8
+  // queries, newest first; kept here so it outlives a rebuilt window, and
+  // never written to disk).
+  property var searchJobQueue: []
+  property var searchPluginQueue: []
+  property var searchJobItem: null
+  property var searchPluginItem: null
+  property int searchWatchId: 0
+  property var searchRecent: []
 
   readonly property int refreshIntervalSec: {
     var n = parseInt(String(settings && settings.refreshIntervalSec != null ? settings.refreshIntervalSec : 5), 10)
@@ -185,6 +195,16 @@ Scope {
   // queue): the ticket setSecret returned, and qbt's one-line reason on a
   // failure. Never the value.
   signal secretFinished(int ticket, bool ok, string error)
+  // Slice 5a (Search): the end of a `qbt search …` / `qbt search-plugin …`
+  // run (searchRun's ticket): ok, qbt's one-line reason on a failure, and
+  // its stdout JSON on success (null when there was none or it didn't
+  // parse). Never actionFinished: these don't go through actionQueue.
+  signal searchFinished(int ticket, bool ok, string error, var data)
+  // A sidecar search reply ({"type":"search", ...}), as the sidecar sent it.
+  signal searchReply(var reply)
+  // A (re)started sidecar came up with no search watch while the window
+  // still watches a job: the window re-sends it at the rows it holds (OV7).
+  signal searchWatchLost()
 
   function clearError() { lastError = "" }
 
@@ -1051,11 +1071,136 @@ Scope {
   // opts is accepted for the same call shape as the other actions; opening
   // a folder writes no shared state for any origin (the file manager owns
   // its own failure UI).
+  // OV10: launched detached (setsid -f forks and returns at once), so a
+  // slow file manager or browser can never wedge openProcess.
   function openPath(path, opts) {
     var p = String(path || "")
     if (p === "" || openProcess.running) return
-    openProcess.command = ["xdg-open", p]
+    openProcess.command = ["setsid", "-f", "xdg-open", p]
     openProcess.running = true
+  }
+
+  // ---- slice 5a: Search (Task 3) ------------------------------------------------
+
+  // `d` (design D3): a result's page, after the window's confirm. Only an
+  // http(s) link (the window already applied the pageLink rule); detached
+  // like openPath (OV10). Returns whether it launched.
+  function openUrl(url) {
+    var u = String(url || "")
+    if (!/^https?:\/\//i.test(u) || openProcess.running) return false
+    openProcess.command = ["setsid", "-f", "xdg-open", u]
+    openProcess.running = true
+    return true
+  }
+
+  // Two lanes of `qbt search*` runs, each one at a time in order: "jobs"
+  // (start, stop, delete, add) and "plugins" (list, install, uninstall,
+  // enable, update: an install reads back for up to 20 s, which must not
+  // hold up a stop). Every argv is an array, never a shell string. Returns
+  // the ticket searchFinished carries back, or 0 on a Service that isn't
+  // started.
+  function searchRun(lane, cmd) {
+    if (!started) return 0
+    var item = { ticket: mintTicket(), cmd: cmd }
+    var plugins = lane === "plugins"
+    var p = plugins ? searchPluginProcess : searchJobProcess
+    if (p.running || (plugins ? searchPluginItem : searchJobItem) !== null) {
+      if (plugins) searchPluginQueue = searchPluginQueue.concat([item])
+      else searchJobQueue = searchJobQueue.concat([item])
+      return item.ticket
+    }
+    startSearchItem(plugins, item)
+    return item.ticket
+  }
+
+  function startSearchItem(plugins, item) {
+    var p = plugins ? searchPluginProcess : searchJobProcess
+    if (plugins) searchPluginItem = item
+    else searchJobItem = item
+    p.command = item.cmd
+    p.running = true
+  }
+
+  // The end of a lane's run (exited, or never started): the next queued
+  // run starts first, then the signal goes out.
+  function finishSearchItem(plugins, ok, err, data) {
+    var item = plugins ? searchPluginItem : searchJobItem
+    if (plugins) searchPluginItem = null
+    else searchJobItem = null
+    var queue = plugins ? searchPluginQueue : searchJobQueue
+    if (queue.length > 0) {
+      if (plugins) searchPluginQueue = queue.slice(1)
+      else searchJobQueue = queue.slice(1)
+      if (started) startSearchItem(plugins, queue[0])
+      else Qt.callLater(function() { root.searchFinished(queue[0].ticket, false, "qBittorrent isn't running.", null) })
+    }
+    if (!item) return
+    if (ok && item.cmd.length > 2 && item.cmd[1] === "search" && item.cmd[2] === "add") refresh()
+    searchFinished(item.ticket, ok, err, data)
+  }
+
+  function searchExited(plugins, exitCode, out, err) {
+    if ((plugins ? searchPluginItem : searchJobItem) === null) return
+    if (exitCode !== 0) {
+      finishSearchItem(plugins, false, Model.sanitizeError(lastStderrLine(err) || "Could not run the qbt helper"), null)
+      return
+    }
+    var text = String(out || "").trim()
+    var data = null
+    if (text !== "") {
+      try { data = JSON.parse(text) } catch (e) { data = null }
+    }
+    finishSearchItem(plugins, true, "", data)
+  }
+
+  // A lane whose program never started (running went false, no exited).
+  function searchLost(plugins, pending) {
+    var p = plugins ? searchPluginProcess : searchJobProcess
+    if (p.running || (plugins ? searchPluginItem : searchJobItem) !== pending) return
+    finishSearchItem(plugins, false, "Could not run the qbt helper", null)
+  }
+
+  function searchStart(pattern, category) {
+    return searchRun("jobs", [helperPath, "search", "start", "--pattern", String(pattern), "--category", String(category)])
+  }
+  function searchStop(id) { return searchRun("jobs", [helperPath, "search", "stop", String(id)]) }
+  function searchDelete(id) { return searchRun("jobs", [helperPath, "search", "delete", String(id)]) }
+  // plugin: the result's engineName, passed only when non-empty.
+  function searchAdd(link, plugin) {
+    var cmd = [helperPath, "search", "add", String(link)]
+    if (plugin) cmd.push(String(plugin))
+    return searchRun("jobs", cmd)
+  }
+  function searchPluginList() { return searchRun("plugins", [helperPath, "search-plugin", "list"]) }
+  function searchPluginInstall(url) { return searchRun("plugins", [helperPath, "search-plugin", "install", String(url)]) }
+  function searchPluginUninstall(name) { return searchRun("plugins", [helperPath, "search-plugin", "uninstall", String(name)]) }
+  function searchPluginEnable(name, on) { return searchRun("plugins", [helperPath, "search-plugin", "enable", String(name), on ? "on" : "off"]) }
+  function searchPluginUpdate() { return searchRun("plugins", [helperPath, "search-plugin", "update"]) }
+
+  // The sidecar's search watch (OV7): the window owns the offset (the rows
+  // it holds) and sends it with every command. searchWatchId remembers the
+  // job so a restarted sidecar's first status line asks the window to
+  // re-send (searchWatchLost). Returns whether the sidecar got it.
+  function searchWatch(id, offset) {
+    var n = Number(id) || 0
+    if (n <= 0) return false
+    searchWatchId = n
+    return sidecar.send({ cmd: "search", id: n, offset: Math.max(0, Number(offset) || 0) })
+  }
+
+  function searchUnwatch() {
+    if (searchWatchId === 0) return
+    searchWatchId = 0
+    sidecar.send({ cmd: "search", id: null })
+  }
+
+  function handleSearchLine(data) {
+    if (!data || typeof data !== "object" || data.type !== "search") return
+    // A reply for a job nobody watches any more (a late one) goes nowhere.
+    if (Number(data.id) !== searchWatchId) return
+    // The final reply and "gone" end the sidecar's watch (Ruling FB).
+    if (data.error === "gone") searchWatchId = 0
+    searchReply(data)
   }
 
   // opts: {origin: "window"} returns a ticket that covers the install and
@@ -1164,6 +1309,8 @@ Scope {
         // pointless clearing watch on every start.
         lastSentWatch = null
         if (effectiveWatch(watchedHash, watchedTab).hash !== null) sendWatchIfChanged()
+        // Slice 5a: a fresh sidecar has no search watch either (OV7).
+        if (searchWatchId > 0) searchWatchLost()
       }
     } else if (msg.type === "heartbeat") {
       sidecarLastBeat = Date.now()
@@ -1222,7 +1369,7 @@ Scope {
   // The window is rebuilt on every toggle, so its Client may already be
   // destroyed by the time windowOpen flips false and could never send a
   // clearing watch itself; Service does it here instead (see clearWatch).
-  onWindowOpenChanged: if (!windowOpen) clearWatch()
+  onWindowOpenChanged: if (!windowOpen) { clearWatch(); searchUnwatch() }
 
   onSidecarCadenceMsChanged: if (sidecarState === "up") sendCadence()
 
@@ -1232,6 +1379,7 @@ Scope {
     id: sidecar
     path: root.sidecarPath
     onLine: function(text) { root.handleSidecarLine(text) }
+    onSearchLine: function(data) { root.handleSearchLine(data) }
     onExited: function(code) { root.handleSidecarExit(code) }
   }
 
@@ -1534,6 +1682,39 @@ Scope {
       if (exitCode !== 0) root.finishSecret(false, Model.sanitizeError(root.lastStderrLine(secretErr.text) || "Could not set the secret"))
       else root.finishSecret(true, "")
     }
+  }
+
+  // Slice 5a: the two `qbt search*` lanes (searchRun). searchLane is also
+  // what a test finds each by. A run that never starts emits no exited,
+  // only running going false: deferred a turn, like prefsProcess.
+  Process {
+    id: searchJobProcess
+    readonly property string searchLane: "jobs"
+    running: false
+    command: []
+    stdout: StdioCollector { id: searchJobOut; waitForEnd: true }
+    stderr: StdioCollector { id: searchJobErr; waitForEnd: true }
+    onRunningChanged: {
+      if (running || root.searchJobItem === null) return
+      var pending = root.searchJobItem
+      Qt.callLater(function() { root.searchLost(false, pending) })
+    }
+    onExited: function(exitCode) { root.searchExited(false, exitCode, searchJobOut.text, searchJobErr.text) }
+  }
+
+  Process {
+    id: searchPluginProcess
+    readonly property string searchLane: "plugins"
+    running: false
+    command: []
+    stdout: StdioCollector { id: searchPluginOut; waitForEnd: true }
+    stderr: StdioCollector { id: searchPluginErr; waitForEnd: true }
+    onRunningChanged: {
+      if (running || root.searchPluginItem === null) return
+      var pending = root.searchPluginItem
+      Qt.callLater(function() { root.searchLost(true, pending) })
+    }
+    onExited: function(exitCode) { root.searchExited(true, exitCode, searchPluginOut.text, searchPluginErr.text) }
   }
 
   Process {
