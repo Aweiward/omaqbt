@@ -167,7 +167,7 @@ def _write_fault(key):
     fault, _, nth = value.partition("@")
     if nth and (not nth.isdigit() or int(nth) != n):
         return None
-    return fault if fault in ("404", "409", "500", "409secret", "noop") else None
+    return fault if fault in ("404", "409", "500", "409secret", "noop", "unreadable") else None
 
 
 def _torrent_rows():
@@ -452,6 +452,111 @@ _LIBRARY_WRITES = {
 }
 
 
+# Slice 4a: /app/preferences backed by state. QBT_FIXTURE_PREFS names a
+# preferences dump (tests/fixtures/preferences-5.2.3.json, or a test's copy
+# with extra keys); QBT_FIXTURE_LIBRARY's "preferences" still override it.
+# Without the env var the GET stays the old synthetic reply and
+# setPreferences stays a 404, so no other suite sees a change.
+_SCHEMA = json.loads((ROOT.parent.parent / "settings-schema.json").read_text())["keys"]
+_PREFS_PATH = os.environ.get("QBT_FIXTURE_PREFS")
+PREFS_STATE = None
+if _PREFS_PATH:
+    PREFS_STATE = json.loads(Path(_PREFS_PATH).read_text())
+    PREFS_STATE.update(PREFERENCES)
+_PREFS_LOCK = threading.Lock()
+_SCHEDULE_PAIRS = (("schedule_from_hour", "schedule_from_min"), ("schedule_to_hour", "schedule_to_min"))
+_INT_TYPES = ("int", "choice-int", "speed")
+
+
+def _is_int(v):
+    return isinstance(v, int) and not isinstance(v, bool)
+
+
+def _is_number(v):
+    return isinstance(v, (int, float)) and not isinstance(v, bool)
+
+
+def _clean_path(p):
+    """Path()'s normalisation, as far as the tests need: no trailing slash."""
+    while len(p) > 1 and p.endswith("/"):
+        p = p[:-1]
+    return p
+
+
+def _pref_value(key, value):
+    """5.2.3's setter for one key: (True, stored) when it applies, (False,
+    None) when qBittorrent would drop it. Strings are trimmed, global
+    speeds are stored in whole KiB (sessionimpl.cpp:3480), announce_ip must
+    be an IP address or becomes "" (appcontroller.cpp:1178)."""
+    entry = _SCHEMA.get(key)
+    if entry is None:
+        current = PREFS_STATE[key]
+        if isinstance(current, bool):
+            return (True, value) if isinstance(value, bool) else (False, None)
+        if _is_number(current):
+            return (True, value) if _is_number(value) else (False, None)
+        if isinstance(current, str):
+            return (True, value.strip()) if isinstance(value, str) else (False, None)
+        return False, None
+    if entry.get("readOnly") or entry.get("composite"):
+        return False, None
+    kind = entry["type"]
+    if kind == "bool":
+        return (True, value) if isinstance(value, bool) else (False, None)
+    if kind in _INT_TYPES:
+        if not _is_int(value):
+            return False, None
+        if kind == "choice-int" and value not in [c["value"] for c in entry["choices"]]:
+            return False, None
+        if kind == "speed" and value > 0:
+            value = max(1024, value // 1024 * 1024)
+        return True, value
+    if kind == "float":
+        return (True, value) if _is_number(value) else (False, None)
+    if not isinstance(value, str):
+        return False, None
+    if kind == "choice-string":
+        return (True, value) if value in [c["value"] for c in entry["choices"]] else (False, None)
+    value = value.strip()
+    if kind == "path":
+        return True, _clean_path(value)
+    if key in ("announce_ip", "current_interface_address"):
+        import ipaddress
+        try:
+            return True, str(ipaddress.ip_address(value))
+        except ValueError:
+            return True, ""
+    return True, value
+
+
+def _set_preferences(body):
+    """setPreferencesAction (:513): always 200. Unknown keys, values of the
+    wrong kind and malformed JSON are dropped without a word; a scheduler
+    time applies only when its hour and minute arrive together (:807-812).
+    The control file's "prefs_override" ({key: value}) is applied after the
+    write, simulating qBittorrent changing a value on its own."""
+    raw = (parse_qs(body, keep_blank_values=True).get("json") or [""])[0]
+    try:
+        m = json.loads(raw)
+    except ValueError:
+        m = None
+    if not isinstance(m, dict):
+        m = {}
+    with _PREFS_LOCK:
+        for key, value in m.items():
+            if key not in PREFS_STATE or any(key in pair for pair in _SCHEDULE_PAIRS):
+                continue
+            ok, stored = _pref_value(key, value)
+            if ok:
+                PREFS_STATE[key] = stored
+        for hour, minute in _SCHEDULE_PAIRS:
+            if hour in m and minute in m and _is_int(m[hour]) and _is_int(m[minute]):
+                PREFS_STATE[hour], PREFS_STATE[minute] = m[hour], m[minute]
+        override = _control().get("prefs_override")
+        if isinstance(override, dict):
+            PREFS_STATE.update(override)
+
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
         return
@@ -575,6 +680,23 @@ class Handler(BaseHTTPRequestHandler):
                     wanted.update(x.lower() for x in entry.split("|") if x)
                 rows = [r for r in rows if (r.get("hash") or "").lower() in wanted]
             self._send(200, json.dumps(rows).encode())
+            return
+        if parsed.path == "/api/v2/app/preferences" and PREFS_STATE is not None:
+            # "409state": an error body that carries every preference,
+            # secrets included; qbt must report the code only.
+            fault = _write_fault("preferences")
+            if _control().get("preferences") == "409state":
+                self._send(409, json.dumps(PREFS_STATE).encode(), content_type="text/plain")
+                return
+            if fault == "unreadable":
+                self._send(200, b"<html>not json</html>")
+                return
+            if fault and fault != "noop":
+                self._fault_reply(fault)
+                return
+            with _PREFS_LOCK:
+                payload = json.dumps(PREFS_STATE)
+            self._send(200, payload.encode())
             return
         if parsed.path == "/api/v2/app/preferences":
             bind = ""
@@ -716,6 +838,17 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(400, f"Missing required parameters: {missing}".encode(), content_type="text/plain")
                 return
             self._send(code, b"" if code == 200 else b"refused")
+            return
+        if parsed.path == "/api/v2/app/setPreferences" and PREFS_STATE is not None:
+            fault = _write_fault("setPreferences")
+            if fault == "noop":
+                self._send(200, b"")
+                return
+            if fault and fault != "unreadable":
+                self._fault_reply(fault)
+                return
+            _set_preferences(body)
+            self._send(200, b"")
             return
         if parsed.path in ("/api/v2/torrents/pause", "/api/v2/torrents/resume"):
             self._send(404, b"gone")

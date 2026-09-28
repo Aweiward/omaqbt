@@ -1928,6 +1928,244 @@ cmd_rename() {
   printf '%s\n' '{"ok":true}'
 }
 
+# ---------------------------------------------------------------------------
+# Slice 4a: qBittorrent's preferences. settings-schema.json (plugin root,
+# next to this script) types every key; the locks and Other's refused
+# patterns are hardcoded here on purpose, so an edited or missing schema
+# can never unlock a key (tests/test_prefs.py pins them equal to the
+# schema's). Secret values never reach stdout, stderr or any argv; API
+# failures report the HTTP code only.
+# ---------------------------------------------------------------------------
+
+# The VPN binding: "Set by OmaqBT's setup."
+PREF_LOCKED_VPN=(
+  current_network_interface
+  current_interface_address
+  current_interface_name
+)
+# The WebUI OmaqBT itself talks to: "OmaqBT needs this as it is."
+PREF_LOCKED_WEBUI=(
+  web_ui_address
+  web_ui_port
+  bypass_local_auth
+  use_https
+  'web_ui_https_*'
+  web_ui_host_header_validation_enabled
+  web_ui_domain_list
+  'web_ui_reverse_prox*'
+  'alternative_webui_*'
+)
+# A key the schema doesn't know (Other) is refused when it matches one.
+PREF_OTHER_REFUSED=(
+  'web_ui_*'
+  'proxy_*'
+  '*interface*'
+  '*password*'
+  '*https*'
+  'autorun*'
+)
+# Printed as {"set": bool}, on top of the schema's secret flags.
+PREF_SECRETS=(proxy_password dyndns_password mail_notification_password web_ui_api_key)
+
+pref_schema_path() {
+  local exec_path
+  exec_path=$(readlink -f "$0" 2>/dev/null || printf '%s' "$0")
+  [[ $exec_path == /* ]] || exec_path="$PWD/$0"
+  printf '%s/settings-schema.json' "$(dirname "$exec_path")"
+}
+
+# True when $1 matches one of the globs after it ("*" is the only
+# wildcard; keys are checked to be [A-Za-z0-9_] first).
+pref_matches() {
+  local key=$1 glob
+  shift
+  for glob in "$@"; do
+    # shellcheck disable=SC2053 # the glob is meant to match
+    [[ $key == $glob ]] && return 0
+  done
+  return 1
+}
+
+# Prints a JSON array of the secret keys' names.
+pref_secret_names() {
+  local schema=$1
+  jq -c --arg extra "${PREF_SECRETS[*]}" \
+    '[.keys | to_entries[] | select(.value.secret == true) | .key] + ($extra | split(" ")) | unique' "$schema"
+}
+
+# Reads /app/preferences into PREFS_JSON, or dies with the code only.
+pref_read() {
+  api_try GET "/api/v2/app/preferences" || die "qBittorrent refused it (${API_FAIL})"
+  PREFS_JSON=$API_BODY
+  jq -e 'type == "object"' >/dev/null 2>&1 <<<"$PREFS_JSON" || die "qBittorrent sent something unreadable"
+}
+
+cmd_prefs() {
+  local api_error_detail=code
+  [[ $# -eq 0 ]] || die "usage: qbt prefs"
+  local schema secrets
+  schema=$(pref_schema_path)
+  [[ -f $schema ]] || die "The settings schema is missing."
+  secrets=$(pref_secret_names "$schema") || die "The settings schema is unreadable."
+  pref_read
+  # Secrets by name, plus any key that sounds like a password. The values
+  # go through stdin only.
+  jq -c --arg names "$secrets" '
+    ($names | fromjson) as $s
+    | with_entries(
+        if (.key as $k | $s | index([$k])) or (.key | test("password"; "i"))
+        then .value = {set: (.value != null and .value != "" and .value != false)}
+        else . end)' <<<"$PREFS_JSON" || die "qBittorrent sent something unreadable"
+}
+
+# Validates and casts one value for one key. $other is "" for a schema key,
+# or the kind of an Other key's current value (boolean, integer, number,
+# string).
+# Prints {error} or {sent, label, type}; the value only ever
+# arrives through --arg and is cast by the schema's type, never its shape.
+PREF_CAST_JQ='
+def one_line: test("[\n\r]") | not;
+def whole: test("^(0|-?[1-9][0-9]{0,9})$");
+def sentinel_text: (.sentinels // {}) | to_entries
+  | map("\(.key | if . == "" then "nothing" else . end) for \(.value)")
+  | if length == 0 then "" else ", or " + join(" or ") end;
+def sentinel($n): (.sentinels // {}) | has($n | tostring);
+def low: . as $e | $e.min | until(. as $n | $e | sentinel($n) | not; . + 1);
+def high: . as $e | $e.max | until(. as $n | $e | sentinel($n) | not; . - 1);
+def range_text: "from \(low) to \(high)\(sentinel_text)";
+def in_range($n): (.sentinels // {} | has($v)) or ($n >= .min and $n <= .max);
+def out($x): {sent: {($key): $x}};
+(if $other == "" then .keys[$key]
+ else {label: $key, type: ({boolean: "bool", integer: "integer", number: "number", string: "text"}[$other])} end) as $e
+| $e
+| (if .type == "bool" then
+     if $v == "true" or $v == "false" then out($v == "true") else {error: "Use true or false."} end
+   elif .type == "int" or .type == "speed" then
+     if ($v | whole) and in_range($v | tonumber) then
+       if .step and (($v | tonumber) % .step != 0) then {error: "Use whole KiB."}
+       else out($v | tonumber) end
+     else {error: "Use a whole number \(range_text)."} end
+   elif .type == "float" then
+     if ($v | test("^(0|-?[1-9][0-9]{0,9})(\\.[0-9]{1,2})?$")) and in_range($v | tonumber)
+     then out($v | tonumber)
+     else {error: "Use a number \(range_text), with at most 2 decimals."} end
+   elif .type == "integer" then
+     if $v | whole then out($v | tonumber) else {error: "Use a whole number."} end
+   elif .type == "number" then
+     if ($v | test("^-?(0|[1-9][0-9]{0,9})(\\.[0-9]{1,6})?$")) and ($v | test("^-0(\\.0+)?$") | not)
+     then out($v | tonumber)
+     else {error: "Use a number."} end
+   elif .type == "choice-int" then
+     if ($v | whole) and ([.choices[].value] | index([$v | tonumber])) then out($v | tonumber)
+     else {error: "Use one of: \([.choices[].value | tostring] | join(", "))."} end
+   elif .type == "choice-string" then
+     if [.choices[].value] | index([$v]) then out($v)
+     else {error: "Use one of: \([.choices[].value] | join(", "))."} end
+   elif .type == "time" then
+     if ($v | test("^([01][0-9]|2[0-3]):[0-5][0-9]$")) then
+       {sent: {(.composite.hour): ($v[0:2] | tonumber), (.composite.min): ($v[3:5] | tonumber)}}
+     else {error: "Use HH:MM, from 00:00 to 23:59."} end
+   elif .type == "path" then
+     if $v == "" and (.sentinels // {} | has("")) then out("")
+     elif ($v | one_line) and ($v | startswith("/")) then out($v)
+     elif ($v | one_line) and ($v | startswith("~/")) then out($home + $v[1:])
+     else {error: "Use an absolute path or one starting with ~/\(sentinel_text)."} end
+   elif .type == "text" then
+     if $v | one_line then out($v) else {error: "Keep it to one line."} end
+   else {error: "OmaqBT doesn'"'"'t change this setting."} end)
+| . + {label: $e.label, type: $e.type}'
+
+# True when the re-read preferences (stdin) hold what was sent, per type
+# (Ruling DI, the same rule as SettingsView.js): numbers numerically,
+# strings trimmed, paths trimmed and without a trailing slash (the sent
+# path already has ~/ expanded); every key of a composite.
+PREF_SAME_JQ='
+def trim_ws: sub("^\\s+"; "") | sub("\\s+$"; "");
+def clean: trim_ws | if . == "/" then . else sub("/+$"; "") end;
+($sent | fromjson) as $s | . as $p
+| all($s | to_entries[]; .value as $want | $p[.key] as $got
+    | if ($want | type) == "boolean" then $got == $want
+      elif ($want | type) == "number" then ($got | type) == "number" and $got == $want
+      elif ($got | type) != "string" then false
+      elif $type == "path" then ($got | clean) == ($want | clean)
+      else ($got | trim_ws) == ($want | trim_ws) end)'
+
+cmd_pref_set() {
+  local api_error_detail=code
+  local usage="usage: qbt pref-set <key> -- <value>"
+  [[ $# -eq 3 && $2 == -- ]] || die "$usage"
+  local key=$1 value=$3
+  (
+    LC_ALL=C
+    [[ $key =~ ^[A-Za-z][A-Za-z0-9_]{0,127}$ ]]
+  ) || die "qBittorrent has no setting called that."
+  pref_matches "$key" "${PREF_LOCKED_VPN[@]}" && die "Set by OmaqBT's setup."
+  pref_matches "$key" "${PREF_LOCKED_WEBUI[@]}" && die "OmaqBT needs this as it is."
+
+  local schema
+  schema=$(pref_schema_path)
+  [[ -f $schema ]] || die "The settings schema is missing."
+  local flags
+  flags=$(jq -r --arg k "$key" '
+    .keys[$k] as $e
+    | if $e == null then "other"
+      elif $e.readOnly then "readOnly" elif $e.secret or $e.type == "secret" then "secret"
+      elif $e.hidden then "hidden" elif $e.deferred then "deferred"
+      elif $e.locked then "locked" elif $e.multiline then "multiline" else "ok" end' "$schema") || die "The settings schema is unreadable."
+  case $flags in
+    readOnly) die "qBittorrent doesn't let this be changed." ;;
+    secret) die "OmaqBT doesn't change secrets yet." ;;
+    hidden) die "OmaqBT doesn't change this setting." ;;
+    deferred) die "OmaqBT doesn't change this setting yet." ;;
+    # Ruling DH: multi-line text is read-only in 4a.
+    multiline) die "Editing multi-line settings arrives in 4b." ;;
+    # A schema lock the hardcoded lists above don't cover: refuse anyway.
+    locked) die "OmaqBT needs this as it is." ;;
+    ok|other) ;;
+    *) die "The settings schema is unreadable." ;;
+  esac
+
+  # jq replaces invalid UTF-8 with U+FFFD, which would send (and read back)
+  # something other than what was typed.
+  local loc
+  loc=$(name_utf8_locale) || die "No UTF-8 locale is available to check the value."
+  (LC_ALL=$loc; [[ $value =~ ^.*$ ]]) 2>/dev/null || die "Use valid UTF-8 text."
+
+  local other=""
+  if [[ $flags == other ]]; then
+    # Ruling DL: case-insensitive, so Proxy_foo or WEB_UI_x is refused too.
+    pref_matches "${key,,}" "${PREF_OTHER_REFUSED[@]}" && die "OmaqBT won't change this setting."
+    pref_read
+    # A whole number stays whole: an integer's Other value refuses decimals.
+    other=$(jq -r --arg k "$key" '
+      if has($k) | not then "missing"
+      elif (.[$k] | type) == "number" and .[$k] == (.[$k] | floor) then "integer"
+      else .[$k] | type end' <<<"$PREFS_JSON") \
+      || die "qBittorrent sent something unreadable"
+    case $other in
+      missing) die "qBittorrent has no setting called ${key}." ;;
+      boolean|integer|number|string) ;;
+      *) die "OmaqBT can only change on/off, number and text settings." ;;
+    esac
+  fi
+
+  local cast err
+  cast=$(jq -c --arg key "$key" --arg v "$value" --arg other "$other" --arg home "${HOME%/}" "$PREF_CAST_JQ" "$schema") \
+    || die "The settings schema is unreadable."
+  err=$(jq -r '.error // empty' <<<"$cast")
+  [[ -z $err ]] || die "$err"
+  local sent label type
+  sent=$(jq -c '.sent' <<<"$cast")
+  label=$(jq -r '.label' <<<"$cast")
+  type=$(jq -r '.type' <<<"$cast")
+
+  api_try POST "/api/v2/app/setPreferences" "json=$(uri "$sent")" || die "qBittorrent refused it (${API_FAIL})"
+  pref_read
+  jq -e --arg sent "$sent" --arg type "$type" "$PREF_SAME_JQ" >/dev/null 2>&1 <<<"$PREFS_JSON" \
+    || die "qBittorrent ignored ${label}"
+  printf '%s\n' '{"ok":true}'
+}
+
 case ${1:-} in
   status) shift; cmd_status "$@" ;;
   probe) shift; cmd_probe "$@" ;;
@@ -1963,6 +2201,8 @@ case ${1:-} in
   tag-remove) shift; cmd_tag_remove "$@" ;;
   tag-rename) shift; cmd_rename tag "$@" ;;
   tags) shift; cmd_tags "$@" ;;
+  prefs) shift; cmd_prefs "$@" ;;
+  pref-set) shift; cmd_pref_set "$@" ;;
   magnet-paths) shift; cmd_magnet_paths "$@" ;;
   magnet-snapshot) shift; cmd_magnet_snapshot "$@" ;;
   magnet-inbox) shift; cmd_magnet_inbox "$@" ;;
@@ -1972,5 +2212,5 @@ case ${1:-} in
   magnet-pending-drop) shift; cmd_magnet_pending_drop "$@" ;;
   magnet-install-handler) shift; cmd_magnet_install_handler "$@" ;;
   magnet-uninstall-handler) shift; cmd_magnet_uninstall_handler "$@" ;;
-  *) die "usage: qbt status|probe|add|start|stop|recheck|set-location|delete|reannounce|tracker-add|tracker-edit|tracker-remove|ban-peer|fetch-metadata|files|prio|turtle|limit|sequential|first-last|sharelimit|share-limits|category-add|category-path|category-remove|category-rename|set-category|tag-add|tag-remove|tag-rename|tags|install|start-daemon|stop-daemon|magnet-paths|magnet-inbox|magnet-drain|magnet-pending-list|magnet-pending-drop|magnet-install-handler|magnet-uninstall-handler" ;;
+  *) die "usage: qbt status|probe|add|start|stop|recheck|set-location|delete|reannounce|tracker-add|tracker-edit|tracker-remove|ban-peer|fetch-metadata|files|prio|turtle|limit|sequential|first-last|sharelimit|share-limits|category-add|category-path|category-remove|category-rename|set-category|tag-add|tag-remove|tag-rename|tags|prefs|pref-set|install|start-daemon|stop-daemon|magnet-paths|magnet-inbox|magnet-drain|magnet-pending-list|magnet-pending-drop|magnet-install-handler|magnet-uninstall-handler" ;;
 esac

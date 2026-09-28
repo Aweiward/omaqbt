@@ -1644,6 +1644,41 @@ with harness.fixture_server(extra_env=sl_library({sl_hash(54): {"seq_dl": True}}
           r.returncode == 0 and [(x["method"], x["path"], x["body"]) for x in e] == [("POST", "/api/v2/torrents/toggleSequentialDownload", f"hashes={sl_hash(54)}")])
     check("bare sequential: flips", state(port)["limits"][sl_hash(54)]["seq_dl"] is False)
 
+# ---------------------------------------------------------------------------
+# Slice 4a, Task 2: pref-set's exact requests (the full gate is in
+# tests/test_prefs.py). A schema key: one POST, then the re-read. A
+# composite: both members in one POST. Other: a read first for the type.
+# ---------------------------------------------------------------------------
+_prefs_fd, _prefs_path = tempfile.mkstemp(prefix="qbt-actions-prefs-", suffix=".json")
+with os.fdopen(_prefs_fd, "w") as f:
+    json.dump(dict(json.loads(Path("tests/fixtures/preferences-5.2.3.json").read_text()), future_flag=False), f)
+try:
+    with harness.fixture_server(extra_env=dict(UTF8_ENV, QBT_FIXTURE_PREFS=_prefs_path)) as (port, env):
+        for args, want in (
+            (["dht", "--", "false"], [("POST", "/api/v2/app/setPreferences", "json=%7B%22dht%22%3Afalse%7D"),
+                                      ("GET", "/api/v2/app/preferences", "")]),
+            (["schedule_to", "--", "06:05"], [("POST", "/api/v2/app/setPreferences",
+                                               "json=%7B%22schedule_to_hour%22%3A6%2C%22schedule_to_min%22%3A5%7D"),
+                                              ("GET", "/api/v2/app/preferences", "")]),
+            (["app_instance_name", "--", "a&b+c%d"], [("POST", "/api/v2/app/setPreferences",
+                                                        "json=%7B%22app_instance_name%22%3A%22a%26b%2Bc%25d%22%7D"),
+                                                       ("GET", "/api/v2/app/preferences", "")]),
+            (["future_flag", "--", "true"], [("GET", "/api/v2/app/preferences", ""),
+                                             ("POST", "/api/v2/app/setPreferences", "json=%7B%22future_flag%22%3Atrue%7D"),
+                                             ("GET", "/api/v2/app/preferences", "")]),
+        ):
+            before = len(read_log(env))
+            r = run(env, "pref-set", *args)
+            e = new_entries(env, before)
+            check(f"pref-set {args[0]}: succeeds", r.returncode == 0 and r.stdout.strip() == '{"ok":true}')
+            check(f"pref-set {args[0]}: exact requests", [(x["method"], x["path"], x["body"]) for x in e] == want)
+        before = len(read_log(env))
+        r = run(env, "pref-set", "web_ui_port", "--", "8081")
+        check("pref-set web_ui_port: refused before any request",
+              r.returncode != 0 and r.stderr.strip() == "OmaqBT needs this as it is." and read_log(env)[before:] == [])
+finally:
+    os.unlink(_prefs_path)
+
 if failures:
     print(f"\n{len(failures)} check(s) failed", file=sys.stderr)
     sys.exit(1)
