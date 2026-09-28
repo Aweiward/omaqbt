@@ -1065,6 +1065,10 @@ function parseStatusJson(raw) {
     var id = torrentId(row);
     torrents.push({
       hash: id,
+      // Slice 5a (OV11): qBittorrent's v1 and v2 ids ("" when absent), for
+      // the Search view's "in library" match.
+      infohash_v1: typeof row.infohash_v1 === "string" ? row.infohash_v1 : "",
+      infohash_v2: typeof row.infohash_v2 === "string" ? row.infohash_v2 : "",
       name: String(row.name || ""),
       state: String(row.state || ""),
       progress: Number(row.progress || 0),

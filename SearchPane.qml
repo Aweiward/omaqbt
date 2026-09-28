@@ -128,9 +128,14 @@ Item {
   property var pluginList: []
   property bool pluginsLoaded: false
   property bool pluginsReading: false
-  // The plugin change running: "install", "uninstall", "toggle", "update" or "".
-  property string busyKind: ""
+  // The plugin change running: "install", "uninstall", "toggle", "update" or
+  // "". Service's searchPluginChange, so a window rebuilt while a change
+  // runs still shows it and waits (localBusy: a Service without it).
+  property string localBusy: ""
+  readonly property string busyKind: service && typeof service.searchPluginChange === "string" ? service.searchPluginChange : localBusy
   readonly property bool pluginsBusy: busyKind !== ""
+  // A change ended (in this window or before it was rebuilt): the list again.
+  onPluginsBusyChanged: if (!pluginsBusy) cmds.loadPlugins()
   readonly property int plugins: pluginList.length
   readonly property int enabledPlugins: SearchView.enabledCount(pluginList)
   property int pluginListIndex: 0
@@ -187,14 +192,17 @@ Item {
   property int addConfirmMs: 30000
   // The sidecar streams the results; while it isn't up nothing arrives.
   readonly property bool sidecarUp: !service || service.sidecarState === undefined || service.sidecarState === "up"
-  // Ruling FD: only while Running with the sidecar not up, never on a
-  // quiet search.
-  readonly property bool stalled: jobState === "running" && !sidecarUp
+  // Ruling FD: only while Running with the sidecar down (it gave up), never
+  // on a quiet search or while it starts.
+  readonly property bool stalled: jobState === "running" && !!service && service.sidecarState === "down"
   // The library's ids (SearchView.librarySet), for "in library" (OV11).
   property var libSet: ({})
 
-  readonly property var flags: ({ narrow: search.narrow, result: search.currentResult, plugin: search.cursorPlugin, plugins: search.plugins,
-    enabledPlugins: search.enabledPlugins, pluginsBusy: search.pluginsBusy, running: search.running, category: search.category })
+  // Over the down screen no result, plugin or search key acts (Esc still
+  // leaves; run() refuses the rest).
+  readonly property var flags: ({ narrow: search.narrow, result: search.downShown ? null : search.currentResult,
+    plugin: search.downShown ? null : search.cursorPlugin, plugins: search.plugins, enabledPlugins: search.downShown ? 0 : search.enabledPlugins,
+    pluginsBusy: search.pluginsBusy, running: search.running, category: search.category })
 
   // ---- the down screen (OV4) ----------------------------------------------------------
   readonly property bool downNow: ["gui", "notInstalled", "daemon", "api"].indexOf(tableState) !== -1
@@ -258,6 +266,8 @@ Item {
   // undefined (the palette).
   function run(commandId, args, ev) {
     if (!open) return
+    // The down screen (W2): only the ways out.
+    if (downShown && ["search.back", "plugin.close", "search.pluginsClose"].indexOf(commandId) === -1) return
     var a = args || ({})
     switch (commandId) {
     case "search.back":
@@ -446,14 +456,17 @@ Item {
     held = held + raws.length
     var byKey = ({})
     for (var k in rowByKey) byKey[k] = rowByKey[k]
+    var keys = shownKeys.slice()
     for (var u = 0; u < m.updated.length; u++) {
       var row = null
       for (var j = 0; j < m.rows.length; j++) if (m.rows[j].key === m.updated[u]) { row = m.rows[j]; break }
       byKey[m.updated[u]] = row
-      var at = shownKeys.indexOf(m.updated[u])
-      if (row && at >= 0) resultModel.setProperty(at, "plugin", pluginText(row))
+      if (!row) continue
+      var at = keys.indexOf(m.updated[u])
+      if (at >= 0) resultModel.setProperty(at, "plugin", pluginText(row))
+      // A held row that gained the filtered plugin shows now (W3).
+      else if (SearchView.matchesPlugin(row, pluginFilter)) { keys.push(row.key); resultModel.append(modelRow(row)) }
     }
-    var keys = shownKeys.slice()
     for (var i = 0; i < m.added.length; i++) {
       var r = m.added[i]
       byKey[r.key] = r

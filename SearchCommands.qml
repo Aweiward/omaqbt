@@ -33,8 +33,9 @@ import "Model.js" as Model
 // - d: the pageLink rule, then D3's CONFIRM; `y` opens it detached (OV10).
 // - The plugins overlay: Space on/off, x uninstall (after a CONFIRM), i
 //   install (the pluginUrl rule in INSERT, then D4's CONFIRM), U update all.
-//   One plugin change at a time (pluginsBusy); the list is re-read after
-//   each.
+//   One plugin change at a time (pluginsBusy: Service's
+//   searchPluginChange, so a reopened window still waits); SearchPane
+//   reads the list again when it ends.
 // Every sentence is SearchView's (the case file's); qbt's own sentences
 // show as they are.
 QtObject {
@@ -48,10 +49,6 @@ QtObject {
   // [{v1, v2, name, until}]; "Added <name>." shows once it is, and
   // "Couldn't confirm <name> was added." once `until` (ms) passes (FD).
   property var awaiting: []
-  // Starts the window gave up on while they ran (it closed): their job is
-  // deleted as soon as its id arrives (review 3: by ticket, so a later
-  // start is never touched).
-  property var orphanStarts: []
 
   readonly property var client: view.client
   readonly property var service: view.service
@@ -111,7 +108,7 @@ QtObject {
 
   function pluginWrite(kind, ticket, name) {
     if (!remember(ticket, { kind: kind, name: name })) return
-    view.busyKind = kind
+    view.localBusy = kind
   }
 
   function togglePlugin(p) {
@@ -214,7 +211,8 @@ QtObject {
   function started(ticket, ok, error, data) {
     var v = view
     // Only the latest `/` counts; an older start's job is deleted by the
-    // newer start (qbt's search.id), or by the window's close.
+    // newer start (qbt's search.id), or by Service once the window closed
+    // (it abandons the starts still going).
     if (Number(ticket) !== v.startTicket) return
     v.startTicket = 0
     if (!ok) {
@@ -299,11 +297,12 @@ QtObject {
     if (v.jobId > 0 && svcHas("searchWatch")) service.searchWatch(v.jobId, v.held)
   }
 
-  // The window closes: the job goes (A5/OV14).
+  // The window closes: the job goes (A5/OV14). A start still going is
+  // Service's: windowOpen going false abandons it, and Service deletes its
+  // job once the id arrives (this window is rebuilt, never reopened).
   function closeJob() {
     var v = view
     if (v.jobState === "starting" || v.jobState === "running") v.jobState = "stopped"
-    if (v.startTicket > 0) orphanStarts = orphanStarts.concat([v.startTicket])
     v.startTicket = 0
     v.stopWanted = false
     if (v.jobId > 0) {
@@ -384,13 +383,6 @@ QtObject {
     if (!e) return
     var v = view
     if (e.kind === "start") {
-      var at = orphanStarts.indexOf(Number(ticket))
-      if (at !== -1) {
-        orphanStarts = orphanStarts.slice(0, at).concat(orphanStarts.slice(at + 1))
-        var oid = ok && data && typeof data === "object" ? data.id : undefined
-        if (typeof oid === "number" && SearchView.checkSearchId(String(oid)).ok && svcHas("searchDelete")) service.searchDelete(oid)
-        return
-      }
       started(ticket, ok, error, data)
       return
     }
@@ -410,11 +402,11 @@ QtObject {
       if (!ok) fail(error)
       return
     }
-    // A plugin change: the list is read again whatever happened.
+    // A plugin change: the list is read again whatever happened (SearchPane,
+    // when pluginsBusy goes false).
     if (e.kind === "install" || e.kind === "uninstall" || e.kind === "toggle" || e.kind === "update") {
-      v.busyKind = ""
       if (!ok) fail(error)
-      loadPlugins()
+      v.localBusy = ""
     }
   }
 

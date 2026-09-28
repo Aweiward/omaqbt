@@ -122,6 +122,48 @@ test("the library match (OV11): btih vs hash, btmh vs infohash_v2 and the v2 id;
   assert.equal(S.addPlan(S.resultFrom(raw(), 0), "1.0 KiB", set).note, "Already in your library.");
 });
 
+test("the library match (OV11) with the status rows' infohash_v1 and infohash_v2", () => {
+  const Model = (() => {
+    const file = path.join(__dirname, "..", "Model.js");
+    const src = fs.readFileSync(file, "utf8").split("\n").map((l) => (/^\s*\.(import|pragma)\b/.test(l) ? "" : l)).join("\n");
+    return vm.runInNewContext(src + "\n;({ parseStatusJson })", {});
+  })();
+  const v1 = "11".repeat(20), hybridV2 = "22".repeat(32), onlyV2 = "33".repeat(32);
+  // Status rows as qbt status prints them: "" when qBittorrent has no such id.
+  const status = Model.parseStatusJson(JSON.stringify({ installed: true, daemon: true, api: true, torrents: [
+    { hash: v1.toUpperCase(), infohash_v1: v1.toUpperCase(), infohash_v2: hybridV2.toUpperCase(), name: "hybrid", state: "uploading" },
+    { hash: onlyV2.slice(0, 40), infohash_v1: "", infohash_v2: onlyV2, name: "v2 only", state: "uploading" },
+    { hash: "44".repeat(20), infohash_v1: "44".repeat(20), infohash_v2: "", name: "v1 only", state: "uploading" }
+  ] }));
+  assert.equal(status.torrents[0].infohash_v2, hybridV2.toUpperCase());
+  const set = S.librarySet(status.torrents);
+  assert.equal(S.inLibrary(v1, null, set), true, "btih vs hash and infohash_v1");
+  assert.equal(S.inLibrary(null, hybridV2, set), true, "btmh vs infohash_v2 (a hybrid's hash is its v1)");
+  assert.equal(S.inLibrary(null, onlyV2, set), true, "btmh vs a v2-only torrent's infohash_v2");
+  assert.equal(S.inLibrary("44".repeat(20), null, set), true);
+  assert.equal(S.inLibrary(onlyV2.slice(0, 40), null, set), true, "a btih still meets qBittorrent's id (the hash)");
+  assert.equal(S.inLibrary(null, "44".repeat(20) + "55".repeat(12), set), false, "a btmh never meets a v1 torrent whose row says it has no v2");
+  assert.equal(S.inLibrary(null, v1 + "66".repeat(12), set), false, "nor a hybrid's hash, which is its v1");
+  assert.equal(S.inLibrary(hybridV2.slice(0, 40), null, set), false, "a btih never meets a v2 id");
+  // The fields absent (an older helper): the hash-only path still works.
+  const old = S.librarySet([{ hash: v1 }, { hash: onlyV2.slice(0, 40) }]);
+  assert.equal(S.inLibrary(v1, null, old), true);
+  assert.equal(S.inLibrary(null, onlyV2, old), true);
+  assert.equal(S.inLibrary(null, null, old), false);
+  assert.equal(S.inLibrary(v1, onlyV2, {}), false, "an empty set matches nothing");
+});
+
+test("BAD refuses the soft hyphen and the IDNA dots in every URL kind", () => {
+  for (const ch of ["\u00ad", "\u3002", "\uff0e", "\uff61"]) {
+    const name = "U+" + ch.codePointAt(0).toString(16).toUpperCase().padStart(4, "0");
+    assert.deepEqual(S.checkPluginUrl("https://example" + ch + "org/jackett.py"), { ok: false, message: S.MSG.pluginUrlBad }, "pluginUrl " + name);
+    assert.deepEqual(S.checkPageLink("https://example" + ch + "org/d/1"), { ok: false, message: S.MSG.pageBad }, "pageLink " + name);
+    assert.deepEqual(S.checkAddLink(["https://example" + ch + "org/d.torrent"]), { ok: false, message: S.MSG.noLink }, "addLink " + name);
+    assert.deepEqual(S.checkAddLink(["https://example" + ch + "org/d/1", "piratebay"]), { ok: false, message: S.MSG.noLink }, "addLink via a plugin " + name);
+    assert.equal(S.copyableLink("https://example" + ch + "org/d.torrent"), false, "y " + name);
+  }
+});
+
 test("sort: seeds descending by default, — last either way, ties by arrival", () => {
   const rows = S.mergeResults([], [raw({ fileUrl: "u1", nbSeeders: 3, fileName: "b" }), raw({ fileUrl: "u2", nbSeeders: -1, fileName: "a" }),
     raw({ fileUrl: "u3", nbSeeders: 9, fileName: "c" }), raw({ fileUrl: "u4", nbSeeders: 3, fileName: "d" })], 0).rows;
