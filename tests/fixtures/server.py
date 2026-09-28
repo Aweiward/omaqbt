@@ -168,7 +168,7 @@ def _write_fault(key):
     fault, _, nth = value.partition("@")
     if nth and (not nth.isdigit() or int(nth) != n):
         return None
-    return fault if fault in ("404", "409", "500", "409secret", "noop", "unreadable") else None
+    return fault if fault in ("404", "409", "500", "409secret", "noop", "unreadable", "sleep7") else None
 
 
 def _torrent_rows():
@@ -465,6 +465,8 @@ if _PREFS_PATH:
     PREFS_STATE = json.loads(Path(_PREFS_PATH).read_text())
     PREFS_STATE.update(PREFERENCES)
 _PREFS_LOCK = threading.Lock()
+# Whether the last /app/preferences request was a setPreferences POST.
+_PREFS_POSTED = [False]
 _SCHEDULE_PAIRS = (("schedule_from_hour", "schedule_from_min"), ("schedule_to_hour", "schedule_to_min"))
 _INT_TYPES = ("int", "choice-int", "speed")
 
@@ -501,15 +503,32 @@ def _clean_path(p):
 
 def _qt_address(text):
     """QHostAddress{text}.toString(), or "" when it doesn't parse: IPv6
-    lowercased and compressed, a v4-mapped address kept dotted."""
+    lowercased and compressed (RFC 5952), a v4-mapped address kept dotted,
+    and so is one whose first 96 bits are zero while its 7th group isn't
+    (::1.2.3.4, but ::1 and ::100): checked against Qt 6.11's QHostAddress
+    over 6000 addresses. (Qt also takes 127.1 or a padded address; qbt
+    never sends those.)"""
     import ipaddress
     try:
         addr = ipaddress.ip_address(text)
     except ValueError:
         return ""
-    if isinstance(addr, ipaddress.IPv6Address) and addr.ipv4_mapped is not None:
-        return f"::ffff:{addr.ipv4_mapped}"
+    if isinstance(addr, ipaddress.IPv6Address):
+        if addr.ipv4_mapped is not None:
+            return f"::ffff:{addr.ipv4_mapped}"
+        packed = addr.packed
+        if packed[:12] == bytes(12) and packed[12:14] != bytes(2):
+            return f"::{ipaddress.IPv4Address(packed[12:])}"
     return str(addr)
+
+
+def _banned_ips(text):
+    """setBannedIPs (sessionimpl.cpp:4167) after appcontroller.cpp:783's
+    split(SkipEmptyParts): invalid addresses dropped, QHostAddress form,
+    sorted as strings, de-duplicated, joined back with newlines."""
+    kept = {_qt_address(part) for part in text.split("\n") if part != ""}
+    kept.discard("")
+    return "\n".join(sorted(kept))
 
 
 def _utf16_len(text):
@@ -557,6 +576,8 @@ def _pref_value(key, value):
         return True, _clean_path(value)
     if key in ("announce_ip", "current_interface_address"):
         return True, _qt_address(value)
+    if key == "banned_IPs":
+        return True, _banned_ips(value)
     return True, value
 
 
@@ -746,6 +767,13 @@ class Handler(BaseHTTPRequestHandler):
             # "409state": an error body that carries every preference,
             # secrets included; qbt must report the code only.
             fault = _write_fault("preferences")
+            # "preferences_after_post": the fault hits only a read that
+            # follows a setPreferences POST (a write's read-back), so a
+            # command that reads first and then writes can fail after it.
+            with _PREFS_LOCK:
+                after_post, _PREFS_POSTED[0] = _PREFS_POSTED[0], False
+            if after_post and isinstance(_control().get("preferences_after_post"), str):
+                fault = _control()["preferences_after_post"]
             if _control().get("preferences") == "409state":
                 self._send(409, json.dumps(PREFS_STATE).encode(), content_type="text/plain")
                 return
@@ -901,7 +929,14 @@ class Handler(BaseHTTPRequestHandler):
             self._send(code, b"" if code == 200 else b"refused")
             return
         if parsed.path == "/api/v2/app/setPreferences" and PREFS_STATE is not None:
+            with _PREFS_LOCK:
+                _PREFS_POSTED[0] = True
             fault = _write_fault("setPreferences")
+            if fault == "sleep7":
+                # Past qbt's 5 s curl limit; nothing applies.
+                time.sleep(7)
+                self._send(200, b"")
+                return
             if fault == "noop":
                 self._send(200, b"")
                 return
