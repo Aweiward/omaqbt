@@ -115,25 +115,39 @@ var commands = [
   { id: "library.remove", title: "Delete category or tag", group: "Library", keys: ["x"], modes: ["NORMAL"], panes: ["filters"], needs: "libraryName" },
 
   // NORMAL, inspector pane: the list the current tab shows (trackers,
-  // peers or files; the window ignores these on Info). Space cycles a
-  // file's priority like a widget click (Files only).
-  { id: "file.down", title: "Next row", group: "View", keys: ["j", "Down"], modes: ["NORMAL"], panes: ["inspector"], needs: "none" },
-  { id: "file.up", title: "Previous row", group: "View", keys: ["k", "Up"], modes: ["NORMAL"], panes: ["inspector"], needs: "none" },
-  { id: "file.cycle", title: "Cycle file priority", group: "Torrent", keys: ["Space"], modes: ["NORMAL"], panes: ["inspector"], needs: "torrent" },
+  // peers or files). Space cycles a file's priority like a widget click
+  // (Files only). `tabs` (D7) is what tells file.down/up apart from the
+  // Info tab's limit.down/up below: findMatch (see tabMatches) skips a row
+  // whose tabs doesn't include the focused inspector tab, so j/k/Space
+  // never fall through from one tab's rows to another's.
+  { id: "file.down", title: "Next row", group: "View", keys: ["j", "Down"], modes: ["NORMAL"], panes: ["inspector"], tabs: ["files", "trackers", "peers"], needs: "none" },
+  { id: "file.up", title: "Previous row", group: "View", keys: ["k", "Up"], modes: ["NORMAL"], panes: ["inspector"], tabs: ["files", "trackers", "peers"], needs: "none" },
+  { id: "file.cycle", title: "Cycle file priority", group: "Torrent", keys: ["Space"], modes: ["NORMAL"], panes: ["inspector"], tabs: ["files"], needs: "torrent" },
+
+  // NORMAL, inspector pane, Info tab only: the Limits group's cursor
+  // (Task 5 adds the group; this only reserves its keys, D7). limit.edit
+  // and limit.toggle need a row/toggle row under the Limits cursor --
+  // limitCursorKey/limitToggle, which Task 5's Limits group will compute;
+  // until then Enter is a no-op and Space is blocked with no note (never
+  // torrent.toggle, which the inspector pane never binds Space to).
+  { id: "limit.down", title: "Next limit", group: "View", keys: ["j", "Down"], modes: ["NORMAL"], panes: ["inspector"], tabs: ["info"], needs: "none" },
+  { id: "limit.up", title: "Previous limit", group: "View", keys: ["k", "Up"], modes: ["NORMAL"], panes: ["inspector"], tabs: ["info"], needs: "none" },
+  { id: "limit.edit", title: "Edit limit", group: "Torrent", keys: ["Enter"], modes: ["NORMAL"], panes: ["inspector"], tabs: ["info"], needs: "limitRow" },
+  { id: "limit.toggle", title: "Toggle limit", group: "Torrent", keys: ["Space"], modes: ["NORMAL"], panes: ["inspector"], tabs: ["info"], needs: "limitToggle" },
 
   // NORMAL, inspector pane, trackers tab only (Deviation 4: R too). a and
   // R work on an empty list; c and x act on the tracker under the cursor,
   // captured at key time (args.target). x means "remove this tracker" and
   // never removes a torrent (torrent.remove is table-only).
-  { id: "tracker.reannounce", title: "Reannounce", group: "Torrent", keys: ["R"], modes: ["NORMAL"], panes: ["inspector"], needs: "trackersTab" },
-  { id: "tracker.add", title: "Add tracker", group: "Torrent", keys: ["a"], modes: ["NORMAL"], panes: ["inspector"], needs: "trackersTab" },
-  { id: "tracker.edit", title: "Change tracker URL", group: "Torrent", keys: ["c"], modes: ["NORMAL"], panes: ["inspector"], needs: "tracker" },
-  { id: "tracker.remove", title: "Remove tracker", group: "Torrent", keys: ["x"], modes: ["NORMAL"], panes: ["inspector"], needs: "tracker" },
+  { id: "tracker.reannounce", title: "Reannounce", group: "Torrent", keys: ["R"], modes: ["NORMAL"], panes: ["inspector"], tabs: ["trackers"], needs: "trackersTab" },
+  { id: "tracker.add", title: "Add tracker", group: "Torrent", keys: ["a"], modes: ["NORMAL"], panes: ["inspector"], tabs: ["trackers"], needs: "trackersTab" },
+  { id: "tracker.edit", title: "Change tracker URL", group: "Torrent", keys: ["c"], modes: ["NORMAL"], panes: ["inspector"], tabs: ["trackers"], needs: "tracker" },
+  { id: "tracker.remove", title: "Remove tracker", group: "Torrent", keys: ["x"], modes: ["NORMAL"], panes: ["inspector"], tabs: ["trackers"], needs: "tracker" },
 
   // NORMAL, inspector pane, peers tab only: ban the peer under the cursor
   // (captured at key time, CONFIRM). The ban is global: it goes on
   // qBittorrent's IP ban list.
-  { id: "peer.ban", title: "Ban peer", group: "Torrent", keys: ["b"], modes: ["NORMAL"], panes: ["inspector"], needs: "peer" },
+  { id: "peer.ban", title: "Ban peer", group: "Torrent", keys: ["b"], modes: ["NORMAL"], panes: ["inspector"], tabs: ["peers"], needs: "peer" },
 
   // NORMAL, any pane: swap a stopped no-metadata torrent for its magnet
   // with stopCondition MetadataReceived (qbt fetch-metadata, F4).
@@ -228,6 +242,13 @@ function normalizeState(state) {
     cursorNoMetadata: s.cursorNoMetadata === true,
     cursorStopped: s.cursorStopped === true,
     cursorPendingMagnet: s.cursorPendingMagnet === true,
+    // The inspector's currently shown tab ("info"/"trackers"/"peers"/
+    // "files"/"chart", "" when the inspector isn't focused): what `tabs`
+    // (D7) matches against. Task 5's Limits group cursor, defaulted so
+    // limit.edit/limit.toggle are blocked (with no note) until it's wired.
+    inspectorTab: typeof s.inspectorTab === "string" ? s.inspectorTab : "",
+    limitCursorKey: s.limitCursorKey || null,
+    limitToggle: s.limitToggle === true,
     // The filters pane's part (ClientView.libraryTarget): the category or
     // tag row under the filters cursor, or null.
     libraryTarget: s.libraryTarget || null,
@@ -279,7 +300,40 @@ function paneMatches(row, pane) {
   return row.panes.indexOf(PANE_ANY) !== -1 || row.panes.indexOf(pane) !== -1;
 }
 
+// tabMatches(row, tab) -> whether row.tabs (D7) covers the inspector's
+// current tab. A row with no `tabs` (everything outside the inspector
+// pane, and o/y/m/e/f inside it) is never tab-scoped, so it always matches.
+function tabMatches(row, tab) {
+  return !row.tabs || row.tabs.indexOf(tab) !== -1;
+}
+
+// findMatch(s, ev) -> the row a key resolves to: the first row matching
+// mode, pane, key AND (D7) tab. A row that matches everything but the tab
+// (e.g. x pressed off the trackers tab) is not returned here -- see
+// findMatchIgnoringTabs, which dispatch() consults only to keep reporting
+// that row's own `needs` reason, never to run it.
 function findMatch(s, ev) {
+  var i, j, row, label;
+  for (i = 0; i < commands.length; i++) {
+    row = commands[i];
+    if (row.modes.indexOf(s.mode) === -1) continue;
+    if (!paneMatches(row, s.pane)) continue;
+    if (!tabMatches(row, s.inspectorTab)) continue;
+    for (j = 0; j < row.keys.length; j++) {
+      label = row.keys[j];
+      if (label === "g g" || label === "Esc Esc") continue;
+      if (matchLabel(label, ev)) return row;
+    }
+  }
+  return null;
+}
+
+// findMatchIgnoringTabs(s, ev) -> the same search, but blind to `tabs`:
+// exactly what findMatch would have returned before D7 existed. dispatch()
+// uses this only when the tab-aware search above found nothing, so a key
+// that's genuinely bound elsewhere in this pane (just not on this tab)
+// keeps naming why it's blocked (needsReason), instead of going silent.
+function findMatchIgnoringTabs(s, ev) {
   var i, j, row, label;
   for (i = 0; i < commands.length; i++) {
     row = commands[i];
@@ -290,6 +344,16 @@ function findMatch(s, ev) {
       if (label === "g g" || label === "Esc Esc") continue;
       if (matchLabel(label, ev)) return row;
     }
+  }
+  return null;
+}
+
+// findRowById(id) -> the (single) commands-table row with this id, or null.
+// Used by dispatch()'s Deviation-3 carve-out to resolve file.cycle without
+// going through findMatch's tab filter.
+function findRowById(id) {
+  for (var i = 0; i < commands.length; i++) {
+    if (commands[i].id === id) return commands[i];
   }
   return null;
 }
@@ -319,7 +383,10 @@ var LIBRARY_NEEDS = { libraryGroup: "group", libraryName: "name", categoryName: 
 // cursor (s.inspectorTarget); trackersTab needs the trackers tab focused
 // (even an empty list, so `a` can add the first tracker); noMetadata needs
 // a cursor torrent without metadata that isn't a browser magnet still
-// pending in the handler flow (that hash is already fetching).
+// pending in the handler flow (that hash is already fetching); limitRow
+// needs a row under the Info tab's Limits cursor (s.limitCursorKey);
+// limitToggle needs that row to be a toggle (s.limitToggle) -- both are
+// Task 5's to compute; until then they default unmet (D7's Task-4 stub).
 function preconditionMet(needs, s) {
   if (!needs || needs === "none") return true;
   if (needs === "torrent") return s.hasTorrent === true;
@@ -328,18 +395,24 @@ function preconditionMet(needs, s) {
   if (needs === "peer") return targetKind(s) === "peer";
   if (needs === "trackersTab") return s.trackersTab === true;
   if (needs === "noMetadata") return s.cursorNoMetadata === true && s.cursorPendingMagnet !== true;
+  if (needs === "limitRow") return s.limitCursorKey !== null && s.limitCursorKey !== undefined && s.limitCursorKey !== "";
+  if (needs === "limitToggle") return s.limitToggle === true;
   if (Object.prototype.hasOwnProperty.call(LIBRARY_NEEDS, needs)) return libraryKind(s, LIBRARY_NEEDS[needs]);
   return true;
 }
 
 // needsReason(needs, s) -> why an unmet `needs` blocks a command: the
-// dispatch `blocked` text and the palette's dimmed-row reason. "" when met.
+// dispatch `blocked` text and the palette's dimmed-row reason. "" when met,
+// and also "" for limitRow/limitToggle even when unmet -- Space/Enter on
+// the Info tab are blocked with no note until Task 5 wires the Limits
+// cursor (the brief's "blocked with no note on a non-toggle row").
 function needsReason(needs, s) {
   if (preconditionMet(needs, s)) return "";
   if (needs === "tracker" || needs === "trackersTab") return "focus the trackers tab";
   if (needs === "peer") return "focus the peers tab";
   if (needs === "categoryName") return "focus a category";
   if (needs === "libraryGroup" || needs === "libraryName") return "focus a category or tag";
+  if (needs === "limitRow" || needs === "limitToggle") return "";
   if (needs === "noMetadata") {
     if (s.cursorPendingMagnet === true) return "already fetching metadata";
     if (s.hasTorrent === true) return "already has metadata";
@@ -516,8 +589,30 @@ function dispatch(state, event) {
     return { state: assign(s, { prefix: "g", prefixAt: now }), commandId: null };
   }
 
+  // Deviation 3 carve-out: file.cycle now matches only the Files tab
+  // (limit.toggle owns Space on Info, D7), but a no-metadata torrent's
+  // Info tab still needs Space to start it -- exactly as Files does
+  // (ClientCommands.qml's file.cycle handler already covers Info there).
+  // Resolved before findMatch so file.cycle's own tab scope can't shadow
+  // it; this never reaches torrent.toggle directly (only file.cycle does,
+  // and only the window's own handler decides whether to escalate to it).
+  if (s.mode === "NORMAL" && s.pane === "inspector" && s.inspectorTab === "info" &&
+      ev.key === KEY.Space && s.cursorNoMetadata === true) {
+    var fileCycleRow = findRowById("file.cycle");
+    if (fileCycleRow) return resolveRow(s, fileCycleRow, now);
+  }
+
   var row = findMatch(s, ev);
   if (!row || row.id === null) {
+    // A row matches this key/mode/pane but not the focused tab (e.g. x off
+    // the trackers tab, j/k on Chart): keep naming why, via that row's own
+    // `needs`, unless it would have run unconditionally (needs "none" --
+    // Chart genuinely has no j/k, so it stays silent, no note at all).
+    var offTab = findMatchIgnoringTabs(s, ev);
+    if (offTab && offTab.id !== null && offTab.needs !== "none") {
+      var reason = needsReason(offTab.needs, s);
+      if (reason) return { state: clearPrefix(s), commandId: null, blocked: reason };
+    }
     return { state: clearPrefix(s), commandId: null };
   }
 
@@ -597,22 +692,28 @@ function raiseConfirm(state, commandId, kind, args) {
 // dispatchCommand(state, commandId) -> the same result dispatch() gives
 // for a key bound to `commandId` in state's mode and pane (the command
 // palette runs a command by id, not by key). No row for that id in this
-// mode/pane resolves to no command, as an unbound key would.
+// mode/pane/tab resolves to no command, as an unbound key would. In
+// practice the palette never offers a tab-mismatched row (paletteRowFrom
+// dims it first), but this stays consistent with findMatch (D7) regardless.
 function dispatchCommand(state, commandId) {
   var s = clearPrefix(normalizeState(state));
   for (var i = 0; i < commands.length; i++) {
     var row = commands[i];
     if (row.id === null || row.id !== commandId) continue;
     if (row.modes.indexOf(s.mode) === -1 || !paneMatches(row, s.pane)) continue;
+    if (!tabMatches(row, s.inspectorTab)) continue;
     return resolveRow(s, row, 0);
   }
   return { state: s, commandId: null };
 }
 
-// helpFor(mode, pane) -> rows from `commands` active for that mode/pane,
-// generated from the same table dispatch() reads. Reserved (id === null)
-// rows are not commands, so they are left out.
-function helpFor(mode, pane) {
+// helpFor(mode, pane, tab) -> rows from `commands` active for that
+// mode/pane, generated from the same table dispatch() reads. Reserved
+// (id === null) rows are not commands, so they are left out. `tab` is
+// optional (D7): when given, a row whose `tabs` excludes it is left out
+// too (the `?` overlay's inspector-pane listing, one tab at a time); when
+// omitted, every tab's rows are listed together, as before Task 4.
+function helpFor(mode, pane, tab) {
   var out = [];
   var i, row;
   for (i = 0; i < commands.length; i++) {
@@ -620,6 +721,7 @@ function helpFor(mode, pane) {
     if (row.id === null) continue;
     if (row.modes.indexOf(mode) === -1) continue;
     if (!paneMatches(row, pane)) continue;
+    if (tab !== undefined && !tabMatches(row, tab)) continue;
     out.push(row);
   }
   return out;
@@ -637,6 +739,7 @@ if (typeof module !== "undefined" && module.exports) {
     preconditionMet: preconditionMet,
     needsReason: needsReason,
     needsConfirm: needsConfirm,
-    paneMatches: paneMatches
+    paneMatches: paneMatches,
+    tabMatches: tabMatches
   };
 }

@@ -858,6 +858,9 @@ function dispatchState(regState, pane, state, hasCursorRow, targets, inspector, 
   st.inspectorTarget = i.inspectorTarget || null;
   st.trackersTab = i.trackersTab === true;
   st.filesTab = i.filesTab === true;
+  st.inspectorTab = typeof i.inspectorTab === "string" ? i.inspectorTab : "";
+  st.limitCursorKey = i.limitCursorKey || null;
+  st.limitToggle = i.limitToggle === true;
   st.cursorNoMetadata = i.cursorNoMetadata === true;
   st.cursorStopped = i.cursorStopped === true;
   st.cursorPendingMagnet = i.cursorPendingMagnet === true;
@@ -877,7 +880,8 @@ function sameInspectorState(a, b) {
   var sameTarget = ta === tb || (!!ta && !!tb && ta.kind === tb.kind && ta.value === tb.value && ta.label === tb.label);
   var la = a.libraryTarget, lb = b.libraryTarget;
   var sameLibrary = la === lb || (!!la && !!lb && la.kind === lb.kind && la.value === lb.value && la.refusal === lb.refusal);
-  return sameTarget && sameLibrary && a.trackersTab === b.trackersTab && a.filesTab === b.filesTab && a.cursorNoMetadata === b.cursorNoMetadata &&
+  return sameTarget && sameLibrary && a.trackersTab === b.trackersTab && a.filesTab === b.filesTab && a.inspectorTab === b.inspectorTab &&
+    a.limitCursorKey === b.limitCursorKey && a.limitToggle === b.limitToggle && a.cursorNoMetadata === b.cursorNoMetadata &&
     a.cursorStopped === b.cursorStopped && a.cursorPendingMagnet === b.cursorPendingMagnet;
 }
 
@@ -961,6 +965,16 @@ function inspectorDispatch(ctx) {
     inspectorTarget: target,
     trackersTab: focused && c.tab === "trackers",
     filesTab: focused && c.tab === "files",
+    // The tab CommandRegistry's `tabs` (D7) matches against, gated by
+    // `focused` exactly like trackersTab/filesTab above. "" when the
+    // inspector isn't focused, so a stale tab from a previous dispatch
+    // never leaks into an unrelated pane's key.
+    inspectorTab: focused ? String(c.tab || "") : "",
+    // Placeholders for Task 5's Info-tab Limits cursor (limit.edit/
+    // limit.toggle's needs): no Limits group exists yet, so these always
+    // read "blocked, no row" until Task 5 computes them here.
+    limitCursorKey: null,
+    limitToggle: false,
     cursorNoMetadata: row !== null && c.noMeta === true,
     cursorStopped: st === "stoppeddl" || st === "pauseddl",
     cursorPendingMagnet: hash !== "" && (c.pending || []).indexOf(hash) !== -1,
@@ -1633,7 +1647,7 @@ function paletteCommandEntries(commandsTable) {
     if (String(row.id).indexOf("palette.") === 0) continue;
     if (!row.modes || row.modes.indexOf("NORMAL") === -1) continue;
     if (!byId[row.id]) {
-      byId[row.id] = { id: row.id, title: row.title, group: row.group, needs: row.needs, rows: [] };
+      byId[row.id] = { id: row.id, title: row.title, group: row.group, needs: row.needs, tabs: row.tabs, rows: [] };
       order.push(row.id);
     }
     byId[row.id].rows.push(row);
@@ -1641,6 +1655,15 @@ function paletteCommandEntries(commandsTable) {
   var out = [];
   for (var j = 0; j < order.length; j++) out.push(byId[order[j]]);
   return out;
+}
+
+// paletteTabsReason(tabs) -> "focus the X tab" (one tab) or "focus the X, Y
+// or Z tab" (several), the palette's dimmed-row text for a command whose
+// rows (D7) don't cover the inspector's current tab.
+function paletteTabsReason(tabs) {
+  var list = tabs || [];
+  if (list.length <= 1) return "focus the " + (list[0] || "") + " tab";
+  return "focus the " + list.slice(0, -1).join(", ") + " or " + list[list.length - 1] + " tab";
 }
 
 function paletteKeysText(rows) {
@@ -1662,11 +1685,15 @@ function paletteKeysText(rows) {
 // "focus the inspector" for the Files tab's file.* rows, "focus the
 // filters" for the filters pane's filter.* rows -- see
 // paletteFocusReason) unless the palette was opened from a pane they do
-// cover (state.pane); otherwise a failed `needs` precondition disables it
-// with Registry.needsReason ("needs a selected torrent", "focus the
-// trackers tab", "already has metadata", ...). A row that fails both
-// checks reports the pane reason: focusing the right pane is the
-// prerequisite for the precondition mattering at all.
+// cover (state.pane); next, a tab-scoped command (D7: file.*, tracker.*,
+// peer.ban, limit.*) whose rows don't cover the inspector's current tab is
+// disabled with paletteTabsReason -- mirroring findMatch's own pane-then-
+// tab order, so the palette never offers a key the registry wouldn't
+// resolve; otherwise a failed `needs` precondition disables it with
+// Registry.needsReason ("needs a selected torrent", "focus the trackers
+// tab", "already has metadata", ...). A row that fails an earlier check
+// reports that reason: focusing the right pane/tab is the prerequisite for
+// the precondition mattering at all.
 function paletteRowFrom(entry, state, indices) {
   var enabled = true;
   var reason = "";
@@ -1674,14 +1701,12 @@ function paletteRowFrom(entry, state, indices) {
   if (!paletteRunsFromTable(entry.rows) && !paletteRunsFrom(entry.rows, pane)) {
     enabled = false;
     reason = paletteFocusReason(entry.rows);
+  } else if (entry.tabs && !Registry.tabMatches({ tabs: entry.tabs }, state && state.inspectorTab)) {
+    enabled = false;
+    reason = paletteTabsReason(entry.tabs);
   } else if (!Registry.preconditionMet(entry.needs, state)) {
     enabled = false;
     reason = Registry.needsReason(entry.needs, state);
-  } else if (entry.id === "file.cycle" && !(state && state.filesTab === true)) {
-    // Space only cycles a priority on the Files tab (elsewhere the
-    // handler ignores it), so the palette doesn't offer it enabled but inert.
-    enabled = false;
-    reason = "focus the files tab";
   } else if (entry.id === "file.cycle" && state.cursorNoMetadata === true) {
     // A no-metadata torrent has no files: Space there is Start download
     // (Deviation 3), which this row's title doesn't say.

@@ -774,7 +774,7 @@ Item {
       HelpOverlay {
         anchors.fill: parent
         visible: root.helpOpen
-        groups: root.helpOpen ? View.helpRows(Registry.helpFor("NORMAL", root.helpPane)) : []
+        groups: root.helpOpen ? View.helpRows(Registry.helpFor("NORMAL", root.helpPane, root.inspectorTab)) : []
         mode: "NORMAL"
         paneName: root.helpPane
         onDismissed: {

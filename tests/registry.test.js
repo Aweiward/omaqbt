@@ -705,7 +705,9 @@ test("every command row has the documented shape", () => {
   const validGroups = ["Torrent", "View", "Library", "App"];
   // tracker/peer/trackersTab/noMetadata: slice 2b (Task 3's preconditions).
   // libraryGroup/libraryName/categoryName: slice 3a (Task 5's filters-pane rows).
-  const validNeeds = ["none", "torrent", "selection", "tracker", "peer", "trackersTab", "noMetadata", "libraryGroup", "libraryName", "categoryName"];
+  // limitRow/limitToggle: slice 3b Task 4, for Task 5's Info-tab Limits cursor.
+  const validNeeds = ["none", "torrent", "selection", "tracker", "peer", "trackersTab", "noMetadata", "libraryGroup", "libraryName", "categoryName", "limitRow", "limitToggle"];
+  const validTabs = ["info", "trackers", "peers", "files", "chart"];
   for (const row of commands) {
     assert.ok(row.id === null || typeof row.id === "string");
     assert.equal(typeof row.title, "string");
@@ -714,13 +716,22 @@ test("every command row has the documented shape", () => {
     assert.ok(Array.isArray(row.modes) && row.modes.length > 0, row.id);
     assert.ok(Array.isArray(row.panes) && row.panes.length > 0, row.id);
     assert.ok(validNeeds.includes(row.needs), row.id + " needs " + row.needs);
+    // tabs (D7) is optional, and only ever appears on inspector-pane rows.
+    if (row.tabs !== undefined) {
+      assert.ok(Array.isArray(row.tabs) && row.tabs.length > 0, row.id + " tabs");
+      for (const t of row.tabs) assert.ok(validTabs.includes(t), row.id + " tab " + t);
+      assert.deepEqual(row.panes, ["inspector"], row.id + " tabs only make sense on the inspector pane");
+    }
   }
 });
 
 // --- NORMAL, inspector pane: the Files tab list --------------------------
 
+// Slice 3b Task 4 (D7): j/k/Space are now tab-scoped, so this pins them
+// with inspectorTab explicitly "files" -- the bare pane, before Task 4,
+// was enough on its own, but a bare inspector pane no longer names a tab.
 test("j/k/Down/Up and Space in the inspector pane are the file list's keys", () => {
-  const s = state({ pane: "inspector", hasTorrent: true });
+  const s = state({ pane: "inspector", hasTorrent: true, inspectorTab: "files" });
   assert.equal(dispatch(s, ev("j", keyOf("j"))).commandId, "file.down");
   assert.equal(dispatch(s, ev("", KEY.Down)).commandId, "file.down");
   assert.equal(dispatch(s, ev("k", keyOf("k"))).commandId, "file.up");
@@ -743,6 +754,130 @@ test("helpFor(NORMAL, inspector) lists the file rows and not the table's", () =>
   assert.ok(ids.includes("file.cycle"));
   assert.ok(!ids.includes("cursor.down"));
   assert.ok(!ids.includes("torrent.toggle"));
+});
+
+// --- slice 3b, Task 4: keys belong to their tab (D6/D7) --------------------
+
+// Every j/k/Down/Up/Space/Enter x tab combination in the inspector pane,
+// pinned in one place. hasTorrent is true throughout (Info's Space carve-out
+// and file.cycle both need one; cursorNoMetadata false unless noted).
+function onTab(tab, overrides) {
+  return state(Object.assign({ pane: "inspector", hasTorrent: true, inspectorTab: tab }, overrides || {}));
+}
+
+test("j/k/Down/Up: Files/Trackers/Peers move the list, Info moves the Limits cursor, Chart gets neither", () => {
+  for (const tab of ["files", "trackers", "peers"]) {
+    assert.equal(dispatch(onTab(tab), ev("j", keyOf("j"))).commandId, "file.down", tab);
+    assert.equal(dispatch(onTab(tab), ev("", KEY.Down)).commandId, "file.down", tab);
+    assert.equal(dispatch(onTab(tab), ev("k", keyOf("k"))).commandId, "file.up", tab);
+    assert.equal(dispatch(onTab(tab), ev("", KEY.Up)).commandId, "file.up", tab);
+  }
+  for (const e of [ev("j", keyOf("j")), ev("", KEY.Down)]) {
+    assert.equal(dispatch(onTab("info"), e).commandId, "limit.down", JSON.stringify(e));
+  }
+  for (const e of [ev("k", keyOf("k")), ev("", KEY.Up)]) {
+    assert.equal(dispatch(onTab("info"), e).commandId, "limit.up", JSON.stringify(e));
+  }
+  for (const e of [ev("j", keyOf("j")), ev("k", keyOf("k")), ev("", KEY.Down), ev("", KEY.Up)]) {
+    const r = dispatch(onTab("chart"), e);
+    assert.equal(r.commandId, null, "chart " + JSON.stringify(e));
+    assert.equal("blocked" in r, false, "chart has no j/k at all, not even a blocked note");
+  }
+});
+
+test("Space: file.cycle on Files, limit.toggle (blocked, no note) on Info, inert on Trackers/Peers/Chart", () => {
+  assert.equal(dispatch(onTab("files"), ev(" ", KEY.Space)).commandId, "file.cycle");
+  const infoSpace = dispatch(onTab("info"), ev(" ", KEY.Space));
+  assert.equal(infoSpace.commandId, null);
+  assert.equal(infoSpace.blocked, "", "blocked with no note, per the brief, until Task 5 wires limitToggle");
+  for (const tab of ["trackers", "peers", "chart"]) {
+    const r = dispatch(onTab(tab), ev(" ", KEY.Space));
+    assert.equal(r.commandId, null, tab);
+    assert.equal("blocked" in r, false, tab + ": file.cycle's own needs (torrent) is met, so no note either");
+  }
+});
+
+test("Enter: limit.edit (blocked, no note) on Info, otherwise unbound in the inspector pane", () => {
+  const infoEnter = dispatch(onTab("info"), ev("\r", KEY.Return));
+  assert.equal(infoEnter.commandId, null);
+  assert.equal(infoEnter.blocked, "", "blocked with no note until Task 5 wires limitCursorKey");
+  for (const tab of ["files", "trackers", "peers", "chart"]) {
+    const r = dispatch(onTab(tab), ev("\r", KEY.Return));
+    assert.equal(r.commandId, null, tab);
+  }
+});
+
+test("limit.down/limit.up/limit.edit/limit.toggle are real rows, Info only, NORMAL", () => {
+  const want = {
+    "limit.down": ["j", "Down"],
+    "limit.up": ["k", "Up"],
+    "limit.edit": ["Enter"],
+    "limit.toggle": ["Space"]
+  };
+  for (const id of Object.keys(want)) {
+    const rows = rowsFor(id);
+    assert.equal(rows.length, 1, id);
+    assert.deepEqual(rows[0].keys, want[id], id);
+    assert.deepEqual(rows[0].modes, ["NORMAL"], id);
+    assert.deepEqual(rows[0].panes, ["inspector"], id);
+    assert.deepEqual(rows[0].tabs, ["info"], id);
+  }
+  assert.equal(rowsFor("limit.edit")[0].needs, "limitRow");
+  assert.equal(rowsFor("limit.toggle")[0].needs, "limitToggle");
+  const help = helpFor("NORMAL", "inspector", "info").map((r) => r.id);
+  for (const id of Object.keys(want)) assert.ok(help.includes(id), id + " in the Info tab's help");
+  assert.ok(!helpFor("NORMAL", "inspector", "files").map((r) => r.id).includes("limit.down"));
+});
+
+test("limit.edit/limit.toggle fire once Task 5's state fields are set", () => {
+  const edit = dispatch(onTab("info", { limitCursorKey: "ratio" }), ev("\r", KEY.Return));
+  assert.equal(edit.commandId, "limit.edit");
+  const toggle = dispatch(onTab("info", { limitCursorKey: "sequential", limitToggle: true }), ev(" ", KEY.Space));
+  assert.equal(toggle.commandId, "limit.toggle");
+});
+
+test("preconditionMet/needsReason: limitRow and limitToggle, blocked with no note", () => {
+  const pm = Registry.preconditionMet;
+  const nr = Registry.needsReason;
+  assert.equal(pm("limitRow", { limitCursorKey: "ratio" }), true);
+  assert.equal(pm("limitRow", { limitCursorKey: null }), false);
+  assert.equal(pm("limitRow", { limitCursorKey: "" }), false);
+  assert.equal(pm("limitRow", {}), false);
+  assert.equal(pm("limitToggle", { limitToggle: true }), true);
+  assert.equal(pm("limitToggle", { limitToggle: false }), false);
+  assert.equal(pm("limitToggle", {}), false);
+  assert.equal(nr("limitRow", {}), "");
+  assert.equal(nr("limitToggle", {}), "");
+});
+
+test("Deviation 3 carve-out: Space on Info still starts a no-metadata torrent, never limit.toggle", () => {
+  const r = dispatch(onTab("info", { cursorNoMetadata: true }), ev(" ", KEY.Space));
+  assert.equal(r.commandId, "file.cycle", "the window's existing file.cycle handler covers Info's noMeta case");
+  // Off Info (or with metadata), the carve-out doesn't apply -- ordinary
+  // Info Space (limit.toggle, blocked with no note) or file.cycle (Files).
+  const withMeta = dispatch(onTab("info", { cursorNoMetadata: false }), ev(" ", KEY.Space));
+  assert.equal(withMeta.commandId, null);
+  assert.equal(withMeta.blocked, "");
+});
+
+test("x/R/a/c/b off their tab still name it (needsReason), unless the row would run unconditionally", () => {
+  for (const tab of ["info", "files", "chart"]) {
+    for (const k of ["R", "a", "c", "x"]) {
+      const r = dispatch(onTab(tab), ev(k, keyOf(k)));
+      assert.equal(r.commandId, null, tab + "/" + k);
+      assert.equal(r.blocked, "focus the trackers tab", tab + "/" + k);
+    }
+    const b = dispatch(onTab(tab), ev("b", keyOf("b")));
+    assert.equal(b.commandId, null, tab);
+    assert.equal(b.blocked, "focus the peers tab", tab);
+  }
+  // On Peers, R/a/c/x still name the trackers tab; on Trackers, b still
+  // names the peers tab (the two only ever collide with each other's keys
+  // through this fallback, since neither tab's own rows use R/a/c/x/b).
+  for (const k of ["R", "a", "c", "x"]) {
+    assert.equal(dispatch(onTab("peers"), ev(k, keyOf(k))).blocked, "focus the trackers tab", k);
+  }
+  assert.equal(dispatch(onTab("trackers"), ev("b", keyOf("b"))).blocked, "focus the peers tab");
 });
 
 // --- o, y, m, e from the inspector pane ------------------------------------
@@ -994,8 +1129,24 @@ const TRACKER_A = { kind: "tracker", value: "https://a.example/announce?passkey=
 const TRACKER_B = { kind: "tracker", value: "udp://b.example:1337/announce", label: "b.example:1337" };
 const PEER_A = { kind: "peer", value: "203.0.113.42:6881", label: "203.0.113.42:6881" };
 
+// Slice 3b, Task 4: dispatch now needs to know the focused inspector tab
+// (inspectorTab, D7) to tell file/tracker/peer/limit rows sharing a key
+// apart. Every pre-existing caller here identifies its tab through
+// trackersTab or inspectorTarget.kind instead (the fields slice 2b already
+// tested), so this helper derives inspectorTab from those when the test
+// doesn't set it explicitly -- one change here instead of touching every
+// tracker/peer test below.
 function inspector(overrides) {
-  return state(Object.assign({ pane: "inspector" }, overrides || {}));
+  var o = overrides || {};
+  var tab = o.inspectorTab;
+  if (tab === undefined) {
+    if (o.trackersTab === true) tab = "trackers";
+    else if (o.inspectorTarget && o.inspectorTarget.kind === "tracker") tab = "trackers";
+    else if (o.inspectorTarget && o.inspectorTarget.kind === "peer") tab = "peers";
+  }
+  var merged = Object.assign({ pane: "inspector" }, o);
+  if (tab !== undefined) merged.inspectorTab = tab;
+  return state(merged);
 }
 
 test("preconditionMet: tracker and peer need that kind of inspector target", () => {

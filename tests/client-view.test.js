@@ -1629,6 +1629,66 @@ test("inspectorDispatch: filesTab follows the focused Files tab", () => {
   assert.equal(V.sameInspectorState(V.inspectorDispatch(insp({ tab: "files", trackers: [] })), V.inspectorDispatch(insp({ tab: "info", trackers: [] }))), false);
 });
 
+// --- slice 3b, Task 4: inspectorTab and the Limits placeholders ------------
+
+test("inspectorDispatch: inspectorTab follows the focused tab exactly (D7), '' unfocused", () => {
+  for (const tab of ["info", "trackers", "peers", "files", "chart"]) {
+    assert.equal(V.inspectorDispatch(insp({ tab })).inspectorTab, tab, tab);
+  }
+  assert.equal(V.inspectorDispatch(insp({ pane: "table" })).inspectorTab, "");
+  assert.equal(V.inspectorDispatch(insp({ row: null })).inspectorTab, "");
+  assert.equal(V.inspectorDispatch({}).inspectorTab, "");
+});
+
+test("inspectorDispatch: limitCursorKey/limitToggle default so Task 5 can wire them in", () => {
+  const d = V.inspectorDispatch(insp({ tab: "info" }));
+  assert.equal(d.limitCursorKey, null);
+  assert.equal(d.limitToggle, false);
+});
+
+test("dispatchState copies inspectorTab and the limit placeholders", () => {
+  const st = V.dispatchState({ mode: "NORMAL" }, "inspector", "rows", true, [], V.inspectorDispatch(insp({ tab: "info" })));
+  assert.equal(st.inspectorTab, "info");
+  assert.equal(st.limitCursorKey, null);
+  assert.equal(st.limitToggle, false);
+  const stale = V.dispatchState(st, "table", "rows", true, []);
+  assert.equal(stale.inspectorTab, "");
+});
+
+test("sameInspectorState: differs on inspectorTab even when trackersTab/filesTab agree (both false, e.g. Info vs Chart)", () => {
+  const info = V.inspectorDispatch(insp({ tab: "info" }));
+  const chart = V.inspectorDispatch(insp({ tab: "chart" }));
+  assert.equal(info.trackersTab, chart.trackersTab);
+  assert.equal(info.filesTab, chart.filesTab);
+  assert.equal(V.sameInspectorState(info, chart), false);
+});
+
+test("paletteRows: from the inspector, Next row (file.down) names every tab it covers when off all of them", () => {
+  const onInfo = V.paletteState("rows", true, V.inspectorDispatch(insp({ tab: "info" })), "inspector");
+  const row = paletteRow(onInfo, "file.down");
+  assert.equal(row.enabled, false);
+  assert.equal(row.reason, "focus the files, trackers or peers tab");
+  const onChart = V.paletteState("rows", true, V.inspectorDispatch(insp({ tab: "chart" })), "inspector");
+  assert.equal(paletteRow(onChart, "file.down").reason, "focus the files, trackers or peers tab");
+});
+
+test("paletteRows: the Limits rows (Info only) name the info tab, and are otherwise blocked with no note", () => {
+  const onFiles = V.paletteState("rows", true, V.inspectorDispatch(insp({ tab: "files" })), "inspector");
+  for (const id of ["limit.down", "limit.up", "limit.edit", "limit.toggle"]) {
+    assert.equal(paletteRow(onFiles, id).enabled, false, id);
+    assert.equal(paletteRow(onFiles, id).reason, "focus the info tab", id);
+  }
+  const onInfo = V.paletteState("rows", true, V.inspectorDispatch(insp({ tab: "info" })), "inspector");
+  assert.equal(paletteRow(onInfo, "limit.down").enabled, true);
+  assert.equal(paletteRow(onInfo, "limit.up").enabled, true);
+  // limit.edit/limit.toggle need Task 5's state; until then, blocked with
+  // an empty reason (never "needs a selected torrent" or similar).
+  assert.equal(paletteRow(onInfo, "limit.edit").enabled, false);
+  assert.equal(paletteRow(onInfo, "limit.edit").reason, "");
+  assert.equal(paletteRow(onInfo, "limit.toggle").enabled, false);
+  assert.equal(paletteRow(onInfo, "limit.toggle").reason, "");
+});
+
 // --- the trackers tab's actions (slice 2b, Task 4) -------------------------
 
 test("paletteRows: R, a, c, x dim with the pane or tab they need, and run on the trackers tab", () => {
