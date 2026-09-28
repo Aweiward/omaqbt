@@ -1,0 +1,2852 @@
+.pragma library
+
+// GENERATED from settings-schema.json by tools/gen-settings-schema.js.
+// Don't edit: change the JSON and run `node tools/gen-settings-schema.js`.
+//
+// The settings schema for qBittorrent 5.2.3's /app/preferences, the
+// same one qbt reads through jq. settings-schema.json's _doc describes the
+// entry fields. No I/O, no Qt objects; it imports nothing.
+//
+// The `.pragma library` line above is QML-only. The node tests strip it
+// and run this file in a vm context, like LimitsView.js.
+
+// Every known key -> its entry. Composite entries (a time written as two
+// hidden member keys) aren't real preference keys.
+var SCHEMA = {
+ "torrent_content_layout": {
+  "section": "Downloads",
+  "group": "When adding a torrent",
+  "label": "Content layout",
+  "help": "How a new torrent's files are laid out: as the torrent has them, in a subfolder, or without one.",
+  "type": "choice-string",
+  "choices": [
+   {
+    "value": "Original",
+    "label": "Original"
+   },
+   {
+    "value": "Subfolder",
+    "label": "Create subfolder"
+   },
+   {
+    "value": "NoSubfolder",
+    "label": "Don't create subfolder"
+   }
+  ]
+ },
+ "add_to_top_of_queue": {
+  "section": "Downloads",
+  "group": "When adding a torrent",
+  "label": "Add to top of queue",
+  "help": "New torrents go to the top of the queue instead of the bottom.",
+  "type": "bool"
+ },
+ "add_stopped_enabled": {
+  "section": "Downloads",
+  "group": "When adding a torrent",
+  "label": "Add torrents stopped",
+  "help": "New torrents are added stopped, so they don't start until you start them.",
+  "type": "bool"
+ },
+ "torrent_stop_condition": {
+  "section": "Downloads",
+  "group": "When adding a torrent",
+  "label": "Stop condition",
+  "help": "Stop a new torrent once its metadata arrives or its files are checked.",
+  "type": "choice-string",
+  "choices": [
+   {
+    "value": "None",
+    "label": "None"
+   },
+   {
+    "value": "MetadataReceived",
+    "label": "Metadata received"
+   },
+   {
+    "value": "FilesChecked",
+    "label": "Files checked"
+   }
+  ]
+ },
+ "merge_trackers": {
+  "section": "Downloads",
+  "group": "When adding a torrent",
+  "label": "Merge trackers of duplicates",
+  "help": "Adding a torrent that already exists merges its trackers into the existing one.",
+  "type": "bool"
+ },
+ "auto_delete_mode": {
+  "section": "Downloads",
+  "group": "When adding a torrent",
+  "label": "Delete .torrent files afterwards",
+  "help": "Delete the .torrent file once the torrent is added, or also when adding is cancelled.",
+  "type": "choice-int",
+  "choices": [
+   {
+    "value": 0,
+    "label": "Never"
+   },
+   {
+    "value": 1,
+    "label": "When added"
+   },
+   {
+    "value": 2,
+    "label": "Always, even if cancelled"
+   }
+  ],
+  "confirm": {
+   "text": "The .torrent files you add are deleted from disk.",
+   "values": [
+    1,
+    2
+   ]
+  }
+ },
+ "preallocate_all": {
+  "section": "Downloads",
+  "group": "Files",
+  "label": "Pre-allocate disk space",
+  "help": "Reserve the full size of every file when a download starts.",
+  "type": "bool"
+ },
+ "incomplete_files_ext": {
+  "section": "Downloads",
+  "group": "Files",
+  "label": "Add .!qB to incomplete files",
+  "help": "Unfinished files carry a .!qB extension until they complete.",
+  "type": "bool"
+ },
+ "use_unwanted_folder": {
+  "section": "Downloads",
+  "group": "Files",
+  "label": "Keep unselected files in .unwanted",
+  "help": "Files you skip are kept in a .unwanted folder instead of beside the others.",
+  "type": "bool"
+ },
+ "auto_tmm_enabled": {
+  "section": "Downloads",
+  "group": "Saving management",
+  "label": "Automatic torrent management",
+  "help": "New torrents use automatic management: their category decides where they're saved.",
+  "type": "bool"
+ },
+ "torrent_changed_tmm_enabled": {
+  "section": "Downloads",
+  "group": "Saving management",
+  "label": "Relocate when category changes",
+  "help": "Changing a torrent's category moves it to that category's path; off turns management off for it.",
+  "type": "bool"
+ },
+ "save_path_changed_tmm_enabled": {
+  "section": "Downloads",
+  "group": "Saving management",
+  "label": "Relocate when default path changes",
+  "help": "Changing the default save path moves the affected torrents; off turns management off for them.",
+  "type": "bool"
+ },
+ "category_changed_tmm_enabled": {
+  "section": "Downloads",
+  "group": "Saving management",
+  "label": "Relocate when category path changes",
+  "help": "Changing a category's save path moves its torrents; off turns management off for them.",
+  "type": "bool"
+ },
+ "use_category_paths_in_manual_mode": {
+  "section": "Downloads",
+  "group": "Saving management",
+  "label": "Category paths in manual mode",
+  "help": "Manually managed torrents still use their category's subfolder.",
+  "type": "bool"
+ },
+ "save_path": {
+  "section": "Downloads",
+  "group": "Saving management",
+  "label": "Default save path",
+  "help": "Where new torrents are saved unless a category says otherwise.",
+  "type": "path"
+ },
+ "temp_path_enabled": {
+  "section": "Downloads",
+  "group": "Saving management",
+  "label": "Keep incomplete torrents elsewhere",
+  "help": "Download into a separate folder and move files to the save path when done.",
+  "type": "bool"
+ },
+ "temp_path": {
+  "section": "Downloads",
+  "group": "Saving management",
+  "label": "Incomplete torrents path",
+  "help": "Where torrents stay while downloading.",
+  "type": "path",
+  "dependsOn": {
+   "key": "temp_path_enabled",
+   "value": true
+  }
+ },
+ "export_dir": {
+  "section": "Downloads",
+  "group": "Saving management",
+  "label": "Copy .torrent files to",
+  "help": "Keep a copy of every added .torrent file here. Empty turns it off.",
+  "type": "path",
+  "sentinels": {
+   "": "off"
+  }
+ },
+ "export_dir_fin": {
+  "section": "Downloads",
+  "group": "Saving management",
+  "label": "Copy finished .torrent files to",
+  "help": "Keep a copy of each finished torrent's .torrent file here. Empty turns it off.",
+  "type": "path",
+  "sentinels": {
+   "": "off"
+  }
+ },
+ "scan_dirs": {
+  "section": "Downloads",
+  "group": "Watched folders",
+  "label": "Watched folders",
+  "help": "Folders qBittorrent watches for new .torrent files. Deprecated in the API, so it isn't shown here.",
+  "type": "text",
+  "hidden": true
+ },
+ "excluded_file_names_enabled": {
+  "section": "Downloads",
+  "group": "Excluded file names",
+  "label": "Exclude file names",
+  "help": "Skip files whose names match the patterns below when adding a torrent.",
+  "type": "bool"
+ },
+ "excluded_file_names": {
+  "section": "Downloads",
+  "group": "Excluded file names",
+  "label": "Excluded file names",
+  "help": "One pattern per line, for example *.exe.",
+  "type": "text",
+  "multiline": true,
+  "dependsOn": {
+   "key": "excluded_file_names_enabled",
+   "value": true
+  }
+ },
+ "mail_notification_enabled": {
+  "section": "Downloads",
+  "group": "Email on completion",
+  "label": "Email when done",
+  "help": "Send an email when a download finishes.",
+  "type": "bool"
+ },
+ "mail_notification_sender": {
+  "section": "Downloads",
+  "group": "Email on completion",
+  "label": "From",
+  "help": "The sender address on the email.",
+  "type": "text",
+  "dependsOn": {
+   "key": "mail_notification_enabled",
+   "value": true
+  }
+ },
+ "mail_notification_email": {
+  "section": "Downloads",
+  "group": "Email on completion",
+  "label": "To",
+  "help": "The address the email goes to.",
+  "type": "text",
+  "dependsOn": {
+   "key": "mail_notification_enabled",
+   "value": true
+  }
+ },
+ "mail_notification_smtp": {
+  "section": "Downloads",
+  "group": "Email on completion",
+  "label": "SMTP server",
+  "help": "The mail server that sends the email.",
+  "type": "text",
+  "dependsOn": {
+   "key": "mail_notification_enabled",
+   "value": true
+  }
+ },
+ "mail_notification_ssl_enabled": {
+  "section": "Downloads",
+  "group": "Email on completion",
+  "label": "Use SSL",
+  "help": "Connect to the SMTP server over SSL.",
+  "type": "bool",
+  "dependsOn": {
+   "key": "mail_notification_enabled",
+   "value": true
+  }
+ },
+ "mail_notification_auth_enabled": {
+  "section": "Downloads",
+  "group": "Email on completion",
+  "label": "SMTP authentication",
+  "help": "Log in to the SMTP server.",
+  "type": "bool",
+  "dependsOn": {
+   "key": "mail_notification_enabled",
+   "value": true
+  }
+ },
+ "mail_notification_username": {
+  "section": "Downloads",
+  "group": "Email on completion",
+  "label": "SMTP username",
+  "help": "The login for the SMTP server.",
+  "type": "text",
+  "dependsOn": {
+   "key": "mail_notification_auth_enabled",
+   "value": true
+  }
+ },
+ "mail_notification_password": {
+  "section": "Downloads",
+  "group": "Email on completion",
+  "label": "SMTP password",
+  "help": "The SMTP password. Shown only as set or not set.",
+  "type": "secret",
+  "secret": true,
+  "dependsOn": {
+   "key": "mail_notification_auth_enabled",
+   "value": true
+  }
+ },
+ "autorun_on_torrent_added_enabled": {
+  "section": "Downloads",
+  "group": "Run on torrent added",
+  "label": "Run a program when added",
+  "help": "Run the command below each time a torrent is added.",
+  "type": "bool",
+  "confirm": {
+   "text": "This runs a command every time a torrent is added.",
+   "values": [
+    true
+   ]
+  }
+ },
+ "autorun_on_torrent_added_program": {
+  "section": "Downloads",
+  "group": "Run on torrent added",
+  "label": "Command on added",
+  "help": "The command to run. qBittorrent fills in %N (name), %F (content path) and the other % parameters.",
+  "type": "text",
+  "confirm": {
+   "text": "This runs this command every time a torrent is added."
+  },
+  "dependsOn": {
+   "key": "autorun_on_torrent_added_enabled",
+   "value": true
+  }
+ },
+ "autorun_enabled": {
+  "section": "Downloads",
+  "group": "Run on torrent finished",
+  "label": "Run a program when finished",
+  "help": "Run the command below each time a torrent finishes.",
+  "type": "bool",
+  "confirm": {
+   "text": "This runs a command after every torrent finishes.",
+   "values": [
+    true
+   ]
+  }
+ },
+ "autorun_program": {
+  "section": "Downloads",
+  "group": "Run on torrent finished",
+  "label": "Command on finished",
+  "help": "The command to run. qBittorrent fills in %N (name), %F (content path) and the other % parameters.",
+  "type": "text",
+  "confirm": {
+   "text": "This runs this command after every torrent finishes."
+  },
+  "dependsOn": {
+   "key": "autorun_enabled",
+   "value": true
+  }
+ },
+ "listen_port": {
+  "section": "Connection",
+  "group": "Listening port",
+  "label": "Port for incoming connections",
+  "help": "The port peers connect to. 0 = random, picked at each start.",
+  "type": "int",
+  "min": 0,
+  "max": 65535,
+  "sentinels": {
+   "0": "random"
+  },
+  "confirm": {
+   "text": "Peers and trackers will reach you on the new port; open it in your firewall or VPN if needed."
+  }
+ },
+ "random_port": {
+  "section": "Connection",
+  "group": "Listening port",
+  "label": "Random port",
+  "help": "Deprecated: reads true when the port is 0. Set the port to 0 instead.",
+  "type": "bool",
+  "hidden": true
+ },
+ "upnp": {
+  "section": "Connection",
+  "group": "Listening port",
+  "label": "UPnP / NAT-PMP port forwarding",
+  "help": "Ask your router to forward the listening port.",
+  "type": "bool",
+  "confirm": {
+   "text": "This asks your router to forward the listening port, or stops asking."
+  }
+ },
+ "ssl_enabled": {
+  "section": "Connection",
+  "group": "Listening port",
+  "label": "SSL torrents",
+  "help": "Accept SSL torrents on a separate port.",
+  "type": "bool"
+ },
+ "ssl_listen_port": {
+  "section": "Connection",
+  "group": "Listening port",
+  "label": "SSL torrents port",
+  "help": "The port for SSL torrents.",
+  "type": "int",
+  "min": 1,
+  "max": 65535,
+  "dependsOn": {
+   "key": "ssl_enabled",
+   "value": true
+  }
+ },
+ "bittorrent_protocol": {
+  "section": "Connection",
+  "group": "Protocol",
+  "label": "Peer connection protocol",
+  "help": "Which protocols qBittorrent uses to talk to peers.",
+  "type": "choice-int",
+  "choices": [
+   {
+    "value": 0,
+    "label": "TCP and µTP"
+   },
+   {
+    "value": 1,
+    "label": "TCP"
+   },
+   {
+    "value": 2,
+    "label": "µTP"
+   }
+  ]
+ },
+ "max_connec": {
+  "section": "Connection",
+  "group": "Connection limits",
+  "label": "Global connections",
+  "help": "The most peer connections across all torrents. -1 = unlimited.",
+  "type": "int",
+  "min": 1,
+  "max": 2147483647,
+  "sentinels": {
+   "-1": "unlimited"
+  }
+ },
+ "max_connec_per_torrent": {
+  "section": "Connection",
+  "group": "Connection limits",
+  "label": "Connections per torrent",
+  "help": "The most peer connections for one torrent. -1 = unlimited.",
+  "type": "int",
+  "min": 1,
+  "max": 2147483647,
+  "sentinels": {
+   "-1": "unlimited"
+  }
+ },
+ "max_uploads": {
+  "section": "Connection",
+  "group": "Connection limits",
+  "label": "Global upload slots",
+  "help": "The most peers uploaded to at once, across all torrents. -1 = unlimited.",
+  "type": "int",
+  "min": 1,
+  "max": 2147483647,
+  "sentinels": {
+   "-1": "unlimited"
+  }
+ },
+ "max_uploads_per_torrent": {
+  "section": "Connection",
+  "group": "Connection limits",
+  "label": "Upload slots per torrent",
+  "help": "The most peers one torrent uploads to at once. -1 = unlimited.",
+  "type": "int",
+  "min": 1,
+  "max": 2147483647,
+  "sentinels": {
+   "-1": "unlimited"
+  }
+ },
+ "i2p_enabled": {
+  "section": "Connection",
+  "group": "I2P",
+  "label": "I2P",
+  "help": "Connect to peers over the I2P network through a local SAM bridge (experimental).",
+  "type": "bool"
+ },
+ "i2p_address": {
+  "section": "Connection",
+  "group": "I2P",
+  "label": "I2P host",
+  "help": "The host of the I2P SAM bridge.",
+  "type": "text",
+  "dependsOn": {
+   "key": "i2p_enabled",
+   "value": true
+  }
+ },
+ "i2p_port": {
+  "section": "Connection",
+  "group": "I2P",
+  "label": "I2P port",
+  "help": "The port of the I2P SAM bridge.",
+  "type": "int",
+  "min": 1,
+  "max": 65535,
+  "dependsOn": {
+   "key": "i2p_enabled",
+   "value": true
+  }
+ },
+ "i2p_mixed_mode": {
+  "section": "Connection",
+  "group": "I2P",
+  "label": "I2P mixed mode",
+  "help": "Also use regular peers alongside I2P ones; this gives up I2P's anonymity.",
+  "type": "bool",
+  "dependsOn": {
+   "key": "i2p_enabled",
+   "value": true
+  }
+ },
+ "proxy_type": {
+  "section": "Connection",
+  "group": "Proxy",
+  "label": "Proxy type",
+  "help": "The proxy qBittorrent connects through. None connects directly.",
+  "type": "choice-string",
+  "choices": [
+   {
+    "value": "None",
+    "label": "None"
+   },
+   {
+    "value": "HTTP",
+    "label": "HTTP"
+   },
+   {
+    "value": "SOCKS5",
+    "label": "SOCKS5"
+   },
+   {
+    "value": "SOCKS4",
+    "label": "SOCKS4"
+   }
+  ],
+  "confirm": {
+   "text": "The new proxy type applies immediately with the current host."
+  }
+ },
+ "proxy_ip": {
+  "section": "Connection",
+  "group": "Proxy",
+  "label": "Proxy host",
+  "help": "The proxy's host name or IP address.",
+  "type": "text",
+  "dependsOn": {
+   "key": "proxy_type",
+   "value": [
+    "HTTP",
+    "SOCKS5",
+    "SOCKS4"
+   ]
+  }
+ },
+ "proxy_port": {
+  "section": "Connection",
+  "group": "Proxy",
+  "label": "Proxy port",
+  "help": "The proxy's port.",
+  "type": "int",
+  "min": 1,
+  "max": 65535,
+  "dependsOn": {
+   "key": "proxy_type",
+   "value": [
+    "HTTP",
+    "SOCKS5",
+    "SOCKS4"
+   ]
+  }
+ },
+ "proxy_auth_enabled": {
+  "section": "Connection",
+  "group": "Proxy",
+  "label": "Proxy authentication",
+  "help": "Log in to the proxy.",
+  "type": "bool",
+  "dependsOn": {
+   "key": "proxy_type",
+   "value": [
+    "HTTP",
+    "SOCKS5",
+    "SOCKS4"
+   ]
+  }
+ },
+ "proxy_username": {
+  "section": "Connection",
+  "group": "Proxy",
+  "label": "Proxy username",
+  "help": "The login for the proxy.",
+  "type": "text",
+  "dependsOn": {
+   "key": "proxy_type",
+   "value": [
+    "HTTP",
+    "SOCKS5",
+    "SOCKS4"
+   ]
+  }
+ },
+ "proxy_password": {
+  "section": "Connection",
+  "group": "Proxy",
+  "label": "Proxy password",
+  "help": "The proxy password. Shown only as set or not set.",
+  "type": "secret",
+  "secret": true,
+  "dependsOn": {
+   "key": "proxy_type",
+   "value": [
+    "HTTP",
+    "SOCKS5",
+    "SOCKS4"
+   ]
+  }
+ },
+ "proxy_hostname_lookup": {
+  "section": "Connection",
+  "group": "Proxy",
+  "label": "Resolve host names via proxy",
+  "help": "Look up host names through the proxy instead of locally.",
+  "type": "bool",
+  "dependsOn": {
+   "key": "proxy_type",
+   "value": [
+    "HTTP",
+    "SOCKS5",
+    "SOCKS4"
+   ]
+  }
+ },
+ "proxy_bittorrent": {
+  "section": "Connection",
+  "group": "Proxy",
+  "label": "Use proxy for BitTorrent",
+  "help": "Send BitTorrent traffic through the proxy.",
+  "type": "bool",
+  "confirm": {
+   "text": "This sends peer traffic outside the VPN tunnel, through the proxy.",
+   "values": [
+    true
+   ]
+  },
+  "dependsOn": {
+   "key": "proxy_type",
+   "value": [
+    "HTTP",
+    "SOCKS5",
+    "SOCKS4"
+   ]
+  }
+ },
+ "proxy_peer_connections": {
+  "section": "Connection",
+  "group": "Proxy",
+  "label": "Use proxy for peer connections",
+  "help": "Connect to peers through the proxy, not only to trackers.",
+  "type": "bool",
+  "confirm": {
+   "text": "This sends peer traffic outside the VPN tunnel, through the proxy.",
+   "values": [
+    true
+   ]
+  },
+  "dependsOn": {
+   "key": "proxy_type",
+   "value": [
+    "HTTP",
+    "SOCKS5",
+    "SOCKS4"
+   ]
+  }
+ },
+ "proxy_rss": {
+  "section": "Connection",
+  "group": "Proxy",
+  "label": "Use proxy for RSS",
+  "help": "Fetch RSS feeds through the proxy.",
+  "type": "bool",
+  "dependsOn": {
+   "key": "proxy_type",
+   "value": [
+    "HTTP",
+    "SOCKS5",
+    "SOCKS4"
+   ]
+  }
+ },
+ "proxy_misc": {
+  "section": "Connection",
+  "group": "Proxy",
+  "label": "Use proxy for general purposes",
+  "help": "Use the proxy for other requests, such as downloading torrent files.",
+  "type": "bool",
+  "dependsOn": {
+   "key": "proxy_type",
+   "value": [
+    "HTTP",
+    "SOCKS5",
+    "SOCKS4"
+   ]
+  }
+ },
+ "ip_filter_enabled": {
+  "section": "Connection",
+  "group": "IP filtering",
+  "label": "IP filtering",
+  "help": "Block peers listed in the filter file.",
+  "type": "bool"
+ },
+ "ip_filter_path": {
+  "section": "Connection",
+  "group": "IP filtering",
+  "label": "Filter file",
+  "help": "A .dat, .p2p or .p2b file of blocked address ranges.",
+  "type": "path",
+  "dependsOn": {
+   "key": "ip_filter_enabled",
+   "value": true
+  }
+ },
+ "ip_filter_trackers": {
+  "section": "Connection",
+  "group": "IP filtering",
+  "label": "Apply to trackers",
+  "help": "Also block trackers whose addresses are in the filter.",
+  "type": "bool",
+  "dependsOn": {
+   "key": "ip_filter_enabled",
+   "value": true
+  }
+ },
+ "banned_IPs": {
+  "section": "Connection",
+  "group": "IP filtering",
+  "label": "Banned IPs",
+  "help": "Addresses banned by hand, one per line. Edited in its own section.",
+  "type": "text",
+  "hidden": true,
+  "multiline": true
+ },
+ "dl_limit": {
+  "section": "Speed",
+  "group": "Global limits",
+  "label": "Download limit",
+  "help": "The most qBittorrent downloads across all torrents. Type 500K, 2M, or u for unlimited.",
+  "type": "speed",
+  "unit": "B/s",
+  "min": 0,
+  "max": 2146435072,
+  "step": 1024,
+  "sentinels": {
+   "0": "unlimited"
+  }
+ },
+ "up_limit": {
+  "section": "Speed",
+  "group": "Global limits",
+  "label": "Upload limit",
+  "help": "The most qBittorrent uploads across all torrents. Type 500K, 2M, or u for unlimited.",
+  "type": "speed",
+  "unit": "B/s",
+  "min": 0,
+  "max": 2146435072,
+  "step": 1024,
+  "sentinels": {
+   "0": "unlimited"
+  }
+ },
+ "alt_dl_limit": {
+  "section": "Speed",
+  "group": "Alternative limits",
+  "label": "Alternative download limit",
+  "help": "The download limit while alternative limits are on.",
+  "type": "speed",
+  "unit": "B/s",
+  "min": 0,
+  "max": 2146435072,
+  "step": 1024,
+  "sentinels": {
+   "0": "unlimited"
+  }
+ },
+ "alt_up_limit": {
+  "section": "Speed",
+  "group": "Alternative limits",
+  "label": "Alternative upload limit",
+  "help": "The upload limit while alternative limits are on.",
+  "type": "speed",
+  "unit": "B/s",
+  "min": 0,
+  "max": 2146435072,
+  "step": 1024,
+  "sentinels": {
+   "0": "unlimited"
+  }
+ },
+ "scheduler_enabled": {
+  "section": "Speed",
+  "group": "Scheduler",
+  "label": "Schedule alternative limits",
+  "help": "Switch to the alternative limits between the times below.",
+  "type": "bool"
+ },
+ "schedule_from": {
+  "section": "Speed",
+  "group": "Scheduler",
+  "label": "From",
+  "help": "When the alternative limits start, as HH:MM.",
+  "type": "time",
+  "dependsOn": {
+   "key": "scheduler_enabled",
+   "value": true
+  },
+  "composite": {
+   "hour": "schedule_from_hour",
+   "min": "schedule_from_min"
+  }
+ },
+ "schedule_to": {
+  "section": "Speed",
+  "group": "Scheduler",
+  "label": "To",
+  "help": "When the alternative limits end, as HH:MM.",
+  "type": "time",
+  "dependsOn": {
+   "key": "scheduler_enabled",
+   "value": true
+  },
+  "composite": {
+   "hour": "schedule_to_hour",
+   "min": "schedule_to_min"
+  }
+ },
+ "schedule_from_hour": {
+  "section": "Speed",
+  "group": "Scheduler",
+  "label": "From hour",
+  "help": "The hour of the schedule's start. Written with its minute.",
+  "type": "int",
+  "min": 0,
+  "max": 23,
+  "hidden": true
+ },
+ "schedule_from_min": {
+  "section": "Speed",
+  "group": "Scheduler",
+  "label": "From minute",
+  "help": "The minute of the schedule's start. Written with its hour.",
+  "type": "int",
+  "min": 0,
+  "max": 59,
+  "hidden": true
+ },
+ "schedule_to_hour": {
+  "section": "Speed",
+  "group": "Scheduler",
+  "label": "To hour",
+  "help": "The hour of the schedule's end. Written with its minute.",
+  "type": "int",
+  "min": 0,
+  "max": 23,
+  "hidden": true
+ },
+ "schedule_to_min": {
+  "section": "Speed",
+  "group": "Scheduler",
+  "label": "To minute",
+  "help": "The minute of the schedule's end. Written with its hour.",
+  "type": "int",
+  "min": 0,
+  "max": 59,
+  "hidden": true
+ },
+ "scheduler_days": {
+  "section": "Speed",
+  "group": "Scheduler",
+  "label": "Days",
+  "help": "Which days the schedule applies.",
+  "type": "choice-int",
+  "choices": [
+   {
+    "value": 0,
+    "label": "Every day"
+   },
+   {
+    "value": 1,
+    "label": "Weekdays"
+   },
+   {
+    "value": 2,
+    "label": "Weekends"
+   },
+   {
+    "value": 3,
+    "label": "Monday"
+   },
+   {
+    "value": 4,
+    "label": "Tuesday"
+   },
+   {
+    "value": 5,
+    "label": "Wednesday"
+   },
+   {
+    "value": 6,
+    "label": "Thursday"
+   },
+   {
+    "value": 7,
+    "label": "Friday"
+   },
+   {
+    "value": 8,
+    "label": "Saturday"
+   },
+   {
+    "value": 9,
+    "label": "Sunday"
+   }
+  ],
+  "dependsOn": {
+   "key": "scheduler_enabled",
+   "value": true
+  }
+ },
+ "limit_utp_rate": {
+  "section": "Speed",
+  "group": "Rate limit settings",
+  "label": "Apply limits to µTP",
+  "help": "Count µTP traffic against the speed limits.",
+  "type": "bool"
+ },
+ "limit_tcp_overhead": {
+  "section": "Speed",
+  "group": "Rate limit settings",
+  "label": "Apply limits to overhead",
+  "help": "Count protocol overhead against the speed limits.",
+  "type": "bool"
+ },
+ "limit_lan_peers": {
+  "section": "Speed",
+  "group": "Rate limit settings",
+  "label": "Apply limits to LAN peers",
+  "help": "Count peers on your local network against the speed limits.",
+  "type": "bool"
+ },
+ "dht": {
+  "section": "BitTorrent",
+  "group": "Privacy",
+  "label": "DHT",
+  "help": "Find peers through the distributed hash table, without trackers.",
+  "type": "bool",
+  "confirm": {
+   "text": "Magnets without trackers will stop finding peers.",
+   "values": [
+    false
+   ]
+  }
+ },
+ "pex": {
+  "section": "BitTorrent",
+  "group": "Privacy",
+  "label": "Peer exchange (PeX)",
+  "help": "Learn about more peers from the peers you're connected to.",
+  "type": "bool",
+  "confirm": {
+   "text": "Magnets without trackers will stop finding peers.",
+   "values": [
+    false
+   ]
+  }
+ },
+ "lsd": {
+  "section": "BitTorrent",
+  "group": "Privacy",
+  "label": "Local peer discovery",
+  "help": "Find peers on your local network.",
+  "type": "bool",
+  "confirm": {
+   "text": "Magnets without trackers will stop finding peers.",
+   "values": [
+    false
+   ]
+  }
+ },
+ "encryption": {
+  "section": "BitTorrent",
+  "group": "Privacy",
+  "label": "Encryption",
+  "help": "Prefer encrypts when the peer can; Require drops peers that don't; Disable never encrypts.",
+  "type": "choice-int",
+  "choices": [
+   {
+    "value": 0,
+    "label": "Prefer"
+   },
+   {
+    "value": 1,
+    "label": "Require"
+   },
+   {
+    "value": 2,
+    "label": "Disable"
+   }
+  ],
+  "confirm": {
+   "text": "Peers that don't encrypt are dropped.",
+   "values": [
+    1
+   ]
+  }
+ },
+ "anonymous_mode": {
+  "section": "BitTorrent",
+  "group": "Privacy",
+  "label": "Anonymous mode",
+  "help": "Stop identifying qBittorrent to peers and trackers. See qBittorrent's Anonymous Mode wiki page.",
+  "type": "bool",
+  "confirm": {
+   "text": "qBittorrent will stop identifying itself to peers and trackers.",
+   "values": [
+    true
+   ]
+  }
+ },
+ "max_active_checking_torrents": {
+  "section": "BitTorrent",
+  "group": "Queueing",
+  "label": "Active checking torrents",
+  "help": "How many torrents are checked at once. -1 = unlimited.",
+  "type": "int",
+  "min": 0,
+  "max": 2147483647,
+  "sentinels": {
+   "-1": "unlimited"
+  }
+ },
+ "queueing_enabled": {
+  "section": "BitTorrent",
+  "group": "Queueing",
+  "label": "Torrent queueing",
+  "help": "Limit how many torrents are active; the rest wait in the queue.",
+  "type": "bool"
+ },
+ "max_active_downloads": {
+  "section": "BitTorrent",
+  "group": "Queueing",
+  "label": "Active downloads",
+  "help": "The most torrents downloading at once. -1 = unlimited.",
+  "type": "int",
+  "min": 0,
+  "max": 2147483647,
+  "sentinels": {
+   "-1": "unlimited"
+  },
+  "dependsOn": {
+   "key": "queueing_enabled",
+   "value": true
+  }
+ },
+ "max_active_uploads": {
+  "section": "BitTorrent",
+  "group": "Queueing",
+  "label": "Active uploads",
+  "help": "The most torrents seeding at once. -1 = unlimited.",
+  "type": "int",
+  "min": 0,
+  "max": 2147483647,
+  "sentinels": {
+   "-1": "unlimited"
+  },
+  "dependsOn": {
+   "key": "queueing_enabled",
+   "value": true
+  }
+ },
+ "max_active_torrents": {
+  "section": "BitTorrent",
+  "group": "Queueing",
+  "label": "Active torrents",
+  "help": "The most torrents active at once. -1 = unlimited.",
+  "type": "int",
+  "min": 0,
+  "max": 2147483647,
+  "sentinels": {
+   "-1": "unlimited"
+  },
+  "dependsOn": {
+   "key": "queueing_enabled",
+   "value": true
+  }
+ },
+ "dont_count_slow_torrents": {
+  "section": "BitTorrent",
+  "group": "Queueing",
+  "label": "Don't count slow torrents",
+  "help": "Slow torrents don't take a queue slot.",
+  "type": "bool",
+  "dependsOn": {
+   "key": "queueing_enabled",
+   "value": true
+  }
+ },
+ "slow_torrent_dl_rate_threshold": {
+  "section": "BitTorrent",
+  "group": "Queueing",
+  "label": "Slow download threshold",
+  "help": "Below this download rate a torrent counts as slow.",
+  "type": "int",
+  "unit": "KiB/s",
+  "min": 1,
+  "max": 2000000,
+  "dependsOn": {
+   "key": "dont_count_slow_torrents",
+   "value": true
+  }
+ },
+ "slow_torrent_ul_rate_threshold": {
+  "section": "BitTorrent",
+  "group": "Queueing",
+  "label": "Slow upload threshold",
+  "help": "Below this upload rate a torrent counts as slow.",
+  "type": "int",
+  "unit": "KiB/s",
+  "min": 1,
+  "max": 2000000,
+  "dependsOn": {
+   "key": "dont_count_slow_torrents",
+   "value": true
+  }
+ },
+ "slow_torrent_inactive_timer": {
+  "section": "BitTorrent",
+  "group": "Queueing",
+  "label": "Slow torrent timer",
+  "help": "How long a torrent must stay under the thresholds to count as slow.",
+  "type": "int",
+  "unit": "s",
+  "min": 1,
+  "max": 999999,
+  "dependsOn": {
+   "key": "dont_count_slow_torrents",
+   "value": true
+  }
+ },
+ "max_ratio_enabled": {
+  "section": "BitTorrent",
+  "group": "Share limits",
+  "label": "Ratio limit on",
+  "help": "Reads true when a ratio limit is set. Set the ratio to -1 to turn it off.",
+  "type": "bool",
+  "hidden": true
+ },
+ "max_ratio": {
+  "section": "BitTorrent",
+  "group": "Share limits",
+  "label": "Ratio limit",
+  "help": "Stop seeding at this share ratio. -1 = no limit.",
+  "type": "float",
+  "min": 0,
+  "max": 9998,
+  "sentinels": {
+   "-1": "none"
+  }
+ },
+ "max_seeding_time_enabled": {
+  "section": "BitTorrent",
+  "group": "Share limits",
+  "label": "Seeding time limit on",
+  "help": "Reads true when a seeding time limit is set. Set it to -1 to turn it off.",
+  "type": "bool",
+  "hidden": true
+ },
+ "max_seeding_time": {
+  "section": "BitTorrent",
+  "group": "Share limits",
+  "label": "Seeding time limit",
+  "help": "Stop seeding after this many minutes. -1 = no limit.",
+  "type": "int",
+  "unit": "min",
+  "min": 0,
+  "max": 525600,
+  "sentinels": {
+   "-1": "none"
+  }
+ },
+ "max_inactive_seeding_time_enabled": {
+  "section": "BitTorrent",
+  "group": "Share limits",
+  "label": "Inactive seeding limit on",
+  "help": "Reads true when an inactive seeding limit is set. Set it to -1 to turn it off.",
+  "type": "bool",
+  "hidden": true
+ },
+ "max_inactive_seeding_time": {
+  "section": "BitTorrent",
+  "group": "Share limits",
+  "label": "Inactive seeding limit",
+  "help": "Stop seeding after this many minutes without traffic. -1 = no limit.",
+  "type": "int",
+  "unit": "min",
+  "min": 0,
+  "max": 525600,
+  "sentinels": {
+   "-1": "none"
+  }
+ },
+ "max_ratio_act": {
+  "section": "BitTorrent",
+  "group": "Share limits",
+  "label": "When a limit is reached",
+  "help": "What happens to a torrent that reaches its ratio or seeding limit.",
+  "type": "choice-int",
+  "choices": [
+   {
+    "value": 0,
+    "label": "Stop"
+   },
+   {
+    "value": 1,
+    "label": "Remove"
+   },
+   {
+    "value": 3,
+    "label": "Remove with files"
+   },
+   {
+    "value": 2,
+    "label": "Super seeding"
+   }
+  ],
+  "confirm": {
+   "text": "Torrents that reach their share limit will be removed.",
+   "values": [
+    1,
+    3
+   ]
+  }
+ },
+ "add_trackers_enabled": {
+  "section": "BitTorrent",
+  "group": "Add trackers",
+  "label": "Add trackers to new torrents",
+  "help": "Append the trackers below to every new torrent.",
+  "type": "bool"
+ },
+ "add_trackers": {
+  "section": "BitTorrent",
+  "group": "Add trackers",
+  "label": "Trackers to add",
+  "help": "One tracker URL per line.",
+  "type": "text",
+  "multiline": true,
+  "dependsOn": {
+   "key": "add_trackers_enabled",
+   "value": true
+  }
+ },
+ "add_trackers_from_url_enabled": {
+  "section": "BitTorrent",
+  "group": "Add trackers",
+  "label": "Add trackers from a URL",
+  "help": "Append the trackers listed at a URL to every new torrent.",
+  "type": "bool"
+ },
+ "add_trackers_url": {
+  "section": "BitTorrent",
+  "group": "Add trackers",
+  "label": "Tracker list URL",
+  "help": "A URL that serves a tracker list.",
+  "type": "text",
+  "dependsOn": {
+   "key": "add_trackers_from_url_enabled",
+   "value": true
+  }
+ },
+ "add_trackers_url_list": {
+  "section": "BitTorrent",
+  "group": "Add trackers",
+  "label": "Trackers from the URL",
+  "help": "The trackers last fetched from the URL. Read-only.",
+  "type": "text",
+  "readOnly": true,
+  "multiline": true
+ },
+ "locale": {
+  "section": "Behaviour",
+  "group": "Interface",
+  "label": "Language",
+  "help": "qBittorrent's interface language, as a locale code such as en or de_DE.",
+  "type": "text"
+ },
+ "performance_warning": {
+  "section": "Behaviour",
+  "group": "Interface",
+  "label": "Performance warnings",
+  "help": "Log libtorrent's performance alerts.",
+  "type": "bool"
+ },
+ "status_bar_external_ip": {
+  "section": "Behaviour",
+  "group": "Interface",
+  "label": "Show external IP in status bar",
+  "help": "qBittorrent's own status bar shows your external IP.",
+  "type": "bool"
+ },
+ "confirm_torrent_deletion": {
+  "section": "Behaviour",
+  "group": "Interface",
+  "label": "Confirm torrent deletion",
+  "help": "qBittorrent's own UI asks before removing a torrent.",
+  "type": "bool"
+ },
+ "file_log_enabled": {
+  "section": "Behaviour",
+  "group": "Log file",
+  "label": "Log to a file",
+  "help": "Write qBittorrent's log to a file.",
+  "type": "bool"
+ },
+ "file_log_path": {
+  "section": "Behaviour",
+  "group": "Log file",
+  "label": "Log folder",
+  "help": "Where the log file is written.",
+  "type": "path",
+  "dependsOn": {
+   "key": "file_log_enabled",
+   "value": true
+  }
+ },
+ "file_log_backup_enabled": {
+  "section": "Behaviour",
+  "group": "Log file",
+  "label": "Back up the log",
+  "help": "Start a new log file when it reaches the size below.",
+  "type": "bool",
+  "dependsOn": {
+   "key": "file_log_enabled",
+   "value": true
+  }
+ },
+ "file_log_max_size": {
+  "section": "Behaviour",
+  "group": "Log file",
+  "label": "Log size",
+  "help": "The size at which a new log file is started.",
+  "type": "int",
+  "unit": "KiB",
+  "min": 1,
+  "max": 1024000,
+  "dependsOn": {
+   "key": "file_log_backup_enabled",
+   "value": true
+  }
+ },
+ "file_log_delete_old": {
+  "section": "Behaviour",
+  "group": "Log file",
+  "label": "Delete old logs",
+  "help": "Delete backup logs older than the age below.",
+  "type": "bool",
+  "dependsOn": {
+   "key": "file_log_enabled",
+   "value": true
+  }
+ },
+ "file_log_age": {
+  "section": "Behaviour",
+  "group": "Log file",
+  "label": "Log age",
+  "help": "How old a backup log gets before it's deleted, in the unit below.",
+  "type": "int",
+  "min": 1,
+  "max": 365,
+  "dependsOn": {
+   "key": "file_log_delete_old",
+   "value": true
+  }
+ },
+ "file_log_age_type": {
+  "section": "Behaviour",
+  "group": "Log file",
+  "label": "Log age unit",
+  "help": "The unit of the log age.",
+  "type": "choice-int",
+  "choices": [
+   {
+    "value": 0,
+    "label": "days"
+   },
+   {
+    "value": 1,
+    "label": "months"
+   },
+   {
+    "value": 2,
+    "label": "years"
+   }
+  ],
+  "dependsOn": {
+   "key": "file_log_delete_old",
+   "value": true
+  }
+ },
+ "delete_torrent_content_files": {
+  "section": "Behaviour",
+  "group": "Removing torrents",
+  "label": "Also delete files by default",
+  "help": "Removing a torrent in qBittorrent's own UI deletes its files by default.",
+  "type": "bool"
+ },
+ "web_ui_address": {
+  "section": "Web UI",
+  "group": "Server",
+  "label": "Web UI address",
+  "help": "OmaqBT talks to qBittorrent at 127.0.0.1. Set by OmaqBT's setup.",
+  "type": "text",
+  "locked": true
+ },
+ "web_ui_port": {
+  "section": "Web UI",
+  "group": "Server",
+  "label": "Web UI port",
+  "help": "OmaqBT talks to qBittorrent on this port. Set by OmaqBT's setup.",
+  "type": "int",
+  "min": 1,
+  "max": 65535,
+  "locked": true
+ },
+ "web_ui_upnp": {
+  "section": "Web UI",
+  "group": "Server",
+  "label": "UPnP for the Web UI port",
+  "help": "Ask your router to forward the Web UI port.",
+  "type": "bool",
+  "confirm": {
+   "text": "This asks your router to open the Web UI port to your network.",
+   "values": [
+    true
+   ]
+  }
+ },
+ "use_https": {
+  "section": "Web UI",
+  "group": "Server",
+  "label": "Use HTTPS",
+  "help": "OmaqBT talks to qBittorrent over plain HTTP on localhost. Locked by OmaqBT.",
+  "type": "bool",
+  "locked": true
+ },
+ "web_ui_https_cert_path": {
+  "section": "Web UI",
+  "group": "Server",
+  "label": "HTTPS certificate",
+  "help": "Unused while HTTPS is off. Locked by OmaqBT.",
+  "type": "path",
+  "locked": true
+ },
+ "web_ui_https_key_path": {
+  "section": "Web UI",
+  "group": "Server",
+  "label": "HTTPS key",
+  "help": "Unused while HTTPS is off. Locked by OmaqBT.",
+  "type": "path",
+  "locked": true
+ },
+ "web_ui_domain_list": {
+  "section": "Web UI",
+  "group": "Server",
+  "label": "Server domains",
+  "help": "Host names the Web UI answers to. Locked so OmaqBT can always reach it.",
+  "type": "text",
+  "locked": true
+ },
+ "web_ui_username": {
+  "section": "Web UI",
+  "group": "Authentication",
+  "label": "Username",
+  "help": "The Web UI login name. At least 3 characters, no colon.",
+  "type": "text"
+ },
+ "bypass_local_auth": {
+  "section": "Web UI",
+  "group": "Authentication",
+  "label": "Skip login for localhost",
+  "help": "OmaqBT connects from localhost without a password. Set by OmaqBT's setup.",
+  "type": "bool",
+  "locked": true
+ },
+ "bypass_auth_subnet_whitelist_enabled": {
+  "section": "Web UI",
+  "group": "Authentication",
+  "label": "Skip login for these subnets",
+  "help": "Clients in the subnets below don't log in.",
+  "type": "bool"
+ },
+ "bypass_auth_subnet_whitelist": {
+  "section": "Web UI",
+  "group": "Authentication",
+  "label": "Subnets",
+  "help": "One subnet per line, such as 192.168.0.0/24.",
+  "type": "text",
+  "multiline": true,
+  "dependsOn": {
+   "key": "bypass_auth_subnet_whitelist_enabled",
+   "value": true
+  }
+ },
+ "web_ui_max_auth_fail_count": {
+  "section": "Web UI",
+  "group": "Authentication",
+  "label": "Ban after failed logins",
+  "help": "How many failed logins ban a client. 0 = never.",
+  "type": "int",
+  "min": 0,
+  "max": 2147483647,
+  "sentinels": {
+   "0": "never"
+  }
+ },
+ "web_ui_ban_duration": {
+  "section": "Web UI",
+  "group": "Authentication",
+  "label": "Ban duration",
+  "help": "How long a banned client stays banned.",
+  "type": "int",
+  "unit": "s",
+  "min": 1,
+  "max": 2147483647
+ },
+ "web_ui_session_timeout": {
+  "section": "Web UI",
+  "group": "Authentication",
+  "label": "Session timeout",
+  "help": "How long an idle Web UI session lasts. 0 = no timeout.",
+  "type": "int",
+  "unit": "s",
+  "min": 0,
+  "max": 2147483647,
+  "sentinels": {
+   "0": "never"
+  }
+ },
+ "web_ui_api_key": {
+  "section": "Web UI",
+  "group": "Authentication",
+  "label": "API key",
+  "help": "The Web UI API key. Shown only as set or not set; it's rotated from the Web UI.",
+  "type": "secret",
+  "readOnly": true,
+  "secret": true
+ },
+ "alternative_webui_enabled": {
+  "section": "Web UI",
+  "group": "Alternative Web UI",
+  "label": "Alternative Web UI",
+  "help": "Serve a different Web UI. Locked so OmaqBT keeps the one it talks to.",
+  "type": "bool",
+  "locked": true
+ },
+ "alternative_webui_path": {
+  "section": "Web UI",
+  "group": "Alternative Web UI",
+  "label": "Alternative Web UI files",
+  "help": "Unused while the alternative Web UI is off. Locked by OmaqBT.",
+  "type": "path",
+  "locked": true
+ },
+ "web_ui_clickjacking_protection_enabled": {
+  "section": "Web UI",
+  "group": "Security",
+  "label": "Clickjacking protection",
+  "help": "Stop other sites from framing the Web UI.",
+  "type": "bool"
+ },
+ "web_ui_csrf_protection_enabled": {
+  "section": "Web UI",
+  "group": "Security",
+  "label": "CSRF protection",
+  "help": "Refuse Web UI requests forged by other sites.",
+  "type": "bool"
+ },
+ "web_ui_secure_cookie_enabled": {
+  "section": "Web UI",
+  "group": "Security",
+  "label": "Secure cookie",
+  "help": "Mark the session cookie secure (HTTPS only).",
+  "type": "bool"
+ },
+ "web_ui_host_header_validation_enabled": {
+  "section": "Web UI",
+  "group": "Security",
+  "label": "Host header validation",
+  "help": "Check requests against the server domains. Locked so OmaqBT can always reach it.",
+  "type": "bool",
+  "locked": true
+ },
+ "web_ui_use_custom_http_headers_enabled": {
+  "section": "Web UI",
+  "group": "Custom HTTP headers",
+  "label": "Custom HTTP headers",
+  "help": "Add the headers below to every Web UI response.",
+  "type": "bool"
+ },
+ "web_ui_custom_http_headers": {
+  "section": "Web UI",
+  "group": "Custom HTTP headers",
+  "label": "Headers",
+  "help": "One header per line, as Name: value.",
+  "type": "text",
+  "multiline": true,
+  "dependsOn": {
+   "key": "web_ui_use_custom_http_headers_enabled",
+   "value": true
+  }
+ },
+ "web_ui_reverse_proxy_enabled": {
+  "section": "Web UI",
+  "group": "Reverse proxy",
+  "label": "Reverse proxy support",
+  "help": "Trust forwarded addresses from the proxies below. Locked by OmaqBT.",
+  "type": "bool",
+  "locked": true
+ },
+ "web_ui_reverse_proxies_list": {
+  "section": "Web UI",
+  "group": "Reverse proxy",
+  "label": "Trusted proxies",
+  "help": "Proxy addresses to trust, separated by semicolons.",
+  "type": "text",
+  "dependsOn": {
+   "key": "web_ui_reverse_proxy_enabled",
+   "value": true
+  }
+ },
+ "dyndns_enabled": {
+  "section": "Web UI",
+  "group": "Dynamic DNS",
+  "label": "Update a dynamic DNS name",
+  "help": "Keep a dynamic DNS name pointed at your IP address.",
+  "type": "bool",
+  "confirm": {
+   "text": "This publishes your IP address to the DNS service.",
+   "values": [
+    true
+   ]
+  }
+ },
+ "dyndns_service": {
+  "section": "Web UI",
+  "group": "Dynamic DNS",
+  "label": "Service",
+  "help": "The dynamic DNS provider.",
+  "type": "choice-int",
+  "choices": [
+   {
+    "value": 0,
+    "label": "DynDNS"
+   },
+   {
+    "value": 1,
+    "label": "No-IP"
+   }
+  ],
+  "dependsOn": {
+   "key": "dyndns_enabled",
+   "value": true
+  }
+ },
+ "dyndns_domain": {
+  "section": "Web UI",
+  "group": "Dynamic DNS",
+  "label": "Domain name",
+  "help": "The name to keep updated.",
+  "type": "text",
+  "dependsOn": {
+   "key": "dyndns_enabled",
+   "value": true
+  }
+ },
+ "dyndns_username": {
+  "section": "Web UI",
+  "group": "Dynamic DNS",
+  "label": "Username",
+  "help": "The login for the DNS service.",
+  "type": "text",
+  "dependsOn": {
+   "key": "dyndns_enabled",
+   "value": true
+  }
+ },
+ "dyndns_password": {
+  "section": "Web UI",
+  "group": "Dynamic DNS",
+  "label": "Password",
+  "help": "The DNS service password. Shown only as set or not set.",
+  "type": "secret",
+  "secret": true,
+  "dependsOn": {
+   "key": "dyndns_enabled",
+   "value": true
+  }
+ },
+ "resume_data_storage_type": {
+  "section": "Advanced",
+  "group": "qBittorrent",
+  "label": "Resume data storage",
+  "help": "Where torrent resume data is kept. Requires a qBittorrent restart.",
+  "type": "choice-string",
+  "choices": [
+   {
+    "value": "Legacy",
+    "label": "Fastresume files"
+   },
+   {
+    "value": "SQLite",
+    "label": "SQLite database (experimental)"
+   }
+  ],
+  "restart": true
+ },
+ "torrent_content_remove_option": {
+  "section": "Advanced",
+  "group": "qBittorrent",
+  "label": "Removing files",
+  "help": "Whether deleted torrent files are removed for good or moved to the trash.",
+  "type": "choice-string",
+  "choices": [
+   {
+    "value": "Delete",
+    "label": "Delete permanently"
+   },
+   {
+    "value": "MoveToTrash",
+    "label": "Move to trash if possible"
+   }
+  ]
+ },
+ "memory_working_set_limit": {
+  "section": "Advanced",
+  "group": "qBittorrent",
+  "label": "RAM usage limit",
+  "help": "Physical memory limit. qBittorrent doesn't apply it on Linux.",
+  "type": "int",
+  "unit": "MiB",
+  "min": 1,
+  "max": 2147483647
+ },
+ "save_resume_data_interval": {
+  "section": "Advanced",
+  "group": "qBittorrent",
+  "label": "Save resume data every",
+  "help": "How often resume data is saved. 0 = never.",
+  "type": "int",
+  "unit": "min",
+  "min": 0,
+  "max": 2147483647,
+  "sentinels": {
+   "0": "off"
+  }
+ },
+ "save_statistics_interval": {
+  "section": "Advanced",
+  "group": "qBittorrent",
+  "label": "Save statistics every",
+  "help": "How often statistics are saved. 0 = never.",
+  "type": "int",
+  "unit": "min",
+  "min": 0,
+  "max": 2147483647,
+  "sentinels": {
+   "0": "off"
+  }
+ },
+ "torrent_file_size_limit": {
+  "section": "Advanced",
+  "group": "qBittorrent",
+  "label": ".torrent file size limit",
+  "help": "The largest .torrent file qBittorrent will open, in bytes.",
+  "type": "int",
+  "unit": "bytes",
+  "min": 1048576,
+  "max": 2146435072
+ },
+ "confirm_torrent_recheck": {
+  "section": "Advanced",
+  "group": "qBittorrent",
+  "label": "Confirm torrent recheck",
+  "help": "qBittorrent's own UI asks before rechecking.",
+  "type": "bool"
+ },
+ "recheck_completed_torrents": {
+  "section": "Advanced",
+  "group": "qBittorrent",
+  "label": "Recheck on completion",
+  "help": "Check a torrent's data again when it finishes.",
+  "type": "bool"
+ },
+ "app_instance_name": {
+  "section": "Advanced",
+  "group": "qBittorrent",
+  "label": "Instance name",
+  "help": "A name shown in qBittorrent's title, to tell instances apart.",
+  "type": "text"
+ },
+ "refresh_interval": {
+  "section": "Advanced",
+  "group": "qBittorrent",
+  "label": "Refresh interval",
+  "help": "How often qBittorrent's own UI refreshes.",
+  "type": "int",
+  "unit": "ms",
+  "min": 30,
+  "max": 99999
+ },
+ "resolve_peer_host_names": {
+  "section": "Advanced",
+  "group": "qBittorrent",
+  "label": "Resolve peer host names",
+  "help": "Look up host names for peers' addresses.",
+  "type": "bool"
+ },
+ "resolve_peer_countries": {
+  "section": "Advanced",
+  "group": "qBittorrent",
+  "label": "Resolve peer countries",
+  "help": "Show which country each peer is in.",
+  "type": "bool"
+ },
+ "reannounce_when_address_changed": {
+  "section": "Advanced",
+  "group": "qBittorrent",
+  "label": "Reannounce on address change",
+  "help": "Tell all trackers when your IP or port changes.",
+  "type": "bool"
+ },
+ "mark_of_the_web": {
+  "section": "Advanced",
+  "group": "qBittorrent",
+  "label": "Mark of the Web",
+  "help": "Tag downloaded files as from the internet. Only used on Windows and macOS.",
+  "type": "bool"
+ },
+ "ignore_ssl_errors": {
+  "section": "Advanced",
+  "group": "qBittorrent",
+  "label": "Ignore SSL errors",
+  "help": "Skip certificate checks for RSS, torrent downloads and other non-torrent traffic.",
+  "type": "bool"
+ },
+ "python_executable_path": {
+  "section": "Advanced",
+  "group": "qBittorrent",
+  "label": "Python executable",
+  "help": "The Python used for search plugins. Empty = detect it. May need a restart.",
+  "type": "path",
+  "sentinels": {
+   "": "auto"
+  }
+ },
+ "current_network_interface": {
+  "section": "Advanced",
+  "group": "Network interface",
+  "label": "Network interface",
+  "help": "OmaqBT binds qBittorrent to your VPN interface so traffic never leaves the tunnel. Set by OmaqBT's setup.",
+  "type": "text",
+  "locked": true
+ },
+ "current_interface_name": {
+  "section": "Advanced",
+  "group": "Network interface",
+  "label": "Interface name",
+  "help": "The bound interface's name, as qBittorrent reports it. Set by OmaqBT's setup.",
+  "type": "text",
+  "locked": true,
+  "readOnly": true
+ },
+ "current_interface_address": {
+  "section": "Advanced",
+  "group": "Network interface",
+  "label": "Interface address",
+  "help": "OmaqBT binds to every address on the VPN interface. Set by OmaqBT's setup.",
+  "type": "text",
+  "locked": true
+ },
+ "enable_embedded_tracker": {
+  "section": "Advanced",
+  "group": "Embedded tracker",
+  "label": "Embedded tracker",
+  "help": "Run a small BitTorrent tracker inside qBittorrent.",
+  "type": "bool"
+ },
+ "embedded_tracker_port": {
+  "section": "Advanced",
+  "group": "Embedded tracker",
+  "label": "Embedded tracker port",
+  "help": "The port the embedded tracker listens on.",
+  "type": "int",
+  "min": 1,
+  "max": 65535,
+  "dependsOn": {
+   "key": "enable_embedded_tracker",
+   "value": true
+  }
+ },
+ "embedded_tracker_port_forwarding": {
+  "section": "Advanced",
+  "group": "Embedded tracker",
+  "label": "Forward the tracker port",
+  "help": "Forward the embedded tracker's port with UPnP.",
+  "type": "bool",
+  "dependsOn": {
+   "key": "enable_embedded_tracker",
+   "value": true
+  }
+ },
+ "bdecode_depth_limit": {
+  "section": "Advanced",
+  "group": "Disk",
+  "label": "Bdecode depth limit",
+  "help": "The deepest nesting accepted when reading torrent data.",
+  "type": "int",
+  "min": 0,
+  "max": 2147483647
+ },
+ "bdecode_token_limit": {
+  "section": "Advanced",
+  "group": "Disk",
+  "label": "Bdecode token limit",
+  "help": "The most tokens accepted when reading torrent data.",
+  "type": "int",
+  "min": 0,
+  "max": 2147483647
+ },
+ "async_io_threads": {
+  "section": "Advanced",
+  "group": "Disk",
+  "label": "Asynchronous I/O threads",
+  "help": "Threads for disk reads and writes.",
+  "type": "int",
+  "min": 1,
+  "max": 1024
+ },
+ "hashing_threads": {
+  "section": "Advanced",
+  "group": "Disk",
+  "label": "Hashing threads",
+  "help": "Threads for checking pieces.",
+  "type": "int",
+  "min": 1,
+  "max": 1024
+ },
+ "file_pool_size": {
+  "section": "Advanced",
+  "group": "Disk",
+  "label": "File pool size",
+  "help": "The most files kept open at once.",
+  "type": "int",
+  "min": 1,
+  "max": 2147483647
+ },
+ "checking_memory_use": {
+  "section": "Advanced",
+  "group": "Disk",
+  "label": "Checking memory",
+  "help": "Memory used for checking torrents.",
+  "type": "int",
+  "unit": "MiB",
+  "min": 1,
+  "max": 1024
+ },
+ "disk_cache": {
+  "section": "Advanced",
+  "group": "Disk",
+  "label": "Disk cache",
+  "help": "The disk cache size. -1 = automatic, 0 = off. Only used with libtorrent 1.x.",
+  "type": "int",
+  "unit": "MiB",
+  "min": 0,
+  "max": 33554431,
+  "sentinels": {
+   "0": "off",
+   "-1": "auto"
+  }
+ },
+ "disk_cache_ttl": {
+  "section": "Advanced",
+  "group": "Disk",
+  "label": "Disk cache expiry",
+  "help": "How long cached data is kept. Only used with libtorrent 1.x.",
+  "type": "int",
+  "unit": "s",
+  "min": 1,
+  "max": 2147483647
+ },
+ "disk_queue_size": {
+  "section": "Advanced",
+  "group": "Disk",
+  "label": "Disk queue size",
+  "help": "The most bytes waiting to be written to disk.",
+  "type": "int",
+  "unit": "bytes",
+  "min": 1024,
+  "max": 2147482624
+ },
+ "disk_io_type": {
+  "section": "Advanced",
+  "group": "Disk",
+  "label": "Disk I/O type",
+  "help": "How libtorrent reads and writes files. Requires a qBittorrent restart.",
+  "type": "choice-int",
+  "choices": [
+   {
+    "value": 0,
+    "label": "Default"
+   },
+   {
+    "value": 1,
+    "label": "Memory-mapped files"
+   },
+   {
+    "value": 2,
+    "label": "POSIX-compliant"
+   },
+   {
+    "value": 3,
+    "label": "Simple pread/pwrite"
+   }
+  ],
+  "restart": true
+ },
+ "disk_io_read_mode": {
+  "section": "Advanced",
+  "group": "Disk",
+  "label": "Disk read mode",
+  "help": "Whether reads go through the OS cache.",
+  "type": "choice-int",
+  "choices": [
+   {
+    "value": 0,
+    "label": "Disable OS cache"
+   },
+   {
+    "value": 1,
+    "label": "Enable OS cache"
+   }
+  ]
+ },
+ "disk_io_write_mode": {
+  "section": "Advanced",
+  "group": "Disk",
+  "label": "Disk write mode",
+  "help": "Whether writes go through the OS cache.",
+  "type": "choice-int",
+  "choices": [
+   {
+    "value": 0,
+    "label": "Disable OS cache"
+   },
+   {
+    "value": 1,
+    "label": "Enable OS cache"
+   },
+   {
+    "value": 2,
+    "label": "Write-through"
+   }
+  ]
+ },
+ "enable_coalesce_read_write": {
+  "section": "Advanced",
+  "group": "Disk",
+  "label": "Coalesce reads and writes",
+  "help": "Merge small disk operations. Only used with libtorrent 1.x.",
+  "type": "bool"
+ },
+ "enable_piece_extent_affinity": {
+  "section": "Advanced",
+  "group": "Disk",
+  "label": "Piece extent affinity",
+  "help": "Prefer downloading pieces next to ones already in progress.",
+  "type": "bool"
+ },
+ "enable_upload_suggestions": {
+  "section": "Advanced",
+  "group": "Disk",
+  "label": "Send upload piece suggestions",
+  "help": "Suggest cached pieces to peers.",
+  "type": "bool"
+ },
+ "send_buffer_watermark": {
+  "section": "Advanced",
+  "group": "Network",
+  "label": "Send buffer watermark",
+  "help": "The upper send buffer size per peer.",
+  "type": "int",
+  "unit": "KiB",
+  "min": 1,
+  "max": 2147483647
+ },
+ "send_buffer_low_watermark": {
+  "section": "Advanced",
+  "group": "Network",
+  "label": "Send buffer low watermark",
+  "help": "The lower send buffer size per peer.",
+  "type": "int",
+  "unit": "KiB",
+  "min": 1,
+  "max": 2147483647
+ },
+ "send_buffer_watermark_factor": {
+  "section": "Advanced",
+  "group": "Network",
+  "label": "Send buffer watermark factor",
+  "help": "Scales the send buffer with the upload rate.",
+  "type": "int",
+  "unit": "%",
+  "min": 1,
+  "max": 2147483647
+ },
+ "connection_speed": {
+  "section": "Advanced",
+  "group": "Network",
+  "label": "Outgoing connections per second",
+  "help": "How many new peer connections are opened each second.",
+  "type": "int",
+  "min": 0,
+  "max": 2147483647
+ },
+ "socket_send_buffer_size": {
+  "section": "Advanced",
+  "group": "Network",
+  "label": "Socket send buffer",
+  "help": "0 = the system default.",
+  "type": "int",
+  "unit": "bytes",
+  "min": 0,
+  "max": 2147482624,
+  "sentinels": {
+   "0": "system default"
+  }
+ },
+ "socket_receive_buffer_size": {
+  "section": "Advanced",
+  "group": "Network",
+  "label": "Socket receive buffer",
+  "help": "0 = the system default.",
+  "type": "int",
+  "unit": "bytes",
+  "min": 0,
+  "max": 2147482624,
+  "sentinels": {
+   "0": "system default"
+  }
+ },
+ "socket_backlog_size": {
+  "section": "Advanced",
+  "group": "Network",
+  "label": "Socket backlog",
+  "help": "Pending incoming connections the socket holds.",
+  "type": "int",
+  "min": 1,
+  "max": 2147483647
+ },
+ "outgoing_ports_min": {
+  "section": "Advanced",
+  "group": "Network",
+  "label": "Outgoing ports (min)",
+  "help": "The lowest local port for outgoing connections. 0 = any.",
+  "type": "int",
+  "min": 0,
+  "max": 65535,
+  "sentinels": {
+   "0": "any"
+  }
+ },
+ "outgoing_ports_max": {
+  "section": "Advanced",
+  "group": "Network",
+  "label": "Outgoing ports (max)",
+  "help": "The highest local port for outgoing connections. 0 = any.",
+  "type": "int",
+  "min": 0,
+  "max": 65535,
+  "sentinels": {
+   "0": "any"
+  }
+ },
+ "upnp_lease_duration": {
+  "section": "Advanced",
+  "group": "Network",
+  "label": "UPnP lease duration",
+  "help": "How long a UPnP port mapping lasts. 0 = permanent.",
+  "type": "int",
+  "unit": "s",
+  "min": 0,
+  "max": 2147483647,
+  "sentinels": {
+   "0": "permanent"
+  }
+ },
+ "peer_tos": {
+  "section": "Advanced",
+  "group": "Network",
+  "label": "DSCP for peer connections",
+  "help": "The Differentiated Services Code Point on peer traffic.",
+  "type": "int",
+  "min": 0,
+  "max": 255
+ },
+ "utp_tcp_mixed_mode": {
+  "section": "Advanced",
+  "group": "Network",
+  "label": "µTP-TCP mixed mode",
+  "help": "How µTP and TCP share bandwidth.",
+  "type": "choice-int",
+  "choices": [
+   {
+    "value": 0,
+    "label": "Prefer TCP"
+   },
+   {
+    "value": 1,
+    "label": "Peer proportional"
+   }
+  ]
+ },
+ "hostname_cache_ttl": {
+  "section": "Advanced",
+  "group": "Network",
+  "label": "Host name cache expiry",
+  "help": "How long resolved host names are kept.",
+  "type": "int",
+  "unit": "s",
+  "min": 0,
+  "max": 2147483647
+ },
+ "idn_support_enabled": {
+  "section": "Advanced",
+  "group": "Network",
+  "label": "Internationalized domain names",
+  "help": "Allow non-ASCII tracker and web seed host names.",
+  "type": "bool"
+ },
+ "enable_multi_connections_from_same_ip": {
+  "section": "Advanced",
+  "group": "Network",
+  "label": "Multiple connections per IP",
+  "help": "Allow more than one connection from the same address.",
+  "type": "bool"
+ },
+ "validate_https_tracker_certificate": {
+  "section": "Advanced",
+  "group": "Network",
+  "label": "Validate HTTPS tracker certificates",
+  "help": "Check HTTPS trackers' certificates.",
+  "type": "bool"
+ },
+ "ssrf_mitigation": {
+  "section": "Advanced",
+  "group": "Network",
+  "label": "SSRF mitigation",
+  "help": "Refuse tracker and web seed URLs that point at local services.",
+  "type": "bool"
+ },
+ "block_peers_on_privileged_ports": {
+  "section": "Advanced",
+  "group": "Network",
+  "label": "Block peers on privileged ports",
+  "help": "Don't connect to peers on ports below 1024.",
+  "type": "bool"
+ },
+ "upload_slots_behavior": {
+  "section": "Advanced",
+  "group": "Peers",
+  "label": "Upload slots behaviour",
+  "help": "How upload slots are given out.",
+  "type": "choice-int",
+  "choices": [
+   {
+    "value": 0,
+    "label": "Fixed slots"
+   },
+   {
+    "value": 1,
+    "label": "Upload rate based"
+   }
+  ]
+ },
+ "upload_choking_algorithm": {
+  "section": "Advanced",
+  "group": "Peers",
+  "label": "Upload choking algorithm",
+  "help": "Which peers seeding torrents upload to.",
+  "type": "choice-int",
+  "choices": [
+   {
+    "value": 0,
+    "label": "Round-robin"
+   },
+   {
+    "value": 1,
+    "label": "Fastest upload"
+   },
+   {
+    "value": 2,
+    "label": "Anti-leech"
+   }
+  ]
+ },
+ "peer_turnover": {
+  "section": "Advanced",
+  "group": "Peers",
+  "label": "Peer turnover disconnect",
+  "help": "Percentage of peers dropped each interval when a torrent is at its limit.",
+  "type": "int",
+  "unit": "%",
+  "min": 0,
+  "max": 100
+ },
+ "peer_turnover_cutoff": {
+  "section": "Advanced",
+  "group": "Peers",
+  "label": "Peer turnover threshold",
+  "help": "Turnover starts when a torrent's peers pass this percentage of its limit.",
+  "type": "int",
+  "unit": "%",
+  "min": 0,
+  "max": 100
+ },
+ "peer_turnover_interval": {
+  "section": "Advanced",
+  "group": "Peers",
+  "label": "Peer turnover interval",
+  "help": "How often peer turnover runs.",
+  "type": "int",
+  "unit": "s",
+  "min": 30,
+  "max": 3600
+ },
+ "request_queue_size": {
+  "section": "Advanced",
+  "group": "Peers",
+  "label": "Max outstanding requests",
+  "help": "The most block requests queued to one peer.",
+  "type": "int",
+  "min": 1,
+  "max": 2147483647
+ },
+ "announce_to_all_trackers": {
+  "section": "Advanced",
+  "group": "Trackers",
+  "label": "Announce to all trackers in a tier",
+  "help": "Announce to every tracker in a tier, not only the first that works.",
+  "type": "bool"
+ },
+ "announce_to_all_tiers": {
+  "section": "Advanced",
+  "group": "Trackers",
+  "label": "Announce to all tiers",
+  "help": "Announce to one tracker in every tier.",
+  "type": "bool"
+ },
+ "announce_ip": {
+  "section": "Advanced",
+  "group": "Trackers",
+  "label": "IP reported to trackers",
+  "help": "The address to announce instead of your own. Requires a qBittorrent restart.",
+  "type": "text",
+  "restart": true
+ },
+ "announce_port": {
+  "section": "Advanced",
+  "group": "Trackers",
+  "label": "Port reported to trackers",
+  "help": "The port to announce. 0 = the listening port. Requires a qBittorrent restart.",
+  "type": "int",
+  "min": 0,
+  "max": 65535,
+  "sentinels": {
+   "0": "listening port"
+  },
+  "restart": true
+ },
+ "max_concurrent_http_announces": {
+  "section": "Advanced",
+  "group": "Trackers",
+  "label": "Concurrent HTTP announces",
+  "help": "The most HTTP tracker announces at once.",
+  "type": "int",
+  "min": 0,
+  "max": 2147483647
+ },
+ "stop_tracker_timeout": {
+  "section": "Advanced",
+  "group": "Trackers",
+  "label": "Stop tracker timeout",
+  "help": "How long to wait for trackers when stopping. 0 = don't wait.",
+  "type": "int",
+  "unit": "s",
+  "min": 0,
+  "max": 2147483647,
+  "sentinels": {
+   "0": "off"
+  }
+ },
+ "dht_bootstrap_nodes": {
+  "section": "Advanced",
+  "group": "Trackers",
+  "label": "DHT bootstrap nodes",
+  "help": "Nodes used to join the DHT, as host:port separated by commas.",
+  "type": "text"
+ },
+ "i2p_inbound_quantity": {
+  "section": "Advanced",
+  "group": "I2P",
+  "label": "I2P inbound quantity",
+  "help": "Inbound I2P tunnels.",
+  "type": "int",
+  "min": 1,
+  "max": 16,
+  "dependsOn": {
+   "key": "i2p_enabled",
+   "value": true
+  }
+ },
+ "i2p_outbound_quantity": {
+  "section": "Advanced",
+  "group": "I2P",
+  "label": "I2P outbound quantity",
+  "help": "Outbound I2P tunnels.",
+  "type": "int",
+  "min": 1,
+  "max": 16,
+  "dependsOn": {
+   "key": "i2p_enabled",
+   "value": true
+  }
+ },
+ "i2p_inbound_length": {
+  "section": "Advanced",
+  "group": "I2P",
+  "label": "I2P inbound length",
+  "help": "Hops in each inbound I2P tunnel.",
+  "type": "int",
+  "min": 0,
+  "max": 7,
+  "dependsOn": {
+   "key": "i2p_enabled",
+   "value": true
+  }
+ },
+ "i2p_outbound_length": {
+  "section": "Advanced",
+  "group": "I2P",
+  "label": "I2P outbound length",
+  "help": "Hops in each outbound I2P tunnel.",
+  "type": "int",
+  "min": 0,
+  "max": 7,
+  "dependsOn": {
+   "key": "i2p_enabled",
+   "value": true
+  }
+ },
+ "rss_processing_enabled": {
+  "section": "RSS",
+  "group": "RSS",
+  "label": "Fetch RSS feeds",
+  "help": "Fetch RSS feeds. Slice 5.",
+  "type": "bool",
+  "deferred": true
+ },
+ "rss_refresh_interval": {
+  "section": "RSS",
+  "group": "RSS",
+  "label": "Feed refresh interval",
+  "help": "How often feeds are fetched. Slice 5.",
+  "type": "int",
+  "unit": "min",
+  "min": 1,
+  "max": 999999,
+  "deferred": true
+ },
+ "rss_fetch_delay": {
+  "section": "RSS",
+  "group": "RSS",
+  "label": "Feed fetch delay",
+  "help": "The wait between fetches from one host. Slice 5.",
+  "type": "int",
+  "unit": "s",
+  "min": 0,
+  "max": 2147483646,
+  "deferred": true
+ },
+ "rss_max_articles_per_feed": {
+  "section": "RSS",
+  "group": "RSS",
+  "label": "Articles per feed",
+  "help": "The most articles kept per feed. Slice 5.",
+  "type": "int",
+  "min": 0,
+  "max": 2147483646,
+  "deferred": true
+ },
+ "rss_auto_downloading_enabled": {
+  "section": "RSS",
+  "group": "RSS",
+  "label": "RSS auto-downloading",
+  "help": "Download torrents from feeds by rule. Slice 5.",
+  "type": "bool",
+  "deferred": true
+ },
+ "rss_download_repack_proper_episodes": {
+  "section": "RSS",
+  "group": "RSS",
+  "label": "Download REPACK/PROPER",
+  "help": "Also download REPACK and PROPER episodes. Slice 5.",
+  "type": "bool",
+  "deferred": true
+ },
+ "rss_smart_episode_filters": {
+  "section": "RSS",
+  "group": "RSS",
+  "label": "Smart episode filters",
+  "help": "Patterns that find episode numbers, one per line. Slice 5.",
+  "type": "text",
+  "deferred": true,
+  "multiline": true
+ }
+};
+
+// SCHEMA's keys in display order (numeric-looking keys would reorder).
+var KEY_ORDER = [
+ "torrent_content_layout",
+ "add_to_top_of_queue",
+ "add_stopped_enabled",
+ "torrent_stop_condition",
+ "merge_trackers",
+ "auto_delete_mode",
+ "preallocate_all",
+ "incomplete_files_ext",
+ "use_unwanted_folder",
+ "auto_tmm_enabled",
+ "torrent_changed_tmm_enabled",
+ "save_path_changed_tmm_enabled",
+ "category_changed_tmm_enabled",
+ "use_category_paths_in_manual_mode",
+ "save_path",
+ "temp_path_enabled",
+ "temp_path",
+ "export_dir",
+ "export_dir_fin",
+ "scan_dirs",
+ "excluded_file_names_enabled",
+ "excluded_file_names",
+ "mail_notification_enabled",
+ "mail_notification_sender",
+ "mail_notification_email",
+ "mail_notification_smtp",
+ "mail_notification_ssl_enabled",
+ "mail_notification_auth_enabled",
+ "mail_notification_username",
+ "mail_notification_password",
+ "autorun_on_torrent_added_enabled",
+ "autorun_on_torrent_added_program",
+ "autorun_enabled",
+ "autorun_program",
+ "listen_port",
+ "random_port",
+ "upnp",
+ "ssl_enabled",
+ "ssl_listen_port",
+ "bittorrent_protocol",
+ "max_connec",
+ "max_connec_per_torrent",
+ "max_uploads",
+ "max_uploads_per_torrent",
+ "i2p_enabled",
+ "i2p_address",
+ "i2p_port",
+ "i2p_mixed_mode",
+ "proxy_type",
+ "proxy_ip",
+ "proxy_port",
+ "proxy_auth_enabled",
+ "proxy_username",
+ "proxy_password",
+ "proxy_hostname_lookup",
+ "proxy_bittorrent",
+ "proxy_peer_connections",
+ "proxy_rss",
+ "proxy_misc",
+ "ip_filter_enabled",
+ "ip_filter_path",
+ "ip_filter_trackers",
+ "banned_IPs",
+ "dl_limit",
+ "up_limit",
+ "alt_dl_limit",
+ "alt_up_limit",
+ "scheduler_enabled",
+ "schedule_from",
+ "schedule_to",
+ "schedule_from_hour",
+ "schedule_from_min",
+ "schedule_to_hour",
+ "schedule_to_min",
+ "scheduler_days",
+ "limit_utp_rate",
+ "limit_tcp_overhead",
+ "limit_lan_peers",
+ "dht",
+ "pex",
+ "lsd",
+ "encryption",
+ "anonymous_mode",
+ "max_active_checking_torrents",
+ "queueing_enabled",
+ "max_active_downloads",
+ "max_active_uploads",
+ "max_active_torrents",
+ "dont_count_slow_torrents",
+ "slow_torrent_dl_rate_threshold",
+ "slow_torrent_ul_rate_threshold",
+ "slow_torrent_inactive_timer",
+ "max_ratio_enabled",
+ "max_ratio",
+ "max_seeding_time_enabled",
+ "max_seeding_time",
+ "max_inactive_seeding_time_enabled",
+ "max_inactive_seeding_time",
+ "max_ratio_act",
+ "add_trackers_enabled",
+ "add_trackers",
+ "add_trackers_from_url_enabled",
+ "add_trackers_url",
+ "add_trackers_url_list",
+ "locale",
+ "performance_warning",
+ "status_bar_external_ip",
+ "confirm_torrent_deletion",
+ "file_log_enabled",
+ "file_log_path",
+ "file_log_backup_enabled",
+ "file_log_max_size",
+ "file_log_delete_old",
+ "file_log_age",
+ "file_log_age_type",
+ "delete_torrent_content_files",
+ "web_ui_address",
+ "web_ui_port",
+ "web_ui_upnp",
+ "use_https",
+ "web_ui_https_cert_path",
+ "web_ui_https_key_path",
+ "web_ui_domain_list",
+ "web_ui_username",
+ "bypass_local_auth",
+ "bypass_auth_subnet_whitelist_enabled",
+ "bypass_auth_subnet_whitelist",
+ "web_ui_max_auth_fail_count",
+ "web_ui_ban_duration",
+ "web_ui_session_timeout",
+ "web_ui_api_key",
+ "alternative_webui_enabled",
+ "alternative_webui_path",
+ "web_ui_clickjacking_protection_enabled",
+ "web_ui_csrf_protection_enabled",
+ "web_ui_secure_cookie_enabled",
+ "web_ui_host_header_validation_enabled",
+ "web_ui_use_custom_http_headers_enabled",
+ "web_ui_custom_http_headers",
+ "web_ui_reverse_proxy_enabled",
+ "web_ui_reverse_proxies_list",
+ "dyndns_enabled",
+ "dyndns_service",
+ "dyndns_domain",
+ "dyndns_username",
+ "dyndns_password",
+ "resume_data_storage_type",
+ "torrent_content_remove_option",
+ "memory_working_set_limit",
+ "save_resume_data_interval",
+ "save_statistics_interval",
+ "torrent_file_size_limit",
+ "confirm_torrent_recheck",
+ "recheck_completed_torrents",
+ "app_instance_name",
+ "refresh_interval",
+ "resolve_peer_host_names",
+ "resolve_peer_countries",
+ "reannounce_when_address_changed",
+ "mark_of_the_web",
+ "ignore_ssl_errors",
+ "python_executable_path",
+ "current_network_interface",
+ "current_interface_name",
+ "current_interface_address",
+ "enable_embedded_tracker",
+ "embedded_tracker_port",
+ "embedded_tracker_port_forwarding",
+ "bdecode_depth_limit",
+ "bdecode_token_limit",
+ "async_io_threads",
+ "hashing_threads",
+ "file_pool_size",
+ "checking_memory_use",
+ "disk_cache",
+ "disk_cache_ttl",
+ "disk_queue_size",
+ "disk_io_type",
+ "disk_io_read_mode",
+ "disk_io_write_mode",
+ "enable_coalesce_read_write",
+ "enable_piece_extent_affinity",
+ "enable_upload_suggestions",
+ "send_buffer_watermark",
+ "send_buffer_low_watermark",
+ "send_buffer_watermark_factor",
+ "connection_speed",
+ "socket_send_buffer_size",
+ "socket_receive_buffer_size",
+ "socket_backlog_size",
+ "outgoing_ports_min",
+ "outgoing_ports_max",
+ "upnp_lease_duration",
+ "peer_tos",
+ "utp_tcp_mixed_mode",
+ "hostname_cache_ttl",
+ "idn_support_enabled",
+ "enable_multi_connections_from_same_ip",
+ "validate_https_tracker_certificate",
+ "ssrf_mitigation",
+ "block_peers_on_privileged_ports",
+ "upload_slots_behavior",
+ "upload_choking_algorithm",
+ "peer_turnover",
+ "peer_turnover_cutoff",
+ "peer_turnover_interval",
+ "request_queue_size",
+ "announce_to_all_trackers",
+ "announce_to_all_tiers",
+ "announce_ip",
+ "announce_port",
+ "max_concurrent_http_announces",
+ "stop_tracker_timeout",
+ "dht_bootstrap_nodes",
+ "i2p_inbound_quantity",
+ "i2p_outbound_quantity",
+ "i2p_inbound_length",
+ "i2p_outbound_length",
+ "rss_processing_enabled",
+ "rss_refresh_interval",
+ "rss_fetch_delay",
+ "rss_max_articles_per_feed",
+ "rss_auto_downloading_enabled",
+ "rss_download_repack_proper_episodes",
+ "rss_smart_episode_filters"
+];
+
+// The sections, in order. Deferred (RSS) keys sit outside them.
+var SECTIONS = [
+ "Downloads",
+ "Connection",
+ "Speed",
+ "BitTorrent",
+ "Behaviour",
+ "Web UI",
+ "Advanced"
+];
+
+// Keys qbt refuses to write (eng D8), as globs where * is the only
+// wildcard. The same list is hardcoded in qbt.
+var LOCKED = [
+ "current_network_interface",
+ "current_interface_address",
+ "current_interface_name",
+ "web_ui_address",
+ "web_ui_port",
+ "bypass_local_auth",
+ "use_https",
+ "web_ui_https_*",
+ "web_ui_host_header_validation_enabled",
+ "web_ui_domain_list",
+ "web_ui_reverse_proxy*",
+ "alternative_webui_*"
+];
+
+// Unknown keys matching these globs are refused in the Other section.
+var OTHER_REFUSED_PATTERNS = [
+ "web_ui_*",
+ "proxy_*",
+ "*interface*",
+ "*password*",
+ "*https*",
+ "autorun*"
+];
+
+// True when key matches any of patterns (globs: * matches any run of
+// characters, everything else is literal).
+function matchesAny(key, patterns) {
+  for (var i = 0; i < patterns.length; i++) {
+    var parts = patterns[i].split("*");
+    var re = new RegExp("^" + parts.map(function (p) {
+      return p.replace(/[.+?^${}()|[\]\\]/g, "\\$&");
+    }).join(".*") + "$");
+    if (re.test(key)) return true;
+  }
+  return false;
+}
+
+if (typeof module !== "undefined") {
+  module.exports = {
+    SCHEMA: SCHEMA,
+    KEY_ORDER: KEY_ORDER,
+    SECTIONS: SECTIONS,
+    LOCKED: LOCKED,
+    OTHER_REFUSED_PATTERNS: OTHER_REFUSED_PATTERNS,
+    matchesAny: matchesAny
+  };
+}

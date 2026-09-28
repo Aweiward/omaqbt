@@ -1,0 +1,3949 @@
+{
+ "_doc": "Settings value boundary cases, GENERATED from settings-schema.json by tools/gen-settings-schema.js (don't edit). Read by qbt's bash tests (Task 2) and the Settings view's node tests (Task 4); both must accept exactly the ok ones. Every case is {key, input, ok, why}. input is the text as typed or as passed to `qbt pref-set <key> -- <input>`, in the schema's wire units (speeds in bytes/s, not 2M). numbers: each editable int/float/speed key's min, max and sentinels (ok), then the values just outside (below min unless that's a sentinel, below the lowest negative sentinel, above max), a non-number, a decimal (ok only for floats), a speed that isn't a multiple of its step, and empty. choices: each value (ok), then an int just past the list, -1 when it isn't a value, a non-number, or for string enums a wrong-case value, an unknown name and empty. times: HH:MM for each time composite; ok cases also carry the hour and min that are written together. paths: absolute and ~/ are ok, relative is not, empty only where \"\" is the path's sentinel. texts: one-line and multiline text that must survive argv, jq, URL-encoding and the read-back unchanged; a newline is refused in one-line text.",
+ "numbers": [
+  {
+   "key": "listen_port",
+   "input": "0",
+   "ok": true,
+   "why": "min"
+  },
+  {
+   "key": "listen_port",
+   "input": "65535",
+   "ok": true,
+   "why": "max"
+  },
+  {
+   "key": "listen_port",
+   "input": "-1",
+   "ok": false,
+   "why": "below min"
+  },
+  {
+   "key": "listen_port",
+   "input": "65536",
+   "ok": false,
+   "why": "above max"
+  },
+  {
+   "key": "listen_port",
+   "input": "abc",
+   "ok": false,
+   "why": "not a number"
+  },
+  {
+   "key": "listen_port",
+   "input": "1.5",
+   "ok": false,
+   "why": "not a whole number"
+  },
+  {
+   "key": "listen_port",
+   "input": "",
+   "ok": false,
+   "why": "empty"
+  },
+  {
+   "key": "ssl_listen_port",
+   "input": "1",
+   "ok": true,
+   "why": "min"
+  },
+  {
+   "key": "ssl_listen_port",
+   "input": "65535",
+   "ok": true,
+   "why": "max"
+  },
+  {
+   "key": "ssl_listen_port",
+   "input": "0",
+   "ok": false,
+   "why": "below min"
+  },
+  {
+   "key": "ssl_listen_port",
+   "input": "65536",
+   "ok": false,
+   "why": "above max"
+  },
+  {
+   "key": "ssl_listen_port",
+   "input": "abc",
+   "ok": false,
+   "why": "not a number"
+  },
+  {
+   "key": "ssl_listen_port",
+   "input": "1.5",
+   "ok": false,
+   "why": "not a whole number"
+  },
+  {
+   "key": "ssl_listen_port",
+   "input": "",
+   "ok": false,
+   "why": "empty"
+  },
+  {
+   "key": "max_connec",
+   "input": "1",
+   "ok": true,
+   "why": "min"
+  },
+  {
+   "key": "max_connec",
+   "input": "2147483647",
+   "ok": true,
+   "why": "max"
+  },
+  {
+   "key": "max_connec",
+   "input": "-1",
+   "ok": true,
+   "why": "sentinel: unlimited"
+  },
+  {
+   "key": "max_connec",
+   "input": "0",
+   "ok": false,
+   "why": "below min"
+  },
+  {
+   "key": "max_connec",
+   "input": "-2",
+   "ok": false,
+   "why": "below the lowest sentinel"
+  },
+  {
+   "key": "max_connec",
+   "input": "2147483648",
+   "ok": false,
+   "why": "above max"
+  },
+  {
+   "key": "max_connec",
+   "input": "abc",
+   "ok": false,
+   "why": "not a number"
+  },
+  {
+   "key": "max_connec",
+   "input": "1.5",
+   "ok": false,
+   "why": "not a whole number"
+  },
+  {
+   "key": "max_connec",
+   "input": "",
+   "ok": false,
+   "why": "empty"
+  },
+  {
+   "key": "max_connec_per_torrent",
+   "input": "1",
+   "ok": true,
+   "why": "min"
+  },
+  {
+   "key": "max_connec_per_torrent",
+   "input": "2147483647",
+   "ok": true,
+   "why": "max"
+  },
+  {
+   "key": "max_connec_per_torrent",
+   "input": "-1",
+   "ok": true,
+   "why": "sentinel: unlimited"
+  },
+  {
+   "key": "max_connec_per_torrent",
+   "input": "0",
+   "ok": false,
+   "why": "below min"
+  },
+  {
+   "key": "max_connec_per_torrent",
+   "input": "-2",
+   "ok": false,
+   "why": "below the lowest sentinel"
+  },
+  {
+   "key": "max_connec_per_torrent",
+   "input": "2147483648",
+   "ok": false,
+   "why": "above max"
+  },
+  {
+   "key": "max_connec_per_torrent",
+   "input": "abc",
+   "ok": false,
+   "why": "not a number"
+  },
+  {
+   "key": "max_connec_per_torrent",
+   "input": "1.5",
+   "ok": false,
+   "why": "not a whole number"
+  },
+  {
+   "key": "max_connec_per_torrent",
+   "input": "",
+   "ok": false,
+   "why": "empty"
+  },
+  {
+   "key": "max_uploads",
+   "input": "1",
+   "ok": true,
+   "why": "min"
+  },
+  {
+   "key": "max_uploads",
+   "input": "2147483647",
+   "ok": true,
+   "why": "max"
+  },
+  {
+   "key": "max_uploads",
+   "input": "-1",
+   "ok": true,
+   "why": "sentinel: unlimited"
+  },
+  {
+   "key": "max_uploads",
+   "input": "0",
+   "ok": false,
+   "why": "below min"
+  },
+  {
+   "key": "max_uploads",
+   "input": "-2",
+   "ok": false,
+   "why": "below the lowest sentinel"
+  },
+  {
+   "key": "max_uploads",
+   "input": "2147483648",
+   "ok": false,
+   "why": "above max"
+  },
+  {
+   "key": "max_uploads",
+   "input": "abc",
+   "ok": false,
+   "why": "not a number"
+  },
+  {
+   "key": "max_uploads",
+   "input": "1.5",
+   "ok": false,
+   "why": "not a whole number"
+  },
+  {
+   "key": "max_uploads",
+   "input": "",
+   "ok": false,
+   "why": "empty"
+  },
+  {
+   "key": "max_uploads_per_torrent",
+   "input": "1",
+   "ok": true,
+   "why": "min"
+  },
+  {
+   "key": "max_uploads_per_torrent",
+   "input": "2147483647",
+   "ok": true,
+   "why": "max"
+  },
+  {
+   "key": "max_uploads_per_torrent",
+   "input": "-1",
+   "ok": true,
+   "why": "sentinel: unlimited"
+  },
+  {
+   "key": "max_uploads_per_torrent",
+   "input": "0",
+   "ok": false,
+   "why": "below min"
+  },
+  {
+   "key": "max_uploads_per_torrent",
+   "input": "-2",
+   "ok": false,
+   "why": "below the lowest sentinel"
+  },
+  {
+   "key": "max_uploads_per_torrent",
+   "input": "2147483648",
+   "ok": false,
+   "why": "above max"
+  },
+  {
+   "key": "max_uploads_per_torrent",
+   "input": "abc",
+   "ok": false,
+   "why": "not a number"
+  },
+  {
+   "key": "max_uploads_per_torrent",
+   "input": "1.5",
+   "ok": false,
+   "why": "not a whole number"
+  },
+  {
+   "key": "max_uploads_per_torrent",
+   "input": "",
+   "ok": false,
+   "why": "empty"
+  },
+  {
+   "key": "i2p_port",
+   "input": "1",
+   "ok": true,
+   "why": "min"
+  },
+  {
+   "key": "i2p_port",
+   "input": "65535",
+   "ok": true,
+   "why": "max"
+  },
+  {
+   "key": "i2p_port",
+   "input": "0",
+   "ok": false,
+   "why": "below min"
+  },
+  {
+   "key": "i2p_port",
+   "input": "65536",
+   "ok": false,
+   "why": "above max"
+  },
+  {
+   "key": "i2p_port",
+   "input": "abc",
+   "ok": false,
+   "why": "not a number"
+  },
+  {
+   "key": "i2p_port",
+   "input": "1.5",
+   "ok": false,
+   "why": "not a whole number"
+  },
+  {
+   "key": "i2p_port",
+   "input": "",
+   "ok": false,
+   "why": "empty"
+  },
+  {
+   "key": "proxy_port",
+   "input": "1",
+   "ok": true,
+   "why": "min"
+  },
+  {
+   "key": "proxy_port",
+   "input": "65535",
+   "ok": true,
+   "why": "max"
+  },
+  {
+   "key": "proxy_port",
+   "input": "0",
+   "ok": false,
+   "why": "below min"
+  },
+  {
+   "key": "proxy_port",
+   "input": "65536",
+   "ok": false,
+   "why": "above max"
+  },
+  {
+   "key": "proxy_port",
+   "input": "abc",
+   "ok": false,
+   "why": "not a number"
+  },
+  {
+   "key": "proxy_port",
+   "input": "1.5",
+   "ok": false,
+   "why": "not a whole number"
+  },
+  {
+   "key": "proxy_port",
+   "input": "",
+   "ok": false,
+   "why": "empty"
+  },
+  {
+   "key": "dl_limit",
+   "input": "0",
+   "ok": true,
+   "why": "min"
+  },
+  {
+   "key": "dl_limit",
+   "input": "2146435072",
+   "ok": true,
+   "why": "max"
+  },
+  {
+   "key": "dl_limit",
+   "input": "-1",
+   "ok": false,
+   "why": "below min"
+  },
+  {
+   "key": "dl_limit",
+   "input": "2146435073",
+   "ok": false,
+   "why": "above max"
+  },
+  {
+   "key": "dl_limit",
+   "input": "abc",
+   "ok": false,
+   "why": "not a number"
+  },
+  {
+   "key": "dl_limit",
+   "input": "1.5",
+   "ok": false,
+   "why": "not a whole number"
+  },
+  {
+   "key": "dl_limit",
+   "input": "1536",
+   "ok": false,
+   "why": "not a multiple of 1024"
+  },
+  {
+   "key": "dl_limit",
+   "input": "",
+   "ok": false,
+   "why": "empty"
+  },
+  {
+   "key": "up_limit",
+   "input": "0",
+   "ok": true,
+   "why": "min"
+  },
+  {
+   "key": "up_limit",
+   "input": "2146435072",
+   "ok": true,
+   "why": "max"
+  },
+  {
+   "key": "up_limit",
+   "input": "-1",
+   "ok": false,
+   "why": "below min"
+  },
+  {
+   "key": "up_limit",
+   "input": "2146435073",
+   "ok": false,
+   "why": "above max"
+  },
+  {
+   "key": "up_limit",
+   "input": "abc",
+   "ok": false,
+   "why": "not a number"
+  },
+  {
+   "key": "up_limit",
+   "input": "1.5",
+   "ok": false,
+   "why": "not a whole number"
+  },
+  {
+   "key": "up_limit",
+   "input": "1536",
+   "ok": false,
+   "why": "not a multiple of 1024"
+  },
+  {
+   "key": "up_limit",
+   "input": "",
+   "ok": false,
+   "why": "empty"
+  },
+  {
+   "key": "alt_dl_limit",
+   "input": "0",
+   "ok": true,
+   "why": "min"
+  },
+  {
+   "key": "alt_dl_limit",
+   "input": "2146435072",
+   "ok": true,
+   "why": "max"
+  },
+  {
+   "key": "alt_dl_limit",
+   "input": "-1",
+   "ok": false,
+   "why": "below min"
+  },
+  {
+   "key": "alt_dl_limit",
+   "input": "2146435073",
+   "ok": false,
+   "why": "above max"
+  },
+  {
+   "key": "alt_dl_limit",
+   "input": "abc",
+   "ok": false,
+   "why": "not a number"
+  },
+  {
+   "key": "alt_dl_limit",
+   "input": "1.5",
+   "ok": false,
+   "why": "not a whole number"
+  },
+  {
+   "key": "alt_dl_limit",
+   "input": "1536",
+   "ok": false,
+   "why": "not a multiple of 1024"
+  },
+  {
+   "key": "alt_dl_limit",
+   "input": "",
+   "ok": false,
+   "why": "empty"
+  },
+  {
+   "key": "alt_up_limit",
+   "input": "0",
+   "ok": true,
+   "why": "min"
+  },
+  {
+   "key": "alt_up_limit",
+   "input": "2146435072",
+   "ok": true,
+   "why": "max"
+  },
+  {
+   "key": "alt_up_limit",
+   "input": "-1",
+   "ok": false,
+   "why": "below min"
+  },
+  {
+   "key": "alt_up_limit",
+   "input": "2146435073",
+   "ok": false,
+   "why": "above max"
+  },
+  {
+   "key": "alt_up_limit",
+   "input": "abc",
+   "ok": false,
+   "why": "not a number"
+  },
+  {
+   "key": "alt_up_limit",
+   "input": "1.5",
+   "ok": false,
+   "why": "not a whole number"
+  },
+  {
+   "key": "alt_up_limit",
+   "input": "1536",
+   "ok": false,
+   "why": "not a multiple of 1024"
+  },
+  {
+   "key": "alt_up_limit",
+   "input": "",
+   "ok": false,
+   "why": "empty"
+  },
+  {
+   "key": "max_active_checking_torrents",
+   "input": "0",
+   "ok": true,
+   "why": "min"
+  },
+  {
+   "key": "max_active_checking_torrents",
+   "input": "2147483647",
+   "ok": true,
+   "why": "max"
+  },
+  {
+   "key": "max_active_checking_torrents",
+   "input": "-1",
+   "ok": true,
+   "why": "sentinel: unlimited"
+  },
+  {
+   "key": "max_active_checking_torrents",
+   "input": "-2",
+   "ok": false,
+   "why": "below the lowest sentinel"
+  },
+  {
+   "key": "max_active_checking_torrents",
+   "input": "2147483648",
+   "ok": false,
+   "why": "above max"
+  },
+  {
+   "key": "max_active_checking_torrents",
+   "input": "abc",
+   "ok": false,
+   "why": "not a number"
+  },
+  {
+   "key": "max_active_checking_torrents",
+   "input": "1.5",
+   "ok": false,
+   "why": "not a whole number"
+  },
+  {
+   "key": "max_active_checking_torrents",
+   "input": "",
+   "ok": false,
+   "why": "empty"
+  },
+  {
+   "key": "max_active_downloads",
+   "input": "0",
+   "ok": true,
+   "why": "min"
+  },
+  {
+   "key": "max_active_downloads",
+   "input": "2147483647",
+   "ok": true,
+   "why": "max"
+  },
+  {
+   "key": "max_active_downloads",
+   "input": "-1",
+   "ok": true,
+   "why": "sentinel: unlimited"
+  },
+  {
+   "key": "max_active_downloads",
+   "input": "-2",
+   "ok": false,
+   "why": "below the lowest sentinel"
+  },
+  {
+   "key": "max_active_downloads",
+   "input": "2147483648",
+   "ok": false,
+   "why": "above max"
+  },
+  {
+   "key": "max_active_downloads",
+   "input": "abc",
+   "ok": false,
+   "why": "not a number"
+  },
+  {
+   "key": "max_active_downloads",
+   "input": "1.5",
+   "ok": false,
+   "why": "not a whole number"
+  },
+  {
+   "key": "max_active_downloads",
+   "input": "",
+   "ok": false,
+   "why": "empty"
+  },
+  {
+   "key": "max_active_uploads",
+   "input": "0",
+   "ok": true,
+   "why": "min"
+  },
+  {
+   "key": "max_active_uploads",
+   "input": "2147483647",
+   "ok": true,
+   "why": "max"
+  },
+  {
+   "key": "max_active_uploads",
+   "input": "-1",
+   "ok": true,
+   "why": "sentinel: unlimited"
+  },
+  {
+   "key": "max_active_uploads",
+   "input": "-2",
+   "ok": false,
+   "why": "below the lowest sentinel"
+  },
+  {
+   "key": "max_active_uploads",
+   "input": "2147483648",
+   "ok": false,
+   "why": "above max"
+  },
+  {
+   "key": "max_active_uploads",
+   "input": "abc",
+   "ok": false,
+   "why": "not a number"
+  },
+  {
+   "key": "max_active_uploads",
+   "input": "1.5",
+   "ok": false,
+   "why": "not a whole number"
+  },
+  {
+   "key": "max_active_uploads",
+   "input": "",
+   "ok": false,
+   "why": "empty"
+  },
+  {
+   "key": "max_active_torrents",
+   "input": "0",
+   "ok": true,
+   "why": "min"
+  },
+  {
+   "key": "max_active_torrents",
+   "input": "2147483647",
+   "ok": true,
+   "why": "max"
+  },
+  {
+   "key": "max_active_torrents",
+   "input": "-1",
+   "ok": true,
+   "why": "sentinel: unlimited"
+  },
+  {
+   "key": "max_active_torrents",
+   "input": "-2",
+   "ok": false,
+   "why": "below the lowest sentinel"
+  },
+  {
+   "key": "max_active_torrents",
+   "input": "2147483648",
+   "ok": false,
+   "why": "above max"
+  },
+  {
+   "key": "max_active_torrents",
+   "input": "abc",
+   "ok": false,
+   "why": "not a number"
+  },
+  {
+   "key": "max_active_torrents",
+   "input": "1.5",
+   "ok": false,
+   "why": "not a whole number"
+  },
+  {
+   "key": "max_active_torrents",
+   "input": "",
+   "ok": false,
+   "why": "empty"
+  },
+  {
+   "key": "slow_torrent_dl_rate_threshold",
+   "input": "1",
+   "ok": true,
+   "why": "min"
+  },
+  {
+   "key": "slow_torrent_dl_rate_threshold",
+   "input": "2000000",
+   "ok": true,
+   "why": "max"
+  },
+  {
+   "key": "slow_torrent_dl_rate_threshold",
+   "input": "0",
+   "ok": false,
+   "why": "below min"
+  },
+  {
+   "key": "slow_torrent_dl_rate_threshold",
+   "input": "2000001",
+   "ok": false,
+   "why": "above max"
+  },
+  {
+   "key": "slow_torrent_dl_rate_threshold",
+   "input": "abc",
+   "ok": false,
+   "why": "not a number"
+  },
+  {
+   "key": "slow_torrent_dl_rate_threshold",
+   "input": "1.5",
+   "ok": false,
+   "why": "not a whole number"
+  },
+  {
+   "key": "slow_torrent_dl_rate_threshold",
+   "input": "",
+   "ok": false,
+   "why": "empty"
+  },
+  {
+   "key": "slow_torrent_ul_rate_threshold",
+   "input": "1",
+   "ok": true,
+   "why": "min"
+  },
+  {
+   "key": "slow_torrent_ul_rate_threshold",
+   "input": "2000000",
+   "ok": true,
+   "why": "max"
+  },
+  {
+   "key": "slow_torrent_ul_rate_threshold",
+   "input": "0",
+   "ok": false,
+   "why": "below min"
+  },
+  {
+   "key": "slow_torrent_ul_rate_threshold",
+   "input": "2000001",
+   "ok": false,
+   "why": "above max"
+  },
+  {
+   "key": "slow_torrent_ul_rate_threshold",
+   "input": "abc",
+   "ok": false,
+   "why": "not a number"
+  },
+  {
+   "key": "slow_torrent_ul_rate_threshold",
+   "input": "1.5",
+   "ok": false,
+   "why": "not a whole number"
+  },
+  {
+   "key": "slow_torrent_ul_rate_threshold",
+   "input": "",
+   "ok": false,
+   "why": "empty"
+  },
+  {
+   "key": "slow_torrent_inactive_timer",
+   "input": "1",
+   "ok": true,
+   "why": "min"
+  },
+  {
+   "key": "slow_torrent_inactive_timer",
+   "input": "999999",
+   "ok": true,
+   "why": "max"
+  },
+  {
+   "key": "slow_torrent_inactive_timer",
+   "input": "0",
+   "ok": false,
+   "why": "below min"
+  },
+  {
+   "key": "slow_torrent_inactive_timer",
+   "input": "1000000",
+   "ok": false,
+   "why": "above max"
+  },
+  {
+   "key": "slow_torrent_inactive_timer",
+   "input": "abc",
+   "ok": false,
+   "why": "not a number"
+  },
+  {
+   "key": "slow_torrent_inactive_timer",
+   "input": "1.5",
+   "ok": false,
+   "why": "not a whole number"
+  },
+  {
+   "key": "slow_torrent_inactive_timer",
+   "input": "",
+   "ok": false,
+   "why": "empty"
+  },
+  {
+   "key": "max_ratio",
+   "input": "0",
+   "ok": true,
+   "why": "min"
+  },
+  {
+   "key": "max_ratio",
+   "input": "9998",
+   "ok": true,
+   "why": "max"
+  },
+  {
+   "key": "max_ratio",
+   "input": "-1",
+   "ok": true,
+   "why": "sentinel: none"
+  },
+  {
+   "key": "max_ratio",
+   "input": "-0.01",
+   "ok": false,
+   "why": "below min"
+  },
+  {
+   "key": "max_ratio",
+   "input": "-2",
+   "ok": false,
+   "why": "below the lowest sentinel"
+  },
+  {
+   "key": "max_ratio",
+   "input": "9998.01",
+   "ok": false,
+   "why": "above max"
+  },
+  {
+   "key": "max_ratio",
+   "input": "abc",
+   "ok": false,
+   "why": "not a number"
+  },
+  {
+   "key": "max_ratio",
+   "input": "1.5",
+   "ok": true,
+   "why": "a decimal"
+  },
+  {
+   "key": "max_ratio",
+   "input": "",
+   "ok": false,
+   "why": "empty"
+  },
+  {
+   "key": "max_seeding_time",
+   "input": "0",
+   "ok": true,
+   "why": "min"
+  },
+  {
+   "key": "max_seeding_time",
+   "input": "525600",
+   "ok": true,
+   "why": "max"
+  },
+  {
+   "key": "max_seeding_time",
+   "input": "-1",
+   "ok": true,
+   "why": "sentinel: none"
+  },
+  {
+   "key": "max_seeding_time",
+   "input": "-2",
+   "ok": false,
+   "why": "below the lowest sentinel"
+  },
+  {
+   "key": "max_seeding_time",
+   "input": "525601",
+   "ok": false,
+   "why": "above max"
+  },
+  {
+   "key": "max_seeding_time",
+   "input": "abc",
+   "ok": false,
+   "why": "not a number"
+  },
+  {
+   "key": "max_seeding_time",
+   "input": "1.5",
+   "ok": false,
+   "why": "not a whole number"
+  },
+  {
+   "key": "max_seeding_time",
+   "input": "",
+   "ok": false,
+   "why": "empty"
+  },
+  {
+   "key": "max_inactive_seeding_time",
+   "input": "0",
+   "ok": true,
+   "why": "min"
+  },
+  {
+   "key": "max_inactive_seeding_time",
+   "input": "525600",
+   "ok": true,
+   "why": "max"
+  },
+  {
+   "key": "max_inactive_seeding_time",
+   "input": "-1",
+   "ok": true,
+   "why": "sentinel: none"
+  },
+  {
+   "key": "max_inactive_seeding_time",
+   "input": "-2",
+   "ok": false,
+   "why": "below the lowest sentinel"
+  },
+  {
+   "key": "max_inactive_seeding_time",
+   "input": "525601",
+   "ok": false,
+   "why": "above max"
+  },
+  {
+   "key": "max_inactive_seeding_time",
+   "input": "abc",
+   "ok": false,
+   "why": "not a number"
+  },
+  {
+   "key": "max_inactive_seeding_time",
+   "input": "1.5",
+   "ok": false,
+   "why": "not a whole number"
+  },
+  {
+   "key": "max_inactive_seeding_time",
+   "input": "",
+   "ok": false,
+   "why": "empty"
+  },
+  {
+   "key": "file_log_max_size",
+   "input": "1",
+   "ok": true,
+   "why": "min"
+  },
+  {
+   "key": "file_log_max_size",
+   "input": "1024000",
+   "ok": true,
+   "why": "max"
+  },
+  {
+   "key": "file_log_max_size",
+   "input": "0",
+   "ok": false,
+   "why": "below min"
+  },
+  {
+   "key": "file_log_max_size",
+   "input": "1024001",
+   "ok": false,
+   "why": "above max"
+  },
+  {
+   "key": "file_log_max_size",
+   "input": "abc",
+   "ok": false,
+   "why": "not a number"
+  },
+  {
+   "key": "file_log_max_size",
+   "input": "1.5",
+   "ok": false,
+   "why": "not a whole number"
+  },
+  {
+   "key": "file_log_max_size",
+   "input": "",
+   "ok": false,
+   "why": "empty"
+  },
+  {
+   "key": "file_log_age",
+   "input": "1",
+   "ok": true,
+   "why": "min"
+  },
+  {
+   "key": "file_log_age",
+   "input": "365",
+   "ok": true,
+   "why": "max"
+  },
+  {
+   "key": "file_log_age",
+   "input": "0",
+   "ok": false,
+   "why": "below min"
+  },
+  {
+   "key": "file_log_age",
+   "input": "366",
+   "ok": false,
+   "why": "above max"
+  },
+  {
+   "key": "file_log_age",
+   "input": "abc",
+   "ok": false,
+   "why": "not a number"
+  },
+  {
+   "key": "file_log_age",
+   "input": "1.5",
+   "ok": false,
+   "why": "not a whole number"
+  },
+  {
+   "key": "file_log_age",
+   "input": "",
+   "ok": false,
+   "why": "empty"
+  },
+  {
+   "key": "web_ui_max_auth_fail_count",
+   "input": "0",
+   "ok": true,
+   "why": "min"
+  },
+  {
+   "key": "web_ui_max_auth_fail_count",
+   "input": "2147483647",
+   "ok": true,
+   "why": "max"
+  },
+  {
+   "key": "web_ui_max_auth_fail_count",
+   "input": "-1",
+   "ok": false,
+   "why": "below min"
+  },
+  {
+   "key": "web_ui_max_auth_fail_count",
+   "input": "2147483648",
+   "ok": false,
+   "why": "above max"
+  },
+  {
+   "key": "web_ui_max_auth_fail_count",
+   "input": "abc",
+   "ok": false,
+   "why": "not a number"
+  },
+  {
+   "key": "web_ui_max_auth_fail_count",
+   "input": "1.5",
+   "ok": false,
+   "why": "not a whole number"
+  },
+  {
+   "key": "web_ui_max_auth_fail_count",
+   "input": "",
+   "ok": false,
+   "why": "empty"
+  },
+  {
+   "key": "web_ui_ban_duration",
+   "input": "1",
+   "ok": true,
+   "why": "min"
+  },
+  {
+   "key": "web_ui_ban_duration",
+   "input": "2147483647",
+   "ok": true,
+   "why": "max"
+  },
+  {
+   "key": "web_ui_ban_duration",
+   "input": "0",
+   "ok": false,
+   "why": "below min"
+  },
+  {
+   "key": "web_ui_ban_duration",
+   "input": "2147483648",
+   "ok": false,
+   "why": "above max"
+  },
+  {
+   "key": "web_ui_ban_duration",
+   "input": "abc",
+   "ok": false,
+   "why": "not a number"
+  },
+  {
+   "key": "web_ui_ban_duration",
+   "input": "1.5",
+   "ok": false,
+   "why": "not a whole number"
+  },
+  {
+   "key": "web_ui_ban_duration",
+   "input": "",
+   "ok": false,
+   "why": "empty"
+  },
+  {
+   "key": "web_ui_session_timeout",
+   "input": "0",
+   "ok": true,
+   "why": "min"
+  },
+  {
+   "key": "web_ui_session_timeout",
+   "input": "2147483647",
+   "ok": true,
+   "why": "max"
+  },
+  {
+   "key": "web_ui_session_timeout",
+   "input": "-1",
+   "ok": false,
+   "why": "below min"
+  },
+  {
+   "key": "web_ui_session_timeout",
+   "input": "2147483648",
+   "ok": false,
+   "why": "above max"
+  },
+  {
+   "key": "web_ui_session_timeout",
+   "input": "abc",
+   "ok": false,
+   "why": "not a number"
+  },
+  {
+   "key": "web_ui_session_timeout",
+   "input": "1.5",
+   "ok": false,
+   "why": "not a whole number"
+  },
+  {
+   "key": "web_ui_session_timeout",
+   "input": "",
+   "ok": false,
+   "why": "empty"
+  },
+  {
+   "key": "memory_working_set_limit",
+   "input": "1",
+   "ok": true,
+   "why": "min"
+  },
+  {
+   "key": "memory_working_set_limit",
+   "input": "2147483647",
+   "ok": true,
+   "why": "max"
+  },
+  {
+   "key": "memory_working_set_limit",
+   "input": "0",
+   "ok": false,
+   "why": "below min"
+  },
+  {
+   "key": "memory_working_set_limit",
+   "input": "2147483648",
+   "ok": false,
+   "why": "above max"
+  },
+  {
+   "key": "memory_working_set_limit",
+   "input": "abc",
+   "ok": false,
+   "why": "not a number"
+  },
+  {
+   "key": "memory_working_set_limit",
+   "input": "1.5",
+   "ok": false,
+   "why": "not a whole number"
+  },
+  {
+   "key": "memory_working_set_limit",
+   "input": "",
+   "ok": false,
+   "why": "empty"
+  },
+  {
+   "key": "save_resume_data_interval",
+   "input": "0",
+   "ok": true,
+   "why": "min"
+  },
+  {
+   "key": "save_resume_data_interval",
+   "input": "2147483647",
+   "ok": true,
+   "why": "max"
+  },
+  {
+   "key": "save_resume_data_interval",
+   "input": "-1",
+   "ok": false,
+   "why": "below min"
+  },
+  {
+   "key": "save_resume_data_interval",
+   "input": "2147483648",
+   "ok": false,
+   "why": "above max"
+  },
+  {
+   "key": "save_resume_data_interval",
+   "input": "abc",
+   "ok": false,
+   "why": "not a number"
+  },
+  {
+   "key": "save_resume_data_interval",
+   "input": "1.5",
+   "ok": false,
+   "why": "not a whole number"
+  },
+  {
+   "key": "save_resume_data_interval",
+   "input": "",
+   "ok": false,
+   "why": "empty"
+  },
+  {
+   "key": "save_statistics_interval",
+   "input": "0",
+   "ok": true,
+   "why": "min"
+  },
+  {
+   "key": "save_statistics_interval",
+   "input": "2147483647",
+   "ok": true,
+   "why": "max"
+  },
+  {
+   "key": "save_statistics_interval",
+   "input": "-1",
+   "ok": false,
+   "why": "below min"
+  },
+  {
+   "key": "save_statistics_interval",
+   "input": "2147483648",
+   "ok": false,
+   "why": "above max"
+  },
+  {
+   "key": "save_statistics_interval",
+   "input": "abc",
+   "ok": false,
+   "why": "not a number"
+  },
+  {
+   "key": "save_statistics_interval",
+   "input": "1.5",
+   "ok": false,
+   "why": "not a whole number"
+  },
+  {
+   "key": "save_statistics_interval",
+   "input": "",
+   "ok": false,
+   "why": "empty"
+  },
+  {
+   "key": "torrent_file_size_limit",
+   "input": "1048576",
+   "ok": true,
+   "why": "min"
+  },
+  {
+   "key": "torrent_file_size_limit",
+   "input": "2146435072",
+   "ok": true,
+   "why": "max"
+  },
+  {
+   "key": "torrent_file_size_limit",
+   "input": "1048575",
+   "ok": false,
+   "why": "below min"
+  },
+  {
+   "key": "torrent_file_size_limit",
+   "input": "2146435073",
+   "ok": false,
+   "why": "above max"
+  },
+  {
+   "key": "torrent_file_size_limit",
+   "input": "abc",
+   "ok": false,
+   "why": "not a number"
+  },
+  {
+   "key": "torrent_file_size_limit",
+   "input": "1.5",
+   "ok": false,
+   "why": "not a whole number"
+  },
+  {
+   "key": "torrent_file_size_limit",
+   "input": "",
+   "ok": false,
+   "why": "empty"
+  },
+  {
+   "key": "refresh_interval",
+   "input": "30",
+   "ok": true,
+   "why": "min"
+  },
+  {
+   "key": "refresh_interval",
+   "input": "99999",
+   "ok": true,
+   "why": "max"
+  },
+  {
+   "key": "refresh_interval",
+   "input": "29",
+   "ok": false,
+   "why": "below min"
+  },
+  {
+   "key": "refresh_interval",
+   "input": "100000",
+   "ok": false,
+   "why": "above max"
+  },
+  {
+   "key": "refresh_interval",
+   "input": "abc",
+   "ok": false,
+   "why": "not a number"
+  },
+  {
+   "key": "refresh_interval",
+   "input": "1.5",
+   "ok": false,
+   "why": "not a whole number"
+  },
+  {
+   "key": "refresh_interval",
+   "input": "",
+   "ok": false,
+   "why": "empty"
+  },
+  {
+   "key": "embedded_tracker_port",
+   "input": "1",
+   "ok": true,
+   "why": "min"
+  },
+  {
+   "key": "embedded_tracker_port",
+   "input": "65535",
+   "ok": true,
+   "why": "max"
+  },
+  {
+   "key": "embedded_tracker_port",
+   "input": "0",
+   "ok": false,
+   "why": "below min"
+  },
+  {
+   "key": "embedded_tracker_port",
+   "input": "65536",
+   "ok": false,
+   "why": "above max"
+  },
+  {
+   "key": "embedded_tracker_port",
+   "input": "abc",
+   "ok": false,
+   "why": "not a number"
+  },
+  {
+   "key": "embedded_tracker_port",
+   "input": "1.5",
+   "ok": false,
+   "why": "not a whole number"
+  },
+  {
+   "key": "embedded_tracker_port",
+   "input": "",
+   "ok": false,
+   "why": "empty"
+  },
+  {
+   "key": "bdecode_depth_limit",
+   "input": "0",
+   "ok": true,
+   "why": "min"
+  },
+  {
+   "key": "bdecode_depth_limit",
+   "input": "2147483647",
+   "ok": true,
+   "why": "max"
+  },
+  {
+   "key": "bdecode_depth_limit",
+   "input": "-1",
+   "ok": false,
+   "why": "below min"
+  },
+  {
+   "key": "bdecode_depth_limit",
+   "input": "2147483648",
+   "ok": false,
+   "why": "above max"
+  },
+  {
+   "key": "bdecode_depth_limit",
+   "input": "abc",
+   "ok": false,
+   "why": "not a number"
+  },
+  {
+   "key": "bdecode_depth_limit",
+   "input": "1.5",
+   "ok": false,
+   "why": "not a whole number"
+  },
+  {
+   "key": "bdecode_depth_limit",
+   "input": "",
+   "ok": false,
+   "why": "empty"
+  },
+  {
+   "key": "bdecode_token_limit",
+   "input": "0",
+   "ok": true,
+   "why": "min"
+  },
+  {
+   "key": "bdecode_token_limit",
+   "input": "2147483647",
+   "ok": true,
+   "why": "max"
+  },
+  {
+   "key": "bdecode_token_limit",
+   "input": "-1",
+   "ok": false,
+   "why": "below min"
+  },
+  {
+   "key": "bdecode_token_limit",
+   "input": "2147483648",
+   "ok": false,
+   "why": "above max"
+  },
+  {
+   "key": "bdecode_token_limit",
+   "input": "abc",
+   "ok": false,
+   "why": "not a number"
+  },
+  {
+   "key": "bdecode_token_limit",
+   "input": "1.5",
+   "ok": false,
+   "why": "not a whole number"
+  },
+  {
+   "key": "bdecode_token_limit",
+   "input": "",
+   "ok": false,
+   "why": "empty"
+  },
+  {
+   "key": "async_io_threads",
+   "input": "1",
+   "ok": true,
+   "why": "min"
+  },
+  {
+   "key": "async_io_threads",
+   "input": "1024",
+   "ok": true,
+   "why": "max"
+  },
+  {
+   "key": "async_io_threads",
+   "input": "0",
+   "ok": false,
+   "why": "below min"
+  },
+  {
+   "key": "async_io_threads",
+   "input": "1025",
+   "ok": false,
+   "why": "above max"
+  },
+  {
+   "key": "async_io_threads",
+   "input": "abc",
+   "ok": false,
+   "why": "not a number"
+  },
+  {
+   "key": "async_io_threads",
+   "input": "1.5",
+   "ok": false,
+   "why": "not a whole number"
+  },
+  {
+   "key": "async_io_threads",
+   "input": "",
+   "ok": false,
+   "why": "empty"
+  },
+  {
+   "key": "hashing_threads",
+   "input": "1",
+   "ok": true,
+   "why": "min"
+  },
+  {
+   "key": "hashing_threads",
+   "input": "1024",
+   "ok": true,
+   "why": "max"
+  },
+  {
+   "key": "hashing_threads",
+   "input": "0",
+   "ok": false,
+   "why": "below min"
+  },
+  {
+   "key": "hashing_threads",
+   "input": "1025",
+   "ok": false,
+   "why": "above max"
+  },
+  {
+   "key": "hashing_threads",
+   "input": "abc",
+   "ok": false,
+   "why": "not a number"
+  },
+  {
+   "key": "hashing_threads",
+   "input": "1.5",
+   "ok": false,
+   "why": "not a whole number"
+  },
+  {
+   "key": "hashing_threads",
+   "input": "",
+   "ok": false,
+   "why": "empty"
+  },
+  {
+   "key": "file_pool_size",
+   "input": "1",
+   "ok": true,
+   "why": "min"
+  },
+  {
+   "key": "file_pool_size",
+   "input": "2147483647",
+   "ok": true,
+   "why": "max"
+  },
+  {
+   "key": "file_pool_size",
+   "input": "0",
+   "ok": false,
+   "why": "below min"
+  },
+  {
+   "key": "file_pool_size",
+   "input": "2147483648",
+   "ok": false,
+   "why": "above max"
+  },
+  {
+   "key": "file_pool_size",
+   "input": "abc",
+   "ok": false,
+   "why": "not a number"
+  },
+  {
+   "key": "file_pool_size",
+   "input": "1.5",
+   "ok": false,
+   "why": "not a whole number"
+  },
+  {
+   "key": "file_pool_size",
+   "input": "",
+   "ok": false,
+   "why": "empty"
+  },
+  {
+   "key": "checking_memory_use",
+   "input": "1",
+   "ok": true,
+   "why": "min"
+  },
+  {
+   "key": "checking_memory_use",
+   "input": "1024",
+   "ok": true,
+   "why": "max"
+  },
+  {
+   "key": "checking_memory_use",
+   "input": "0",
+   "ok": false,
+   "why": "below min"
+  },
+  {
+   "key": "checking_memory_use",
+   "input": "1025",
+   "ok": false,
+   "why": "above max"
+  },
+  {
+   "key": "checking_memory_use",
+   "input": "abc",
+   "ok": false,
+   "why": "not a number"
+  },
+  {
+   "key": "checking_memory_use",
+   "input": "1.5",
+   "ok": false,
+   "why": "not a whole number"
+  },
+  {
+   "key": "checking_memory_use",
+   "input": "",
+   "ok": false,
+   "why": "empty"
+  },
+  {
+   "key": "disk_cache",
+   "input": "0",
+   "ok": true,
+   "why": "min"
+  },
+  {
+   "key": "disk_cache",
+   "input": "33554431",
+   "ok": true,
+   "why": "max"
+  },
+  {
+   "key": "disk_cache",
+   "input": "-1",
+   "ok": true,
+   "why": "sentinel: auto"
+  },
+  {
+   "key": "disk_cache",
+   "input": "-2",
+   "ok": false,
+   "why": "below the lowest sentinel"
+  },
+  {
+   "key": "disk_cache",
+   "input": "33554432",
+   "ok": false,
+   "why": "above max"
+  },
+  {
+   "key": "disk_cache",
+   "input": "abc",
+   "ok": false,
+   "why": "not a number"
+  },
+  {
+   "key": "disk_cache",
+   "input": "1.5",
+   "ok": false,
+   "why": "not a whole number"
+  },
+  {
+   "key": "disk_cache",
+   "input": "",
+   "ok": false,
+   "why": "empty"
+  },
+  {
+   "key": "disk_cache_ttl",
+   "input": "1",
+   "ok": true,
+   "why": "min"
+  },
+  {
+   "key": "disk_cache_ttl",
+   "input": "2147483647",
+   "ok": true,
+   "why": "max"
+  },
+  {
+   "key": "disk_cache_ttl",
+   "input": "0",
+   "ok": false,
+   "why": "below min"
+  },
+  {
+   "key": "disk_cache_ttl",
+   "input": "2147483648",
+   "ok": false,
+   "why": "above max"
+  },
+  {
+   "key": "disk_cache_ttl",
+   "input": "abc",
+   "ok": false,
+   "why": "not a number"
+  },
+  {
+   "key": "disk_cache_ttl",
+   "input": "1.5",
+   "ok": false,
+   "why": "not a whole number"
+  },
+  {
+   "key": "disk_cache_ttl",
+   "input": "",
+   "ok": false,
+   "why": "empty"
+  },
+  {
+   "key": "disk_queue_size",
+   "input": "1024",
+   "ok": true,
+   "why": "min"
+  },
+  {
+   "key": "disk_queue_size",
+   "input": "2147482624",
+   "ok": true,
+   "why": "max"
+  },
+  {
+   "key": "disk_queue_size",
+   "input": "1023",
+   "ok": false,
+   "why": "below min"
+  },
+  {
+   "key": "disk_queue_size",
+   "input": "2147482625",
+   "ok": false,
+   "why": "above max"
+  },
+  {
+   "key": "disk_queue_size",
+   "input": "abc",
+   "ok": false,
+   "why": "not a number"
+  },
+  {
+   "key": "disk_queue_size",
+   "input": "1.5",
+   "ok": false,
+   "why": "not a whole number"
+  },
+  {
+   "key": "disk_queue_size",
+   "input": "",
+   "ok": false,
+   "why": "empty"
+  },
+  {
+   "key": "send_buffer_watermark",
+   "input": "1",
+   "ok": true,
+   "why": "min"
+  },
+  {
+   "key": "send_buffer_watermark",
+   "input": "2147483647",
+   "ok": true,
+   "why": "max"
+  },
+  {
+   "key": "send_buffer_watermark",
+   "input": "0",
+   "ok": false,
+   "why": "below min"
+  },
+  {
+   "key": "send_buffer_watermark",
+   "input": "2147483648",
+   "ok": false,
+   "why": "above max"
+  },
+  {
+   "key": "send_buffer_watermark",
+   "input": "abc",
+   "ok": false,
+   "why": "not a number"
+  },
+  {
+   "key": "send_buffer_watermark",
+   "input": "1.5",
+   "ok": false,
+   "why": "not a whole number"
+  },
+  {
+   "key": "send_buffer_watermark",
+   "input": "",
+   "ok": false,
+   "why": "empty"
+  },
+  {
+   "key": "send_buffer_low_watermark",
+   "input": "1",
+   "ok": true,
+   "why": "min"
+  },
+  {
+   "key": "send_buffer_low_watermark",
+   "input": "2147483647",
+   "ok": true,
+   "why": "max"
+  },
+  {
+   "key": "send_buffer_low_watermark",
+   "input": "0",
+   "ok": false,
+   "why": "below min"
+  },
+  {
+   "key": "send_buffer_low_watermark",
+   "input": "2147483648",
+   "ok": false,
+   "why": "above max"
+  },
+  {
+   "key": "send_buffer_low_watermark",
+   "input": "abc",
+   "ok": false,
+   "why": "not a number"
+  },
+  {
+   "key": "send_buffer_low_watermark",
+   "input": "1.5",
+   "ok": false,
+   "why": "not a whole number"
+  },
+  {
+   "key": "send_buffer_low_watermark",
+   "input": "",
+   "ok": false,
+   "why": "empty"
+  },
+  {
+   "key": "send_buffer_watermark_factor",
+   "input": "1",
+   "ok": true,
+   "why": "min"
+  },
+  {
+   "key": "send_buffer_watermark_factor",
+   "input": "2147483647",
+   "ok": true,
+   "why": "max"
+  },
+  {
+   "key": "send_buffer_watermark_factor",
+   "input": "0",
+   "ok": false,
+   "why": "below min"
+  },
+  {
+   "key": "send_buffer_watermark_factor",
+   "input": "2147483648",
+   "ok": false,
+   "why": "above max"
+  },
+  {
+   "key": "send_buffer_watermark_factor",
+   "input": "abc",
+   "ok": false,
+   "why": "not a number"
+  },
+  {
+   "key": "send_buffer_watermark_factor",
+   "input": "1.5",
+   "ok": false,
+   "why": "not a whole number"
+  },
+  {
+   "key": "send_buffer_watermark_factor",
+   "input": "",
+   "ok": false,
+   "why": "empty"
+  },
+  {
+   "key": "connection_speed",
+   "input": "0",
+   "ok": true,
+   "why": "min"
+  },
+  {
+   "key": "connection_speed",
+   "input": "2147483647",
+   "ok": true,
+   "why": "max"
+  },
+  {
+   "key": "connection_speed",
+   "input": "-1",
+   "ok": false,
+   "why": "below min"
+  },
+  {
+   "key": "connection_speed",
+   "input": "2147483648",
+   "ok": false,
+   "why": "above max"
+  },
+  {
+   "key": "connection_speed",
+   "input": "abc",
+   "ok": false,
+   "why": "not a number"
+  },
+  {
+   "key": "connection_speed",
+   "input": "1.5",
+   "ok": false,
+   "why": "not a whole number"
+  },
+  {
+   "key": "connection_speed",
+   "input": "",
+   "ok": false,
+   "why": "empty"
+  },
+  {
+   "key": "socket_send_buffer_size",
+   "input": "0",
+   "ok": true,
+   "why": "min"
+  },
+  {
+   "key": "socket_send_buffer_size",
+   "input": "2147482624",
+   "ok": true,
+   "why": "max"
+  },
+  {
+   "key": "socket_send_buffer_size",
+   "input": "-1",
+   "ok": false,
+   "why": "below min"
+  },
+  {
+   "key": "socket_send_buffer_size",
+   "input": "2147482625",
+   "ok": false,
+   "why": "above max"
+  },
+  {
+   "key": "socket_send_buffer_size",
+   "input": "abc",
+   "ok": false,
+   "why": "not a number"
+  },
+  {
+   "key": "socket_send_buffer_size",
+   "input": "1.5",
+   "ok": false,
+   "why": "not a whole number"
+  },
+  {
+   "key": "socket_send_buffer_size",
+   "input": "",
+   "ok": false,
+   "why": "empty"
+  },
+  {
+   "key": "socket_receive_buffer_size",
+   "input": "0",
+   "ok": true,
+   "why": "min"
+  },
+  {
+   "key": "socket_receive_buffer_size",
+   "input": "2147482624",
+   "ok": true,
+   "why": "max"
+  },
+  {
+   "key": "socket_receive_buffer_size",
+   "input": "-1",
+   "ok": false,
+   "why": "below min"
+  },
+  {
+   "key": "socket_receive_buffer_size",
+   "input": "2147482625",
+   "ok": false,
+   "why": "above max"
+  },
+  {
+   "key": "socket_receive_buffer_size",
+   "input": "abc",
+   "ok": false,
+   "why": "not a number"
+  },
+  {
+   "key": "socket_receive_buffer_size",
+   "input": "1.5",
+   "ok": false,
+   "why": "not a whole number"
+  },
+  {
+   "key": "socket_receive_buffer_size",
+   "input": "",
+   "ok": false,
+   "why": "empty"
+  },
+  {
+   "key": "socket_backlog_size",
+   "input": "1",
+   "ok": true,
+   "why": "min"
+  },
+  {
+   "key": "socket_backlog_size",
+   "input": "2147483647",
+   "ok": true,
+   "why": "max"
+  },
+  {
+   "key": "socket_backlog_size",
+   "input": "0",
+   "ok": false,
+   "why": "below min"
+  },
+  {
+   "key": "socket_backlog_size",
+   "input": "2147483648",
+   "ok": false,
+   "why": "above max"
+  },
+  {
+   "key": "socket_backlog_size",
+   "input": "abc",
+   "ok": false,
+   "why": "not a number"
+  },
+  {
+   "key": "socket_backlog_size",
+   "input": "1.5",
+   "ok": false,
+   "why": "not a whole number"
+  },
+  {
+   "key": "socket_backlog_size",
+   "input": "",
+   "ok": false,
+   "why": "empty"
+  },
+  {
+   "key": "outgoing_ports_min",
+   "input": "0",
+   "ok": true,
+   "why": "min"
+  },
+  {
+   "key": "outgoing_ports_min",
+   "input": "65535",
+   "ok": true,
+   "why": "max"
+  },
+  {
+   "key": "outgoing_ports_min",
+   "input": "-1",
+   "ok": false,
+   "why": "below min"
+  },
+  {
+   "key": "outgoing_ports_min",
+   "input": "65536",
+   "ok": false,
+   "why": "above max"
+  },
+  {
+   "key": "outgoing_ports_min",
+   "input": "abc",
+   "ok": false,
+   "why": "not a number"
+  },
+  {
+   "key": "outgoing_ports_min",
+   "input": "1.5",
+   "ok": false,
+   "why": "not a whole number"
+  },
+  {
+   "key": "outgoing_ports_min",
+   "input": "",
+   "ok": false,
+   "why": "empty"
+  },
+  {
+   "key": "outgoing_ports_max",
+   "input": "0",
+   "ok": true,
+   "why": "min"
+  },
+  {
+   "key": "outgoing_ports_max",
+   "input": "65535",
+   "ok": true,
+   "why": "max"
+  },
+  {
+   "key": "outgoing_ports_max",
+   "input": "-1",
+   "ok": false,
+   "why": "below min"
+  },
+  {
+   "key": "outgoing_ports_max",
+   "input": "65536",
+   "ok": false,
+   "why": "above max"
+  },
+  {
+   "key": "outgoing_ports_max",
+   "input": "abc",
+   "ok": false,
+   "why": "not a number"
+  },
+  {
+   "key": "outgoing_ports_max",
+   "input": "1.5",
+   "ok": false,
+   "why": "not a whole number"
+  },
+  {
+   "key": "outgoing_ports_max",
+   "input": "",
+   "ok": false,
+   "why": "empty"
+  },
+  {
+   "key": "upnp_lease_duration",
+   "input": "0",
+   "ok": true,
+   "why": "min"
+  },
+  {
+   "key": "upnp_lease_duration",
+   "input": "2147483647",
+   "ok": true,
+   "why": "max"
+  },
+  {
+   "key": "upnp_lease_duration",
+   "input": "-1",
+   "ok": false,
+   "why": "below min"
+  },
+  {
+   "key": "upnp_lease_duration",
+   "input": "2147483648",
+   "ok": false,
+   "why": "above max"
+  },
+  {
+   "key": "upnp_lease_duration",
+   "input": "abc",
+   "ok": false,
+   "why": "not a number"
+  },
+  {
+   "key": "upnp_lease_duration",
+   "input": "1.5",
+   "ok": false,
+   "why": "not a whole number"
+  },
+  {
+   "key": "upnp_lease_duration",
+   "input": "",
+   "ok": false,
+   "why": "empty"
+  },
+  {
+   "key": "peer_tos",
+   "input": "0",
+   "ok": true,
+   "why": "min"
+  },
+  {
+   "key": "peer_tos",
+   "input": "255",
+   "ok": true,
+   "why": "max"
+  },
+  {
+   "key": "peer_tos",
+   "input": "-1",
+   "ok": false,
+   "why": "below min"
+  },
+  {
+   "key": "peer_tos",
+   "input": "256",
+   "ok": false,
+   "why": "above max"
+  },
+  {
+   "key": "peer_tos",
+   "input": "abc",
+   "ok": false,
+   "why": "not a number"
+  },
+  {
+   "key": "peer_tos",
+   "input": "1.5",
+   "ok": false,
+   "why": "not a whole number"
+  },
+  {
+   "key": "peer_tos",
+   "input": "",
+   "ok": false,
+   "why": "empty"
+  },
+  {
+   "key": "hostname_cache_ttl",
+   "input": "0",
+   "ok": true,
+   "why": "min"
+  },
+  {
+   "key": "hostname_cache_ttl",
+   "input": "2147483647",
+   "ok": true,
+   "why": "max"
+  },
+  {
+   "key": "hostname_cache_ttl",
+   "input": "-1",
+   "ok": false,
+   "why": "below min"
+  },
+  {
+   "key": "hostname_cache_ttl",
+   "input": "2147483648",
+   "ok": false,
+   "why": "above max"
+  },
+  {
+   "key": "hostname_cache_ttl",
+   "input": "abc",
+   "ok": false,
+   "why": "not a number"
+  },
+  {
+   "key": "hostname_cache_ttl",
+   "input": "1.5",
+   "ok": false,
+   "why": "not a whole number"
+  },
+  {
+   "key": "hostname_cache_ttl",
+   "input": "",
+   "ok": false,
+   "why": "empty"
+  },
+  {
+   "key": "peer_turnover",
+   "input": "0",
+   "ok": true,
+   "why": "min"
+  },
+  {
+   "key": "peer_turnover",
+   "input": "100",
+   "ok": true,
+   "why": "max"
+  },
+  {
+   "key": "peer_turnover",
+   "input": "-1",
+   "ok": false,
+   "why": "below min"
+  },
+  {
+   "key": "peer_turnover",
+   "input": "101",
+   "ok": false,
+   "why": "above max"
+  },
+  {
+   "key": "peer_turnover",
+   "input": "abc",
+   "ok": false,
+   "why": "not a number"
+  },
+  {
+   "key": "peer_turnover",
+   "input": "1.5",
+   "ok": false,
+   "why": "not a whole number"
+  },
+  {
+   "key": "peer_turnover",
+   "input": "",
+   "ok": false,
+   "why": "empty"
+  },
+  {
+   "key": "peer_turnover_cutoff",
+   "input": "0",
+   "ok": true,
+   "why": "min"
+  },
+  {
+   "key": "peer_turnover_cutoff",
+   "input": "100",
+   "ok": true,
+   "why": "max"
+  },
+  {
+   "key": "peer_turnover_cutoff",
+   "input": "-1",
+   "ok": false,
+   "why": "below min"
+  },
+  {
+   "key": "peer_turnover_cutoff",
+   "input": "101",
+   "ok": false,
+   "why": "above max"
+  },
+  {
+   "key": "peer_turnover_cutoff",
+   "input": "abc",
+   "ok": false,
+   "why": "not a number"
+  },
+  {
+   "key": "peer_turnover_cutoff",
+   "input": "1.5",
+   "ok": false,
+   "why": "not a whole number"
+  },
+  {
+   "key": "peer_turnover_cutoff",
+   "input": "",
+   "ok": false,
+   "why": "empty"
+  },
+  {
+   "key": "peer_turnover_interval",
+   "input": "30",
+   "ok": true,
+   "why": "min"
+  },
+  {
+   "key": "peer_turnover_interval",
+   "input": "3600",
+   "ok": true,
+   "why": "max"
+  },
+  {
+   "key": "peer_turnover_interval",
+   "input": "29",
+   "ok": false,
+   "why": "below min"
+  },
+  {
+   "key": "peer_turnover_interval",
+   "input": "3601",
+   "ok": false,
+   "why": "above max"
+  },
+  {
+   "key": "peer_turnover_interval",
+   "input": "abc",
+   "ok": false,
+   "why": "not a number"
+  },
+  {
+   "key": "peer_turnover_interval",
+   "input": "1.5",
+   "ok": false,
+   "why": "not a whole number"
+  },
+  {
+   "key": "peer_turnover_interval",
+   "input": "",
+   "ok": false,
+   "why": "empty"
+  },
+  {
+   "key": "request_queue_size",
+   "input": "1",
+   "ok": true,
+   "why": "min"
+  },
+  {
+   "key": "request_queue_size",
+   "input": "2147483647",
+   "ok": true,
+   "why": "max"
+  },
+  {
+   "key": "request_queue_size",
+   "input": "0",
+   "ok": false,
+   "why": "below min"
+  },
+  {
+   "key": "request_queue_size",
+   "input": "2147483648",
+   "ok": false,
+   "why": "above max"
+  },
+  {
+   "key": "request_queue_size",
+   "input": "abc",
+   "ok": false,
+   "why": "not a number"
+  },
+  {
+   "key": "request_queue_size",
+   "input": "1.5",
+   "ok": false,
+   "why": "not a whole number"
+  },
+  {
+   "key": "request_queue_size",
+   "input": "",
+   "ok": false,
+   "why": "empty"
+  },
+  {
+   "key": "announce_port",
+   "input": "0",
+   "ok": true,
+   "why": "min"
+  },
+  {
+   "key": "announce_port",
+   "input": "65535",
+   "ok": true,
+   "why": "max"
+  },
+  {
+   "key": "announce_port",
+   "input": "-1",
+   "ok": false,
+   "why": "below min"
+  },
+  {
+   "key": "announce_port",
+   "input": "65536",
+   "ok": false,
+   "why": "above max"
+  },
+  {
+   "key": "announce_port",
+   "input": "abc",
+   "ok": false,
+   "why": "not a number"
+  },
+  {
+   "key": "announce_port",
+   "input": "1.5",
+   "ok": false,
+   "why": "not a whole number"
+  },
+  {
+   "key": "announce_port",
+   "input": "",
+   "ok": false,
+   "why": "empty"
+  },
+  {
+   "key": "max_concurrent_http_announces",
+   "input": "0",
+   "ok": true,
+   "why": "min"
+  },
+  {
+   "key": "max_concurrent_http_announces",
+   "input": "2147483647",
+   "ok": true,
+   "why": "max"
+  },
+  {
+   "key": "max_concurrent_http_announces",
+   "input": "-1",
+   "ok": false,
+   "why": "below min"
+  },
+  {
+   "key": "max_concurrent_http_announces",
+   "input": "2147483648",
+   "ok": false,
+   "why": "above max"
+  },
+  {
+   "key": "max_concurrent_http_announces",
+   "input": "abc",
+   "ok": false,
+   "why": "not a number"
+  },
+  {
+   "key": "max_concurrent_http_announces",
+   "input": "1.5",
+   "ok": false,
+   "why": "not a whole number"
+  },
+  {
+   "key": "max_concurrent_http_announces",
+   "input": "",
+   "ok": false,
+   "why": "empty"
+  },
+  {
+   "key": "stop_tracker_timeout",
+   "input": "0",
+   "ok": true,
+   "why": "min"
+  },
+  {
+   "key": "stop_tracker_timeout",
+   "input": "2147483647",
+   "ok": true,
+   "why": "max"
+  },
+  {
+   "key": "stop_tracker_timeout",
+   "input": "-1",
+   "ok": false,
+   "why": "below min"
+  },
+  {
+   "key": "stop_tracker_timeout",
+   "input": "2147483648",
+   "ok": false,
+   "why": "above max"
+  },
+  {
+   "key": "stop_tracker_timeout",
+   "input": "abc",
+   "ok": false,
+   "why": "not a number"
+  },
+  {
+   "key": "stop_tracker_timeout",
+   "input": "1.5",
+   "ok": false,
+   "why": "not a whole number"
+  },
+  {
+   "key": "stop_tracker_timeout",
+   "input": "",
+   "ok": false,
+   "why": "empty"
+  },
+  {
+   "key": "i2p_inbound_quantity",
+   "input": "1",
+   "ok": true,
+   "why": "min"
+  },
+  {
+   "key": "i2p_inbound_quantity",
+   "input": "16",
+   "ok": true,
+   "why": "max"
+  },
+  {
+   "key": "i2p_inbound_quantity",
+   "input": "0",
+   "ok": false,
+   "why": "below min"
+  },
+  {
+   "key": "i2p_inbound_quantity",
+   "input": "17",
+   "ok": false,
+   "why": "above max"
+  },
+  {
+   "key": "i2p_inbound_quantity",
+   "input": "abc",
+   "ok": false,
+   "why": "not a number"
+  },
+  {
+   "key": "i2p_inbound_quantity",
+   "input": "1.5",
+   "ok": false,
+   "why": "not a whole number"
+  },
+  {
+   "key": "i2p_inbound_quantity",
+   "input": "",
+   "ok": false,
+   "why": "empty"
+  },
+  {
+   "key": "i2p_outbound_quantity",
+   "input": "1",
+   "ok": true,
+   "why": "min"
+  },
+  {
+   "key": "i2p_outbound_quantity",
+   "input": "16",
+   "ok": true,
+   "why": "max"
+  },
+  {
+   "key": "i2p_outbound_quantity",
+   "input": "0",
+   "ok": false,
+   "why": "below min"
+  },
+  {
+   "key": "i2p_outbound_quantity",
+   "input": "17",
+   "ok": false,
+   "why": "above max"
+  },
+  {
+   "key": "i2p_outbound_quantity",
+   "input": "abc",
+   "ok": false,
+   "why": "not a number"
+  },
+  {
+   "key": "i2p_outbound_quantity",
+   "input": "1.5",
+   "ok": false,
+   "why": "not a whole number"
+  },
+  {
+   "key": "i2p_outbound_quantity",
+   "input": "",
+   "ok": false,
+   "why": "empty"
+  },
+  {
+   "key": "i2p_inbound_length",
+   "input": "0",
+   "ok": true,
+   "why": "min"
+  },
+  {
+   "key": "i2p_inbound_length",
+   "input": "7",
+   "ok": true,
+   "why": "max"
+  },
+  {
+   "key": "i2p_inbound_length",
+   "input": "-1",
+   "ok": false,
+   "why": "below min"
+  },
+  {
+   "key": "i2p_inbound_length",
+   "input": "8",
+   "ok": false,
+   "why": "above max"
+  },
+  {
+   "key": "i2p_inbound_length",
+   "input": "abc",
+   "ok": false,
+   "why": "not a number"
+  },
+  {
+   "key": "i2p_inbound_length",
+   "input": "1.5",
+   "ok": false,
+   "why": "not a whole number"
+  },
+  {
+   "key": "i2p_inbound_length",
+   "input": "",
+   "ok": false,
+   "why": "empty"
+  },
+  {
+   "key": "i2p_outbound_length",
+   "input": "0",
+   "ok": true,
+   "why": "min"
+  },
+  {
+   "key": "i2p_outbound_length",
+   "input": "7",
+   "ok": true,
+   "why": "max"
+  },
+  {
+   "key": "i2p_outbound_length",
+   "input": "-1",
+   "ok": false,
+   "why": "below min"
+  },
+  {
+   "key": "i2p_outbound_length",
+   "input": "8",
+   "ok": false,
+   "why": "above max"
+  },
+  {
+   "key": "i2p_outbound_length",
+   "input": "abc",
+   "ok": false,
+   "why": "not a number"
+  },
+  {
+   "key": "i2p_outbound_length",
+   "input": "1.5",
+   "ok": false,
+   "why": "not a whole number"
+  },
+  {
+   "key": "i2p_outbound_length",
+   "input": "",
+   "ok": false,
+   "why": "empty"
+  }
+ ],
+ "choices": [
+  {
+   "key": "torrent_content_layout",
+   "input": "Original",
+   "ok": true,
+   "why": "Original"
+  },
+  {
+   "key": "torrent_content_layout",
+   "input": "Subfolder",
+   "ok": true,
+   "why": "Create subfolder"
+  },
+  {
+   "key": "torrent_content_layout",
+   "input": "NoSubfolder",
+   "ok": true,
+   "why": "Don't create subfolder"
+  },
+  {
+   "key": "torrent_content_layout",
+   "input": "original",
+   "ok": false,
+   "why": "wrong case: enum names are case-sensitive"
+  },
+  {
+   "key": "torrent_content_layout",
+   "input": "Bogus",
+   "ok": false,
+   "why": "not a value"
+  },
+  {
+   "key": "torrent_content_layout",
+   "input": "",
+   "ok": false,
+   "why": "empty"
+  },
+  {
+   "key": "torrent_stop_condition",
+   "input": "None",
+   "ok": true,
+   "why": "None"
+  },
+  {
+   "key": "torrent_stop_condition",
+   "input": "MetadataReceived",
+   "ok": true,
+   "why": "Metadata received"
+  },
+  {
+   "key": "torrent_stop_condition",
+   "input": "FilesChecked",
+   "ok": true,
+   "why": "Files checked"
+  },
+  {
+   "key": "torrent_stop_condition",
+   "input": "none",
+   "ok": false,
+   "why": "wrong case: enum names are case-sensitive"
+  },
+  {
+   "key": "torrent_stop_condition",
+   "input": "Bogus",
+   "ok": false,
+   "why": "not a value"
+  },
+  {
+   "key": "torrent_stop_condition",
+   "input": "",
+   "ok": false,
+   "why": "empty"
+  },
+  {
+   "key": "auto_delete_mode",
+   "input": "0",
+   "ok": true,
+   "why": "Never"
+  },
+  {
+   "key": "auto_delete_mode",
+   "input": "1",
+   "ok": true,
+   "why": "When added"
+  },
+  {
+   "key": "auto_delete_mode",
+   "input": "2",
+   "ok": true,
+   "why": "Always, even if cancelled"
+  },
+  {
+   "key": "auto_delete_mode",
+   "input": "3",
+   "ok": false,
+   "why": "past the last value"
+  },
+  {
+   "key": "auto_delete_mode",
+   "input": "-1",
+   "ok": false,
+   "why": "not a value"
+  },
+  {
+   "key": "auto_delete_mode",
+   "input": "abc",
+   "ok": false,
+   "why": "not a number"
+  },
+  {
+   "key": "bittorrent_protocol",
+   "input": "0",
+   "ok": true,
+   "why": "TCP and µTP"
+  },
+  {
+   "key": "bittorrent_protocol",
+   "input": "1",
+   "ok": true,
+   "why": "TCP"
+  },
+  {
+   "key": "bittorrent_protocol",
+   "input": "2",
+   "ok": true,
+   "why": "µTP"
+  },
+  {
+   "key": "bittorrent_protocol",
+   "input": "3",
+   "ok": false,
+   "why": "past the last value"
+  },
+  {
+   "key": "bittorrent_protocol",
+   "input": "-1",
+   "ok": false,
+   "why": "not a value"
+  },
+  {
+   "key": "bittorrent_protocol",
+   "input": "abc",
+   "ok": false,
+   "why": "not a number"
+  },
+  {
+   "key": "proxy_type",
+   "input": "None",
+   "ok": true,
+   "why": "None"
+  },
+  {
+   "key": "proxy_type",
+   "input": "HTTP",
+   "ok": true,
+   "why": "HTTP"
+  },
+  {
+   "key": "proxy_type",
+   "input": "SOCKS5",
+   "ok": true,
+   "why": "SOCKS5"
+  },
+  {
+   "key": "proxy_type",
+   "input": "SOCKS4",
+   "ok": true,
+   "why": "SOCKS4"
+  },
+  {
+   "key": "proxy_type",
+   "input": "none",
+   "ok": false,
+   "why": "wrong case: enum names are case-sensitive"
+  },
+  {
+   "key": "proxy_type",
+   "input": "Bogus",
+   "ok": false,
+   "why": "not a value"
+  },
+  {
+   "key": "proxy_type",
+   "input": "",
+   "ok": false,
+   "why": "empty"
+  },
+  {
+   "key": "scheduler_days",
+   "input": "0",
+   "ok": true,
+   "why": "Every day"
+  },
+  {
+   "key": "scheduler_days",
+   "input": "1",
+   "ok": true,
+   "why": "Weekdays"
+  },
+  {
+   "key": "scheduler_days",
+   "input": "2",
+   "ok": true,
+   "why": "Weekends"
+  },
+  {
+   "key": "scheduler_days",
+   "input": "3",
+   "ok": true,
+   "why": "Monday"
+  },
+  {
+   "key": "scheduler_days",
+   "input": "4",
+   "ok": true,
+   "why": "Tuesday"
+  },
+  {
+   "key": "scheduler_days",
+   "input": "5",
+   "ok": true,
+   "why": "Wednesday"
+  },
+  {
+   "key": "scheduler_days",
+   "input": "6",
+   "ok": true,
+   "why": "Thursday"
+  },
+  {
+   "key": "scheduler_days",
+   "input": "7",
+   "ok": true,
+   "why": "Friday"
+  },
+  {
+   "key": "scheduler_days",
+   "input": "8",
+   "ok": true,
+   "why": "Saturday"
+  },
+  {
+   "key": "scheduler_days",
+   "input": "9",
+   "ok": true,
+   "why": "Sunday"
+  },
+  {
+   "key": "scheduler_days",
+   "input": "10",
+   "ok": false,
+   "why": "past the last value"
+  },
+  {
+   "key": "scheduler_days",
+   "input": "-1",
+   "ok": false,
+   "why": "not a value"
+  },
+  {
+   "key": "scheduler_days",
+   "input": "abc",
+   "ok": false,
+   "why": "not a number"
+  },
+  {
+   "key": "encryption",
+   "input": "0",
+   "ok": true,
+   "why": "Prefer"
+  },
+  {
+   "key": "encryption",
+   "input": "1",
+   "ok": true,
+   "why": "Require"
+  },
+  {
+   "key": "encryption",
+   "input": "2",
+   "ok": true,
+   "why": "Disable"
+  },
+  {
+   "key": "encryption",
+   "input": "3",
+   "ok": false,
+   "why": "past the last value"
+  },
+  {
+   "key": "encryption",
+   "input": "-1",
+   "ok": false,
+   "why": "not a value"
+  },
+  {
+   "key": "encryption",
+   "input": "abc",
+   "ok": false,
+   "why": "not a number"
+  },
+  {
+   "key": "max_ratio_act",
+   "input": "0",
+   "ok": true,
+   "why": "Stop"
+  },
+  {
+   "key": "max_ratio_act",
+   "input": "1",
+   "ok": true,
+   "why": "Remove"
+  },
+  {
+   "key": "max_ratio_act",
+   "input": "3",
+   "ok": true,
+   "why": "Remove with files"
+  },
+  {
+   "key": "max_ratio_act",
+   "input": "2",
+   "ok": true,
+   "why": "Super seeding"
+  },
+  {
+   "key": "max_ratio_act",
+   "input": "4",
+   "ok": false,
+   "why": "past the last value"
+  },
+  {
+   "key": "max_ratio_act",
+   "input": "-1",
+   "ok": false,
+   "why": "not a value"
+  },
+  {
+   "key": "max_ratio_act",
+   "input": "abc",
+   "ok": false,
+   "why": "not a number"
+  },
+  {
+   "key": "file_log_age_type",
+   "input": "0",
+   "ok": true,
+   "why": "days"
+  },
+  {
+   "key": "file_log_age_type",
+   "input": "1",
+   "ok": true,
+   "why": "months"
+  },
+  {
+   "key": "file_log_age_type",
+   "input": "2",
+   "ok": true,
+   "why": "years"
+  },
+  {
+   "key": "file_log_age_type",
+   "input": "3",
+   "ok": false,
+   "why": "past the last value"
+  },
+  {
+   "key": "file_log_age_type",
+   "input": "-1",
+   "ok": false,
+   "why": "not a value"
+  },
+  {
+   "key": "file_log_age_type",
+   "input": "abc",
+   "ok": false,
+   "why": "not a number"
+  },
+  {
+   "key": "dyndns_service",
+   "input": "0",
+   "ok": true,
+   "why": "DynDNS"
+  },
+  {
+   "key": "dyndns_service",
+   "input": "1",
+   "ok": true,
+   "why": "No-IP"
+  },
+  {
+   "key": "dyndns_service",
+   "input": "2",
+   "ok": false,
+   "why": "past the last value"
+  },
+  {
+   "key": "dyndns_service",
+   "input": "-1",
+   "ok": false,
+   "why": "not a value"
+  },
+  {
+   "key": "dyndns_service",
+   "input": "abc",
+   "ok": false,
+   "why": "not a number"
+  },
+  {
+   "key": "resume_data_storage_type",
+   "input": "Legacy",
+   "ok": true,
+   "why": "Fastresume files"
+  },
+  {
+   "key": "resume_data_storage_type",
+   "input": "SQLite",
+   "ok": true,
+   "why": "SQLite database (experimental)"
+  },
+  {
+   "key": "resume_data_storage_type",
+   "input": "legacy",
+   "ok": false,
+   "why": "wrong case: enum names are case-sensitive"
+  },
+  {
+   "key": "resume_data_storage_type",
+   "input": "Bogus",
+   "ok": false,
+   "why": "not a value"
+  },
+  {
+   "key": "resume_data_storage_type",
+   "input": "",
+   "ok": false,
+   "why": "empty"
+  },
+  {
+   "key": "torrent_content_remove_option",
+   "input": "Delete",
+   "ok": true,
+   "why": "Delete permanently"
+  },
+  {
+   "key": "torrent_content_remove_option",
+   "input": "MoveToTrash",
+   "ok": true,
+   "why": "Move to trash if possible"
+  },
+  {
+   "key": "torrent_content_remove_option",
+   "input": "delete",
+   "ok": false,
+   "why": "wrong case: enum names are case-sensitive"
+  },
+  {
+   "key": "torrent_content_remove_option",
+   "input": "Bogus",
+   "ok": false,
+   "why": "not a value"
+  },
+  {
+   "key": "torrent_content_remove_option",
+   "input": "",
+   "ok": false,
+   "why": "empty"
+  },
+  {
+   "key": "disk_io_type",
+   "input": "0",
+   "ok": true,
+   "why": "Default"
+  },
+  {
+   "key": "disk_io_type",
+   "input": "1",
+   "ok": true,
+   "why": "Memory-mapped files"
+  },
+  {
+   "key": "disk_io_type",
+   "input": "2",
+   "ok": true,
+   "why": "POSIX-compliant"
+  },
+  {
+   "key": "disk_io_type",
+   "input": "3",
+   "ok": true,
+   "why": "Simple pread/pwrite"
+  },
+  {
+   "key": "disk_io_type",
+   "input": "4",
+   "ok": false,
+   "why": "past the last value"
+  },
+  {
+   "key": "disk_io_type",
+   "input": "-1",
+   "ok": false,
+   "why": "not a value"
+  },
+  {
+   "key": "disk_io_type",
+   "input": "abc",
+   "ok": false,
+   "why": "not a number"
+  },
+  {
+   "key": "disk_io_read_mode",
+   "input": "0",
+   "ok": true,
+   "why": "Disable OS cache"
+  },
+  {
+   "key": "disk_io_read_mode",
+   "input": "1",
+   "ok": true,
+   "why": "Enable OS cache"
+  },
+  {
+   "key": "disk_io_read_mode",
+   "input": "2",
+   "ok": false,
+   "why": "past the last value"
+  },
+  {
+   "key": "disk_io_read_mode",
+   "input": "-1",
+   "ok": false,
+   "why": "not a value"
+  },
+  {
+   "key": "disk_io_read_mode",
+   "input": "abc",
+   "ok": false,
+   "why": "not a number"
+  },
+  {
+   "key": "disk_io_write_mode",
+   "input": "0",
+   "ok": true,
+   "why": "Disable OS cache"
+  },
+  {
+   "key": "disk_io_write_mode",
+   "input": "1",
+   "ok": true,
+   "why": "Enable OS cache"
+  },
+  {
+   "key": "disk_io_write_mode",
+   "input": "2",
+   "ok": true,
+   "why": "Write-through"
+  },
+  {
+   "key": "disk_io_write_mode",
+   "input": "3",
+   "ok": false,
+   "why": "past the last value"
+  },
+  {
+   "key": "disk_io_write_mode",
+   "input": "-1",
+   "ok": false,
+   "why": "not a value"
+  },
+  {
+   "key": "disk_io_write_mode",
+   "input": "abc",
+   "ok": false,
+   "why": "not a number"
+  },
+  {
+   "key": "utp_tcp_mixed_mode",
+   "input": "0",
+   "ok": true,
+   "why": "Prefer TCP"
+  },
+  {
+   "key": "utp_tcp_mixed_mode",
+   "input": "1",
+   "ok": true,
+   "why": "Peer proportional"
+  },
+  {
+   "key": "utp_tcp_mixed_mode",
+   "input": "2",
+   "ok": false,
+   "why": "past the last value"
+  },
+  {
+   "key": "utp_tcp_mixed_mode",
+   "input": "-1",
+   "ok": false,
+   "why": "not a value"
+  },
+  {
+   "key": "utp_tcp_mixed_mode",
+   "input": "abc",
+   "ok": false,
+   "why": "not a number"
+  },
+  {
+   "key": "upload_slots_behavior",
+   "input": "0",
+   "ok": true,
+   "why": "Fixed slots"
+  },
+  {
+   "key": "upload_slots_behavior",
+   "input": "1",
+   "ok": true,
+   "why": "Upload rate based"
+  },
+  {
+   "key": "upload_slots_behavior",
+   "input": "2",
+   "ok": false,
+   "why": "past the last value"
+  },
+  {
+   "key": "upload_slots_behavior",
+   "input": "-1",
+   "ok": false,
+   "why": "not a value"
+  },
+  {
+   "key": "upload_slots_behavior",
+   "input": "abc",
+   "ok": false,
+   "why": "not a number"
+  },
+  {
+   "key": "upload_choking_algorithm",
+   "input": "0",
+   "ok": true,
+   "why": "Round-robin"
+  },
+  {
+   "key": "upload_choking_algorithm",
+   "input": "1",
+   "ok": true,
+   "why": "Fastest upload"
+  },
+  {
+   "key": "upload_choking_algorithm",
+   "input": "2",
+   "ok": true,
+   "why": "Anti-leech"
+  },
+  {
+   "key": "upload_choking_algorithm",
+   "input": "3",
+   "ok": false,
+   "why": "past the last value"
+  },
+  {
+   "key": "upload_choking_algorithm",
+   "input": "-1",
+   "ok": false,
+   "why": "not a value"
+  },
+  {
+   "key": "upload_choking_algorithm",
+   "input": "abc",
+   "ok": false,
+   "why": "not a number"
+  }
+ ],
+ "times": [
+  {
+   "key": "schedule_from",
+   "input": "00:00",
+   "ok": true,
+   "hour": 0,
+   "min": 0,
+   "why": "midnight"
+  },
+  {
+   "key": "schedule_from",
+   "input": "08:00",
+   "ok": true,
+   "hour": 8,
+   "min": 0,
+   "why": "morning"
+  },
+  {
+   "key": "schedule_from",
+   "input": "23:59",
+   "ok": true,
+   "hour": 23,
+   "min": 59,
+   "why": "last minute"
+  },
+  {
+   "key": "schedule_from",
+   "input": "24:00",
+   "ok": false,
+   "why": "hour past 23"
+  },
+  {
+   "key": "schedule_from",
+   "input": "12:60",
+   "ok": false,
+   "why": "minute past 59"
+  },
+  {
+   "key": "schedule_from",
+   "input": "8:00",
+   "ok": false,
+   "why": "HH:MM needs two hour digits"
+  },
+  {
+   "key": "schedule_from",
+   "input": "12:5",
+   "ok": false,
+   "why": "HH:MM needs two minute digits"
+  },
+  {
+   "key": "schedule_from",
+   "input": "-1:00",
+   "ok": false,
+   "why": "negative hour"
+  },
+  {
+   "key": "schedule_from",
+   "input": "ab:cd",
+   "ok": false,
+   "why": "not a time"
+  },
+  {
+   "key": "schedule_from",
+   "input": "",
+   "ok": false,
+   "why": "empty"
+  },
+  {
+   "key": "schedule_to",
+   "input": "00:00",
+   "ok": true,
+   "hour": 0,
+   "min": 0,
+   "why": "midnight"
+  },
+  {
+   "key": "schedule_to",
+   "input": "08:00",
+   "ok": true,
+   "hour": 8,
+   "min": 0,
+   "why": "morning"
+  },
+  {
+   "key": "schedule_to",
+   "input": "23:59",
+   "ok": true,
+   "hour": 23,
+   "min": 59,
+   "why": "last minute"
+  },
+  {
+   "key": "schedule_to",
+   "input": "24:00",
+   "ok": false,
+   "why": "hour past 23"
+  },
+  {
+   "key": "schedule_to",
+   "input": "12:60",
+   "ok": false,
+   "why": "minute past 59"
+  },
+  {
+   "key": "schedule_to",
+   "input": "8:00",
+   "ok": false,
+   "why": "HH:MM needs two hour digits"
+  },
+  {
+   "key": "schedule_to",
+   "input": "12:5",
+   "ok": false,
+   "why": "HH:MM needs two minute digits"
+  },
+  {
+   "key": "schedule_to",
+   "input": "-1:00",
+   "ok": false,
+   "why": "negative hour"
+  },
+  {
+   "key": "schedule_to",
+   "input": "ab:cd",
+   "ok": false,
+   "why": "not a time"
+  },
+  {
+   "key": "schedule_to",
+   "input": "",
+   "ok": false,
+   "why": "empty"
+  }
+ ],
+ "paths": [
+  {
+   "key": "save_path",
+   "input": "/srv/torrents",
+   "ok": true,
+   "why": "absolute"
+  },
+  {
+   "key": "save_path",
+   "input": "~/Downloads",
+   "ok": true,
+   "why": "home-relative"
+  },
+  {
+   "key": "save_path",
+   "input": "relative/dir",
+   "ok": false,
+   "why": "relative"
+  },
+  {
+   "key": "save_path",
+   "input": "",
+   "ok": false,
+   "why": "empty"
+  },
+  {
+   "key": "temp_path",
+   "input": "/srv/torrents",
+   "ok": true,
+   "why": "absolute"
+  },
+  {
+   "key": "temp_path",
+   "input": "~/Downloads",
+   "ok": true,
+   "why": "home-relative"
+  },
+  {
+   "key": "temp_path",
+   "input": "relative/dir",
+   "ok": false,
+   "why": "relative"
+  },
+  {
+   "key": "temp_path",
+   "input": "",
+   "ok": false,
+   "why": "empty"
+  },
+  {
+   "key": "export_dir",
+   "input": "/srv/torrents",
+   "ok": true,
+   "why": "absolute"
+  },
+  {
+   "key": "export_dir",
+   "input": "~/Downloads",
+   "ok": true,
+   "why": "home-relative"
+  },
+  {
+   "key": "export_dir",
+   "input": "relative/dir",
+   "ok": false,
+   "why": "relative"
+  },
+  {
+   "key": "export_dir",
+   "input": "",
+   "ok": true,
+   "why": "sentinel: off"
+  },
+  {
+   "key": "export_dir_fin",
+   "input": "/srv/torrents",
+   "ok": true,
+   "why": "absolute"
+  },
+  {
+   "key": "export_dir_fin",
+   "input": "~/Downloads",
+   "ok": true,
+   "why": "home-relative"
+  },
+  {
+   "key": "export_dir_fin",
+   "input": "relative/dir",
+   "ok": false,
+   "why": "relative"
+  },
+  {
+   "key": "export_dir_fin",
+   "input": "",
+   "ok": true,
+   "why": "sentinel: off"
+  },
+  {
+   "key": "ip_filter_path",
+   "input": "/srv/torrents",
+   "ok": true,
+   "why": "absolute"
+  },
+  {
+   "key": "ip_filter_path",
+   "input": "~/Downloads",
+   "ok": true,
+   "why": "home-relative"
+  },
+  {
+   "key": "ip_filter_path",
+   "input": "relative/dir",
+   "ok": false,
+   "why": "relative"
+  },
+  {
+   "key": "ip_filter_path",
+   "input": "",
+   "ok": false,
+   "why": "empty"
+  },
+  {
+   "key": "file_log_path",
+   "input": "/srv/torrents",
+   "ok": true,
+   "why": "absolute"
+  },
+  {
+   "key": "file_log_path",
+   "input": "~/Downloads",
+   "ok": true,
+   "why": "home-relative"
+  },
+  {
+   "key": "file_log_path",
+   "input": "relative/dir",
+   "ok": false,
+   "why": "relative"
+  },
+  {
+   "key": "file_log_path",
+   "input": "",
+   "ok": false,
+   "why": "empty"
+  },
+  {
+   "key": "python_executable_path",
+   "input": "/srv/torrents",
+   "ok": true,
+   "why": "absolute"
+  },
+  {
+   "key": "python_executable_path",
+   "input": "~/Downloads",
+   "ok": true,
+   "why": "home-relative"
+  },
+  {
+   "key": "python_executable_path",
+   "input": "relative/dir",
+   "ok": false,
+   "why": "relative"
+  },
+  {
+   "key": "python_executable_path",
+   "input": "",
+   "ok": true,
+   "why": "sentinel: auto"
+  }
+ ],
+ "texts": [
+  {
+   "key": "app_instance_name",
+   "input": "a&b=c",
+   "ok": true,
+   "why": "ampersand and equals"
+  },
+  {
+   "key": "app_instance_name",
+   "input": "a+b",
+   "ok": true,
+   "why": "plus"
+  },
+  {
+   "key": "app_instance_name",
+   "input": "100% 20%20",
+   "ok": true,
+   "why": "percent and an encoded-looking escape"
+  },
+  {
+   "key": "app_instance_name",
+   "input": "say \"hi\" 'there'",
+   "ok": true,
+   "why": "quotes"
+  },
+  {
+   "key": "app_instance_name",
+   "input": "-leading-dash",
+   "ok": true,
+   "why": "leading dash, after --"
+  },
+  {
+   "key": "app_instance_name",
+   "input": "back\\slash",
+   "ok": true,
+   "why": "backslash"
+  },
+  {
+   "key": "app_instance_name",
+   "input": "café 🦊",
+   "ok": true,
+   "why": "accented and non-BMP characters"
+  },
+  {
+   "key": "app_instance_name",
+   "input": "$(true) `x` ${HOME}",
+   "ok": true,
+   "why": "shell syntax, kept literal"
+  },
+  {
+   "key": "app_instance_name",
+   "input": "line one\nline two",
+   "ok": false,
+   "why": "newline in one-line text"
+  },
+  {
+   "key": "add_trackers",
+   "input": "a&b=c",
+   "ok": true,
+   "why": "ampersand and equals"
+  },
+  {
+   "key": "add_trackers",
+   "input": "a+b",
+   "ok": true,
+   "why": "plus"
+  },
+  {
+   "key": "add_trackers",
+   "input": "100% 20%20",
+   "ok": true,
+   "why": "percent and an encoded-looking escape"
+  },
+  {
+   "key": "add_trackers",
+   "input": "say \"hi\" 'there'",
+   "ok": true,
+   "why": "quotes"
+  },
+  {
+   "key": "add_trackers",
+   "input": "-leading-dash",
+   "ok": true,
+   "why": "leading dash, after --"
+  },
+  {
+   "key": "add_trackers",
+   "input": "back\\slash",
+   "ok": true,
+   "why": "backslash"
+  },
+  {
+   "key": "add_trackers",
+   "input": "café 🦊",
+   "ok": true,
+   "why": "accented and non-BMP characters"
+  },
+  {
+   "key": "add_trackers",
+   "input": "$(true) `x` ${HOME}",
+   "ok": true,
+   "why": "shell syntax, kept literal"
+  },
+  {
+   "key": "add_trackers",
+   "input": "line one\nline two",
+   "ok": true,
+   "why": "newline in multiline text"
+  }
+ ]
+}
