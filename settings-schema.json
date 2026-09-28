@@ -1,5 +1,5 @@
 {
- "_doc": "OmaqBT's settings schema for qBittorrent 5.2.3's /app/preferences: the one source that qbt (through jq) and the Settings view (through the generated SettingsSchema.js) both read. After editing, run `node tools/gen-settings-schema.js` to regenerate SettingsSchema.js and tests/fixtures/settings-cases.json. keys is in display order. Each entry: section, group, label, help (one line), type (bool, int, float, speed [bytes/s], choice-int, choice-string, time [a composite], path, text, secret); optional unit, min, max, step (values must be multiples of it), sentinels ({value: label}, special values outside or at the edge of the range; for a path, \"\" is its only sentinel), choices ([{value, label}]), locked, readOnly (no setter in setPreferences), hidden (never shown, not even in Other), deferred (a later slice), multiline, secret, restart (qBittorrent's own UI says it requires a restart), confirm ({text, values?}: ask first when the new value is one of values, or on every change without values), dependsOn ({key, value}: dimmed unless key holds value, or one of value when it's an array), composite ({hour, min}: a time written as its two hidden member keys in one request). locked lists the keys qbt refuses to write (globs, * only); otherRefusedPatterns lists the unknown-key patterns the Other section refuses.",
+ "_doc": "OmaqBT's settings schema for qBittorrent 5.2.3's /app/preferences: the one source that qbt (through jq) and the Settings view (through the generated SettingsSchema.js) both read. After editing, run `node tools/gen-settings-schema.js` to regenerate SettingsSchema.js and tests/fixtures/settings-cases.json. keys is in display order. Each entry: section, group, label, help (one line), type (bool, int, float, speed [bytes/s], choice-int, choice-string, time [a composite], path, text, secret); optional unit, min, max, step (values must be multiples of it), sentinels ({value: label}, special values outside or at the edge of the range; for a path, \"\" is its only sentinel), choices ([{value, label}]), locked, readOnly (no setter in setPreferences), hidden (never shown, not even in Other), deferred (a later slice), multiline, secret, restart (qBittorrent's own UI says it requires a restart), confirm ({text, values?, byValue?}: ask first when the new value is one of values, or on every change without values; byValue maps a value (as a string) to the text used for it instead of text), dependsOn ({key, value}: dimmed unless key holds value, or one of value when it's an array), composite ({hour, min}: a time written as its two hidden member keys in one request). locked lists the keys qbt refuses to write (globs, * only); otherRefusedPatterns lists the unknown-key patterns the Other section refuses.",
  "qbittorrent": "5.2.3",
  "sections": [
   "Downloads",
@@ -21,7 +21,7 @@
   "web_ui_https_*",
   "web_ui_host_header_validation_enabled",
   "web_ui_domain_list",
-  "web_ui_reverse_proxy*",
+  "web_ui_reverse_prox*",
   "alternative_webui_*"
  ],
  "otherRefusedPatterns": [
@@ -421,7 +421,10 @@
    "help": "Ask your router to forward the listening port.",
    "type": "bool",
    "confirm": {
-    "text": "This asks your router to forward the listening port, or stops asking."
+    "text": "This maps ports on your router, outside the VPN tunnel.",
+    "values": [
+     true
+    ]
    }
   },
   "ssl_enabled": {
@@ -1013,7 +1016,7 @@
    "help": "Learn about more peers from the peers you're connected to.",
    "type": "bool",
    "confirm": {
-    "text": "Magnets without trackers will stop finding peers.",
+    "text": "Fewer peers will be found through other peers.",
     "values": [
      false
     ]
@@ -1026,7 +1029,7 @@
    "help": "Find peers on your local network.",
    "type": "bool",
    "confirm": {
-    "text": "Magnets without trackers will stop finding peers.",
+    "text": "No peers will be found on your local network.",
     "values": [
      false
     ]
@@ -1066,7 +1069,7 @@
    "help": "Stop identifying qBittorrent to peers and trackers. See qBittorrent's Anonymous Mode wiki page.",
    "type": "bool",
    "confirm": {
-    "text": "qBittorrent will stop identifying itself to peers and trackers.",
+    "text": "qBittorrent will stop identifying itself; some trackers and peers may refuse you.",
     "values": [
      true
     ]
@@ -1283,7 +1286,10 @@
     "values": [
      1,
      3
-    ]
+    ],
+    "byValue": {
+     "3": "Torrents that reach their share limit will be removed with their downloaded files."
+    }
    }
   },
   "add_trackers_enabled": {
@@ -1484,7 +1490,7 @@
    "help": "Ask your router to forward the Web UI port.",
    "type": "bool",
    "confirm": {
-    "text": "This asks your router to open the Web UI port to your network.",
+    "text": "This exposes the Web UI port to the internet through your router.",
     "values": [
      true
     ]
@@ -1676,8 +1682,9 @@
    "section": "Web UI",
    "group": "Reverse proxy",
    "label": "Trusted proxies",
-   "help": "Proxy addresses to trust, separated by semicolons.",
+   "help": "Proxy addresses to trust, separated by semicolons. Locked by OmaqBT with reverse proxy support.",
    "type": "text",
+   "locked": true,
    "dependsOn": {
     "key": "web_ui_reverse_proxy_enabled",
     "value": true
@@ -2415,7 +2422,7 @@
    "section": "Advanced",
    "group": "Trackers",
    "label": "IP reported to trackers",
-   "help": "The address to announce instead of your own. Requires a qBittorrent restart.",
+   "help": "The IP address to announce instead of your own; it must be an IP address. Requires a qBittorrent restart.",
    "type": "text",
    "restart": true
   },

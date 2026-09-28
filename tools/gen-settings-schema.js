@@ -91,8 +91,10 @@ function renderModule(schema) {
 const CASES_DOC = [
   "Settings value boundary cases, GENERATED from settings-schema.json by tools/gen-settings-schema.js (don't edit).",
   "Read by qbt's bash tests (Task 2) and the Settings view's node tests (Task 4); both must accept exactly the ok ones.",
-  "Every case is {key, input, ok, why}. input is the text as typed or as passed to `qbt pref-set <key> -- <input>`, in the",
-  "schema's wire units (speeds in bytes/s, not 2M). numbers: each editable int/float/speed key's min, max and sentinels (ok),",
+  "Every case is {key, input, ok, why}, plus only: \"qbt\" on the cases the window doesn't consume. input is the text as passed",
+  "to `qbt pref-set <key> -- <input>`, in the schema's wire units. Speed cases are all only: \"qbt\": they're argv bytes/s,",
+  "while the window reads a bare number as KiB/s (LimitsView) and rounds to whole KiB for step-1024 keys (Ruling DE), so the",
+  "step refusal (1536) is qbt's alone. numbers: each editable int/float/speed key's min, max and sentinels (ok),",
   "then the values just outside (below min unless that's a sentinel, below the lowest negative sentinel, above max), a",
   "non-number, a decimal (ok only for floats), a speed that isn't a multiple of its step, and empty. choices: each value",
   "(ok), then an int just past the list, -1 when it isn't a value, a non-number, or for string enums a wrong-case value,",
@@ -112,7 +114,11 @@ function numberCases(key, e) {
   const push = (input, ok, why) => {
     if (seen.has(input)) return;
     seen.add(input);
-    out.push({ key, input, ok, why });
+    const c = { key, input, ok, why };
+    // Speeds are argv bytes for qbt only: the window types K/M (a bare
+    // number is KiB in LimitsView) and rounds to whole KiB (Ruling DE).
+    if (e.type === "speed") c.only = "qbt";
+    out.push(c);
   };
   const sentinels = e.sentinels || {};
   const isFloat = e.type === "float";

@@ -1,5 +1,5 @@
 {
- "_doc": "Settings value boundary cases, GENERATED from settings-schema.json by tools/gen-settings-schema.js (don't edit). Read by qbt's bash tests (Task 2) and the Settings view's node tests (Task 4); both must accept exactly the ok ones. Every case is {key, input, ok, why}. input is the text as typed or as passed to `qbt pref-set <key> -- <input>`, in the schema's wire units (speeds in bytes/s, not 2M). numbers: each editable int/float/speed key's min, max and sentinels (ok), then the values just outside (below min unless that's a sentinel, below the lowest negative sentinel, above max), a non-number, a decimal (ok only for floats), a speed that isn't a multiple of its step, and empty. choices: each value (ok), then an int just past the list, -1 when it isn't a value, a non-number, or for string enums a wrong-case value, an unknown name and empty. times: HH:MM for each time composite; ok cases also carry the hour and min that are written together. paths: absolute and ~/ are ok, relative is not, empty only where \"\" is the path's sentinel. texts: one-line and multiline text that must survive argv, jq, URL-encoding and the read-back unchanged; a newline is refused in one-line text.",
+ "_doc": "Settings value boundary cases, GENERATED from settings-schema.json by tools/gen-settings-schema.js (don't edit). Read by qbt's bash tests (Task 2) and the Settings view's node tests (Task 4); both must accept exactly the ok ones. Every case is {key, input, ok, why}, plus only: \"qbt\" on the cases the window doesn't consume. input is the text as passed to `qbt pref-set <key> -- <input>`, in the schema's wire units. Speed cases are all only: \"qbt\": they're argv bytes/s, while the window reads a bare number as KiB/s (LimitsView) and rounds to whole KiB for step-1024 keys (Ruling DE), so the step refusal (1536) is qbt's alone. numbers: each editable int/float/speed key's min, max and sentinels (ok), then the values just outside (below min unless that's a sentinel, below the lowest negative sentinel, above max), a non-number, a decimal (ok only for floats), a speed that isn't a multiple of its step, and empty. choices: each value (ok), then an int just past the list, -1 when it isn't a value, a non-number, or for string enums a wrong-case value, an unknown name and empty. times: HH:MM for each time composite; ok cases also carry the hour and min that are written together. paths: absolute and ~/ are ok, relative is not, empty only where \"\" is the path's sentinel. texts: one-line and multiline text that must survive argv, jq, URL-encoding and the read-back unchanged; a newline is refused in one-line text.",
  "numbers": [
   {
    "key": "listen_port",
@@ -389,193 +389,225 @@
    "key": "dl_limit",
    "input": "0",
    "ok": true,
-   "why": "min"
+   "why": "min",
+   "only": "qbt"
   },
   {
    "key": "dl_limit",
    "input": "2146435072",
    "ok": true,
-   "why": "max"
+   "why": "max",
+   "only": "qbt"
   },
   {
    "key": "dl_limit",
    "input": "-1",
    "ok": false,
-   "why": "below min"
+   "why": "below min",
+   "only": "qbt"
   },
   {
    "key": "dl_limit",
    "input": "2146435073",
    "ok": false,
-   "why": "above max"
+   "why": "above max",
+   "only": "qbt"
   },
   {
    "key": "dl_limit",
    "input": "abc",
    "ok": false,
-   "why": "not a number"
+   "why": "not a number",
+   "only": "qbt"
   },
   {
    "key": "dl_limit",
    "input": "1.5",
    "ok": false,
-   "why": "not a whole number"
+   "why": "not a whole number",
+   "only": "qbt"
   },
   {
    "key": "dl_limit",
    "input": "1536",
    "ok": false,
-   "why": "not a multiple of 1024"
+   "why": "not a multiple of 1024",
+   "only": "qbt"
   },
   {
    "key": "dl_limit",
    "input": "",
    "ok": false,
-   "why": "empty"
+   "why": "empty",
+   "only": "qbt"
   },
   {
    "key": "up_limit",
    "input": "0",
    "ok": true,
-   "why": "min"
+   "why": "min",
+   "only": "qbt"
   },
   {
    "key": "up_limit",
    "input": "2146435072",
    "ok": true,
-   "why": "max"
+   "why": "max",
+   "only": "qbt"
   },
   {
    "key": "up_limit",
    "input": "-1",
    "ok": false,
-   "why": "below min"
+   "why": "below min",
+   "only": "qbt"
   },
   {
    "key": "up_limit",
    "input": "2146435073",
    "ok": false,
-   "why": "above max"
+   "why": "above max",
+   "only": "qbt"
   },
   {
    "key": "up_limit",
    "input": "abc",
    "ok": false,
-   "why": "not a number"
+   "why": "not a number",
+   "only": "qbt"
   },
   {
    "key": "up_limit",
    "input": "1.5",
    "ok": false,
-   "why": "not a whole number"
+   "why": "not a whole number",
+   "only": "qbt"
   },
   {
    "key": "up_limit",
    "input": "1536",
    "ok": false,
-   "why": "not a multiple of 1024"
+   "why": "not a multiple of 1024",
+   "only": "qbt"
   },
   {
    "key": "up_limit",
    "input": "",
    "ok": false,
-   "why": "empty"
+   "why": "empty",
+   "only": "qbt"
   },
   {
    "key": "alt_dl_limit",
    "input": "0",
    "ok": true,
-   "why": "min"
+   "why": "min",
+   "only": "qbt"
   },
   {
    "key": "alt_dl_limit",
    "input": "2146435072",
    "ok": true,
-   "why": "max"
+   "why": "max",
+   "only": "qbt"
   },
   {
    "key": "alt_dl_limit",
    "input": "-1",
    "ok": false,
-   "why": "below min"
+   "why": "below min",
+   "only": "qbt"
   },
   {
    "key": "alt_dl_limit",
    "input": "2146435073",
    "ok": false,
-   "why": "above max"
+   "why": "above max",
+   "only": "qbt"
   },
   {
    "key": "alt_dl_limit",
    "input": "abc",
    "ok": false,
-   "why": "not a number"
+   "why": "not a number",
+   "only": "qbt"
   },
   {
    "key": "alt_dl_limit",
    "input": "1.5",
    "ok": false,
-   "why": "not a whole number"
+   "why": "not a whole number",
+   "only": "qbt"
   },
   {
    "key": "alt_dl_limit",
    "input": "1536",
    "ok": false,
-   "why": "not a multiple of 1024"
+   "why": "not a multiple of 1024",
+   "only": "qbt"
   },
   {
    "key": "alt_dl_limit",
    "input": "",
    "ok": false,
-   "why": "empty"
+   "why": "empty",
+   "only": "qbt"
   },
   {
    "key": "alt_up_limit",
    "input": "0",
    "ok": true,
-   "why": "min"
+   "why": "min",
+   "only": "qbt"
   },
   {
    "key": "alt_up_limit",
    "input": "2146435072",
    "ok": true,
-   "why": "max"
+   "why": "max",
+   "only": "qbt"
   },
   {
    "key": "alt_up_limit",
    "input": "-1",
    "ok": false,
-   "why": "below min"
+   "why": "below min",
+   "only": "qbt"
   },
   {
    "key": "alt_up_limit",
    "input": "2146435073",
    "ok": false,
-   "why": "above max"
+   "why": "above max",
+   "only": "qbt"
   },
   {
    "key": "alt_up_limit",
    "input": "abc",
    "ok": false,
-   "why": "not a number"
+   "why": "not a number",
+   "only": "qbt"
   },
   {
    "key": "alt_up_limit",
    "input": "1.5",
    "ok": false,
-   "why": "not a whole number"
+   "why": "not a whole number",
+   "only": "qbt"
   },
   {
    "key": "alt_up_limit",
    "input": "1536",
    "ok": false,
-   "why": "not a multiple of 1024"
+   "why": "not a multiple of 1024",
+   "only": "qbt"
   },
   {
    "key": "alt_up_limit",
    "input": "",
    "ok": false,
-   "why": "empty"
+   "why": "empty",
+   "only": "qbt"
   },
   {
    "key": "max_active_checking_torrents",

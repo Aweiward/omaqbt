@@ -3,6 +3,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
+const os = require("node:os");
 const { execFileSync } = require("node:child_process");
 
 // The settings schema (slice 4a, Task 1): settings-schema.json is the one
@@ -25,7 +26,7 @@ const SCHEMA = JSON.parse(fs.readFileSync(SCHEMA_FILE, "utf8"));
 const KEYS = SCHEMA.keys;
 const GEN = require("../tools/gen-settings-schema.js");
 
-const SRC_DIR = process.env.QBT_SRC_DIR || "/home/ethos/.claude/jobs/6251a6b2/tmp";
+const SRC_DIR = process.env.QBT_SRC_DIR || path.join(os.homedir(), ".claude", "jobs", "6251a6b2", "tmp");
 const APPCONTROLLER = path.join(SRC_DIR, "appcontroller.cpp");
 const HAVE_SRC = fs.existsSync(APPCONTROLLER);
 const SKIP_SRC = HAVE_SRC ? false : `qBittorrent source not found at ${APPCONTROLLER} (set QBT_SRC_DIR)`;
@@ -160,7 +161,7 @@ const LOCKED = [
   "current_network_interface", "current_interface_address", "current_interface_name",
   "web_ui_address", "web_ui_port", "bypass_local_auth", "use_https",
   "web_ui_https_*", "web_ui_host_header_validation_enabled", "web_ui_domain_list",
-  "web_ui_reverse_proxy*", "alternative_webui_*"
+  "web_ui_reverse_prox*", "alternative_webui_*"
 ];
 const OTHER_REFUSED = ["web_ui_*", "proxy_*", "*interface*", "*password*", "*https*", "autorun*"];
 const SECRETS = ["proxy_password", "dyndns_password", "mail_notification_password", "web_ui_api_key"];
@@ -174,7 +175,7 @@ const CONFIRMS = {
   max_ratio_act: [1, 3],
   web_ui_upnp: [true],
   listen_port: null,
-  upnp: null,
+  upnp: [true],
   proxy_type: null,
   proxy_bittorrent: [true],
   proxy_peer_connections: [true],
@@ -450,6 +451,7 @@ test("the locked flags are exactly the keys the LOCKED patterns match", () => {
   }
   const locked = Object.keys(KEYS).filter((k) => KEYS[k].locked);
   assert.ok(locked.includes("web_ui_https_cert_path") && locked.includes("alternative_webui_path"));
+  assert.ok(locked.includes("web_ui_reverse_proxies_list"), "Ruling DD");
   for (const k of locked) assert.match(KEYS[k].help, /OmaqBT/, `${k} says why`);
   for (const k of ["current_network_interface", "current_interface_address", "current_interface_name"]) {
     assert.match(KEYS[k].help, /Set by OmaqBT's setup\./, k); // eng D5
@@ -474,7 +476,21 @@ test("confirm is set exactly on the design's list, with the consequence first", 
     if (when === null) assert.ok(!("values" in c), `${k} confirms every change`);
     else assert.deepEqual(c.values, when, k);
   }
-  for (const k of ["dht", "pex", "lsd"]) assert.equal(KEYS[k].confirm.text, "Magnets without trackers will stop finding peers.");
+  assert.equal(KEYS.dht.confirm.text, "Magnets without trackers will stop finding peers.");
+  assert.match(KEYS.pex.confirm.text, /[Ff]ewer peers .*through other peers/);
+  assert.match(KEYS.lsd.confirm.text, /local network/);
+  assert.match(KEYS.anonymous_mode.confirm.text, /may refuse you/);
+  assert.match(KEYS.upnp.confirm.text, /router.*outside the VPN tunnel/);
+  assert.match(KEYS.web_ui_upnp.confirm.text, /exposes the Web UI port to the internet through your router/);
+  // The confirm names the worst outcome: value 3 deletes files too.
+  assert.deepEqual(Object.keys(KEYS.max_ratio_act.confirm.byValue), ["3"]);
+  assert.match(KEYS.max_ratio_act.confirm.byValue["3"], /removed with their downloaded files/);
+  for (const [k, e] of Object.entries(KEYS)) {
+    if (!e.confirm || !e.confirm.byValue) continue;
+    for (const v of Object.keys(e.confirm.byValue)) {
+      assert.ok(e.confirm.values.map(String).includes(v), `${k}: byValue ${v} is a confirmed value`);
+    }
+  }
   assert.equal(KEYS.encryption.confirm.text, "Peers that don't encrypt are dropped.");
   assert.match(KEYS.proxy_type.confirm.text, /applies immediately with the current host/);
   assert.match(KEYS.proxy_peer_connections.confirm.text, /sends peer traffic outside the VPN tunnel/);
@@ -568,4 +584,26 @@ test("settings-cases covers the times, paths and text fidelity", () => {
     assert.ok(texts.some((s) => s.includes(needle)), `a text case with ${needle}`);
   }
   assert.ok(cases.texts.some((c) => c.input.includes("\n") && !c.ok), "a newline in one-line text is refused");
+});
+
+test("speed cases are qbt-only argv bytes, and nothing else is qbt-only (Ruling DF)", () => {
+  const cases = JSON.parse(fs.readFileSync(CASES_FILE, "utf8"));
+  for (const group of ["numbers", "choices", "times", "paths", "texts"]) {
+    for (const c of cases[group]) {
+      const speed = group === "numbers" && KEYS[c.key].type === "speed";
+      assert.equal(c.only, speed ? "qbt" : undefined, `${c.key} ${JSON.stringify(c.input)}`);
+    }
+  }
+  assert.ok(cases.numbers.some((c) => c.key === "dl_limit" && c.input === "1536" && !c.ok && c.only === "qbt"));
+  assert.match(cases._doc, /bare number as KiB/);
+});
+
+test("announce_ip's help says it takes an IP address", () => {
+  assert.match(KEYS.announce_ip.help, /must be an IP address/);
+});
+
+test("the committed dump carries no real home directory", () => {
+  const text = fs.readFileSync(path.join(__dirname, "fixtures", "preferences-5.2.3.json"), "utf8");
+  assert.doesNotMatch(text, /\/home\/(?!user\/)/);
+  assert.equal(DUMP.save_path, "/home/user/Downloads");
 });

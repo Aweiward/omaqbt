@@ -401,7 +401,10 @@ var SCHEMA = {
   "help": "Ask your router to forward the listening port.",
   "type": "bool",
   "confirm": {
-   "text": "This asks your router to forward the listening port, or stops asking."
+   "text": "This maps ports on your router, outside the VPN tunnel.",
+   "values": [
+    true
+   ]
   }
  },
  "ssl_enabled": {
@@ -993,7 +996,7 @@ var SCHEMA = {
   "help": "Learn about more peers from the peers you're connected to.",
   "type": "bool",
   "confirm": {
-   "text": "Magnets without trackers will stop finding peers.",
+   "text": "Fewer peers will be found through other peers.",
    "values": [
     false
    ]
@@ -1006,7 +1009,7 @@ var SCHEMA = {
   "help": "Find peers on your local network.",
   "type": "bool",
   "confirm": {
-   "text": "Magnets without trackers will stop finding peers.",
+   "text": "No peers will be found on your local network.",
    "values": [
     false
    ]
@@ -1046,7 +1049,7 @@ var SCHEMA = {
   "help": "Stop identifying qBittorrent to peers and trackers. See qBittorrent's Anonymous Mode wiki page.",
   "type": "bool",
   "confirm": {
-   "text": "qBittorrent will stop identifying itself to peers and trackers.",
+   "text": "qBittorrent will stop identifying itself; some trackers and peers may refuse you.",
    "values": [
     true
    ]
@@ -1263,7 +1266,10 @@ var SCHEMA = {
    "values": [
     1,
     3
-   ]
+   ],
+   "byValue": {
+    "3": "Torrents that reach their share limit will be removed with their downloaded files."
+   }
   }
  },
  "add_trackers_enabled": {
@@ -1464,7 +1470,7 @@ var SCHEMA = {
   "help": "Ask your router to forward the Web UI port.",
   "type": "bool",
   "confirm": {
-   "text": "This asks your router to open the Web UI port to your network.",
+   "text": "This exposes the Web UI port to the internet through your router.",
    "values": [
     true
    ]
@@ -1656,8 +1662,9 @@ var SCHEMA = {
   "section": "Web UI",
   "group": "Reverse proxy",
   "label": "Trusted proxies",
-  "help": "Proxy addresses to trust, separated by semicolons.",
+  "help": "Proxy addresses to trust, separated by semicolons. Locked by OmaqBT with reverse proxy support.",
   "type": "text",
+  "locked": true,
   "dependsOn": {
    "key": "web_ui_reverse_proxy_enabled",
    "value": true
@@ -2395,7 +2402,7 @@ var SCHEMA = {
   "section": "Advanced",
   "group": "Trackers",
   "label": "IP reported to trackers",
-  "help": "The address to announce instead of your own. Requires a qBittorrent restart.",
+  "help": "The IP address to announce instead of your own; it must be an IP address. Requires a qBittorrent restart.",
   "type": "text",
   "restart": true
  },
@@ -2813,7 +2820,7 @@ var LOCKED = [
  "web_ui_https_*",
  "web_ui_host_header_validation_enabled",
  "web_ui_domain_list",
- "web_ui_reverse_proxy*",
+ "web_ui_reverse_prox*",
  "alternative_webui_*"
 ];
 
