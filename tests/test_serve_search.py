@@ -363,8 +363,6 @@ class SearchWatchTest(SearchWatchCase):
         self.assertEqual(self.search_reads(), [])
 
 
-if __name__ == "__main__":
-    unittest.main()
 
 
 class SearchSessionTest(SearchWatchCase):
@@ -528,3 +526,7 @@ class SearchSessionTest(SearchWatchCase):
         self.assert_no_sid(sp, [sid])
         # Not even the stdlib's "cookiejar bug!" warning reaches stderr.
         self.assertEqual(sp._stderr_lines, [])
+
+
+if __name__ == "__main__":
+    unittest.main()
