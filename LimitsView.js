@@ -413,7 +413,18 @@ function outcomeText(kinds, files, count) {
 // force is true when any counted target's effective action is Remove or
 // RemoveWithContent: qbt refuses that write without --force.
 function shareConfirm(action, rows, status) {
-  var none = { line: "", force: false };
+  var d = shareConfirmDetail(action, rows, status);
+  return { line: d.line, force: d.force };
+}
+
+// shareConfirmDetail(action, rows, status) -> {line, force, count, files}.
+// Same rule as shareConfirm, plus the two fields the final-fix confirm
+// re-check (Ruling CN) needs to compare a frozen plan against a fresh one:
+// count (how many targets it counted) and files (whether any counted
+// target's outcome removes files, i.e. RemoveWithContent). Both are 0/false
+// when line is "".
+function shareConfirmDetail(action, rows, status) {
+  var none = { line: "", force: false, count: 0, files: false };
   if (!action || typeof action !== "object") return none;
   var hasRatio = action.ratio !== undefined && action.ratio !== null;
   var hasSeed = action.seedingTime !== undefined && action.seedingTime !== null;
@@ -433,9 +444,14 @@ function shareConfirm(action, rows, status) {
     var ratioMet = effRatio >= 0 && (ratio < 0 || ratio >= effRatio);
     var seedMet = effSeed >= 0 && Math.floor(Number(r.seedingTime) / 60) >= effSeed;
     if (!ratioMet && !seedMet) continue;
+    var act = effectiveAction(r, status);
+    // qBittorrent only applies Stop and EnableSuperSeeding to a torrent
+    // that isn't already stopped (sessionimpl.cpp:2420, :2425); a stoppedUP
+    // target with one of those actions is a no-op, so it doesn't count.
+    // Remove and RemoveWithContent still fire on a stopped torrent.
+    if (r.state === "stoppedUP" && (act === "Stop" || act === "EnableSuperSeeding")) continue;
     count++;
     if (!((hasRatio && ratioMet) || (hasSeed && seedMet))) onlyChanged = false;
-    var act = effectiveAction(r, status);
     kinds[outcomeKind(act)] = true;
     if (act === "RemoveWithContent") files = true;
     if (act === "Remove" || act === "RemoveWithContent") force = true;
@@ -448,7 +464,7 @@ function shareConfirm(action, rows, status) {
   var what = hasRatio && hasSeed || !onlyChanged ? "a share limit" : "it";
   var line = head + " " + count + (count === 1 ? " torrent already meets " : " torrents already meet ") + what +
     " and will " + outcomeText(kinds, files, count) + ".";
-  return { line: line, force: force };
+  return { line: line, force: force, count: count, files: files };
 }
 
 // --- doneNote -----------------------------------------------------------------------------
@@ -556,6 +572,7 @@ if (typeof module !== "undefined") {
     limitRows: limitRows,
     editText: editText,
     shareConfirm: shareConfirm,
+    shareConfirmDetail: shareConfirmDetail,
     doneNote: doneNote,
     NOT_READY: NOT_READY,
     limitCopy: limitCopy,

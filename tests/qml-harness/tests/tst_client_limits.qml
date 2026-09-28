@@ -706,6 +706,28 @@ TestCase {
     compare(o.c.messageLine.text, "↑ limit set to unlimited")
   }
 
+  // A VISUAL range of exactly one torrent (alpha) vanishes from status
+  // before the palette row runs: the frozen range still has one hash, but
+  // rowsFor finds no row for it. The prompt must say "1 torrent", not
+  // "1 torrents" (ClientCommands.qml's startBulkLimit).
+  function test_palette_bulk_prompt_pluralizes_correctly_when_the_single_target_vanished() {
+    var o = make([tt(hh("a"), "alpha", { addedOn: 2 }), tt(hh("b"), "beta", { addedOn: 1 })])
+    o.c.setCursor(hh("a"))
+    key(o.c, "V", 0x56, 0x02000000)
+    compare(o.c.mode, "VISUAL")
+    compare(o.c.visualHashes.length, 1)
+    key(o.c, ":", 0x3a)
+    compare(o.c.mode, "COMMAND")
+    var p = pal(o.c)
+    p.setQuery("Set upload limit")
+    compare(p.currentRow().title, "Set upload limit")
+    // alpha, the range's only target, is gone by the time the row runs.
+    o.svc.torrents = [tt(hh("b"), "beta", { addedOn: 1 })]
+    enter(o)
+    compare(o.c.mode, "INSERT")
+    compare(prompt(o), "Upload limit for 1 torrent")
+  }
+
   function test_palette_bulk_esc_sends_nothing() {
     var o = make(three())
     range3(o)
@@ -918,5 +940,46 @@ TestCase {
     palette(o, "Sort")
     compare(o.c.mode, "NORMAL")
     compare(o.c.sortMode !== "added", true)
+  }
+
+  // Ruling CN (final fix 2): y re-checks the frozen D8 plan against the
+  // current status before writing. beta crosses the ratio limit (and picks
+  // up RemoveWithContent) while the first confirm sits open, so the count
+  // grows from 1 to 2 and files goes false -> true: y must raise a second
+  // confirm with the new line and new force instead of writing. A second y,
+  // with nothing having changed since, writes with that frozen force.
+  function test_y_rechecks_the_plan_and_reraises_when_another_target_crosses_the_limit() {
+    var o = make([
+      tt(hh("a"), "alpha", { addedOn: 2, state: "stalledUP", progress: 1, ratio: 1, seedingTime: 60, shareLimitAction: "Stop" }),
+      tt(hh("b"), "beta", { addedOn: 1, state: "downloading", progress: 0.5, ratio: 0, seedingTime: 0 })
+    ])
+    o.c.setCursor(hh("a"))
+    key(o.c, "V", 0x56, 0x02000000)
+    key(o.c, "j")
+    compare(o.c.mode, "VISUAL")
+    compare(o.c.visualHashes.length, 2)
+    palette(o, "Set ratio limit")
+    type(o, "1")
+    enter(o)
+    compare(o.c.mode, "CONFIRM")
+    compare(o.c.confirm.line, "Set the ratio limit to 1? 1 torrent already meets it and will be stopped.")
+    compare(writes(o.svc).length, 0)
+    // beta finishes past the new limit and now removes itself with its
+    // files, while the confirm sits open.
+    o.svc.torrents = o.svc.torrents.map(function(t) {
+      return t.hash === hh("b")
+        ? tt(hh("b"), "beta", { addedOn: 1, state: "stalledUP", progress: 1, ratio: 5, seedingTime: 7200, shareLimitAction: "RemoveWithContent" })
+        : t
+    })
+    key(o.c, "y")
+    compare(o.c.mode, "CONFIRM", "a higher count reraises instead of writing")
+    compare(o.c.confirm.line, "Set the ratio limit to 1? 2 torrents already meet it and will be removed with their files or stopped.")
+    compare(writes(o.svc).length, 0, "still nothing sent")
+    key(o.c, "y")
+    compare(o.c.mode, "NORMAL")
+    var call = lastCall(o.svc, "setShareLimits")
+    compare(call.args[0], [hh("a"), hh("b")].join("|"))
+    compare(call.args[1], { ratio: 1 })
+    compare(call.args[2], true, "--force from the second confirm")
   }
 }

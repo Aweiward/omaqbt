@@ -643,6 +643,37 @@ test("shareConfirm: the torrent's own Stop beats a removing category; a child's 
   assert.deepEqual(V.shareConfirm({ ratio: 0 }, [row({ category: "p" })], st).force, true);
 });
 
+test("shareConfirm: a stoppedUP target doesn't count toward Stop or EnableSuperSeeding (qbt skips stopped torrents for those)", () => {
+  assert.deepEqual(V.shareConfirm({ ratio: 0 }, [row({ state: "stoppedUP", shareLimitAction: "Stop" })], status()),
+    { line: "", force: false }, "Stop, stopped: no line");
+  assert.deepEqual(V.shareConfirm({ ratio: 0 }, [row({ state: "stoppedUP", shareLimitAction: "EnableSuperSeeding" })], status()),
+    { line: "", force: false }, "EnableSuperSeeding, stopped: no line");
+});
+
+test("shareConfirm: a stoppedUP target still counts toward Remove and RemoveWithContent (qbt applies those to stopped torrents)", () => {
+  assert.deepEqual(V.shareConfirm({ ratio: 0 }, [row({ state: "stoppedUP", shareLimitAction: "Remove" })], status()), {
+    line: "Set the ratio limit to 0? 1 torrent already meets it and will be removed.",
+    force: true
+  });
+  assert.deepEqual(V.shareConfirm({ ratio: 0 }, [row({ state: "stoppedUP", shareLimitAction: "RemoveWithContent" })], status()), {
+    line: "Set the ratio limit to 0? 1 torrent already meets it and will be removed with its files.",
+    force: true
+  });
+});
+
+test("shareConfirm: a mix of stoppedUP and normal-state targets excludes only the stoppedUP Stop/EnableSuperSeeding ones", () => {
+  const rows = [
+    row({ state: "stoppedUP", shareLimitAction: "Stop" }),
+    row({ state: "stoppedUP", shareLimitAction: "EnableSuperSeeding" }),
+    row({ state: "stalledUP", shareLimitAction: "Stop" }),
+    row({ state: "stoppedUP", shareLimitAction: "Remove" })
+  ];
+  assert.deepEqual(V.shareConfirm({ ratio: 0 }, rows, status()), {
+    line: "Set the ratio limit to 0? 2 torrents already meet it and will be removed or stopped.",
+    force: true
+  });
+});
+
 test("shareConfirm: kept limits resolve through the chain, not the row's maxRatio (the same inputs as qbt's guard)", () => {
   // maxRatio says 0.5 (met), but the chain says none: qbt reads the chain, so no confirm.
   const r = row({ ratio: 1, maxRatio: 0.5, maxSeedingTime: 1 });
@@ -664,6 +695,30 @@ test("shareConfirm: a status missing its share fields never throws; the caller g
 test("shareConfirm: takes an array-like of rows (a QML sequence)", () => {
   const rows = { length: 2, 0: row(), 1: row() };
   assert.equal(V.shareConfirm({ ratio: 0 }, rows, status()).line, "Set the ratio limit to 0? 2 torrents already meet it and will be stopped.");
+});
+
+// --- shareConfirmDetail (Ruling CN: the `y`-time re-check needs count and files) ----
+
+test("shareConfirmDetail: adds count and files to shareConfirm's line and force", () => {
+  assert.deepEqual(V.shareConfirmDetail({ ratio: 5 }, [row({ ratio: 1 })], status()), { line: "", force: false, count: 0, files: false }, "nothing met");
+  assert.deepEqual(V.shareConfirmDetail({ ratio: 0 }, [row(), row()], status()), {
+    line: "Set the ratio limit to 0? 2 torrents already meet it and will be stopped.",
+    force: false,
+    count: 2,
+    files: false
+  });
+  assert.deepEqual(V.shareConfirmDetail({ ratio: 0 }, [row({ shareLimitAction: "RemoveWithContent" })], status()), {
+    line: "Set the ratio limit to 0? 1 torrent already meets it and will be removed with its files.",
+    force: true,
+    count: 1,
+    files: true
+  });
+  assert.deepEqual(V.shareConfirmDetail({ ratio: 0 }, [row({ shareLimitAction: "Remove" })], status()), {
+    line: "Set the ratio limit to 0? 1 torrent already meets it and will be removed.",
+    force: true,
+    count: 1,
+    files: false
+  }, "Remove without content doesn't set files");
 });
 
 // --- doneNote -----------------------------------------------------------------------

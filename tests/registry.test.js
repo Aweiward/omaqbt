@@ -913,7 +913,7 @@ test("helpFor(NORMAL, inspector) lists o, y, m and e", () => {
 
 // --- COMMAND mode (command palette) ----------------------------------------
 
-test(": opens the command palette from every pane, in NORMAL only", () => {
+test(": opens the command palette from every pane, in NORMAL", () => {
   for (const pane of ["table", "filters", "inspector"]) {
     const r = dispatch(state({ pane }), ev(":", 0x3a));
     assert.equal(r.commandId, "palette.open", pane);

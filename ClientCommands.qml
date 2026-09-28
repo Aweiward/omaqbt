@@ -453,7 +453,7 @@ QtObject {
     if (targets.length === 0) return
     if (isShareKey(key) && !readyAtEnter()) { c.note(Limits.NOT_READY, "urgent"); return }
     var rows = rowsFor(targets)
-    var name = targets.length === 1 && rows.length === 1 ? String(rows[0].name || "") : targets.length + " torrents"
+    var name = targets.length === 1 && rows.length === 1 ? String(rows[0].name || "") : View.countText(targets.length)
     limitInput = { key: key, hashes: targets.slice(), name: name, prefill: null }
     startInput("limit:bulk:" + key, "")
   }
@@ -475,22 +475,35 @@ QtObject {
     askOrWriteLimit({ key: t.key, value: value, hashes: t.hashes.slice(), force: false })
   }
 
+  // {key, value, hashes} -> LimitsView.shareConfirmDetail's plan over those
+  // targets as the status stands right now.
+  function shareLimitPlan(key, value, hashes) {
+    return Limits.shareConfirmDetail(key === "ratioLimit" ? { ratio: value } : { seedingTime: value }, rowsFor(hashes), client.service)
+  }
+
+  // Raises the D8 CONFIRM for args (key, value, hashes) with plan's line,
+  // freezing plan's force, count and files onto args: the y-time re-check
+  // (Ruling CN) compares a fresh count/files against these.
+  function raiseLimitConfirm(args, plan) {
+    var c = client
+    args.force = plan.force
+    args.confirmCount = plan.count
+    args.confirmFiles = plan.files
+    var r = Registry.raiseConfirm(c.regState, "limit.edit", "limitSet", args)
+    c.regState = r.state
+    c.confirmHashes = args.hashes.slice()
+    c.confirm = withLine(r.confirm, plan.line, "set")
+  }
+
   // args: {key, value, hashes, force}. A share limit runs LimitsView.
-  // shareConfirm over the targets as they stand now; a non-empty line
+  // shareConfirmDetail over the targets as they stand now; a non-empty line
   // raises one CONFIRM whose `y` comes back as limit.edit with these
   // frozen args and its force. Shared with Task 6's palette commands.
   function askOrWriteLimit(args) {
-    var c = client
     if (isShareKey(args.key)) {
-      var plan = Limits.shareConfirm(args.key === "ratioLimit" ? { ratio: args.value } : { seedingTime: args.value }, rowsFor(args.hashes), c.service)
+      var plan = shareLimitPlan(args.key, args.value, args.hashes)
+      if (plan.line !== "") { raiseLimitConfirm(args, plan); return }
       args.force = plan.force
-      if (plan.line !== "") {
-        var r = Registry.raiseConfirm(c.regState, "limit.edit", "limitSet", args)
-        c.regState = r.state
-        c.confirmHashes = args.hashes.slice()
-        c.confirm = withLine(r.confirm, plan.line, "set")
-        return
-      }
     }
     writeLimit(args)
   }
@@ -1095,7 +1108,23 @@ QtObject {
       return
 
     case "limit.edit":
-      if (args.confirmed === true) { c.confirmHashes = []; writeLimit(args); return }
+      if (args.confirmed === true) {
+        c.confirmHashes = []
+        // Ruling CN: re-check the frozen plan against the current status
+        // before writing. A target crossing the limit since the confirm was
+        // raised (a higher count), or a plan that now removes files where
+        // the frozen one didn't, raises the confirm again instead of
+        // writing; the write only ever uses the frozen force.
+        if (isShareKey(args.key)) {
+          var recheck = shareLimitPlan(args.key, args.value, args.hashes)
+          if (recheck.count > args.confirmCount || (recheck.files && !args.confirmFiles)) {
+            raiseLimitConfirm({ key: args.key, value: args.value, hashes: args.hashes }, recheck)
+            return
+          }
+        }
+        writeLimit(args)
+        return
+      }
       if (targets.length === 0 || !args.limitKey) return
       startLimitInput(targets[0], args.limitKey)
       return

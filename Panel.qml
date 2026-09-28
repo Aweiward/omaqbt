@@ -865,6 +865,7 @@ Panel {
             font.family: root.fontFamily
             font.pixelSize: Style.font.bodySmall
             wrapMode: Text.WordWrap
+            textFormat: Text.PlainText
           }
 
           CursorSurface {
