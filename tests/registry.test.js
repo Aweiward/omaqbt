@@ -1813,3 +1813,159 @@ test(": opens the palette from VISUAL too, remembering it was a range", () => {
   const n = dispatch(state({}), ev(":", 0x3a));
   assert.equal(n.args.range, undefined, "NORMAL has no range");
 });
+
+// --- Settings (slice 4a Task 5) ---------------------------------------------
+
+const SETTINGS_PANES = ["settingsSections", "settingsKeys"];
+const TORRENT_PANES = ["filters", "table", "inspector"];
+
+// An event that matches `label` exactly as matchLabel reads it.
+function evFor(label) {
+  const ctrl = { ctrl: true, shift: false, alt: false };
+  switch (label) {
+    case "Tab": return ev("\t", KEY.Tab);
+    case "Shift-Tab": return ev("", KEY.Backtab);
+    case "Ctrl-l": return ev("\f", KEY.L, ctrl);
+    case "Ctrl-h": return ev("\b", KEY.H, ctrl);
+    case "Ctrl-p": return ev("\u0010", KEY.P, ctrl);
+    case "Ctrl-n": return ev("\u000e", KEY.N, ctrl);
+    case "Enter": return ev("\r", KEY.Return);
+    case "Esc": return ev("\u001b", KEY.Escape);
+    case "Up": return ev("", KEY.Up);
+    case "Down": return ev("", KEY.Down);
+    case "Space": return ev(" ", KEY.Space);
+    default: return ev(label, label.toUpperCase().charCodeAt(0));
+  }
+}
+
+test(", opens Settings from every torrent pane in NORMAL, and nowhere else", () => {
+  for (const pane of TORRENT_PANES) {
+    const r = dispatch(state({ pane: pane, inspectorTab: pane === "inspector" ? "info" : "" }), evFor(","));
+    assert.equal(r.commandId, "settings.open", pane);
+    assert.equal(r.state.mode, "NORMAL", pane);
+  }
+  assert.equal(dispatch(state({ mode: "VISUAL", selectionCount: 2 }), evFor(",")).commandId, null, "not from VISUAL");
+  for (const pane of SETTINGS_PANES) assert.equal(dispatch(state({ pane: pane }), evFor(",")).commandId, null, pane);
+  const row = commands.find((r) => r.id === "settings.open");
+  assert.deepEqual(row.keys, [","]);
+  assert.deepEqual(row.panes, TORRENT_PANES, "never PANE_ANY: it must not live inside Settings");
+  assert.equal(row.title, "Settings", "the palette shows it as :Settings");
+});
+
+test("Settings: j/k/Down/Up move in both columns", () => {
+  for (const pane of SETTINGS_PANES) {
+    for (const label of ["j", "Down"]) assert.equal(dispatch(state({ pane: pane }), evFor(label)).commandId, "settings.down", pane + " " + label);
+    for (const label of ["k", "Up"]) assert.equal(dispatch(state({ pane: pane }), evFor(label)).commandId, "settings.up", pane + " " + label);
+  }
+});
+
+test("Settings: l/Enter/Tab go from the sections to the settings, and h/Shift-Tab come back", () => {
+  for (const label of ["l", "Enter", "Tab"]) {
+    assert.equal(dispatch(state({ pane: "settingsSections" }), evFor(label)).commandId, "settings.enter", label);
+    assert.equal(dispatch(state({ pane: "settingsKeys" }), evFor(label)).commandId, null, "settings list " + label);
+  }
+  for (const label of ["h", "Shift-Tab"]) {
+    assert.equal(dispatch(state({ pane: "settingsKeys" }), evFor(label)).commandId, "settings.leave", label);
+    assert.equal(dispatch(state({ pane: "settingsSections" }), evFor(label)).commandId, null, "sections " + label);
+  }
+});
+
+test("Settings: Esc is settings.back in both columns, and / opens the search INSERT", () => {
+  for (const pane of SETTINGS_PANES) {
+    const back = dispatch(state({ pane: pane }), evFor("Esc"));
+    assert.equal(back.commandId, "settings.back", pane);
+    assert.equal(back.state.prefix, null, "no Esc Esc prefix inside Settings");
+    const again = dispatch(back.state, ev("\u001b", KEY.Escape, undefined, 100));
+    assert.equal(again.commandId, "settings.back", "a second Esc is another back, never filter.reset");
+    const search = dispatch(state({ pane: pane }), evFor("/"));
+    assert.equal(search.commandId, "settings.search", pane);
+    assert.equal(search.state.mode, "INSERT", pane);
+  }
+});
+
+test("Settings: a stale Esc or g prefix never reaches the torrent view's sequences", () => {
+  for (const pane of SETTINGS_PANES) {
+    const esc = dispatch(state({ pane: pane, prefix: "Esc", prefixAt: 0 }), ev("\u001b", KEY.Escape, undefined, 10));
+    assert.equal(esc.commandId, "settings.back", pane);
+    const g = dispatch(state({ pane: pane, prefix: "g", prefixAt: 0 }), ev("g", keyOf("g"), undefined, 10));
+    assert.equal(g.commandId, null, pane);
+  }
+});
+
+// The any-pane audit (Review Focus 5). Every NORMAL/VISUAL row on PANE_ANY
+// is a torrent-view key; inside Settings only : and ? stay live. The modal
+// rows (INSERT, COMMAND, CONFIRM, PICKER) are gated by their mode and stay
+// live, or the search field, the palette and Task 6's confirms would break.
+const ANY_PANE_LIVE_IN_SETTINGS = ["palette.open", "help.toggle"];
+const ANY_PANE_TORRENT_ROWS = ["all.toggle", "sort.next", "sort.reverse", "turtle.toggle", "filter.text", "refresh",
+  "inspector.info", "inspector.files", "inspector.trackers", "inspector.peers", "inspector.chart", "pane.next", "pane.prev",
+  "help.toggle", "window.close", "filter.clearText", "filter.reset", "palette.open", "torrent.fetchMetadata"];
+
+function anyPaneViewRows() {
+  return commands.filter((r) => r.panes.includes("*") && (r.modes.includes("NORMAL") || r.modes.includes("VISUAL")));
+}
+
+test("any-pane audit: the NORMAL/VISUAL any-pane rows are exactly the audited list", () => {
+  const ids = Array.from(new Set(anyPaneViewRows().map((r) => r.id))).sort();
+  assert.deepEqual(ids, ANY_PANE_TORRENT_ROWS.slice().sort(), "a new any-pane row needs a Settings decision here");
+});
+
+test("any-pane audit: only : and ? stay live inside Settings; every other any-pane key is dead in both columns", () => {
+  for (const pane of SETTINGS_PANES) {
+    for (const row of anyPaneViewRows()) {
+      for (const label of row.keys) {
+        if (label === "g g" || label === "Esc Esc") continue;
+        for (const mode of row.modes.filter((m) => m === "NORMAL" || m === "VISUAL")) {
+          const r = dispatch(state({ pane: pane, mode: mode, cursorNoMetadata: true, hasTorrent: true, selectionCount: 2 }), evFor(label));
+          if (ANY_PANE_LIVE_IN_SETTINGS.includes(row.id)) {
+            assert.equal(r.commandId, row.id, pane + " " + mode + " " + label);
+          } else {
+            assert.notEqual(r.commandId, row.id, row.id + " must be dead in " + pane + " (" + mode + " " + label + ")");
+            assert.ok(r.commandId === null || /^settings\./.test(r.commandId), row.id + " " + label + " resolved to " + r.commandId);
+            assert.equal(r.blocked, undefined, row.id + " " + label + " says nothing");
+          }
+        }
+      }
+    }
+    for (const id of ANY_PANE_TORRENT_ROWS.filter((x) => !ANY_PANE_LIVE_IN_SETTINGS.includes(x))) {
+      assert.equal(Registry.dispatchCommand(state({ pane: pane, cursorNoMetadata: true }), id).commandId, null, id + ": the palette can't reach it either");
+    }
+  }
+});
+
+test("any-pane audit: the torrent panes keep every any-pane row", () => {
+  for (const pane of TORRENT_PANES) {
+    for (const row of anyPaneViewRows()) assert.ok(Registry.paneMatches(row, pane), row.id + " " + pane);
+  }
+});
+
+test("any-pane audit: the modal rows stay live inside Settings", () => {
+  for (const pane of SETTINGS_PANES) {
+    assert.equal(dispatch(state({ pane: pane, mode: "INSERT" }), evFor("Esc")).commandId, "insert.cancel", pane);
+    assert.equal(dispatch(state({ pane: pane, mode: "INSERT" }), evFor("Enter")).commandId, "insert.commit", pane);
+    assert.equal(dispatch(state({ pane: pane, mode: "COMMAND" }), evFor("Esc")).commandId, "palette.close", pane);
+    assert.equal(dispatch(state({ pane: pane, mode: "COMMAND" }), evFor("Enter")).commandId, "palette.run", pane);
+    assert.equal(dispatch(state({ pane: pane, mode: "PICKER" }), evFor("Enter")).commandId, "picker.accept", pane);
+    const confirm = Registry.raiseConfirm(state({ pane: pane }), "settings.write", "settingConfirm", {});
+    assert.equal(dispatch(confirm.state, evFor("y")).commandId, "settings.write", pane);
+    assert.equal(dispatch(confirm.state, evFor("n")).commandId, "confirm.cancel", pane);
+  }
+});
+
+test("? in Settings lists the Settings keys, plus : and ?", () => {
+  for (const pane of SETTINGS_PANES) {
+    const ids = Array.from(new Set(helpFor("NORMAL", pane).map((r) => r.id))).sort();
+    const want = ["help.toggle", "palette.open", "settings.back", "settings.down", "settings.search", "settings.up",
+      pane === "settingsSections" ? "settings.enter" : "settings.leave"].sort();
+    assert.deepEqual(ids, want, pane);
+  }
+  assert.ok(helpFor("NORMAL", "table").some((r) => r.id === "settings.open"), "the torrent view's ? lists ,");
+  assert.ok(!helpFor("NORMAL", "table").some((r) => /^settings\.(?!open)/.test(r.id)), "and none of the Settings keys");
+});
+
+test("the Settings navigation rows stay out of the palette; only :Settings is there", () => {
+  for (const row of commands.filter((r) => /^settings\./.test(r.id))) {
+    assert.equal(row.paletteHidden === true, row.id !== "settings.open", row.id);
+    for (const p of row.panes) assert.ok(row.id === "settings.open" ? TORRENT_PANES.includes(p) : SETTINGS_PANES.includes(p), row.id + " " + p);
+  }
+});

@@ -28,6 +28,8 @@ QtObject {
   // C's and T's pickers (slice 3a), which the picker.* commands drive.
   required property var categoryPicker
   required property var tagPicker
+  // The Settings view (slice 4a, SettingsPane), which the settings.* commands drive.
+  required property var settingsView
 
   // ---- trackers and peers (inspector tabs 2, 3) ---------------------------
 
@@ -136,7 +138,7 @@ QtObject {
   // pane keeps its own keys (ruling BS), where y matches nothing.
   function handleBlocked(ev) {
     var c = client
-    if (!c.service || !ev || c.mode !== "NORMAL") return
+    if (!c.service || !ev || c.mode !== "NORMAL" || settingsView.open) return
     if (c.tableState === "empty" && ev.text === "y" && !ev.modifiers.ctrl) {
       c.clipboardAskedAt = ev.now
       c.service.readClipboard()
@@ -802,6 +804,12 @@ QtObject {
 
   function commitInput() {
     var c = client
+    // The Settings search: never an add target or a torrent filter.
+    if (c.inputPurpose === "settingsSearch") {
+      settingsView.commitSearch(inputLine.inputValue())
+      endInput()
+      return
+    }
     if (isLimitPurpose(c.inputPurpose)) {
       if (limitInput) commitLimit(inputLine.inputValue())
       else endInput()
@@ -841,6 +849,7 @@ QtObject {
   // Client.leaveInsert (a click during INSERT) ends INSERT through here too.
   function cancelInput() {
     var c = client
+    if (c.inputPurpose === "settingsSearch") settingsView.clearSearch()
     if (c.inputPurpose === "filter") {
       c.textQuery = c.queryBeforeEdit
       c.rebuildRows(true)
@@ -883,6 +892,9 @@ QtObject {
     }
     var range = paletteRange
     closePalette()
+    // From Settings, only : and ? run there; anything else runs on the
+    // torrents, so Settings makes way first.
+    if (settingsView.open && !Registry.isSettingsPane(View.palettePane(Registry.commands, row.id, c.keyPane))) settingsView.closeView()
     c.paletteMru = View.mruPush(c.paletteMru, row.id)
     c.setPane(View.palettePane(Registry.commands, row.id, c.pane))
     c.saveView()
@@ -922,7 +934,7 @@ QtObject {
       return
 
     case "help.toggle":
-      c.helpPane = View.dispatchPane(c.pane, c.tableState)
+      c.helpPane = c.keyPane
       c.helpOpen = true
       return
 
@@ -1307,6 +1319,34 @@ QtObject {
     case "magnet.start":
     case "magnet.cancel":
       magnet.act(commandId)
+      return
+
+    case "settings.open":
+      settingsView.openView()
+      return
+
+    case "settings.back":
+      settingsView.back()
+      return
+
+    case "settings.down":
+    case "settings.up":
+      settingsView.move(commandId === "settings.down" ? 1 : -1)
+      return
+
+    case "settings.enter":
+      settingsView.enter()
+      return
+
+    case "settings.leave":
+      settingsView.leave()
+      return
+
+    case "settings.search":
+      // Nothing to search on the down screen.
+      if (settingsView.failed) { setMode("NORMAL"); return }
+      settingsView.beginSearch()
+      startInput("settingsSearch", settingsView.query)
       return
 
     case "confirm.cancel":

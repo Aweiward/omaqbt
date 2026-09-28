@@ -2143,3 +2143,96 @@ test("msgTrack/msgFinish: a chunked limit write that fails part-way says how man
   const r = V.msgTrack(V.emptyMessages(), [0, 11], "library", 1001, many, copy);
   assert.equal(V.messageLine(V.msgFinish(r, 11, false, "qBittorrent refused it (HTTP 409)")).text, "Setting the ↓ limit failed: HTTP 409");
 });
+
+// --- Settings (slice 4a Task 5) ---------------------------------------------
+
+test("dispatchPane: a Settings column passes through, whatever the torrent view shows", () => {
+  for (const pane of ["settingsSections", "settingsKeys"]) {
+    for (const st of ["loading", "gui", "notInstalled", "daemon", "api", "empty", "noMatch", "rows"]) {
+      assert.equal(V.dispatchPane(pane, st), pane, pane + " " + st);
+    }
+    assert.equal(V.dispatchState({ mode: "NORMAL" }, pane, "api", false, [], null).pane, pane);
+  }
+  assert.equal(V.dispatchPane("inspector", "api"), "table", "the torrent panes are unchanged");
+});
+
+test("paletteRows: :Settings is there and enabled; the Settings navigation rows are not", () => {
+  for (const pane of ["table", "filters", "inspector"]) {
+    const rows = V.paletteRows("", Registry.commands, [], paletteState({ pane: pane }));
+    const open = rows.find((r) => r.id === "settings.open");
+    assert.equal(open.title, "Settings");
+    assert.equal(open.keys, ",");
+    assert.equal(open.enabled, true, pane);
+    assert.ok(!rows.some((r) => /^settings\.(?!open)/.test(r.id)), pane);
+  }
+  assert.equal(V.paletteRows("sett", Registry.commands, [], paletteState())[0].id, "settings.open");
+});
+
+test("palettePane: from Settings, : and ? stay in Settings and every other command runs on the torrents", () => {
+  for (const pane of ["settingsSections", "settingsKeys"]) {
+    assert.equal(V.palettePane(Registry.commands, "help.toggle", pane), pane);
+    for (const id of ["sort.next", "turtle.toggle", "settings.open", "torrent.move", "filter.down"]) {
+      assert.notEqual(V.palettePane(Registry.commands, id, pane), pane, id);
+    }
+  }
+});
+
+test("modeHints: the Settings columns and the search field have their own hints", () => {
+  assert.deepEqual(V.modeHints("NORMAL", { pane: "settingsSections" }).map((h) => h.key + " " + h.label),
+    ["j/k section", "l keys", "/ search all", "Esc back", "? keys"]);
+  assert.deepEqual(V.modeHints("NORMAL", { pane: "settingsKeys" }).map((h) => h.key + " " + h.label),
+    ["j/k move", "h sections", "/ search", "Esc back", "? keys"]);
+  assert.deepEqual(V.modeHints("NORMAL", { pane: "settingsKeys", searching: true }).map((h) => h.key + " " + h.label),
+    ["j/k move", "h sections", "/ search", "Esc clear search", "? keys"]);
+  assert.deepEqual(V.modeHints("INSERT", { purpose: "settingsSearch" }).map((h) => h.key + " " + h.label),
+    ["Enter keep results", "Esc clear"]);
+  assert.ok(!V.modeHints("NORMAL", { pane: "settingsKeys" }).some((h) => h.key === "Space" || h.key === "q"), "no torrent keys");
+});
+
+test("inputPrompt: the Settings search has its own prompt, not the filter's magnet placeholder", () => {
+  assert.deepEqual(V.inputPrompt("settingsSearch"), { prompt: "Search settings", placeholder: "label, help or key" });
+});
+
+test("settingsSectionStep: moves over the sections, skipping the dimmed RSS row and stopping at the ends", () => {
+  const secs = [{ name: "A" }, { name: "B" }, { name: "Other" }, { name: "RSS", dimmed: true }];
+  assert.equal(V.settingsSectionStep(secs, 0, 1), 1);
+  assert.equal(V.settingsSectionStep(secs, 2, 1), 2, "RSS is never a cursor stop");
+  assert.equal(V.settingsSectionStep(secs, 0, -1), 0);
+  assert.equal(V.settingsSectionStep(secs, 7, 0), 2, "a stale index clamps to the last stop");
+  assert.equal(V.settingsSectionStep([{ name: "A", dimmed: true }, { name: "B" }], 0, 0), 1);
+  assert.equal(V.settingsSectionStep([], 3, 1), 0);
+});
+
+test("settingsDownCopy: the torrent view's own blocking copy, else the api-down copy, with keys that work in Settings", () => {
+  for (const st of ["gui", "notInstalled", "daemon", "api"]) {
+    const c = V.settingsDownCopy(st);
+    assert.equal(c.title, V.stateCopy(st).title, st);
+    assert.equal(c.body, V.stateCopy(st).body, st);
+    assert.deepEqual(c.keys, [{ key: "Esc", label: "Back to torrents" }], st);
+  }
+  for (const st of ["rows", "empty", "noMatch", "loading"]) {
+    assert.equal(V.settingsDownCopy(st).title, V.stateCopy("api").title, st);
+  }
+});
+
+test("settingsTitle: a section names its count; a search names its query and matches", () => {
+  assert.deepEqual(V.settingsTitle("Speed", 12, ""), { title: "Speed", right: "12 settings" });
+  assert.deepEqual(V.settingsTitle("Other", 1, ""), { title: "Other", right: "1 setting" });
+  assert.deepEqual(V.settingsTitle("Speed", 7, " port "), { title: "Search", right: "“port” · 7 matches" });
+  assert.deepEqual(V.settingsTitle("Speed", 1, "dht"), { title: "Search", right: "“dht” · 1 match" });
+});
+
+test("settingsFooterKeys: each column lists the keys that apply there", () => {
+  const f = (col, s) => V.settingsFooterKeys(col, s).map((h) => h.key + " " + h.label);
+  assert.deepEqual(f("settingsSections", false), ["j/k section", "l keys", "/ search all", "Esc back"]);
+  assert.deepEqual(f("settingsKeys", false), ["j/k move", "h sections", "/ search", "Esc back"]);
+  assert.deepEqual(f("settingsKeys", true), ["j/k move", "h sections", "/ search", "Esc clear search"]);
+});
+
+test("settingsEntries: a group header before each group's first row; a search lists rows alone", () => {
+  const rows = [{ key: "a", group: "G1" }, { key: "b", group: "G1" }, { key: "c", group: "G2" }];
+  assert.deepEqual(V.settingsEntries(rows, false).map((e) => e.kind === "header" ? "#" + e.label : e.row.key + e.index),
+    ["#G1", "a0", "b1", "#G2", "c2"]);
+  assert.deepEqual(V.settingsEntries(rows, true).map((e) => e.kind + e.index), ["row0", "row1", "row2"]);
+  assert.deepEqual(V.settingsEntries(null, false), []);
+});
