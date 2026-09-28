@@ -939,6 +939,25 @@ TestCase {
     compare(view(o).listKey, "banned_IPs")
   }
 
+  // Reopening on Other: the read decides the section (sections(null) has no
+  // Other, so its index names Banned IPs until then).
+  function test_narrow_reopening_on_other_keeps_the_settings() {
+    var sets = [prefs(), lists()]
+    for (var i = 0; i < sets.length; i++) {
+      var o = narrowClient(sets[i])
+      focusKey(o, "zz_new_count")
+      compare(view(o).sectionName, "Other")
+      esc(o)
+      verify(!view(o).open)
+      comma(o)
+      o.svc.answer({ ok: true, prefs: sets[i] })
+      compare(view(o).sectionName, "Other")
+      compare(o.c.keyPane, "settingsKeys")
+      compare(view(o).listKey, "")
+      compare(view(o).cursorRow.key, "zz_new_count")
+    }
+  }
+
   // W4: a second secret while another saves is refused in place, the value
   // kept (masked) so nothing is retyped; nothing reaches setSecret.
   function test_a_second_secret_while_another_saves_stays_in_its_field() {

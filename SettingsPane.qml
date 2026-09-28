@@ -115,15 +115,13 @@ Item {
 
   function openView() {
     open = true
-    // Narrow, the sections are a chip: what the section shows takes the
-    // keys (the Banned IPs list, or the settings). After the read starts,
-    // which clears a failed read's flag.
+    // Narrow, the sections are a chip: the settings take the keys, or the
+    // Banned IPs list once the read shows which section this is (reload).
     column = narrow ? "settingsKeys" : "settingsSections"
     listKey = ""
     query = ""
     searchIndex = 0
     reload(false)
-    if (narrow) showSection()
   }
 
   function closeView() {
@@ -157,6 +155,7 @@ Item {
       if (res && res.ok === true && res.prefs) {
         settings.prefs = res.prefs
         settings.failed = false
+        settings.settleNarrow()
       } else {
         // error first: a failed read's note (SettingsCommands) reads it.
         settings.error = res && res.error ? String(res.error) : ""
@@ -172,9 +171,6 @@ Item {
     if (!open) return
     if (failed && ["gui", "notInstalled", "daemon", "api", "loading"].indexOf(tableState) === -1) {
       reload(false)
-      // Narrow, a list section's list takes the keys again (openList
-      // refused it under the down screen).
-      if (narrow && column === "settingsKeys" && !searching) showSection()
     } else if (!failed && ["gui", "notInstalled", "daemon", "api"].indexOf(tableState) !== -1) {
       readSeq = readSeq + 1
       error = ""
@@ -230,6 +226,14 @@ Item {
   function closeSections() {
     if (section.list) closeView()
     else { listKey = ""; column = "settingsKeys" }
+  }
+
+  // Narrow, the settings column has the keys on a list section (opening
+  // Settings, or the down screen gone): the list takes them. Only once
+  // prefs are in: sections(null) has no Other, so the index may name
+  // another section until then.
+  function settleNarrow() {
+    if (narrow && open && column === "settingsKeys" && !searching && !failed && section.list) openList(String(section.list))
   }
 
   // The focus handoff when the sections collapse: to what the section

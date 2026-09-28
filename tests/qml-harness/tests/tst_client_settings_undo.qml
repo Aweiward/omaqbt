@@ -741,6 +741,25 @@ TestCase {
     compare(Object.keys(stack(o)[1]).sort(), ["from", "key", "label", "to"], "as it was recorded")
   }
 
+  function test_a_failed_confirmed_undo_write_goes_back_under_newer_entries_too() {
+    var o = make()
+    editTo(o, "up_limit", "10M")
+    saved(o, prefs({ up_limit: 10485760 }))
+    editTo(o, "dl_limit", "2M")
+    saved(o, prefs({ up_limit: 10485760, dl_limit: 2097152 }))
+    undo(o, prefs({ up_limit: 10485760, dl_limit: 4194304 }))
+    compare(o.c.mode, "CONFIRM", "changed since: asks")
+    key(o.c, "y")
+    compare(writes(o)[2], ["dl_limit", "0"])
+    var undoTicket = o.svc.seq
+    editTo(o, "max_connec", "600")
+    saved(o, prefs({ up_limit: 10485760, dl_limit: 4194304, max_connec: 600 }))
+    compare(stack(o).map(function(e) { return e.key }), ["up_limit", "max_connec"])
+    o.svc.actionFinished(undoTicket, false, "qBittorrent ignored Download limit", "window", [])
+    compare(stack(o).map(function(e) { return e.key }), ["up_limit", "dl_limit", "max_connec"], "back where it was")
+    compare(Object.keys(stack(o)[1]).sort(), ["from", "key", "label", "to"])
+  }
+
   // E3: u does nothing under the down screen.
   function test_u_under_the_down_screen_reads_and_writes_nothing() {
     var o = make()
