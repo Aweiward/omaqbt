@@ -30,6 +30,9 @@ QtObject {
   required property var tagPicker
   // The Settings view (slice 4a, SettingsPane), which the settings.* commands drive.
   required property var settingsView
+  // Its editors (Task 6, SettingsCommands): settings.toggle/edit/write, the
+  // settingEdit INSERT and the choice picker are forwarded there.
+  property var settingsCommands: null
 
   // ---- trackers and peers (inspector tabs 2, 3) ---------------------------
 
@@ -204,7 +207,8 @@ QtObject {
   readonly property var footerKeys: Library.footerKeys(client.inspectorNow.libraryTarget)
   // The name the INSERT prompt shows: a tracker's redacted URL, or the
   // category or tag being renamed or re-pathed.
-  readonly property string inputShown: trackerInput ? trackerInput.shown : (libraryInput ? libraryInput.target.value : (limitInput ? limitInput.name : ""))
+  readonly property string inputShown: trackerInput ? trackerInput.shown : (libraryInput ? libraryInput.target.value
+    : (limitInput ? limitInput.name : (settingsCommands ? settingsCommands.inputShown : "")))
 
   // The row an open a/c/p INSERT acts on, captured when the key was
   // pressed: {target} (Registry's frozen copy, {kind, value, label}). The
@@ -555,6 +559,7 @@ QtObject {
   property var pickerTargets: []
 
   function openPicker() {
+    if (settingsCommands && settingsCommands.pickerOpen) return settingsCommands.picker
     return pickerKind === "category" ? categoryPicker : (pickerKind === "tag" ? tagPicker : null)
   }
 
@@ -586,6 +591,7 @@ QtObject {
 
   // Esc, a scrim click, or an accept: nothing is left open.
   function closePicker() {
+    if (settingsCommands) settingsCommands.dropPicker()
     pickerKind = ""
     pickerTargets = []
     setMode("NORMAL")
@@ -604,6 +610,7 @@ QtObject {
   // files (G8; `y` comes back as torrent.category with args.confirmed).
   // T: send what the toggles changed, nothing when unchanged.
   function acceptPicker() {
+    if (settingsCommands && settingsCommands.pickerOpen) { settingsCommands.acceptPicker(); return }
     var c = client
     var svc = c.service
     var targets = pickerTargets
@@ -810,6 +817,10 @@ QtObject {
       endInput()
       return
     }
+    if (c.inputPurpose === "settingEdit") {
+      settingsCommands.commitInput(inputLine.inputValue())
+      return
+    }
     if (isLimitPurpose(c.inputPurpose)) {
       if (limitInput) commitLimit(inputLine.inputValue())
       else endInput()
@@ -858,6 +869,7 @@ QtObject {
     trackerInput = null
     libraryInput = null
     limitInput = null
+    if (settingsCommands) settingsCommands.input = null
     endInput()
   }
 
@@ -1347,6 +1359,12 @@ QtObject {
       if (settingsView.failed) { setMode("NORMAL"); return }
       settingsView.beginSearch()
       startInput("settingsSearch", settingsView.query)
+      return
+
+    case "settings.toggle":
+    case "settings.edit":
+    case "settings.write":
+      settingsCommands.run(commandId, args)
       return
 
     case "confirm.cancel":

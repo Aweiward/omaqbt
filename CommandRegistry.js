@@ -183,6 +183,14 @@ var commands = [
   // Esc clears an active search first, then leaves Settings (the window
   // decides which; the registry only names the key).
   { id: "settings.back", title: "Clear search, or back to torrents", group: "App", keys: ["Esc"], modes: ["NORMAL"], panes: ["settingsSections", "settingsKeys"], needs: "none", paletteHidden: true },
+  // Task 6: the editors, on the setting under the cursor as it stood at
+  // key time (args.settingKey). toggleRow/editableRow come from the window
+  // (SettingsCommands.flags: SettingsView.editorFor, and no write of that
+  // key still saving); a row with no editor is blocked with no note (its
+  // help line says why). Their CONFIRM's `y` resolves to settings.write,
+  // which has no row at all, so no key and no palette entry can reach it.
+  { id: "settings.toggle", title: "Toggle the setting", group: "App", keys: ["Space"], modes: ["NORMAL"], panes: ["settingsKeys"], needs: "toggleRow", paletteHidden: true },
+  { id: "settings.edit", title: "Edit the setting", group: "App", keys: ["Enter"], modes: ["NORMAL"], panes: ["settingsKeys"], needs: "editableRow", paletteHidden: true },
 
   // VISUAL (j/k/Space/x/X/e reuse the NORMAL,table rows above; this is the exit)
   { id: "visual.exit", title: "Exit visual", group: "View", keys: ["Esc", "V"], modes: ["VISUAL"], panes: ["table"], needs: "none" },
@@ -292,7 +300,12 @@ function normalizeState(state) {
     // flags, read fresh from the caller each dispatch (ListOverlay/the
     // picker never keep their own copy of these -- see the PICKER rows).
     pickerQueryEmpty: s.pickerQueryEmpty === true,
-    pickerMulti: s.pickerMulti === true
+    pickerMulti: s.pickerMulti === true,
+    // Settings (Task 6): the key under the settings cursor, and whether it
+    // toggles (Space) or edits (Enter) right now. Default off.
+    settingsKey: s.settingsKey || null,
+    settingsToggle: s.settingsToggle === true,
+    settingsEditable: s.settingsEditable === true
   };
 }
 
@@ -458,6 +471,8 @@ function preconditionMet(needs, s) {
   if (needs === "noMetadata") return s.cursorNoMetadata === true && s.cursorPendingMagnet !== true;
   if (needs === "limitRow") return s.limitCursorKey !== null && s.limitCursorKey !== undefined && s.limitCursorKey !== "";
   if (needs === "limitToggle") return s.limitToggle === true;
+  if (needs === "toggleRow") return s.settingsToggle === true;
+  if (needs === "editableRow") return s.settingsEditable === true;
   if (Object.prototype.hasOwnProperty.call(LIBRARY_NEEDS, needs)) return libraryKind(s, LIBRARY_NEEDS[needs]);
   return true;
 }
@@ -474,6 +489,7 @@ function needsReason(needs, s) {
   if (needs === "categoryName") return "focus a category";
   if (needs === "libraryGroup" || needs === "libraryName") return "focus a category or tag";
   if (needs === "limitRow" || needs === "limitToggle") return "";
+  if (needs === "toggleRow" || needs === "editableRow") return "";
   if (needs === "noMetadata") {
     if (s.cursorPendingMagnet === true) return "already fetching metadata";
     if (s.hasTorrent === true) return "already has metadata";
@@ -538,6 +554,10 @@ function buildArgs(row, s) {
   // The Info tab's Limits row under the cursor, as it stood at key time.
   if (row.needs === "limitRow" || row.needs === "limitToggle") {
     args.limitKey = s.limitCursorKey;
+  }
+  // The setting under the Settings cursor, as it stood at key time.
+  if (row.needs === "toggleRow" || row.needs === "editableRow") {
+    args.settingKey = s.settingsKey;
   }
   // ":" on a VISUAL range: the palette acts on that range (the window keeps it).
   if (row.id === "palette.open" && s.mode === "VISUAL") args.range = true;

@@ -2236,3 +2236,67 @@ test("settingsEntries: a group header before each group's first row; a search li
   assert.deepEqual(V.settingsEntries(rows, true).map((e) => e.kind + e.index), ["row0", "row1", "row2"]);
   assert.deepEqual(V.settingsEntries(null, false), []);
 });
+
+// --- Settings editors (slice 4a, Task 6) ---------------------------------------------
+
+test("dispatchState carries the Settings cursor key and its editor flags, off by default", () => {
+  const st = V.dispatchState({ mode: "NORMAL" }, "settingsKeys", "rows", true, [], null, null, { key: "dht", toggle: true, editable: false });
+  assert.equal(st.settingsKey, "dht");
+  assert.equal(st.settingsToggle, true);
+  assert.equal(st.settingsEditable, false);
+  const none = V.dispatchState({ mode: "NORMAL", settingsKey: "stale", settingsToggle: true, settingsEditable: true }, "settingsKeys", "rows", true, []);
+  assert.equal(none.settingsKey, null, "a key a previous dispatch left behind never carries over");
+  assert.equal(none.settingsToggle, false);
+  assert.equal(none.settingsEditable, false);
+  assert.equal(Registry.dispatch(st, { key: KEY.Space, text: " ", modifiers: {}, now: 0 }).args.settingKey, "dht");
+});
+
+test("confirmLine: a setting's CONFIRM names what y writes, then the consequence", () => {
+  const c = V.confirmLine({ kind: "settingConfirm", line: "Turn DHT off?", detail: "Magnets without trackers will stop finding peers.", accept: "turn off" });
+  assert.deepEqual(c, { lead: "Turn DHT off? ", strong: "", tail: "Magnets without trackers will stop finding peers.", accept: "turn off" });
+  assert.equal(V.confirmLine({ kind: "settingConfirm", line: "Set Encryption to Require?", detail: "x" }).accept, "set");
+  assert.ok(!/torrent/.test(V.confirmLine({ kind: "settingConfirm", line: "q?", detail: "d" }).lead), "never the torrent remove line");
+});
+
+test("settingQuestion: Turn <label> on/off for a toggle, Set <label> to <value> otherwise", () => {
+  assert.deepEqual(V.settingQuestion("DHT", true, false, "off"), { line: "Turn DHT off?", accept: "turn off" });
+  assert.deepEqual(V.settingQuestion("UPnP / NAT-PMP port forwarding", true, true, "on"), { line: "Turn UPnP / NAT-PMP port forwarding on?", accept: "turn on" });
+  assert.deepEqual(V.settingQuestion("Port for incoming connections", false, 51414, "51414"), { line: "Set Port for incoming connections to 51414?", accept: "set" });
+  assert.deepEqual(V.settingQuestion("Command on added", false, "", "empty"), { line: "Set Command on added to empty?", accept: "set" });
+});
+
+test("settingFailure: qbt's own sentences show as they are; anything else names the setting", () => {
+  const f = (e) => V.settingFailure("DHT", e);
+  assert.equal(f("qBittorrent ignored DHT"), "qBittorrent ignored DHT");
+  assert.equal(f("Couldn't confirm DHT (HTTP 409)\n"), "Couldn't confirm DHT (HTTP 409)");
+  assert.equal(f("Set by OmaqBT's setup."), "Set by OmaqBT's setup.");
+  assert.equal(f("OmaqBT needs this as it is."), "OmaqBT needs this as it is.");
+  assert.equal(f("qBittorrent doesn't let this be changed."), "qBittorrent doesn't let this be changed.");
+  assert.equal(f("OmaqBT won't change this setting."), "OmaqBT won't change this setting.");
+  assert.equal(f("qBittorrent has no setting called foo_bar."), "qBittorrent has no setting called foo_bar.");
+  assert.equal(f("qBittorrent refused it (HTTP 409)"), "Setting DHT failed: HTTP 409");
+  assert.equal(f("Use a whole number from 1 to 65535, or 0 for random."), "Setting DHT failed: Use a whole number from 1 to 65535, or 0 for random.");
+  assert.equal(f("Could not run the qbt helper"), "Setting DHT failed: Could not run the qbt helper");
+  assert.equal(f(""), "Setting DHT failed.");
+});
+
+test("settingsReadNote: a failed read names itself when qBittorrent is up, and stays quiet on a down screen", () => {
+  assert.equal(V.settingsReadNote("rows", true, "qBittorrent refused it (HTTP 403)"), "Couldn't read settings: HTTP 403");
+  assert.equal(V.settingsReadNote("empty", true, "Could not read preferences"), "Couldn't read settings: Could not read preferences");
+  assert.equal(V.settingsReadNote("rows", true, ""), "Couldn't read settings.");
+  for (const st of ["gui", "notInstalled", "daemon", "api", "loading"]) assert.equal(V.settingsReadNote(st, true, "x"), "", st);
+  assert.equal(V.settingsReadNote("rows", false, "x"), "");
+});
+
+test("settingsFooterKeys and modeHints: the settings list names its editor's key", () => {
+  const f = (ed) => V.settingsFooterKeys("settingsKeys", false, ed).map((h) => h.key + " " + h.label);
+  assert.deepEqual(f("toggle"), ["j/k move", "Space toggle", "h sections", "/ search", "Esc back"]);
+  assert.deepEqual(f("input"), ["j/k move", "Enter edit", "h sections", "/ search", "Esc back"]);
+  assert.deepEqual(f("picker"), ["j/k move", "Enter choose", "h sections", "/ search", "Esc back"]);
+  assert.deepEqual(f("none"), ["j/k move", "h sections", "/ search", "Esc back"]);
+  assert.deepEqual(V.settingsFooterKeys("settingsSections", false, "toggle").map((h) => h.key), ["j/k", "l", "/", "Esc"], "the sections never edit");
+  assert.deepEqual(V.modeHints("NORMAL", { pane: "settingsKeys", editor: "toggle" }).map((h) => h.key + " " + h.label),
+    ["j/k move", "Space toggle", "h sections", "/ search", "Esc back", "? keys"]);
+  assert.deepEqual(V.modeHints("INSERT", { purpose: "settingEdit" }).map((h) => h.key + " " + h.label), ["Enter set", "Esc cancel"]);
+  assert.deepEqual(V.inputPrompt("settingEdit", "Port for incoming connections"), { prompt: "Port for incoming connections", placeholder: "" });
+});

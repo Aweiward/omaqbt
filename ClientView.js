@@ -545,6 +545,11 @@ function confirmLine(confirm) {
     }
     return { lead: "Ban " + label + " from all torrents? ", strong: "", tail: "It goes on qBittorrent's IP ban list.", accept: "ban" };
   }
+  // A setting's confirm (slice 4a): settingQuestion's line, then the
+  // schema's consequence (SettingsView.confirmFor).
+  if (c.kind === "settingConfirm") {
+    return { lead: String(c.line || "") + " ", strong: "", tail: String(c.detail || ""), accept: c.accept ? String(c.accept) : "set" };
+  }
   var n = Number(c.count) || 0;
   var t = plural(n, "torrent", "torrents");
   if (c.withFiles === true) {
@@ -750,6 +755,8 @@ function inputPrompt(purpose, shown) {
     return { prompt: LIMIT_PROMPTS[purpose][0] + " for " + String(shown || ""), placeholder: LIMIT_PROMPTS[purpose][1] };
   }
   if (purpose === "settingsSearch") return { prompt: "Search settings", placeholder: "label, help or key" };
+  // A setting's input editor (Task 6); `shown` is its label.
+  if (purpose === "settingEdit") return { prompt: String(shown || ""), placeholder: "" };
   return { prompt: "/", placeholder: "filter by name, or paste a magnet" };
 }
 
@@ -767,7 +774,7 @@ function modeHints(mode, ctx) {
     if (c.purpose === "categoryAdd" || c.purpose === "tagAdd") return [{ key: "Enter", label: "create" }, { key: "Esc", label: "cancel" }];
     if (c.purpose === "categoryRename" || c.purpose === "tagRename") return [{ key: "Enter", label: "rename" }, { key: "Esc", label: "cancel" }];
     if (c.purpose === "settingsSearch") return [{ key: "Enter", label: "keep results" }, { key: "Esc", label: "clear" }];
-    if (c.purpose === "categoryPath" || Object.prototype.hasOwnProperty.call(LIMIT_PROMPTS, c.purpose)) return [{ key: "Enter", label: "set" }, { key: "Esc", label: "cancel" }];
+    if (c.purpose === "settingEdit" || c.purpose === "categoryPath" || Object.prototype.hasOwnProperty.call(LIMIT_PROMPTS, c.purpose)) return [{ key: "Enter", label: "set" }, { key: "Esc", label: "cancel" }];
     return [{ key: "Enter", label: "keep filter" }, { key: "Esc", label: "cancel" }];
   }
   // The palette and the C/T pickers show their own key hints in a footer.
@@ -780,7 +787,7 @@ function modeHints(mode, ctx) {
       { key: "Esc", label: "cancel" }
     ];
   }
-  if (Registry.isSettingsPane(c.pane)) return settingsFooterKeys(c.pane, c.searching === true).concat([{ key: "?", label: "keys" }]);
+  if (Registry.isSettingsPane(c.pane)) return settingsFooterKeys(c.pane, c.searching === true, c.editor).concat([{ key: "?", label: "keys" }]);
   if (c.pane === "filters") {
     return [
       { key: "j/k", label: "move" },
@@ -822,13 +829,58 @@ function modeHints(mode, ctx) {
 // settingsFooterKeys(column, searching) -> [{key, label}] for the focused
 // Settings column's footer (the mockup's): the sections move and open a
 // section; the settings list moves and goes back. While a search shows,
-// Esc clears it first. Task 6 adds Enter and Space for the editors.
-function settingsFooterKeys(column, searching) {
+// Esc clears it first. editor (Task 6) is SettingsView.editorFor's kind for
+// the cursor row: a toggle adds "Space toggle", an input "Enter edit", a
+// picker "Enter choose"; none (or no row) adds nothing.
+var SETTINGS_EDITOR_KEYS = { toggle: { key: "Space", label: "toggle" }, input: { key: "Enter", label: "edit" }, picker: { key: "Enter", label: "choose" } };
+function settingsFooterKeys(column, searching, editor) {
   if (column === "settingsSections") {
     return [{ key: "j/k", label: "section" }, { key: "l", label: "keys" }, { key: "/", label: "search all" }, { key: "Esc", label: "back" }];
   }
-  return [{ key: "j/k", label: "move" }, { key: "h", label: "sections" }, { key: "/", label: "search" },
-    { key: "Esc", label: searching === true ? "clear search" : "back" }];
+  var out = [{ key: "j/k", label: "move" }];
+  if (Object.prototype.hasOwnProperty.call(SETTINGS_EDITOR_KEYS, editor)) out.push(SETTINGS_EDITOR_KEYS[editor]);
+  return out.concat([{ key: "h", label: "sections" }, { key: "/", label: "search" },
+    { key: "Esc", label: searching === true ? "clear search" : "back" }]);
+}
+
+// settingQuestion(label, isBool, value, shown) -> {line, accept}: what a
+// setting's CONFIRM asks before its consequence, naming the setting and
+// the value `y` writes ("Turn DHT off?", "Set Encryption to Require?").
+// shown is SettingsView.formatValue's text for value.
+function settingQuestion(label, isBool, value, shown) {
+  if (isBool === true) {
+    var on = value === true || value === "true";
+    return { line: "Turn " + String(label) + (on ? " on?" : " off?"), accept: on ? "turn on" : "turn off" };
+  }
+  return { line: "Set " + String(label) + " to " + String(shown) + "?", accept: "set" };
+}
+
+// qbt pref-set's own sentences (tests/test_prefs.py pins them): each names
+// its setting or its reason already, so it shows as it is.
+var PREF_SENTENCES = ["Set by OmaqBT's setup.", "OmaqBT needs this as it is.", "qBittorrent doesn't let this be changed.",
+  "OmaqBT doesn't change secrets yet.", "OmaqBT doesn't change this setting.", "OmaqBT doesn't change this setting yet.",
+  "Editing multi-line settings arrives in 4b.", "OmaqBT won't change this setting.",
+  "OmaqBT can only change on/off, number and text settings."];
+
+// settingFailure(label, error) -> the status line after a failed write:
+// qbt's sentence as it is ("qBittorrent ignored DHT", "Couldn't confirm DHT
+// (HTTP 409)", a lock's reason), else "Setting <label> failed: <reason>"
+// (a bare refusal reads "HTTP 409").
+function settingFailure(label, error) {
+  var e = String(error || "").trim();
+  if (e === "") return "Setting " + String(label) + " failed.";
+  if (PREF_SENTENCES.indexOf(e) !== -1 || e.indexOf("qBittorrent ignored ") === 0 || e.indexOf("Couldn't confirm ") === 0
+      || e.indexOf("qBittorrent has no setting called ") === 0) return e;
+  return "Setting " + String(label) + " failed: " + refusalDetail(e);
+}
+
+// settingsReadNote(tableState, failed, error) -> the status line when
+// Settings couldn't read preferences but qBittorrent is up (Ruling DO: the
+// down screen alone would blame the API), else "".
+function settingsReadNote(tableState, failed, error) {
+  if (failed !== true || ["gui", "notInstalled", "daemon", "api", "loading"].indexOf(tableState) !== -1) return "";
+  var e = String(error || "").trim();
+  return e === "" ? "Couldn't read settings." : "Couldn't read settings: " + refusalDetail(e);
 }
 
 // settingsSectionStep(sections, index, delta) -> the section cursor moved
@@ -938,8 +990,10 @@ function targetHashes(mode, rows, cursorHash, anchorHash) {
 // always written (null/false without one), so a target a previous dispatch
 // left in regState never carries over. `picker` is the open C/T picker's
 // {queryEmpty, multi} (PICKER's Space/Tab rule), or null; its flags are
-// always written too.
-function dispatchState(regState, pane, state, hasCursorRow, targets, inspector, picker) {
+// always written too. `settings` is SettingsCommands.flags() while the
+// Settings view is open ({key, toggle, editable}: the setting under its
+// cursor and whether Space/Enter edit it), or null; written every time.
+function dispatchState(regState, pane, state, hasCursorRow, targets, inspector, picker, settings) {
   var st = {};
   var r = regState || {};
   for (var k in r) {
@@ -962,6 +1016,10 @@ function dispatchState(regState, pane, state, hasCursorRow, targets, inspector, 
   var p = picker || {};
   st.pickerQueryEmpty = p.queryEmpty === true;
   st.pickerMulti = p.multi === true;
+  var sv = settings || {};
+  st.settingsKey = sv.key ? String(sv.key) : null;
+  st.settingsToggle = sv.toggle === true;
+  st.settingsEditable = sv.editable === true;
   return st;
 }
 
@@ -2170,6 +2228,9 @@ if (typeof module !== "undefined" && module.exports) {
     confirmLine: confirmLine,
     modeHints: modeHints,
     settingsFooterKeys: settingsFooterKeys,
+    settingQuestion: settingQuestion,
+    settingFailure: settingFailure,
+    settingsReadNote: settingsReadNote,
     settingsSectionStep: settingsSectionStep,
     settingsDownCopy: settingsDownCopy,
     settingsTitle: settingsTitle,

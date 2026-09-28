@@ -244,7 +244,8 @@ Item {
     closing = true
     // An open palette/picker would lose its field focus; reopening lands on the torrents.
     if (mode === "COMMAND") commands.closePalette(); else if (mode === "PICKER") commands.closePicker()
-    if (mode === "INSERT" && inputPurpose === "settingsSearch") leaveInsert()
+    if (mode === "INSERT" && (inputPurpose === "settingsSearch" || inputPurpose === "settingEdit")) leaveInsert()
+    settingsCmds.dropConfirm()
     settingsView.closeView()
     opened = false
     window.visible = false
@@ -493,7 +494,7 @@ Item {
 
   // The state a key or palette command resolves against, as it stands now.
   function registryState(targets) {
-    return View.dispatchState(regState, keyPane, tableState, cursorIndex >= 0, targets, inspectorNow, commands.pickerFlags())
+    return View.dispatchState(regState, keyPane, tableState, cursorIndex >= 0, targets, inspectorNow, commands.pickerFlags(), settingsCmds.flags())
   }
 
   // Ends INSERT the way Esc does (insert.cancel: the filter query goes
@@ -536,6 +537,7 @@ Item {
       if (!root.viewTouched) root.applyViewState(root.service.viewState)
     }
     function onActionFinished(ticket, ok, error, origin, hashes) {
+      settingsCmds.finished(ticket, ok, error)
       commands.libraryFinished(ticket, ok, error)
       // Strictly this window's own tickets (msgFinish ignores the rest): a
       // pending-magnet drop can emit extra window-origin signals that
@@ -561,9 +563,17 @@ Item {
     keyItem: keyRoot
     palette: cmdPalette
     settingsView: settingsView
+    settingsCommands: settingsCmds
     magnet: magnetRow
     categoryPicker: catPicker
     tagPicker: tagPicker
+  }
+
+  SettingsCommands {
+    id: settingsCmds
+    client: root
+    commands: commands
+    settingsView: settingsView
   }
 
   WmFocus {
@@ -776,6 +786,7 @@ Item {
           purpose: root.inputPurpose,
           pane: root.keyPane,
           searching: settingsView.searching,
+          editor: settingsView.editorKind,
           filesTab: root.inspectorTab === "files" && !root.infoTab.noMeta
         })
 

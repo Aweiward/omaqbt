@@ -706,7 +706,8 @@ test("every command row has the documented shape", () => {
   // tracker/peer/trackersTab/noMetadata: slice 2b (Task 3's preconditions).
   // libraryGroup/libraryName/categoryName: slice 3a (Task 5's filters-pane rows).
   // limitRow/limitToggle: slice 3b Task 4, for Task 5's Info-tab Limits cursor.
-  const validNeeds = ["none", "torrent", "selection", "tracker", "peer", "trackersTab", "noMetadata", "libraryGroup", "libraryName", "categoryName", "limitRow", "limitToggle"];
+  // toggleRow/editableRow: slice 4a Task 6, the Settings editors.
+  const validNeeds = ["none", "torrent", "selection", "tracker", "peer", "trackersTab", "noMetadata", "libraryGroup", "libraryName", "categoryName", "limitRow", "limitToggle", "toggleRow", "editableRow"];
   const validTabs = ["info", "trackers", "peers", "files", "chart"];
   for (const row of commands) {
     assert.ok(row.id === null || typeof row.id === "string");
@@ -1956,7 +1957,8 @@ test("? in Settings lists the Settings keys, plus : and ?", () => {
   for (const pane of SETTINGS_PANES) {
     const ids = Array.from(new Set(helpFor("NORMAL", pane).map((r) => r.id))).sort();
     const want = ["help.toggle", "palette.open", "settings.back", "settings.down", "settings.search", "settings.up",
-      pane === "settingsSections" ? "settings.enter" : "settings.leave"].sort();
+      pane === "settingsSections" ? "settings.enter" : "settings.leave"]
+      .concat(pane === "settingsKeys" ? ["settings.edit", "settings.toggle"] : []).sort();
     assert.deepEqual(ids, want, pane);
   }
   assert.ok(helpFor("NORMAL", "table").some((r) => r.id === "settings.open"), "the torrent view's ? lists ,");
@@ -1969,3 +1971,64 @@ test("the Settings navigation rows stay out of the palette; only :Settings is th
     for (const p of row.panes) assert.ok(row.id === "settings.open" ? TORRENT_PANES.includes(p) : SETTINGS_PANES.includes(p), row.id + " " + p);
   }
 });
+
+// --- Settings editors (slice 4a, Task 6) ---------------------------------------------
+
+test("Settings: Space toggles and Enter edits the setting under the cursor, captured at key time", () => {
+  const t = dispatch(state({ pane: "settingsKeys", settingsToggle: true, settingsKey: "dht" }), evFor("Space"));
+  assert.equal(t.commandId, "settings.toggle");
+  assert.equal(t.args.settingKey, "dht", "the key under the cursor when Space was pressed");
+  assert.equal(t.state.mode, "NORMAL");
+  const e = dispatch(state({ pane: "settingsKeys", settingsEditable: true, settingsKey: "listen_port" }), evFor("Enter"));
+  assert.equal(e.commandId, "settings.edit");
+  assert.equal(e.args.settingKey, "listen_port");
+  assert.equal(e.state.mode, "NORMAL", "the window picks INSERT or PICKER from the editor");
+});
+
+test("Settings: a row with no editor (locked, read-only, secret, multi-line, dimmed, saving) does nothing, with no note", () => {
+  for (const label of ["Space", "Enter"]) {
+    const r = dispatch(state({ pane: "settingsKeys", settingsKey: "web_ui_port" }), evFor(label));
+    assert.equal(r.commandId, null, label);
+    assert.equal(r.blocked, "", label + ": the help line already says why");
+  }
+  // Space on an input row and Enter on a toggle row are not edits either.
+  assert.equal(dispatch(state({ pane: "settingsKeys", settingsEditable: true, settingsKey: "listen_port" }), evFor("Space")).commandId, null);
+  assert.equal(dispatch(state({ pane: "settingsKeys", settingsToggle: true, settingsKey: "dht" }), evFor("Enter")).commandId, null);
+  // Enter on the sections column is still settings.enter.
+  assert.equal(dispatch(state({ pane: "settingsSections", settingsEditable: true, settingsKey: "x" }), evFor("Enter")).commandId, "settings.enter");
+  assert.equal(dispatch(state({ pane: "settingsSections", settingsToggle: true, settingsKey: "x" }), evFor("Space")).commandId, null);
+});
+
+test("Settings: the edit rows need their flags, which default off", () => {
+  assert.equal(Registry.preconditionMet("toggleRow", {}), false);
+  assert.equal(Registry.preconditionMet("editableRow", {}), false);
+  assert.equal(Registry.preconditionMet("toggleRow", { settingsToggle: true }), true);
+  assert.equal(Registry.preconditionMet("editableRow", { settingsEditable: true }), true);
+  assert.equal(Registry.needsReason("toggleRow", {}), "");
+  assert.equal(Registry.needsReason("editableRow", {}), "");
+});
+
+test("Settings: settings.write has no key or palette row; only its CONFIRM's y reaches it", () => {
+  assert.ok(!commands.some((r) => r.id === "settings.write"));
+  for (const pane of SETTINGS_PANES.concat(TORRENT_PANES)) {
+    assert.equal(Registry.dispatchCommand(state({ pane: pane, settingsToggle: true, settingsEditable: true, settingsKey: "dht" }), "settings.write").commandId, null, pane);
+  }
+  const args = { key: "dht", value: false, from: true, label: "DHT" };
+  const c = Registry.raiseConfirm(state({ pane: "settingsKeys" }), "settings.write", "settingConfirm", args);
+  const y = dispatch(c.state, evFor("y"));
+  assert.equal(y.commandId, "settings.write");
+  assert.deepEqual(y.args, { key: "dht", value: false, from: true, label: "DHT", confirmed: true });
+  assert.equal(y.state.mode, "NORMAL");
+  const n = dispatch(c.state, evFor("n"));
+  assert.equal(n.commandId, "confirm.cancel");
+  assert.equal(dispatch(c.state, evFor("Esc")).commandId, "confirm.cancel");
+  // Space/Enter while the question is up never start another edit.
+  assert.equal(dispatch(assign(c.state, { settingsToggle: true, settingsEditable: true, settingsKey: "upnp" }), evFor("Space")).commandId, null);
+  assert.equal(dispatch(assign(c.state, { settingsToggle: true, settingsEditable: true, settingsKey: "upnp" }), evFor("Enter")).commandId, null);
+  // A palette- or key-resolved settings.toggle/edit never carries confirmed.
+  const t = Registry.dispatchCommand(state({ pane: "settingsKeys", settingsToggle: true, settingsKey: "dht" }), "settings.toggle");
+  assert.equal(t.commandId, "settings.toggle");
+  assert.equal(t.args.confirmed, undefined);
+});
+
+function assign(a, b) { return Object.assign({}, a, b); }

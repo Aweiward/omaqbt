@@ -43,6 +43,12 @@ Item {
   property string error: ""
   // Bumped by every read and by closing, so a late answer is dropped.
   property int readSeq: 0
+  // Task 6 (SettingsCommands): key -> "run" while its write runs, "done"
+  // until the re-read is in; those rows show "saving…". pickerOpen loads
+  // the choice picker below (null otherwise), which SettingsCommands drives.
+  property var saving: ({})
+  property bool pickerOpen: false
+  readonly property var picker: pickerLoader.item
 
   property int sectionIndex: 0
   // The settings cursor of each section, by section name.
@@ -65,6 +71,8 @@ Item {
   readonly property var cursorRow: keyIndex < shownRows.length ? shownRows[keyIndex] : null
   readonly property var entries: View.settingsEntries(shownRows, searching)
   readonly property var title: View.settingsTitle(section.label, shownRows.length, query)
+  // The cursor row's editor kind (Space/Enter hints), "none" while it saves.
+  readonly property string editorKind: cursorRow && saving[cursorRow.key] === undefined ? SettingsView.editorFor(cursorRow.key, prefs).kind : "none"
 
   readonly property int padX: Style.space(12)
   readonly property int rowHeight: Style.space(28)
@@ -85,6 +93,7 @@ Item {
 
   function closeView() {
     open = false
+    pickerOpen = false
     query = ""
     searchIndex = 0
     column = "settingsSections"
@@ -109,8 +118,9 @@ Item {
         settings.prefs = res.prefs
         settings.failed = false
       } else {
-        settings.failed = true
+        // error first: a failed read's note (SettingsCommands) reads it.
         settings.error = res && res.error ? String(res.error) : ""
+        settings.failed = true
       }
     })
   }
@@ -262,6 +272,7 @@ Item {
     property bool current: false
     property bool focused: false
     property bool showSection: false
+    property bool saving: false
     signal clicked()
     readonly property color dim: Util.alpha(Color.foreground, Style.normalBorderAlpha)
     readonly property int labelWidth: Math.min(Style.space(300), Math.round(width * 0.45))
@@ -313,11 +324,11 @@ Item {
       anchors.rightMargin: Style.space(8)
       anchors.verticalCenter: parent.verticalCenter
       elide: Text.ElideRight
-      text: String(rowItem.row.text === undefined ? "" : rowItem.row.text)
+      text: rowItem.saving ? "saving…" : String(rowItem.row.text === undefined ? "" : rowItem.row.text)
       textFormat: Text.PlainText
       font.family: Style.fontFamily
       font.pixelSize: Style.font.body
-      color: rowItem.row.locked || rowItem.row.dimmed ? rowItem.dim : (rowItem.row.muted ? Color.muted : Color.foreground)
+      color: rowItem.saving ? Color.muted : (rowItem.row.locked || rowItem.row.dimmed ? rowItem.dim : (rowItem.row.muted ? Color.muted : Color.foreground))
     }
     Text {
       id: rowRestart
@@ -507,6 +518,7 @@ Item {
               current: entryItem.isRow && entryItem.entryIndex === settings.keyIndex
               focused: keysPane.focusedPane
               showSection: settings.searching
+              saving: entryItem.isRow && settings.saving[entryItem.modelData.row.key] !== undefined
               onClicked: {
                 settings.column = "settingsKeys"
                 settings.searchIndex = entryItem.entryIndex
@@ -588,7 +600,7 @@ Item {
 
     KeyFooter {
       id: keysFooter
-      keys: View.settingsFooterKeys("settingsKeys", settings.searching)
+      keys: View.settingsFooterKeys("settingsKeys", settings.searching, settings.editorKind)
     }
   }
 
@@ -605,6 +617,25 @@ Item {
       anchors.fill: parent
       tableState: "api"
       stateCopy: View.settingsDownCopy(settings.tableState)
+    }
+  }
+
+  // ---- the choice picker (Task 6): 3a's ListOverlay in PICKER mode ----------------
+  // Loaded only while open, so the window's palette (a ListOverlay later in
+  // the tree) stays the first one a search of the tree finds.
+
+  Loader {
+    id: pickerLoader
+    anchors.fill: parent
+    active: settings.open && settings.pickerOpen
+    sourceComponent: Component {
+      ListOverlay {
+        objectName: "settingPicker"
+        keyMode: "PICKER"
+        multi: false
+        placeholder: " type to find"
+        footerHint: "↑↓ / Ctrl-n Ctrl-p move · Enter set · Esc cancel"
+      }
     }
   }
 }
