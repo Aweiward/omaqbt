@@ -247,8 +247,9 @@ QtObject {
       ? { kind: "ban", ip: ip, before: String(prefs[SettingsView.BAN_KEY] === undefined ? "" : prefs[SettingsView.BAN_KEY]) } : null
     var ticket = c.service.banList(op, ip, c.opts([]))
     var label = SettingsView.listTitle(SettingsView.BAN_KEY)
+    var note = done || SettingsView.listDoneNote(SettingsView.BAN_KEY, op, ip)
     c.messages = View.msgTrack(c.messages, ticket, "setting", 0, [],
-      { progress: (op === "add" ? "Banning " : "Unbanning ") + ip + "…", done: done || SettingsView.listDoneNote(SettingsView.BAN_KEY, op, ip), raw: true })
+      { progress: (op === "add" ? "Banning " : "Unbanning ") + ip + "…", done: record ? note + SettingsView.UNDO_HINT : note, raw: true })
     track(ticket, SettingsView.BAN_KEY, label, record, undoEntry)
   }
 
@@ -257,17 +258,27 @@ QtObject {
   // Enter in the masked field. raw is the field's text, passed straight
   // through: the field is emptied before anything else, an empty Enter
   // changes nothing, a refused value stays (masked) with the reason.
+  // Service runs one secret at a time: while another saves, the value
+  // stays (masked) in its field with a note, rather than being emptied and
+  // then refused.
   function commitSecret(t, raw) {
     if (raw === "") { closeSecret(); commands.endInput(); return }
     var parsed = SettingsView.parseListLine("secret", raw)
     if (parsed.error !== undefined) { commands.refuseInput(parsed.error); return }
+    if (secretSaving()) { commands.refuseInput(SettingsView.SECRET_BUSY); return }
     closeSecret()
     commands.endInput()
     var c = client
     var ticket = c.service.setSecret(t.key, raw, c.opts([]))
     c.messages = View.msgTrack(c.messages, ticket, "setting", 0, [],
       { progress: "Saving " + t.label + "…", done: SettingsView.secretDoneNote(t.key, "set"), raw: true })
-    track(ticket, t.key, t.label)
+    track(ticket, t.key, t.label, null, null, true)
+  }
+
+  // A secret this window sent (Service.setSecret) hasn't finished.
+  function secretSaving() {
+    for (var t in tickets) if (tickets[t].secret === true) return true
+    return false
   }
 
   // Empties the masked field and forgets that it was open.
@@ -331,19 +342,23 @@ QtObject {
     var from = undoEntry ? undefined : SettingsView.undoValue(k, settingsView.prefs)
     var record = from === undefined ? null : { kind: "pref", key: k, label: label, from: from }
     var ticket = c.service.setPref(k, String(value), c.opts([]))
+    var note = done || SettingsView.doneNote(k, value)
+    // A write u can undo says so (Ruling EJ); finished() takes it back off
+    // when the write ends outside this visit.
     c.messages = View.msgTrack(c.messages, ticket, "setting", 0, [],
-      { progress: "Saving " + label + "…", done: done || SettingsView.doneNote(k, value), raw: true })
+      { progress: "Saving " + label + "…", done: record ? note + SettingsView.UNDO_HINT : note, raw: true })
     track(ticket, k, label, record, undoEntry)
   }
 
   // A running write of k (any kind): "saving…" until its ticket ends.
-  // record/undoEntry: write()'s and banWrite()'s (none for a secret). A
-  // write Service refused outright puts its undo entry back.
-  function track(ticket, k, label, record, undoEntry) {
+  // record/undoEntry: write()'s and banWrite()'s (none for a secret);
+  // secret: a Service.setSecret ticket. A write Service refused outright
+  // puts its undo entry back.
+  function track(ticket, k, label, record, undoEntry, secret) {
     if (!(Number(ticket) > 0)) { if (undoEntry) restoreUndo(undoEntry); return }
     var n = ({})
     for (var t in tickets) n[t] = tickets[t]
-    n[String(ticket)] = { key: k, label: label, record: record || null, undo: undoEntry || null, visit: visit }
+    n[String(ticket)] = { key: k, label: label, record: record || null, undo: undoEntry || null, visit: visit, secret: secret === true }
     tickets = n
     setSaving(k, "run")
   }
@@ -358,8 +373,14 @@ QtObject {
     for (var t in tickets) if (t !== String(ticket)) n[t] = tickets[t]
     tickets = n
     var c = client
-    c.messages = View.msgFinish(c.messages, ticket, ok, ok === true ? "" : View.settingFailure(w.label, error))
     var here = settingsView.open && w.visit === visit
+    var hinted = ok === true && !here && w.record && c.messages.tickets && c.messages.tickets[String(ticket)]
+      ? String(c.messages.tickets[String(ticket)].done || "") : ""
+    c.messages = View.msgFinish(c.messages, ticket, ok, ok === true ? "" : View.settingFailure(w.label, error))
+    // Ended after leaving: nothing records it, so the note doesn't offer u.
+    if (hinted !== "" && c.messages.note === hinted && hinted.slice(-SettingsView.UNDO_HINT.length) === SettingsView.UNDO_HINT) {
+      c.note(hinted.slice(0, hinted.length - SettingsView.UNDO_HINT.length), "muted")
+    }
     if (ok === true && here && w.record) undoPending = undoPending.concat([w.record])
     if (ok !== true && here && w.undo) restoreUndo(w.undo)
     if (ok === true && settingsView.open) {
@@ -392,8 +413,15 @@ QtObject {
     undoStack = stack
   }
 
+  // A failed undo write's entry goes back at the depth it was taken from
+  // (entry.at, set by undoWith), under any entry recorded since.
   function restoreUndo(entry) {
-    undoStack = undoStack.concat([entry])
+    var e = ({})
+    for (var f in entry) if (f !== "at") e[f] = entry[f]
+    var stack = undoStack.slice()
+    var at = typeof entry.at === "number" ? Math.max(0, Math.min(entry.at, stack.length)) : stack.length
+    stack.splice(at, 0, e)
+    undoStack = stack
   }
 
   function clearUndo() {
@@ -407,8 +435,10 @@ QtObject {
   // its re-read is still out (the newest entry may be about to change).
   function undo() {
     var c = client
-    if (undoReading) return
+    if (undoReading) { c.note(SettingsView.UNDO_CHECKING, "muted"); return }
     if (undoStack.length === 0) { c.note(SettingsView.UNDO_EMPTY, "muted"); return }
+    // The down screen: nothing shows to undo against.
+    if (settingsView.failed) { c.note(SettingsView.UNDO_DOWN, "muted"); return }
     if (Object.keys(tickets).length > 0 || undoPending.length > 0) { c.note(SettingsView.UNDO_WAIT, "muted"); return }
     if (!c.service || typeof c.service.readPrefs !== "function") return
     undoReading = true
@@ -417,6 +447,8 @@ QtObject {
     c.service.readPrefs(function(res) {
       if (myVisit !== edits.visit || !edits.settingsView.open) return
       edits.undoReading = false
+      // The down screen came up meanwhile: it stays, and the entry too.
+      if (edits.settingsView.failed) return
       if (!res || res.ok !== true || !res.prefs) { edits.client.note(SettingsView.UNDO_READ_FAILED, "urgent"); return }
       // The view shows these too, unless a newer read is already out.
       if (edits.settingsView.readSeq === seq) edits.settingsView.prefs = res.prefs
@@ -433,7 +465,11 @@ QtObject {
     if (c.mode !== "NORMAL") return
     if (Object.keys(tickets).length > 0 || undoPending.length > 0) { c.note(SettingsView.UNDO_WAIT, "muted"); return }
     var stack = undoStack.slice()
-    var e = stack.pop()
+    // at: its depth, should a failed write put it back (restoreUndo).
+    var e = ({})
+    var top = stack.pop()
+    for (var f0 in top) e[f0] = top[f0]
+    e.at = stack.length
     undoStack = stack
     var more = stack.length
     var why = ""

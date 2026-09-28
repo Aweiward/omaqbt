@@ -95,7 +95,9 @@ Item {
   readonly property string editorKind: cursorEditor.kind
   // The list the settings column shows: the open one, or the Banned IPs
   // section's (a preview while the sections have focus); "" for settings.
-  readonly property string listShown: column === "settingsList" ? listKey : (section.list ? String(section.list) : "")
+  // A search (typed or committed) shows its results instead: the keys act
+  // on them.
+  readonly property string listShown: column === "settingsList" ? listKey : (!searching && section.list ? String(section.list) : "")
   readonly property var listItems: listShown !== "" && prefs ? SettingsView.listItems(listShown, prefs[listShown]) : []
   readonly property int listIndex: View.moveIndex(listItems.length, listCursors[listShown] || 0, 0)
   // The line under the list cursor, or null.
@@ -113,12 +115,15 @@ Item {
 
   function openView() {
     open = true
-    // Narrow, the sections are a chip: the settings take the keys.
+    // Narrow, the sections are a chip: what the section shows takes the
+    // keys (the Banned IPs list, or the settings). After the read starts,
+    // which clears a failed read's flag.
     column = narrow ? "settingsKeys" : "settingsSections"
     listKey = ""
     query = ""
     searchIndex = 0
     reload(false)
+    if (narrow) showSection()
   }
 
   function closeView() {
@@ -167,6 +172,9 @@ Item {
     if (!open) return
     if (failed && ["gui", "notInstalled", "daemon", "api", "loading"].indexOf(tableState) === -1) {
       reload(false)
+      // Narrow, a list section's list takes the keys again (openList
+      // refused it under the down screen).
+      if (narrow && column === "settingsKeys" && !searching) showSection()
     } else if (!failed && ["gui", "notInstalled", "daemon", "api"].indexOf(tableState) !== -1) {
       readSeq = readSeq + 1
       error = ""
@@ -207,9 +215,12 @@ Item {
 
   // ---- narrow: the sections overlay (slice 4b, D13) ---------------------------
 
-  // Tab/h/Shift-Tab from the settings: the overlay (the sections column).
+  // Tab/h/Shift-Tab from the settings: the overlay (the sections column),
+  // ending a search as wide h does (leave()).
   function openSections() {
     if (failed) return
+    query = ""
+    searchIndex = 0
     column = "settingsSections"
   }
 
@@ -221,9 +232,11 @@ Item {
     else { listKey = ""; column = "settingsKeys" }
   }
 
-  // The focus handoff when the sections collapse: to what the section shows.
+  // The focus handoff when the sections collapse: to what the section
+  // shows. Under the down screen a list can't open: the settings column
+  // holds the keys until the read is back (onTableStateChanged).
   function showSection() {
-    if (section.list) openList(String(section.list))
+    if (section.list && !failed) openList(String(section.list))
     else { listKey = ""; column = "settingsKeys" }
   }
 

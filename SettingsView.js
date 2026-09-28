@@ -956,6 +956,14 @@ function doneNote(key, value) {
 var UNDO_EMPTY = "Nothing to undo.";
 var UNDO_WAIT = "Wait for the change to save, then undo.";
 var UNDO_READ_FAILED = "Couldn't read the settings; nothing was undone.";
+// u under the down screen, and a second u while the first one's read is out.
+var UNDO_DOWN = "The settings aren't loaded; nothing was undone.";
+var UNDO_CHECKING = "Still checking the last undo.";
+// The done note of a write u can undo ends with this (design state table:
+// "Port set to 51414 · u undoes"; Ruling EJ).
+var UNDO_HINT = " · u undoes";
+// A secret sent while another is still saving (Service runs one at a time).
+var SECRET_BUSY = "Another password is still saving; try again.";
 
 // undoValue(key, prefs) -> what prefs hold for key, as the history keeps
 // it: a time composite as {hour, min}, a list as its whole string (tiers
@@ -1107,6 +1115,10 @@ if (typeof module !== "undefined") {
     UNDO_EMPTY: UNDO_EMPTY,
     UNDO_WAIT: UNDO_WAIT,
     UNDO_READ_FAILED: UNDO_READ_FAILED,
+    UNDO_DOWN: UNDO_DOWN,
+    UNDO_CHECKING: UNDO_CHECKING,
+    UNDO_HINT: UNDO_HINT,
+    SECRET_BUSY: SECRET_BUSY,
     undoValue: undoValue,
     sameStored: sameStored,
     undoWriteValue: undoWriteValue,

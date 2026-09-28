@@ -1076,3 +1076,13 @@ test("4b banHolds: an address as stored (a zone id too) or in QHostAddress's for
   assert.equal(V.banHolds("10.0.0.1", "10.0.0.2"), false);
   assert.equal(V.banHolds("", "10.0.0.1"), false);
 });
+
+// --- Slice 4b final fix wave (window lane) -----------------------------------------------------
+
+test("4b final: the undo and secret notes the window adds", () => {
+  assert.equal(V.UNDO_DOWN, "The settings aren't loaded; nothing was undone.");
+  assert.equal(V.UNDO_CHECKING, "Still checking the last undo.");
+  assert.equal(V.SECRET_BUSY, "Another password is still saving; try again.");
+  // Ruling EJ: the design state table's "Port set to 51414 · u undoes".
+  assert.equal(V.doneNote("dl_limit", 2048) + V.UNDO_HINT, "Download limit set to 2 KiB/s · u undoes");
+});
