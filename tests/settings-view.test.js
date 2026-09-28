@@ -25,6 +25,7 @@ const V = load("SettingsView.js", ["Schema", "Limits"], [Schema, Limits]);
 
 const DUMP = JSON.parse(fs.readFileSync(path.join(__dirname, "fixtures", "preferences-5.2.3.json"), "utf8"));
 const CASES = JSON.parse(fs.readFileSync(path.join(__dirname, "fixtures", "settings-cases.json"), "utf8"));
+const TEXT_RULES_CASES = JSON.parse(fs.readFileSync(path.join(__dirname, "fixtures", "text-rules-cases.json"), "utf8"));
 const SECRETS = ["proxy_password", "dyndns_password", "mail_notification_password", "web_ui_api_key"];
 
 // `qbt prefs` output: the dump with each secret replaced by {set: bool}.
@@ -720,12 +721,15 @@ test("parseInput (DQ): a path must be clean, without //, /./, /../ or a trailing
 test("parseInput (DR): announce_ip takes an IPv4 or IPv6 address, or nothing", () => {
   const msg = "Use an IPv4 or IPv6 address, or leave it empty.";
   assert.equal(V.IP_ERROR, msg);
-  for (const ok of ["", "10.0.0.1", "0.0.0.0", "255.255.255.255", " 10.0.0.1", "10.0.0.1 ", "::", "::1", "2001:db8::1",
+  for (const ok of ["", "10.0.0.1", "0.0.0.0", "255.255.255.255", "::", "::1", "2001:db8::1",
     "2001:DB8:0:0:0:0:0:1", "fe80::1:2:3:4", "::ffff:10.0.0.1", "1:2:3:4:5:6:7:8", "1::", "1:2:3:4:5:6::8", "::2:3:4:5:6:7:8"]) {
     assert.deepEqual(V.parseInput("announce_ip", ok), { value: ok }, JSON.stringify(ok));
   }
+  // Never trimmed: qbt validates the raw argv, so surrounding whitespace is refused,
+  // not silently accepted-and-sent-untrimmed (Ruling DV parity follow-up).
   for (const bad of ["example.com", "10.0.0", "10.0.0.256", "10.0.0.1.2", "010.0.0.1", "1.2.3.-4", "1:2:3:4:5:6:7:8:9", "1::2::3",
-    "12345::", "::g", "fe80::1%eth0", "[::1]", ":1:2:3:4:5:6:7", "1:2:3:4:5:6:7:", "1:2:3:4:5:6:7::8", "::ffff:10.0.0", " ", "10.0.0.1/24"]) {
+    "12345::", "::g", "fe80::1%eth0", "[::1]", ":1:2:3:4:5:6:7", "1:2:3:4:5:6:7:", "1:2:3:4:5:6:7::8", "::ffff:10.0.0", " ", "10.0.0.1/24",
+    " 10.0.0.1", "10.0.0.1 "]) {
     assert.deepEqual(V.parseInput("announce_ip", bad), { error: msg }, JSON.stringify(bad));
   }
   assert.deepEqual(V.parseInput("announce_ip", "10.0.0.1\n"), { error: V.LINE_ERROR });
@@ -739,6 +743,30 @@ test("parseInput (DS): the Web UI username needs 3 characters and no colon", () 
   }
   for (const ok of ["abc", "admin", "ünï", "a b"]) assert.deepEqual(V.parseInput("web_ui_username", ok), { value: ok }, ok);
   assert.deepEqual(V.parseInput("web_ui_username", "abc\n"), { error: V.LINE_ERROR });
+});
+
+// Ruling DV (parity follow-up): one shared case file for announce_ip,
+// web_ui_username and path cleanliness, with qbt as the source of truth.
+// tests/test_prefs.py runs the same file against the real qbt.
+test("parseInput: every case in text-rules-cases.json matches qbt", () => {
+  let n = 0;
+  for (const c of TEXT_RULES_CASES.cases) {
+    n++;
+    const label = c.key + " " + JSON.stringify(c.input) + " (" + c.why + ")";
+    const r = V.parseInput(c.key, c.input);
+    if (c.ok) assert.deepEqual(r, { value: c.input }, label);
+    else assert.deepEqual(r, { error: c.message }, label);
+  }
+  assert.equal(n, TEXT_RULES_CASES.cases.length);
+});
+
+test("Other: future_token, secret and api_key names never show or edit (Ruling DV)", () => {
+  const p = prefs({ future_token: "x", my_app_secret: "y", zz_api_key: "z" });
+  const keys = V.otherRows(p).map((r) => r.key);
+  for (const k of ["future_token", "my_app_secret", "zz_api_key"]) {
+    assert.ok(!keys.includes(k), k + " is refused");
+    assert.deepEqual(V.parseInput(k, "1", p), { error: V.CANT_CHANGE }, k);
+  }
 });
 
 test("Other: a key matching a lock is refused, whatever its case", () => {

@@ -30,7 +30,10 @@
   "*interface*",
   "*password*",
   "*https*",
-  "autorun*"
+  "autorun*",
+  "*token*",
+  "*secret*",
+  "*api_key*"
  ],
  "keys": {
   "torrent_content_layout": {

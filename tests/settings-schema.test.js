@@ -163,7 +163,8 @@ const LOCKED = [
   "web_ui_https_*", "web_ui_host_header_validation_enabled", "web_ui_domain_list",
   "web_ui_reverse_prox*", "alternative_webui_*"
 ];
-const OTHER_REFUSED = ["web_ui_*", "proxy_*", "*interface*", "*password*", "*https*", "autorun*"];
+const OTHER_REFUSED = ["web_ui_*", "proxy_*", "*interface*", "*password*", "*https*", "autorun*",
+  "*token*", "*secret*", "*api_key*"];
 const SECRETS = ["proxy_password", "dyndns_password", "mail_notification_password", "web_ui_api_key"];
 
 // The design's confirm list (design D7, eng D8, D10).

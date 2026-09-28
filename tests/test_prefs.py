@@ -29,6 +29,7 @@ QBT = os.environ.get("QBT_UNDER_TEST", str(ROOT / "qbt"))
 SCHEMA = json.loads((ROOT / "settings-schema.json").read_text())
 DUMP = json.loads((ROOT / "tests" / "fixtures" / "preferences-5.2.3.json").read_text())
 CASES = json.loads((ROOT / "tests" / "fixtures" / "settings-cases.json").read_text())
+TEXT_RULES_CASES = json.loads((ROOT / "tests" / "fixtures" / "text-rules-cases.json").read_text())["cases"]
 UTF8_ENV = {"LANG": "en_US.UTF-8", "LC_ALL": "en_US.UTF-8"}
 C_ENV = {"LANG": "C", "LC_ALL": "C"}
 # Ruling DH: multi-line text is read-only in 4a.
@@ -661,6 +662,40 @@ class UsernameTest(FinalFixCase):
         self.assertEqual(self.post_raw({"web_ui_username": "root"}), 200)
         self.assertEqual(self.state()["web_ui_username"], "root")
         self.assertEqual(self.post_raw({"web_ui_username": "admin"}), 200)
+
+
+class TextRulesCasesTest(FinalFixCase):
+    """Ruling DV (parity follow-up): the shared case file that both qbt and
+    SettingsView.parseInput are checked against, so the window never accepts
+    an announce_ip, web_ui_username or path input qbt then refuses."""
+
+    def test_every_case_matches_qbt(self):
+        seen = 0
+        for case in TEXT_RULES_CASES:
+            seen += 1
+            with self.subTest(key=case["key"], input=case["input"], why=case["why"]):
+                if case["ok"]:
+                    text = case["input"]
+                    if case["key"] == "save_path" and text.startswith("~/"):
+                        want = {"save_path": os.environ["HOME"] + text[1:]}
+                    else:
+                        want = {case["key"]: text}
+                    self.assertEqual(self.set_ok(case["key"], text), want)
+                else:
+                    self.set_refused(case["key"], case["input"], case["message"])
+        self.assertEqual(seen, len(TEXT_RULES_CASES))
+
+
+class OtherRefusedGainsTokenSecretApiKeyTest(PrefsCase):
+    """Ruling DV: PREF_OTHER_REFUSED (and the schema's otherRefusedPatterns)
+    gain *token*, *secret* and *api_key*, case-insensitively, so an unknown
+    key that sounds like one is refused before it's sent, not just redacted
+    on read (RedactionTest)."""
+
+    def test_future_token_and_friends_are_refused(self):
+        for key in ("future_token", "Auth_TOKEN", "client_Secret_x", "my_api_key"):
+            r = self.set_refused(key, "x", "OmaqBT won't change this setting.")
+            self.assertNotIn(SECRET_VALUES[key], r.stderr)
 
 
 class DerivedKeysTest(FinalFixCase):

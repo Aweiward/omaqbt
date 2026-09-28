@@ -2831,7 +2831,10 @@ var OTHER_REFUSED_PATTERNS = [
  "*interface*",
  "*password*",
  "*https*",
- "autorun*"
+ "autorun*",
+ "*token*",
+ "*secret*",
+ "*api_key*"
 ];
 
 // True when key matches any of patterns (globs: * matches any run of

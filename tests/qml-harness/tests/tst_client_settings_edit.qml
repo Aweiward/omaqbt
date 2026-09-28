@@ -288,14 +288,17 @@ TestCase {
   }
 
   function test_text_is_taken_exactly_as_typed() {
-    var o = make()
-    focusKey(o, "announce_ip")
+    // Ruling DV: announce_ip is no longer a good example here, since qbt
+    // (and now the window) refuses it with surrounding whitespace.
+    // app_instance_name has no such rule, so it stays a plain "as typed" case.
+    var o = make(prefs({ app_instance_name: "" }))
+    focusKey(o, "app_instance_name")
     enter(o)
     compare(line(o).inputValue(), "")
-    typeAndEnter(o, " 10.0.0.1")
-    compare(writes(o), [["announce_ip", " 10.0.0.1"]], "never trimmed by the window")
+    typeAndEnter(o, " padded ")
+    compare(writes(o), [["app_instance_name", " padded "]], "never trimmed by the window")
     finish(o, true)
-    compare(status(o), "IP reported to trackers set to  10.0.0.1" + SettingsView.RESTART_NOTE)
+    compare(status(o), "Instance name set to  padded ")
   }
 
   function test_an_other_number_edits_by_its_json_type() {

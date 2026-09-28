@@ -862,8 +862,7 @@ var PREF_SENTENCES = ["Set by OmaqBT's setup.", "OmaqBT needs this as it is.", "
   "OmaqBT doesn't change secrets yet.", "OmaqBT doesn't change this setting.", "OmaqBT doesn't change this setting yet.",
   "Editing multi-line settings arrives in 4b.", "OmaqBT won't change this setting.",
   "OmaqBT can only change on/off, number and text settings.",
-  // Rulings DQ, DR, DS (the backend lane adds them to qbt; the drift test
-  // in tests/client-view.test.js tolerates them until it merges).
+  // Rulings DQ, DR, DS.
   "Use a clean path without //, /./ or /../.", "Use an IPv4 or IPv6 address, or leave it empty.",
   "Use at least 3 characters and no colon."];
 

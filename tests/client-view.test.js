@@ -2322,25 +2322,16 @@ test("palette: Settings is disabled, with a reason, while Settings is open", () 
 
 // PREF_SENTENCES is copied by hand from qbt's pref-set sentences: each must
 // still be in qbt, or a failure would lose its bare sentence.
-// Pending the backend lane (lane-4a-fb, Rulings DQ/DR/DS): qbt gains these
-// three; tolerated while missing. Delete this list once that lane merges.
-const PENDING_BACKEND_SENTENCES = [
-  "Use a clean path without //, /./ or /../.",
-  "Use an IPv4 or IPv6 address, or leave it empty.",
-  "Use at least 3 characters and no colon."
-];
-
 test("PREF_SENTENCES: every sentence is still one qbt says", () => {
   const qbt = fs.readFileSync(path.join(__dirname, "..", "qbt"), "utf8");
   assert.ok(Array.isArray(V.PREF_SENTENCES) && V.PREF_SENTENCES.length > 0);
   assert.equal(new Set(V.PREF_SENTENCES).size, V.PREF_SENTENCES.length, "no duplicates");
-  for (const s of PENDING_BACKEND_SENTENCES) assert.ok(V.PREF_SENTENCES.includes(s), "pending sentence listed: " + s);
-  for (const s of V.PREF_SENTENCES) {
-    if (PENDING_BACKEND_SENTENCES.includes(s) && !qbt.includes(s)) continue;
-    assert.ok(qbt.includes(s), "qbt still says: " + s);
-  }
+  for (const s of V.PREF_SENTENCES) assert.ok(qbt.includes(s), "qbt still says: " + s);
 });
 
-test("settingFailure: qbt's new validation sentences show as they are", () => {
-  for (const s of PENDING_BACKEND_SENTENCES) assert.equal(V.settingFailure("Default save path", s), s);
+test("settingFailure: qbt's validation sentences (Rulings DQ, DR, DS) show as they are", () => {
+  for (const s of ["Use a clean path without //, /./ or /../.", "Use an IPv4 or IPv6 address, or leave it empty.",
+    "Use at least 3 characters and no colon."]) {
+    assert.equal(V.settingFailure("Default save path", s), s);
+  }
 });

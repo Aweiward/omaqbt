@@ -1965,6 +1965,9 @@ PREF_OTHER_REFUSED=(
   '*password*'
   '*https*'
   'autorun*'
+  '*token*'
+  '*secret*'
+  '*api_key*'
 )
 # Printed as {"set": bool}, on top of the schema's secret flags, and never
 # written: web_ui_api_key is read-only in qBittorrent, the rest wait for 4b.

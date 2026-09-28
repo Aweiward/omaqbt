@@ -1,0 +1,31 @@
+{
+  "_doc": "Slice 4a parity follow-up (Ruling DV): the window's SettingsView.parseInput and qbt's pref-set must refuse exactly the same announce_ip, web_ui_username and path-cleanliness inputs, with the same message. qbt is the source of truth these cases were derived from (PREF_CAST_JQ's ipv4/ipv6/clean_path defs and the announce_ip/web_ui_username text-type branch). Read by tests/test_prefs.py (against the real qbt) and by a node test for SettingsView.parseInput. Every case is {key, input, ok, message?, why}; message is present only when ok is false, and is qbt's exact sentence; why is a short human note for a failed assertion's label. The path cases use save_path as their key.",
+  "cases": [
+    { "key": "announce_ip", "input": "", "ok": true, "why": "empty is allowed" },
+    { "key": "announce_ip", "input": "10.0.0.1", "ok": true, "why": "plain IPv4" },
+    { "key": "announce_ip", "input": " 10.0.0.1", "ok": false, "message": "Use an IPv4 or IPv6 address, or leave it empty.", "why": "leading space: qbt never trims announce_ip before validating" },
+    { "key": "announce_ip", "input": "10.0.0.1 ", "ok": false, "message": "Use an IPv4 or IPv6 address, or leave it empty.", "why": "trailing space" },
+    { "key": "announce_ip", "input": "01.2.3.4", "ok": false, "message": "Use an IPv4 or IPv6 address, or leave it empty.", "why": "leading-zero IPv4 octet" },
+    { "key": "announce_ip", "input": "127.1", "ok": false, "message": "Use an IPv4 or IPv6 address, or leave it empty.", "why": "shorthand dotted form, not 4 octets" },
+    { "key": "announce_ip", "input": "fe80::1%eth0", "ok": false, "message": "Use an IPv4 or IPv6 address, or leave it empty.", "why": "IPv6 zone id" },
+    { "key": "announce_ip", "input": "[::1]", "ok": false, "message": "Use an IPv4 or IPv6 address, or leave it empty.", "why": "brackets" },
+    { "key": "announce_ip", "input": "2001:DB8::1", "ok": true, "why": "uppercase IPv6" },
+    { "key": "announce_ip", "input": "::ffff:1.2.3.4", "ok": true, "why": "IPv4-mapped IPv6" },
+
+    { "key": "web_ui_username", "input": "ab", "ok": false, "message": "Use at least 3 characters and no colon.", "why": "2 characters" },
+    { "key": "web_ui_username", "input": "abc", "ok": true, "why": "3 characters" },
+    { "key": "web_ui_username", "input": "a:bc", "ok": false, "message": "Use at least 3 characters and no colon.", "why": "a colon" },
+    { "key": "web_ui_username", "input": " ab ", "ok": true, "why": "surrounding spaces count toward length and aren't trimmed; 4 chars, no colon" },
+
+    { "key": "save_path", "input": "/srv//dl", "ok": false, "message": "Use a clean path without //, /./ or /../.", "why": "//" },
+    { "key": "save_path", "input": "/srv/./dl", "ok": false, "message": "Use a clean path without //, /./ or /../.", "why": "/./" },
+    { "key": "save_path", "input": "/srv/../dl", "ok": false, "message": "Use a clean path without //, /./ or /../.", "why": "/../" },
+    { "key": "save_path", "input": "/srv/dl/.", "ok": false, "message": "Use a clean path without //, /./ or /../.", "why": "trailing /." },
+    { "key": "save_path", "input": "/srv/dl/..", "ok": false, "message": "Use a clean path without //, /./ or /../.", "why": "trailing /.." },
+    { "key": "save_path", "input": "~/a/../b", "ok": false, "message": "Use a clean path without //, /./ or /../.", "why": "~/ with /../" },
+    { "key": "save_path", "input": "/srv/dl", "ok": true, "why": "clean absolute path" },
+    { "key": "save_path", "input": "~/Downloads", "ok": true, "why": "clean ~/ path" },
+    { "key": "save_path", "input": "/srv/.hidden", "ok": true, "why": "a dot-name isn't a /./ segment" },
+    { "key": "save_path", "input": "/srv/x.", "ok": true, "why": "a trailing dot in a name isn't a trailing /." }
+  ]
+}

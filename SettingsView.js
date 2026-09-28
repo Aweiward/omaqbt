@@ -568,14 +568,13 @@ function isIPv6(s) {
 }
 
 // Per-key rules the schema has no field for (Rulings DR, DS), after the
-// type's own parse accepted s. announce_ip is checked trimmed, as
-// qBittorrent trims it, but sent as typed.
+// type's own parse accepted s. qbt validates both announce_ip and
+// web_ui_username on the raw argv, with no trimming, so surrounding
+// whitespace is refused rather than silently accepted-and-sent-untrimmed
+// (Ruling DV parity follow-up).
 function parseByKey(key, s, parsed) {
   if (parsed.error !== undefined) return parsed;
-  if (key === "announce_ip") {
-    var ip = s.trim();
-    if (s !== "" && !(isIPv4(ip) || isIPv6(ip))) return { error: IP_ERROR };
-  }
+  if (key === "announce_ip" && s !== "" && !(isIPv4(s) || isIPv6(s))) return { error: IP_ERROR };
   if (key === "web_ui_username" && (s.length < 3 || s.indexOf(":") !== -1)) return { error: USERNAME_ERROR };
   return parsed;
 }
