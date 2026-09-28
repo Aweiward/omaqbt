@@ -595,11 +595,11 @@ TestCase {
     key(o.c, "c")
     compare(o.c.mode, "NORMAL", "no plugin on: c is blocked")
     compare(o.c.statusMessage.text, "No search plugins yet (P).")
-    sp.plugins = 2
-    sp.enabledPlugins = 0
+    // Task 3: the counts come from the plugin list (qbt search-plugin list).
+    sp.setPlugins([{ name: "a", enabled: false }, { name: "b", enabled: false }])
     key(o.c, "c")
     compare(o.c.statusMessage.text, "All plugins are off (P).")
-    sp.enabledPlugins = 1
+    sp.setPlugins([{ name: "a", enabled: true }, { name: "b", enabled: false }])
     key(o.c, "c")
     compare(o.c.mode, "PICKER")
     verify(sp.pickerOpen)
@@ -625,7 +625,7 @@ TestCase {
   function test_closing_the_window_drops_an_open_category_picker() {
     var o = make()
     openSearch(o)
-    searchPane(o).enabledPlugins = 1
+    searchPane(o).setPlugins([{ name: "a", enabled: true }])
     key(o.c, "c")
     compare(o.c.mode, "PICKER")
     o.c.close()
