@@ -2458,9 +2458,9 @@ test("4b settingsFooterKeys: list and secret rows, the list column, and the narr
   assert.deepEqual(f("settingsSections", "none", { narrow: true }), ["j/k section", "Enter choose", "/ search all", "Esc close"]);
   // Ruling EF: on a list section (Banned IPs) the overlay's Esc leaves Settings.
   assert.deepEqual(f("settingsSections", "none", { narrow: true, listSection: true }), ["j/k section", "Enter choose", "/ search all", "Esc back"]);
-  // W2: the overlay never holds a search (opening it ends one).
-  assert.deepEqual(V.settingsFooterKeys("settingsSections", true, "none", { narrow: true }).map((h) => h.key + " " + h.label),
-    ["j/k section", "Enter choose", "/ search all", "Esc close"]);
+  // W2: opening the overlay ends a search, but one typed from it is live: Esc clears it.
+  assert.deepEqual(V.settingsFooterKeys("settingsSections", true, "none", { narrow: true, listSection: true }).map((h) => h.key + " " + h.label),
+    ["j/k section", "Enter choose", "/ search all", "Esc clear search"]);
   assert.deepEqual(f("settingsList", "none", { listEditable: true, listItem: { index: 0 } }), ["j/k move", "a add", "x remove", "Esc back"]);
   assert.deepEqual(f("settingsList", "none", { listEditable: true, listItem: null }), ["j/k move", "a add", "Esc back"]);
   assert.deepEqual(f("settingsList", "none", {}), ["j/k move", "Esc back"], "saving: nothing to add or remove yet");

@@ -868,10 +868,10 @@ function settingsFooterKeys(column, searching, editor, ctx) {
   }
   if (column === "settingsSections") {
     // Narrow, opening the overlay ends a search (SettingsPane.openSections),
-    // so its Esc never clears one.
+    // but a search typed from the overlay is live until Esc clears it.
     if (c.narrow === true) {
       return [{ key: "j/k", label: "section" }, { key: "Enter", label: "choose" }, { key: "/", label: "search all" },
-        { key: "Esc", label: c.listSection === true ? "back" : "close" }];
+        { key: "Esc", label: searching === true ? "clear search" : c.listSection === true ? "back" : "close" }];
     }
     return [{ key: "j/k", label: "section" }, { key: "l", label: "keys" }, { key: "/", label: "search all" }, esc];
   }
