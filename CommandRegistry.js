@@ -421,7 +421,9 @@ function normalizeState(state) {
     searchPlugin: s.searchPlugin && typeof s.searchPlugin === "object" ? s.searchPlugin : null,
     searchPluginCount: typeof s.searchPluginCount === "number" ? s.searchPluginCount : 0,
     searchEnabledPlugins: typeof s.searchEnabledPlugins === "number" ? s.searchEnabledPlugins : 0,
-    searchPluginsBusy: s.searchPluginsBusy === true
+    searchPluginsBusy: s.searchPluginsBusy === true,
+    // qBittorrent is down and Search shows the api-down screen.
+    searchDown: s.searchDown === true
   };
 }
 
@@ -619,7 +621,8 @@ var SEARCH_REASONS = {
   allOff: "all plugins are off (P)",
   noPlugins: "no search plugins yet (P)",
   noPlugin: "needs a plugin",
-  busy: "wait for the plugin change to finish"
+  busy: "wait for the plugin change to finish",
+  down: "qBittorrent isn't reachable"
 };
 
 // The official plugin list (design D4), which plugin.copyListUrl copies.
@@ -677,7 +680,9 @@ function needsReason(needs, s) {
   // Slice 4b: the row, list or width already shows why; only undo speaks.
   if (needs === "listRow" || needs === "secretSet" || needs === "listEditable" || needs === "listItem" || needs === "narrow") return "";
   if (needs === "undoEntry") return "nothing to undo";
-  // Search (slice 5a). OV8: `/` with every plugin off says so.
+  // Search (slice 5a). Over the api-down screen every Search key is out for
+  // that reason, not for its own. OV8: `/` with every plugin off says so.
+  if (s.searchDown === true && (needs === "searchResult" || needs === "searchPluginOn" || needs === "searchPlugin" || needs === "pluginsIdle")) return SEARCH_REASONS.down;
   if (needs === "searchResult") return SEARCH_REASONS.noResult;
   if (needs === "searchPluginOn") return s.searchPluginCount > 0 ? SEARCH_REASONS.allOff : SEARCH_REASONS.noPlugins;
   if (needs === "searchPlugin" || needs === "pluginsIdle") return s.searchPluginsBusy === true ? SEARCH_REASONS.busy : SEARCH_REASONS.noPlugin;

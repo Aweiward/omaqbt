@@ -1150,6 +1150,7 @@ function dispatchState(regState, pane, state, hasCursorRow, targets, inspector, 
   st.searchPluginCount = typeof se.plugins === "number" ? se.plugins : 0;
   st.searchEnabledPlugins = typeof se.enabledPlugins === "number" ? se.enabledPlugins : 0;
   st.searchPluginsBusy = se.pluginsBusy === true;
+  st.searchDown = se.down === true;
   return st;
 }
 

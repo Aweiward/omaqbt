@@ -202,7 +202,7 @@ Item {
   // leaves; run() refuses the rest).
   readonly property var flags: ({ narrow: search.narrow, result: search.downShown ? null : search.currentResult,
     plugin: search.downShown ? null : search.cursorPlugin, plugins: search.plugins, enabledPlugins: search.downShown ? 0 : search.enabledPlugins,
-    pluginsBusy: search.pluginsBusy, running: search.running, category: search.category })
+    pluginsBusy: search.pluginsBusy, running: search.running, category: search.category, down: search.downShown })
 
   // ---- the down screen (OV4) ----------------------------------------------------------
   readonly property bool downNow: ["gui", "notInstalled", "daemon", "api"].indexOf(tableState) !== -1

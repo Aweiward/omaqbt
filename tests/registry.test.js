@@ -2435,6 +2435,15 @@ test("search: / needs an enabled plugin and says why (OV8); it never sets the mo
   assert.deepEqual([none.commandId, none.blocked], [null, "no search plugins yet (P)"]);
 });
 
+test("search: over the api-down screen a blocked Search key names the down client, not its own need", () => {
+  for (const [key, pane] of [["/", "searchResults"], ["c", "searchPlugins"], ["Enter", "searchResults"]]) {
+    const down = dispatch(state({ pane, searchPluginCount: 3, searchEnabledPlugins: 0, searchDown: true }), evFor(key));
+    assert.deepEqual([down.commandId, down.blocked], [null, "qBittorrent isn't reachable"], key);
+  }
+  const up = dispatch(state({ pane: "searchPlugins", searchPluginCount: 3, searchEnabledPlugins: 0 }), evFor("/"));
+  assert.equal(up.blocked, "all plugins are off (P)", "the down reason only while down");
+});
+
 test("search: the plugin overlay's Space and x need a plugin, and every write waits for a change still running", () => {
   const plugin = Object.assign({}, SEARCH_ON.searchPlugin);
   for (const [label, id] of [["Space", "plugin.toggle"], ["x", "plugin.uninstall"]]) {
@@ -2465,7 +2474,7 @@ test("search: the new needs default unmet, with their reasons", () => {
   assert.equal(Registry.preconditionMet("searchPluginOn", { searchEnabledPlugins: "1" }), false, "a number, never a string");
   assert.equal(Registry.preconditionMet("searchResult", { searchResult: "x" }), false, "an object");
   assert.deepEqual(Registry.SEARCH_REASONS, { noResult: "needs a result", allOff: "all plugins are off (P)", noPlugins: "no search plugins yet (P)",
-    noPlugin: "needs a plugin", busy: "wait for the plugin change to finish" });
+    noPlugin: "needs a plugin", busy: "wait for the plugin change to finish", down: "qBittorrent isn't reachable" });
   assert.equal(Registry.needsReason("searchResult", { searchResult: {} }), "");
 });
 
