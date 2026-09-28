@@ -94,7 +94,7 @@
   "limit_lan_peers": true,
   "limit_tcp_overhead": false,
   "limit_utp_rate": true,
-  "listen_port": 35763,
+  "listen_port": 50505,
   "locale": "en_US",
   "lsd": true,
   "mail_notification_auth_enabled": false,

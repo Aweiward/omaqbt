@@ -744,7 +744,7 @@ class DerivedKeysTest(FinalFixCase):
         self.assertIs(self.state()["max_inactive_seeding_time_enabled"], False)
         self.set_ok("listen_port", "0")
         self.assertIs(self.state()["random_port"], True)
-        self.set_ok("listen_port", "35763")
+        self.set_ok("listen_port", "50505")
         self.assertIs(self.state()["random_port"], False)
 
     def test_writing_a_derived_key_is_the_setter(self):

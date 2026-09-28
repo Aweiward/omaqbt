@@ -107,8 +107,8 @@ test("rows: the row shape", () => {
     "dimmed", "dimmedReason", "group", "help", "key", "label", "locked", "muted", "readOnly",
     "restart", "secret", "section", "text", "typeTag", "value"
   ]);
-  assert.equal(r.value, "35763");
-  assert.equal(r.text, "35763");
+  assert.equal(r.value, "50505");
+  assert.equal(r.text, "50505");
   assert.equal(r.typeTag, "number");
   assert.equal(r.muted, false);
   assert.equal(r.locked, false);
@@ -298,7 +298,7 @@ test("editorFor: toggle, with the next value", () => {
 
 test("editorFor: input with a prefill per type", () => {
   const e = (k, o) => V.editorFor(k, prefs(o));
-  assert.deepEqual(e("listen_port"), { kind: "input", key: "Enter", prefill: "35763" });
+  assert.deepEqual(e("listen_port"), { kind: "input", key: "Enter", prefill: "50505" });
   assert.equal(e("dl_limit").prefill, "u");
   assert.equal(e("alt_dl_limit").prefill, "10K");
   assert.equal(e("alt_dl_limit", { alt_dl_limit: 2097152 }).prefill, "2M");
@@ -506,8 +506,8 @@ test("confirmFor: the D7 and D8 list", () => {
   assert.equal(V.confirmFor("web_ui_upnp", true, false), "");
   assert.equal(V.confirmFor("upnp", false, true), "This maps ports on your router, outside the VPN tunnel.");
   assert.equal(V.confirmFor("upnp", true, false), "");
-  assert.match(V.confirmFor("listen_port", 35763, 51414), /new port/);
-  assert.match(V.confirmFor("listen_port", 35763, 0), /new port/);
+  assert.match(V.confirmFor("listen_port", 50505, 51414), /new port/);
+  assert.match(V.confirmFor("listen_port", 50505, 0), /new port/);
   assert.match(V.confirmFor("proxy_bittorrent", false, true), /outside the VPN tunnel/);
   assert.match(V.confirmFor("proxy_peer_connections", false, true), /outside the VPN tunnel/);
   assert.equal(V.confirmFor("proxy_bittorrent", true, false), "");
@@ -626,7 +626,7 @@ test("SettingsView.js: .pragma library and imports only the schema and LimitsVie
 
 test("currentValue: composites as HH:MM, plain keys as they are, undefined when missing or loading", () => {
   assert.equal(V.currentValue("schedule_from", prefs({ schedule_from_hour: 9, schedule_from_min: 5 })), "09:05");
-  assert.equal(V.currentValue("listen_port", prefs()), 35763);
+  assert.equal(V.currentValue("listen_port", prefs()), 50505);
   assert.equal(V.currentValue("listen_port", null), undefined);
   assert.equal(V.currentValue("nope", prefs()), undefined);
   assert.equal(V.currentValue("schedule_from", prefs({ schedule_from_hour: "9" })), undefined);
