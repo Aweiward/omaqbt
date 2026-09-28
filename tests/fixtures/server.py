@@ -9,7 +9,7 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs, unquote_plus, urlparse
+from urllib.parse import parse_qs, unquote, unquote_plus, urlparse
 
 ROOT = Path(__file__).resolve().parent
 LOG = Path(os.environ["QBT_FIXTURE_LOG"])
@@ -639,6 +639,269 @@ def _set_preferences(body):
     return 200, ""
 
 
+# Slice 5a: qBittorrent 5.2.3's search API (searchcontroller.cpp,
+# searchpluginmanager.cpp, searchhandler.cpp), backed by state the write
+# routes really change. Jobs and plugins are shared by every handler thread,
+# so one lock guards both.
+#
+# A job's shape comes from the control file's "search" object when it
+# starts: {"total": rows (default 3), "rate": rows per second (default: all
+# at once), "finish": seconds until it finishes on its own (default 0; null
+# = never), "rows": explicit result objects (then total = their count)}.
+# Time is time.monotonic() plus the control file's "search_clock" seconds,
+# a fake clock a test moves forward: at 180 s qBittorrent cancels the search
+# process (m_searchTimeout) and the job reads Stopped with what it found.
+# "search_python": "missing" makes start answer 409 the way it does without
+# Python. Each route's faults use _write_fault's key "search_<action>".
+_SEARCH_LOCK = threading.Lock()
+SEARCH_JOBS = {}
+_SEARCH_IDS = [1000]
+MAX_CONCURRENT_SEARCHES = 5
+SEARCH_TIMEOUT = 180
+_SEARCH_CATEGORY_NAMES = {
+    "all": "All categories", "anime": "Anime", "books": "Books", "games": "Games", "movies": "Movies",
+    "music": "Music", "pictures": "Pictures", "software": "Software", "tv": "TV shows",
+}
+
+
+def _search_plugin(name, full_name, version, enabled, url, categories):
+    """One /search/plugins entry as getPluginsInfo builds it: "all" first,
+    then the plugin's categories sorted case-insensitively."""
+    cats = [{"id": "all", "name": _SEARCH_CATEGORY_NAMES["all"]}]
+    cats += [{"id": c, "name": _SEARCH_CATEGORY_NAMES.get(c, "")} for c in sorted(categories, key=str.lower)]
+    return {"name": name, "version": version, "fullName": full_name, "url": url,
+            "supportedCategories": cats, "enabled": enabled}
+
+
+def _default_plugins():
+    return [
+        _search_plugin("piratebay", "The Pirate Bay", "3.3", True, "https://thepiratebay.org",
+                       ["movies", "tv", "music", "software", "games", "books", "anime"]),
+        _search_plugin("eztv", "EZTV", "1.16", False, "https://eztvx.to", ["tv"]),
+    ]
+
+
+SEARCH_PLUGINS = _default_plugins()
+
+
+def _search_now():
+    try:
+        return time.monotonic() + float(_control().get("search_clock") or 0)
+    except (TypeError, ValueError):
+        return time.monotonic()
+
+
+def _qt_int(values):
+    """QString::toInt of a query/form value: 0 when missing or not an int."""
+    text = (values or [""])[0]
+    return int(text) if re.fullmatch(r"[+-]?[0-9]{1,10}", text) else 0
+
+
+def _plugin_version(text):
+    try:
+        return tuple(int(p) for p in str(text).split("."))
+    except ValueError:
+        return ()
+
+
+def _search_row(job, i):
+    """Row i of a generated job: deterministic, so a test can name row k."""
+    if job["rows"] is not None:
+        return job["rows"][i]
+    h = format(i, "040x")
+    return {
+        "fileName": f"{job['pattern']} result {i}",
+        "fileUrl": f"magnet:?xt=urn:btih:{h}&dn=r{i}",
+        "fileSize": 1000 * (i + 1),
+        "nbSeeders": i,
+        "nbLeechers": 1,
+        "engineName": "piratebay",
+        "siteUrl": "https://thepiratebay.org",
+        "descrLink": f"https://thepiratebay.org/t/{i}",
+        "pubDate": 1757894400 + i,
+    }
+
+
+def _search_view(job, now):
+    """(running, rows) at fake time `now`. A job stops at the first of: an
+    explicit stop, its own finish, and the 3-minute cancel; its rows freeze
+    there. Rows only grow."""
+    ends = [SEARCH_TIMEOUT]
+    if job["finish"] is not None:
+        ends.append(job["finish"])
+    if job["stopped_at"] is not None:
+        ends.append(job["stopped_at"] - job["started"])
+    end = min(ends)
+    elapsed = now - job["started"]
+    running = elapsed < end
+    t = elapsed if running else end
+    n = job["total"] if job["rate"] is None else min(job["total"], max(0, int(job["rate"] * t)))
+    return running, [_search_row(job, i) for i in range(n)]
+
+
+def _search_running():
+    now = _search_now()
+    return [j for j in SEARCH_JOBS.values() if _search_view(j, now)[0]]
+
+
+def _search_start(form):
+    """-> (code, body). The Python check comes before the cap, as in
+    startAction."""
+    for key in ("pattern", "category", "plugins"):
+        if key not in form:
+            return 400, b"Missing required parameters"
+    if _control().get("search_python") == "missing":
+        return 409, b"Python must be installed to use the Search Engine."
+    spec = _control().get("search")
+    spec = spec if isinstance(spec, dict) else {}
+    with _SEARCH_LOCK:
+        if len(_search_running()) >= MAX_CONCURRENT_SEARCHES:
+            return 409, b"Unable to create more than 5 concurrent searches."
+        _SEARCH_IDS[0] += 1
+        jid = _SEARCH_IDS[0]
+        rows = spec.get("rows") if isinstance(spec.get("rows"), list) else None
+        SEARCH_JOBS[jid] = {
+            "id": jid,
+            "pattern": form["pattern"][0].strip(),
+            "category": form["category"][0].strip(),
+            "plugins": form["plugins"][0].split("|"),
+            "started": _search_now(),
+            "stopped_at": None,
+            "rows": rows,
+            "total": len(rows) if rows is not None else int(spec.get("total", 3)),
+            "rate": spec.get("rate"),
+            "finish": spec.get("finish", 0),
+        }
+    return 200, json.dumps({"id": jid}).encode()
+
+
+def _search_get(path, query):
+    """GET status / results / plugins -> (code, body)."""
+    q = parse_qs(query, keep_blank_values=True)
+    with _SEARCH_LOCK:
+        if path == "/api/v2/search/plugins":
+            return 200, json.dumps(SEARCH_PLUGINS).encode()
+        now = _search_now()
+        jid = _qt_int(q.get("id"))
+        if path == "/api/v2/search/status":
+            if jid != 0 and jid not in SEARCH_JOBS:
+                return 404, b""
+            ids = list(SEARCH_JOBS) if jid == 0 else [jid]
+            out = []
+            for i in ids:
+                running, rows = _search_view(SEARCH_JOBS[i], now)
+                out.append({"id": i, "status": "Running" if running else "Stopped", "total": len(rows)})
+            return 200, json.dumps(out).encode()
+        if path == "/api/v2/search/results":
+            if "id" not in q:
+                return 400, b"Missing required parameters"
+            job = SEARCH_JOBS.get(jid)
+            if job is None:
+                return 404, b""
+            running, rows = _search_view(job, now)
+            size = len(rows)
+            limit, offset = _qt_int(q.get("limit")), _qt_int(q.get("offset"))
+            if offset > size:
+                return 409, b"Offset is out of range"
+            if offset < 0:
+                offset = size + offset
+            if offset < 0:
+                return 409, b"Offset is out of range"
+            page = rows[offset:] if limit <= 0 else rows[offset:offset + limit]
+            return 200, json.dumps({"status": "Running" if running else "Stopped",
+                                    "results": page, "total": size}).encode()
+    return 404, b""
+
+
+def _search_finish_install(source, spec):
+    """installPlugin's download finishing: the plugin is named after the
+    URL path's file name with its extension dropped, and a version that
+    isn't newer than the installed one is refused silently
+    (installPlugin_impl). No spec = the download failed."""
+    if not isinstance(spec, dict):
+        return
+    name = unquote(posixpath.splitext(posixpath.basename(urlparse(source).path))[0])
+    version = str(spec.get("version", "1.0"))
+    with _SEARCH_LOCK:
+        current = next((p for p in SEARCH_PLUGINS if p["name"] == name), None)
+        if current is not None and not (_plugin_version(current["version"]) < _plugin_version(version)):
+            return
+        if spec.get("broken"):
+            return
+        if current is None:
+            plugin = _search_plugin(name, spec.get("fullName", name), version, True,
+                                    spec.get("url", "https://example.org"), spec.get("categories", ["movies"]))
+        else:
+            # An update keeps the plugin's enabled state (and, in the
+            # fixture, the rest of its entry).
+            plugin = dict(current, version=version)
+        if current is None:
+            SEARCH_PLUGINS.append(plugin)
+        else:
+            SEARCH_PLUGINS[SEARCH_PLUGINS.index(current)] = plugin
+
+
+def _search_post(path, body):
+    """POST start / stop / delete / downloadTorrent and the plugin writes
+    -> (code, body). Unknown ids are 404; plugin writes always answer 200."""
+    form = parse_qs(body, keep_blank_values=True)
+    action = path.rsplit("/", 1)[1]
+    if path == "/api/v2/search/start":
+        return _search_start(form)
+    if action in ("stop", "delete"):
+        if "id" not in form:
+            return 400, b"Missing required parameters"
+        jid = _qt_int(form.get("id"))
+        with _SEARCH_LOCK:
+            job = SEARCH_JOBS.get(jid)
+            if job is None:
+                return 404, b""
+            if action == "delete":
+                del SEARCH_JOBS[jid]
+            elif _search_view(job, _search_now())[0]:
+                job["stopped_at"] = _search_now()
+        return 200, b""
+    if action == "downloadTorrent":
+        if "torrentUrl" not in form or "pluginName" not in form:
+            return 400, b"Missing required parameters"
+        url = form["torrentUrl"][0]
+        if url.lower().startswith("magnet:"):
+            m = re.search(r"xt=urn:btih:([0-9A-Fa-f]{40})", url)
+            if m:
+                h = m.group(1).lower()
+                ADDED.append({"hash": h, "infohash_v1": h, "name": h, "size": 0, "total_size": 0})
+        return 200, b""
+    if action == "installPlugin":
+        if "sources" not in form:
+            return 400, b"Missing required parameters"
+        sources = _control().get("plugin_sources")
+        sources = sources if isinstance(sources, dict) else {}
+        delay = float(_control().get("plugin_install_delay", 0.3))
+        for source in form["sources"][0].split("|"):
+            threading.Timer(delay, _search_finish_install, (source, sources.get(source))).start()
+        return 200, b""
+    if action in ("uninstallPlugin", "enablePlugin"):
+        if "names" not in form or (action == "enablePlugin" and "enable" not in form):
+            return 400, b"Missing required parameters"
+        names = [n.strip() for n in form["names"][0].split("|")]
+        enable = form.get("enable", [""])[0].strip().lower() == "true"
+        with _SEARCH_LOCK:
+            if action == "uninstallPlugin":
+                SEARCH_PLUGINS[:] = [p for p in SEARCH_PLUGINS if p["name"] not in names]
+            else:
+                for p in SEARCH_PLUGINS:
+                    if p["name"] in names:
+                        p["enabled"] = enable
+        return 200, b""
+    if action == "updatePlugins":
+        updates = _control().get("plugin_updates")
+        for name, version in (updates if isinstance(updates, dict) else {}).items():
+            source = f"https://updates.example/{name}.py"
+            threading.Timer(0.2, _search_finish_install, (source, {"version": version})).start()
+        return 200, b""
+    return 404, b""
+
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
         return
@@ -658,7 +921,7 @@ class Handler(BaseHTTPRequestHandler):
         return sid, True
 
     def _send(self, code, body=b"", content_type="application/json", sid=None):
-        if os.environ.get("QBT_FIXTURE_FORBIDDEN") == "1":
+        if os.environ.get("QBT_FIXTURE_FORBIDDEN") == "1" or _control().get("forbidden") is True:
             self.send_response(403)
             self.send_header("Set-Cookie", COOKIE)
             self.end_headers()
@@ -693,6 +956,19 @@ class Handler(BaseHTTPRequestHandler):
             }).encode())
             return
         record("GET", parsed.path, "", parse_qs(parsed.query), self.headers.get("Cookie") or "")
+        if parsed.path.startswith("/api/v2/search/"):
+            fault = _write_fault("search_" + parsed.path.rsplit("/", 1)[1])
+            if fault == "unreadable":
+                self._send(200, b"<html>not json</html>")
+                return
+            if fault == "sleep7":
+                time.sleep(7)
+            elif fault and fault != "noop":
+                self._fault_reply(fault)
+                return
+            code, payload = _search_get(parsed.path, parsed.query)
+            self._send(code, payload, content_type="application/json" if code == 200 else "text/plain")
+            return
         if parsed.path in ("/api/v2/torrents/categories", "/api/v2/torrents/tags"):
             key = parsed.path.rsplit("/", 1)[1]
             fault = _write_fault(key)
@@ -827,7 +1103,33 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         parsed = urlparse(self.path)
         body = self._read()
+        if parsed.path == "/fixture/search-reset":
+            # Test-only and unrecorded: every job gone, and the plugin list
+            # set to the body's JSON list (empty body: the defaults).
+            with _SEARCH_LOCK:
+                SEARCH_JOBS.clear()
+                SEARCH_PLUGINS[:] = json.loads(body) if body else _default_plugins()
+            with _LOG_LOCK:
+                # "<fault>@N" counts from here for the search routes.
+                for key in [k for k in _CALLS if k.startswith("search_")]:
+                    del _CALLS[key]
+            self._send(200, b"")
+            return
         record("POST", parsed.path, body, parse_qs(parsed.query))
+        if parsed.path.startswith("/api/v2/search/"):
+            fault = _write_fault("search_" + parsed.path.rsplit("/", 1)[1])
+            if fault == "noop":
+                self._send(200, b"")
+                return
+            if fault == "unreadable":
+                self._send(200, b"<html>not json</html>")
+                return
+            if fault:
+                self._fault_reply(fault)
+                return
+            code, payload = _search_post(parsed.path, body)
+            self._send(code, payload, content_type="application/json" if code == 200 and payload else "text/plain")
+            return
         if parsed.path == "/api/v2/torrents/add":
             import re
             fault = _control().get("add")
