@@ -278,11 +278,11 @@ class PrefSetOtherTest(PrefsCase):
         self.assertEqual(self.set_ok("future_count", "7"), {"future_count": 7})
         self.assertEqual(self.set_ok("future_ratio", "2.25"), {"future_ratio": 2.25})
         self.assertEqual(self.set_ok("future_ratio", "-0.5"), {"future_ratio": -0.5})
-        for bad in ("seven", "-0", "-0.0", "+1", "1e3", "01.5", "1."):
+        for bad in ("seven", "-0", "-0.0", "+1", "1e3", "01.5", "1.", "1.5\n", "-0\n"):
             self.set_refused("future_ratio", bad, "Use a number.")
         self.assertEqual(self.set_ok("future_ratio", "2.25"), {"future_ratio": 2.25})
         # Ruling DL: an integer stays whole.
-        for bad in ("1.5", "7.0", "-0", "seven", "+1", "007"):
+        for bad in ("1.5", "7.0", "-0", "seven", "+1", "007", "7\n"):
             self.set_refused("future_count", bad, "Use a whole number.")
         self.assertEqual(self.set_ok("future_count", "-3"), {"future_count": -3})
         self.assertEqual(self.set_ok("future_count", "7"), {"future_count": 7})
@@ -365,8 +365,13 @@ class PrefSetFidelityTest(PrefsCase):
         self.assertEqual(self.set_ok("app_instance_name", "-h"), {"app_instance_name": "-h"})
 
     def test_number_shapes(self):
-        for bad in ("-0", "+5", "007", "1e3", " 5", "5 ", "0x10", "٥", "５", "5\n", "99999999999"):
-            self.set_refused("max_connec", bad)
+        for bad in ("-0", "+5", "007", "1e3", " 5", "5 ", "0x10", "٥", "５", "5\n", "5\r", "x\n5", "99999999999"):
+            r = self.set_refused("max_connec", bad, "Use a whole number from 1 to 2147483647, or -1 for unlimited.")
+            self.assertNotIn("settings-schema", r.stderr)
+        # Ruling DN: a trailing newline never slips past the anchors.
+        self.set_refused("listen_port", "5\n", "Use a whole number from 1 to 65535, or 0 for random.")
+        self.set_refused("max_ratio", "1.5\n", "Use a number from 0 to 9998, or -1 for none, with at most 2 decimals.")
+        self.set_refused("encryption", "1\n", "Use one of: 0, 1, 2.")
         self.assertEqual(self.set_ok("max_connec", "2147483647"), {"max_connec": 2147483647})
 
     def test_int_vs_float(self):
@@ -450,7 +455,7 @@ class PrefSetCompositeTest(PrefsCase):
         st = self.state()
         self.assertEqual((st["schedule_from_hour"], st["schedule_from_min"]), (8, 30))
         self.assertEqual(self.set_ok("schedule_to", "23:59"), {"schedule_to_hour": 23, "schedule_to_min": 59})
-        for bad in ("8:30", "24:00", "12:60", "-1:00", "0830", "08:30:00", ""):
+        for bad in ("8:30", "24:00", "12:60", "-1:00", "0830", "08:30:00", "", "08:30\n", "08:30\r", "x\n08:30"):
             self.set_refused("schedule_to", bad, "Use HH:MM, from 00:00 to 23:59.")
 
     def test_members_alone_are_refused(self):
@@ -499,14 +504,23 @@ class PrefSetIgnoredTest(PrefsCase):
 
     def test_read_back_failure_never_leaks_a_secret(self):
         self.control({"preferences": "409state"})
-        for args in (["dht", "--", "true"], ["future_flag", "--", "true"]):
-            r = self.run_qbt("pref-set", *args)
-            self.assertEqual((r.returncode, r.stderr.strip()), (1, "qBittorrent refused it (HTTP 409)"))
-            for secret in SECRET_VALUES.values():
-                self.assertNotIn(secret, r.stdout + r.stderr)
+        # After a POST the write may have applied: "Couldn't confirm", never "refused".
+        before = len(self.log())
+        r = self.run_qbt("pref-set", "dht", "--", "false")
+        self.assertEqual((r.returncode, r.stdout, r.stderr.strip()), (1, "", "Couldn't confirm DHT (HTTP 409)"))
+        self.assertEqual(len(self.posts_since(before)), 1)
+        # Other reads first: a failure there is before any write.
+        before = len(self.log())
+        r2 = self.run_qbt("pref-set", "future_flag", "--", "true")
+        self.assertEqual((r2.returncode, r2.stderr.strip()), (1, "qBittorrent refused it (HTTP 409)"))
+        self.assertEqual(self.posts_since(before), [])
+        for secret in SECRET_VALUES.values():
+            self.assertNotIn(secret, r.stdout + r.stderr + r2.stdout + r2.stderr)
+        self.control({})
+        self.assertIs(self.state()["dht"], False, "the write did apply")
         self.control({"preferences": "unreadable"})
         r = self.run_qbt("pref-set", "dht", "--", "true")
-        self.assertEqual(r.stderr.strip(), "qBittorrent sent something unreadable")
+        self.assertEqual(r.stderr.strip(), "Couldn't confirm DHT (qBittorrent sent something unreadable)")
 
 
 class SecretArgvTest(PrefsCase):
