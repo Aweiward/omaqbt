@@ -65,6 +65,9 @@ Item {
   property var saving: ({})
   property bool pickerOpen: false
   readonly property var picker: pickerLoader.item
+  // Slice 4b (Task 4): entries in this visit's undo history (SettingsCommands
+  // binds it); the footer shows "u undo" while there are any.
+  property int undoCount: 0
 
   property int sectionIndex: 0
   // The settings cursor of each section, by section name.
@@ -767,9 +770,9 @@ Item {
 
     KeyFooter {
       id: keysFooter
-      keys: View.settingsFooterKeys(settings.column === "settingsList" ? "settingsList" : "settingsKeys", settings.searching, settings.editorKind,
+      keys: SettingsView.withUndoKey(View.settingsFooterKeys(settings.column === "settingsList" ? "settingsList" : "settingsKeys", settings.searching, settings.editorKind,
         { narrow: settings.narrow, secretSet: settings.cursorEditor.set === true, listEditable: settings.prefs !== null && !settings.listSaving,
-          listItem: settings.listItem })
+          listItem: settings.listItem }), settings.undoCount)
     }
   }
 

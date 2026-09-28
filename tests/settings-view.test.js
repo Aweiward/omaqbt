@@ -987,3 +987,92 @@ test("4b EC: a stored odd line doesn't block a valid add and comes back unchange
   assert.deepEqual(V.parseListLine("trackerUrl", "http://has space/announce"), { error: "Use an http, https or udp tracker URL." },
     "a new line is still checked");
 });
+
+// --- Slice 4b (Task 4): undo ----------------------------------------------------------------
+
+test("4b undoValue: composites as {hour, min}, lists as their whole string, the rest as stored", () => {
+  const p = prefs({ schedule_from_hour: 8, schedule_from_min: 5, add_trackers: "udp://a/x\n\nhttp://b/y\n", listen_port: 51413 });
+  assert.deepEqual(V.undoValue("schedule_from", p), { hour: 8, min: 5 });
+  assert.equal(V.undoValue("add_trackers", p), "udp://a/x\n\nhttp://b/y\n", "tiers and a trailing empty line exactly");
+  assert.equal(V.undoValue("listen_port", p), 51413);
+  assert.equal(V.undoValue("listen_port", null), undefined);
+  assert.equal(V.undoValue("no_such_key", p), undefined);
+});
+
+test("4b sameStored: composites by member, lists exactly, scalars by equalValue", () => {
+  assert.equal(V.sameStored("schedule_from", { hour: 8, min: 0 }, { hour: 8, min: 0 }), true);
+  assert.equal(V.sameStored("schedule_from", { hour: 8, min: 0 }, { hour: 8, min: 1 }), false);
+  assert.equal(V.sameStored("add_trackers", "a\n\nb", "a\nb"), false, "a tier break counts");
+  assert.equal(V.sameStored("excluded_file_names", "*.exe", "*.exe"), true);
+  assert.equal(V.sameStored("listen_port", 51413, "51413"), true);
+  assert.equal(V.sameStored("up_limit", 0, 10485760), false);
+  assert.equal(V.sameStored("listen_port", undefined, 1), false);
+});
+
+test("4b undoWriteValue / undoShown: a composite writes HH:MM; lists show their summary", () => {
+  assert.equal(V.undoWriteValue("schedule_to", { hour: 7, min: 30 }), "07:30");
+  assert.equal(V.undoWriteValue("listen_port", 51413), 51413);
+  assert.equal(V.undoShown("schedule_to", { hour: 7, min: 30 }), "07:30");
+  assert.equal(V.undoShown("up_limit", 0), "unlimited");
+  assert.equal(V.undoShown("dht", true), "on");
+  assert.equal(V.undoShown("excluded_file_names", ""), "empty");
+  assert.equal(V.undoShown("excluded_file_names", "*.exe\n*.scr"), "2 patterns");
+});
+
+test("4b undoRefusal: the window's own validators on the value to write back", () => {
+  const p = prefs({ scheduler_enabled: true, excluded_file_names_enabled: true, excluded_file_names: "*.exe", add_trackers_enabled: true, add_trackers: "" });
+  assert.equal(V.undoRefusal("listen_port", 51413, p), "");
+  assert.equal(V.undoRefusal("listen_port", 70000, p), "Use a port from 1 to 65535, or 0 for random");
+  assert.equal(V.undoRefusal("up_limit", 10485760, p), "", "a speed is checked as its editor shows it (10M), not as KiB");
+  assert.equal(V.undoRefusal("up_limit", 0, p), "");
+  assert.equal(V.undoRefusal("schedule_from", { hour: 9, min: 0 }, p), "");
+  assert.equal(V.undoRefusal("schedule_from", { hour: 9, min: 0 }, prefs({ scheduler_enabled: false })), "schedule off", "dimmed now");
+  assert.equal(V.undoRefusal("dht", false, p), "");
+  assert.equal(V.undoRefusal("web_ui_port", 8081, p), "This setting can't be changed here", "locked");
+  assert.equal(V.undoRefusal("dyndns_password", { set: true }, prefs({ dyndns_enabled: true })), "This setting can't be changed here", "never a secret");
+});
+
+test("4b undoRefusal (EC): a list checks only the lines of from that aren't stored now", () => {
+  const p = prefs({ excluded_file_names_enabled: true, excluded_file_names: "*.exe\n\n*.scr", add_trackers_enabled: true, add_trackers: "udp://a.example/x" });
+  assert.equal(V.undoRefusal("excluded_file_names", "*.exe\n\n*.scr\n*.bat", p), "", "a stored empty line doesn't refuse");
+  assert.equal(V.undoRefusal("excluded_file_names", "*.exe", prefs({ excluded_file_names_enabled: true, excluded_file_names: "" })), "");
+  assert.equal(V.undoRefusal("excluded_file_names", "*.exe\n", prefs({ excluded_file_names_enabled: true, excluded_file_names: "*.exe" })),
+    "Use a pattern such as *.exe", "an empty entry qbt would refuse as new");
+  assert.equal(V.undoRefusal("add_trackers", "udp://a.example/x\n\nhttp://b.example/y", p), "", "a tier break is fine");
+  assert.equal(V.undoRefusal("add_trackers", "wss://c.example/x", p), "Use an http, https or udp tracker URL");
+});
+
+test("4b undoBanRefusal: an address ban-list add takes; a stored zone id can't come back", () => {
+  assert.equal(V.undoBanRefusal("203.0.113.99"), "");
+  assert.equal(V.undoBanRefusal("2001:db8::1"), "");
+  assert.equal(V.undoBanRefusal("fe80::1%eth0"), "Use an IPv4 or IPv6 address");
+});
+
+test("4b undo notes: back to, already, skipped, banned again, with N more to undo", () => {
+  assert.equal(V.undoDoneNote("listen_port", "Port", 51413, 2), "Port back to 51413 · 2 more to undo");
+  assert.equal(V.undoDoneNote("up_limit", "Upload limit", 0, 0), "Upload limit back to unlimited");
+  assert.equal(V.undoDoneNote("disk_io_type", "Disk IO type", 0, 1).includes(V.RESTART_NOTE + " · 1 more to undo"), true);
+  assert.equal(V.undoSameNote("dht", "DHT", true, 1), "DHT is already on · 1 more to undo");
+  assert.equal(V.undoSkipNote("Port", "Use a port from 1 to 65535.", 0), "Skipped undoing Port: Use a port from 1 to 65535");
+  assert.equal(V.undoBanDoneNote("203.0.113.99", 0), "Banned 203.0.113.99 again");
+  assert.equal(V.undoBanSameNote("203.0.113.99", 3), "203.0.113.99 is already banned · 3 more to undo");
+  assert.deepEqual(V.undoQuestion("Port", "listen_port", 51500, 51413),
+    { line: "Port changed to 51500 since your edit. Set it back to 51413?", accept: "set back" });
+  assert.equal(V.undoQuestion("From", "schedule_from", { hour: 9, min: 0 }, { hour: 8, min: 0 }).line,
+    "From changed to 09:00 since your edit. Set it back to 08:00?");
+});
+
+test("4b withUndoKey: u undo sits before Esc only while there's something to undo", () => {
+  const keys = [{ key: "j/k", label: "move" }, { key: "Esc", label: "back" }];
+  assert.deepEqual(V.withUndoKey(keys, 0), keys);
+  assert.deepEqual(V.withUndoKey(keys, 2), [{ key: "j/k", label: "move" }, { key: "u", label: "undo" }, { key: "Esc", label: "back" }]);
+  assert.equal(keys.length, 2, "the input isn't changed");
+});
+
+test("4b banHolds: an address as stored (a zone id too) or in QHostAddress's form", () => {
+  assert.equal(V.banHolds("fe80::1%eth0\n10.0.0.1", "fe80::1%eth0"), true);
+  assert.equal(V.banHas("fe80::1%eth0\n10.0.0.1", "fe80::1%eth0"), false, "why banHas isn't enough");
+  assert.equal(V.banHolds("2001:DB8::1", "2001:db8::1"), true);
+  assert.equal(V.banHolds("10.0.0.1", "10.0.0.2"), false);
+  assert.equal(V.banHolds("", "10.0.0.1"), false);
+});

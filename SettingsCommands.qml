@@ -34,6 +34,22 @@ import "SettingsView.js" as SettingsView
 // the field to Service.setSecret and the field is emptied at once. It is
 // never kept in a property here: `input` holds only the key. x on a set
 // secret asks first (SettingsView.secretQuestion), then clearSecret.
+//
+// Slice 4b (Task 4): undo (design D3, eng D11/D12). Each write through
+// write() and each unban through banWrite() carries a record of what
+// qBittorrent held before (SettingsView.undoValue of the prefs at the
+// write); once it succeeds and the re-read is in, the record becomes a
+// history entry {key, label, from, to}, or {kind: "ban", ip} for an
+// unban, unless the read-back equals the value before (Ruling EC). Ban
+// adds, secrets (Ruling EH) and undo's own writes record nothing. u
+// (settings.undo) re-reads, then takes the newest entry off: already
+// back: a note; a value the editors would refuse now (undoRefusal, or a
+// ban-list add that would refuse the address): skipped with a note;
+// unchanged since the edit: the write goes out through the same confirm
+// gate as an edit; changed since: one CONFIRM, the "changed since your
+// edit" question with the risky-change reason as its detail. n keeps the
+// current value and the entry is gone, so the next u moves on; a failed
+// undo write puts its entry back. Leaving Settings clears the history.
 QtObject {
   id: edits
 
@@ -54,8 +70,18 @@ QtObject {
   readonly property bool masked: input !== null && input.kind === "secret"
   // An open picker's {key, label, from}, captured at Enter.
   property var pickerCapture: null
-  // ticket -> {key, label}: this window's writes still running.
+  // ticket -> {key, label, record, undo, visit}: this window's writes
+  // still running (record: what the history gets once it succeeds; undo:
+  // the history entry an undo write took off, put back if it fails).
   property var tickets: ({})
+  // This visit's history, newest last (see the header), the records of
+  // writes that succeeded and wait for their re-read, and the visit they
+  // belong to: bumped each time Settings opens or closes.
+  property var undoStack: []
+  property var undoPending: []
+  property int visit: 0
+  // u's re-read is out.
+  property bool undoReading: false
 
   readonly property var picker: settingsView.picker
   readonly property bool pickerOpen: settingsView.pickerOpen
@@ -71,7 +97,7 @@ QtObject {
     var v = settingsView
     if (!v.open) return null
     var out = { key: null, toggle: false, editable: false, listRow: false, secretSet: false, listEditable: false, listItem: null,
-      narrow: v.narrow === true, undoCount: 0, listSection: !!v.section.list }
+      narrow: v.narrow === true, undoCount: undoStack.length, listSection: !!v.section.list }
     if (v.failed) return out
     if (v.column === "settingsList") {
       out.key = v.listKey
@@ -95,7 +121,7 @@ QtObject {
   // The command ids Client.run hands here rather than to ClientCommands.
   function owns(commandId) {
     return ["settings.sections", "settings.sectionsClose", "settings.openList", "settings.clearSecret",
-      "list.down", "list.up", "list.add", "list.remove", "list.back"].indexOf(commandId) !== -1
+      "list.down", "list.up", "list.add", "list.remove", "list.back", "settings.undo"].indexOf(commandId) !== -1
   }
 
   function isSaving(k) {
@@ -121,7 +147,8 @@ QtObject {
     var a = args || ({})
     var k = a.settingKey
     if (commandId === "settings.write") {
-      if (a.confirmed === true && a.key) write(a.key, a.label, a.value)
+      // An undo's CONFIRM carries its done note and its history entry.
+      if (a.confirmed === true && a.key) write(a.key, a.label, a.value, a.done, a.undo)
       return
     }
     if (!v.open) return
@@ -134,6 +161,7 @@ QtObject {
     case "list.add": startListAdd(k); return
     case "list.remove": removeLine(k, a.listItem); return
     case "settings.clearSecret": clearSecret(k, a.confirmed === true); return
+    case "settings.undo": undo(); return
     }
     if (!k || isSaving(k)) return
     var ed = SettingsView.editorFor(k, v.prefs)
@@ -210,13 +238,18 @@ QtObject {
     write(k, SettingsView.listTitle(k), r.value, SettingsView.listDoneNote(k, "remove", item.value))
   }
 
-  function banWrite(op, ip) {
+  // An unban records the list before it (undo re-adds the address); an
+  // add records nothing. undoEntry/done: an undo's re-add and its note.
+  function banWrite(op, ip, undoEntry, done) {
     var c = client
+    var prefs = settingsView.prefs
+    var record = op === "remove" && !undoEntry && prefs
+      ? { kind: "ban", ip: ip, before: String(prefs[SettingsView.BAN_KEY] === undefined ? "" : prefs[SettingsView.BAN_KEY]) } : null
     var ticket = c.service.banList(op, ip, c.opts([]))
     var label = SettingsView.listTitle(SettingsView.BAN_KEY)
     c.messages = View.msgTrack(c.messages, ticket, "setting", 0, [],
-      { progress: (op === "add" ? "Banning " : "Unbanning ") + ip + "…", done: SettingsView.listDoneNote(SettingsView.BAN_KEY, op, ip), raw: true })
-    track(ticket, SettingsView.BAN_KEY, label)
+      { progress: (op === "add" ? "Banning " : "Unbanning ") + ip + "…", done: done || SettingsView.listDoneNote(SettingsView.BAN_KEY, op, ip), raw: true })
+    track(ticket, SettingsView.BAN_KEY, label, record, undoEntry)
   }
 
   // ---- secrets (slice 4b) -----------------------------------------------------------
@@ -291,20 +324,26 @@ QtObject {
   // The one setPref call: qbt pref-set <key> -- <value>, a composite time
   // as its "HH:MM" (qbt splits it), a list as its newline-joined value.
   // done: the note on success (a list's; SettingsView.doneNote otherwise).
-  function write(k, label, value, done) {
+  // undoEntry: the history entry this write undoes (it records nothing);
+  // any other write records the value qBittorrent held before it.
+  function write(k, label, value, done, undoEntry) {
     var c = client
+    var from = undoEntry ? undefined : SettingsView.undoValue(k, settingsView.prefs)
+    var record = from === undefined ? null : { kind: "pref", key: k, label: label, from: from }
     var ticket = c.service.setPref(k, String(value), c.opts([]))
     c.messages = View.msgTrack(c.messages, ticket, "setting", 0, [],
       { progress: "Saving " + label + "…", done: done || SettingsView.doneNote(k, value), raw: true })
-    track(ticket, k, label)
+    track(ticket, k, label, record, undoEntry)
   }
 
   // A running write of k (any kind): "saving…" until its ticket ends.
-  function track(ticket, k, label) {
-    if (!(Number(ticket) > 0)) return
+  // record/undoEntry: write()'s and banWrite()'s (none for a secret). A
+  // write Service refused outright puts its undo entry back.
+  function track(ticket, k, label, record, undoEntry) {
+    if (!(Number(ticket) > 0)) { if (undoEntry) restoreUndo(undoEntry); return }
     var n = ({})
     for (var t in tickets) n[t] = tickets[t]
-    n[String(ticket)] = { key: k, label: label }
+    n[String(ticket)] = { key: k, label: label, record: record || null, undo: undoEntry || null, visit: visit }
     tickets = n
     setSaving(k, "run")
   }
@@ -320,12 +359,115 @@ QtObject {
     tickets = n
     var c = client
     c.messages = View.msgFinish(c.messages, ticket, ok, ok === true ? "" : View.settingFailure(w.label, error))
+    var here = settingsView.open && w.visit === visit
+    if (ok === true && here && w.record) undoPending = undoPending.concat([w.record])
+    if (ok !== true && here && w.undo) restoreUndo(w.undo)
     if (ok === true && settingsView.open) {
       setSaving(w.key, "done")
       settingsView.reload(true)
     } else {
       setSaving(w.key, null)
     }
+  }
+
+  // ---- undo (slice 4b, Task 4) -------------------------------------------------------
+
+  // The re-read after a write is in: each waiting record becomes a history
+  // entry, unless qBittorrent holds what it held before (EC: a no-op).
+  function resolvePending() {
+    var p = settingsView.prefs
+    if (undoPending.length === 0 || !p) return
+    var stack = undoStack.slice()
+    for (var i = 0; i < undoPending.length; i++) {
+      var r = undoPending[i]
+      if (r.kind === "ban") {
+        var now = p[SettingsView.BAN_KEY]
+        if (SettingsView.banHolds(r.before, r.ip) && !SettingsView.banHolds(now, r.ip)) stack.push({ kind: "ban", ip: r.ip })
+        continue
+      }
+      var to = SettingsView.undoValue(r.key, p)
+      if (to !== undefined && !SettingsView.sameStored(r.key, r.from, to)) stack.push({ key: r.key, label: r.label, from: r.from, to: to })
+    }
+    undoPending = []
+    undoStack = stack
+  }
+
+  function restoreUndo(entry) {
+    undoStack = undoStack.concat([entry])
+  }
+
+  function clearUndo() {
+    undoStack = []
+    undoPending = []
+    undoReading = false
+    visit = visit + 1
+  }
+
+  // u: re-reads, then undoWith the fresh values. Nothing while a write or
+  // its re-read is still out (the newest entry may be about to change).
+  function undo() {
+    var c = client
+    if (undoReading) return
+    if (undoStack.length === 0) { c.note(SettingsView.UNDO_EMPTY, "muted"); return }
+    if (Object.keys(tickets).length > 0 || undoPending.length > 0) { c.note(SettingsView.UNDO_WAIT, "muted"); return }
+    if (!c.service || typeof c.service.readPrefs !== "function") return
+    undoReading = true
+    var myVisit = visit
+    var seq = settingsView.readSeq
+    c.service.readPrefs(function(res) {
+      if (myVisit !== edits.visit || !edits.settingsView.open) return
+      edits.undoReading = false
+      if (!res || res.ok !== true || !res.prefs) { edits.client.note(SettingsView.UNDO_READ_FAILED, "urgent"); return }
+      // The view shows these too, unless a newer read is already out.
+      if (edits.settingsView.readSeq === seq) edits.settingsView.prefs = res.prefs
+      edits.undoWith(res.prefs)
+    })
+  }
+
+  // The newest entry against prefs as they are now (see the header).
+  function undoWith(p) {
+    var c = client
+    if (undoStack.length === 0) return
+    // A key pressed while the read was out opened a field, the palette, a
+    // picker or a question: nothing lands over it, and the entry stays.
+    if (c.mode !== "NORMAL") return
+    if (Object.keys(tickets).length > 0 || undoPending.length > 0) { c.note(SettingsView.UNDO_WAIT, "muted"); return }
+    var stack = undoStack.slice()
+    var e = stack.pop()
+    undoStack = stack
+    var more = stack.length
+    var why = ""
+    if (e.kind === "ban") {
+      if (SettingsView.banHolds(p[SettingsView.BAN_KEY], e.ip)) { c.note(SettingsView.undoBanSameNote(e.ip, more), "muted"); return }
+      why = SettingsView.undoBanRefusal(e.ip)
+      if (why !== "") { c.note(SettingsView.undoSkipNote("the unban of " + e.ip, why, more), "urgent"); return }
+      banWrite("add", e.ip, e, SettingsView.undoBanDoneNote(e.ip, more))
+      return
+    }
+    var k = e.key
+    var now = SettingsView.undoValue(k, p)
+    if (SettingsView.sameStored(k, now, e.from)) { c.note(SettingsView.undoSameNote(k, e.label, e.from, more), "muted"); return }
+    why = SettingsView.undoRefusal(k, e.from, p)
+    if (why !== "") { c.note(SettingsView.undoSkipNote(e.label, why, more), "urgent"); return }
+    var target = SettingsView.undoWriteValue(k, e.from)
+    var cur = SettingsView.currentValue(k, p)
+    var done = SettingsView.undoDoneNote(k, e.label, e.from, more)
+    var stale = !SettingsView.sameStored(k, now, e.to)
+    var detail = SettingsView.confirmFor(k, cur, target)
+    if (!stale && detail === "") { write(k, e.label, target, done, e); return }
+    // One CONFIRM: the "changed since" question (or the edit's own), with
+    // the risky-change reason as its detail.
+    var q = stale ? SettingsView.undoQuestion(e.label, k, now, e.from)
+      : View.settingQuestion(e.label, typeof target === "boolean", target, SettingsView.formatValue(k, target))
+    var r = Registry.raiseConfirm(c.regState, "settings.write", "settingConfirm", { key: k, label: e.label, value: target, from: cur, done: done, undo: e })
+    var cf = ({})
+    for (var f in r.confirm) cf[f] = r.confirm[f]
+    cf.line = q.line
+    cf.detail = detail
+    cf.accept = q.accept
+    c.regState = r.state
+    c.confirmHashes = []
+    c.confirm = cf
   }
 
   // ---- INSERT ------------------------------------------------------------------------
@@ -404,6 +546,13 @@ QtObject {
     c.confirm = null
   }
 
+  // SettingsPane's footer shows "u undo" while there's something to undo.
+  property Binding undoCountLink: Binding {
+    target: edits.settingsView
+    property: "undoCount"
+    value: edits.undoStack.length
+  }
+
   // A secret write's end (its own Service signal, not actionFinished).
   property Connections secretLink: Connections {
     target: edits.client.service
@@ -433,12 +582,14 @@ QtObject {
   // a read that fails while qBittorrent is up says so (Ruling DO).
   property Connections viewLink: Connections {
     target: edits.settingsView
-    function onPrefsChanged() { edits.dropDone() }
+    function onPrefsChanged() { edits.dropDone(); edits.resolvePending() }
     // A write still running keeps its mark across a close and reopen.
-    function onOpenChanged() { if (!edits.settingsView.open) edits.dropDone() }
+    // Leaving Settings (or coming back) starts a new history.
+    function onOpenChanged() { if (!edits.settingsView.open) edits.dropDone(); edits.clearUndo() }
     function onFailedChanged() {
       var v = edits.settingsView
-      if (v.failed) edits.dropDone()
+      // A failed re-read: the writes waiting on it record nothing.
+      if (v.failed) { edits.dropDone(); edits.undoPending = [] }
       var line = View.settingsReadNote(edits.client.tableState, v.failed, v.error)
       if (line !== "") edits.client.messages = View.msgError(edits.client.messages, line, [])
     }

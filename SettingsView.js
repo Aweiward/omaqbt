@@ -945,8 +945,182 @@ function doneNote(key, value) {
   return entry && entry.restart ? note + RESTART_NOTE : note;
 }
 
+// --- Slice 4b (Task 4): undo -------------------------------------------------------------------
+//
+// SettingsCommands keeps this visit's history, newest last: {key, label,
+// from, to} with the values qBittorrent held before and after a write
+// (undoValue of each read-back), or {kind: "ban", ip} for an unban (the
+// address as it was stored). Ban adds and secrets are never recorded
+// (Ruling EH), nor a write whose read-back equals the value before (EC).
+
+var UNDO_EMPTY = "Nothing to undo.";
+var UNDO_WAIT = "Wait for the change to save, then undo.";
+var UNDO_READ_FAILED = "Couldn't read the settings; nothing was undone.";
+
+// undoValue(key, prefs) -> what prefs hold for key, as the history keeps
+// it: a time composite as {hour, min}, a list as its whole string (tiers
+// and empty lines exactly), anything else as it is. undefined when prefs
+// lack it.
+function undoValue(key, prefs) {
+  if (!loaded(prefs)) return undefined;
+  var entry = entryOf(key);
+  if (entry && entry.composite) {
+    var h = prefs[entry.composite.hour];
+    var m = prefs[entry.composite.min];
+    if (typeof h !== "number" || typeof m !== "number") return undefined;
+    return { hour: h, min: m };
+  }
+  if (!hasOwn(prefs, key)) return undefined;
+  if (entry && entry.listKind) return textOf(prefs[key]);
+  return prefs[key];
+}
+
+// sameStored(key, a, b) -> whether two undoValues are the same setting:
+// composites by hour and min, lists exactly, the rest by equalValue.
+function sameStored(key, a, b) {
+  if (a === undefined || b === undefined) return a === b;
+  var entry = entryOf(key);
+  if (entry && entry.composite) {
+    return !!a && !!b && typeof a === "object" && typeof b === "object" && a.hour === b.hour && a.min === b.min;
+  }
+  if (entry && entry.listKind) return textOf(a) === textOf(b);
+  return equalValue(key, a, b);
+}
+
+// undoWriteValue(key, v) -> what the write sends for an undoValue: a
+// composite as "HH:MM" (qbt splits it), anything else as it is.
+function undoWriteValue(key, v) {
+  var entry = entryOf(key);
+  if (entry && entry.composite && v && typeof v === "object") return pad2(v.hour) + ":" + pad2(v.min);
+  return v;
+}
+
+// undoShown(key, v) -> an undoValue in words: "08:00", "3 trackers in 2
+// tiers", "unlimited", "on".
+function undoShown(key, v) {
+  var entry = entryOf(key);
+  if (entry && entry.listKind) return listSummary(key, v);
+  return formatValue(key, undoWriteValue(key, v));
+}
+
+function noStop(s) {
+  var t = textOf(s);
+  return t.charAt(t.length - 1) === "." ? t.slice(0, -1) : t;
+}
+
+// undoRefusal(key, from, prefs) -> "" or why writing the undoValue `from`
+// back now would be refused, by the window's own editors and validators
+// (so qbt's parity): a key that can't be edited now (dimmed, locked, gone)
+// says why; a list checks only the lines of from that prefs don't hold
+// now (EC: qbt checks only lines not already stored); anything else goes
+// through parseInput as its editor would prefill it (a speed as "10M",
+// never a bare byte count, which parseSpeed would read as KiB).
+function undoRefusal(key, from, prefs) {
+  var ed = editorFor(key, prefs);
+  if (ed.kind === "none") {
+    if (ed.why === "dimmed") return dimReason(key, prefs);
+    return noStop(CANT_CHANGE);
+  }
+  if (ed.kind === "secret") return noStop(CANT_CHANGE);
+  var entry = entryOf(key);
+  if (ed.kind === "list") {
+    var kind = listKindOf(key);
+    var now = splitList(prefs[key]);
+    var lines = splitList(from);
+    for (var i = 0; i < lines.length; i++) {
+      if (now.indexOf(lines[i]) !== -1) continue;
+      var p = parseListLine(kind, lines[i]);
+      if (p.error !== undefined) return noStop(p.error);
+    }
+    return "";
+  }
+  var text = !entry ? String(from) : entry.composite ? String(undoWriteValue(key, from)) : prefillOf(entry, from);
+  var parsed = parseInput(key, text, prefs);
+  return parsed.error !== undefined ? noStop(parsed.error) : "";
+}
+
+// undoBanRefusal(ip) -> "" or why `qbt ban-list add` would refuse ip (an
+// address stored with a zone id can be unbanned but not added back: ED).
+function undoBanRefusal(ip) {
+  var p = parseListLine("ip", ip);
+  return p.error !== undefined ? noStop(p.error) : "";
+}
+
+function undoMore(more) {
+  var n = Number(more) || 0;
+  return n > 0 ? " · " + n + " more to undo" : "";
+}
+
+// undoQuestion(label, key, now, from) -> {line, accept}: the one confirm
+// when the setting changed since the edit ("Port changed to 51500 since
+// your edit. Set it back to 51413?"). now and from are undoValues.
+function undoQuestion(label, key, now, from) {
+  return {
+    line: String(label) + " changed to " + undoShown(key, now) + " since your edit. Set it back to " + undoShown(key, from) + "?",
+    accept: "set back"
+  };
+}
+
+// undoDoneNote(key, label, from, more) -> "Port back to 51413 · 2 more to
+// undo", with the restart note on restart keys.
+function undoDoneNote(key, label, from, more) {
+  var entry = entryOf(key);
+  var note = String(label) + " back to " + undoShown(key, from);
+  if (entry && entry.restart) note += RESTART_NOTE;
+  return note + undoMore(more);
+}
+
+// undoSameNote(key, label, from, more): the setting already holds from.
+function undoSameNote(key, label, from, more) {
+  return String(label) + " is already " + undoShown(key, from) + undoMore(more);
+}
+
+// undoSkipNote(label, reason, more): from would be refused now.
+function undoSkipNote(label, reason, more) {
+  return "Skipped undoing " + String(label) + ": " + noStop(reason) + undoMore(more);
+}
+
+// banHolds(value, ip) -> whether the ban list holds ip exactly as stored
+// or in QHostAddress's form (banHas alone can't see an address with a
+// zone id, which qBittorrent's own UI can store: Ruling ED).
+function banHolds(value, ip) {
+  var want = textOf(ip);
+  var items = listItems(BAN_KEY, value);
+  for (var i = 0; i < items.length; i++) if (items[i].value === want) return true;
+  return banHas(value, ip);
+}
+
+function undoBanDoneNote(ip, more) { return "Banned " + textOf(ip) + " again" + undoMore(more); }
+function undoBanSameNote(ip, more) { return textOf(ip) + " is already banned" + undoMore(more); }
+
+// withUndoKey(keys, count) -> a footer's keys with "u undo" before the
+// last one (Esc) while there's something to undo.
+function withUndoKey(keys, count) {
+  var k = (keys || []).slice();
+  if (!(Number(count) > 0)) return k;
+  k.splice(Math.max(0, k.length - 1), 0, { key: "u", label: "undo" });
+  return k;
+}
+
 if (typeof module !== "undefined") {
   module.exports = {
+    UNDO_EMPTY: UNDO_EMPTY,
+    UNDO_WAIT: UNDO_WAIT,
+    UNDO_READ_FAILED: UNDO_READ_FAILED,
+    undoValue: undoValue,
+    sameStored: sameStored,
+    undoWriteValue: undoWriteValue,
+    undoShown: undoShown,
+    undoRefusal: undoRefusal,
+    undoBanRefusal: undoBanRefusal,
+    banHolds: banHolds,
+    undoQuestion: undoQuestion,
+    undoDoneNote: undoDoneNote,
+    undoSameNote: undoSameNote,
+    undoSkipNote: undoSkipNote,
+    undoBanDoneNote: undoBanDoneNote,
+    undoBanSameNote: undoBanSameNote,
+    withUndoKey: withUndoKey,
     LOADING: LOADING,
     EMPTY: EMPTY,
     CANT_CHANGE: CANT_CHANGE,
