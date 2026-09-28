@@ -2440,6 +2440,9 @@ test("search: over the api-down screen a blocked Search key names the down clien
     const down = dispatch(state({ pane, searchPluginCount: 3, searchEnabledPlugins: 0, searchDown: true }), evFor(key));
     assert.deepEqual([down.commandId, down.blocked], [null, "qBittorrent isn't reachable"], key);
   }
+  assert.equal(Registry.preconditionMet("pluginsIdle", { searchDown: true }), false, "i and U are out while down, and say why");
+  assert.equal(Registry.needsReason("pluginsIdle", { searchDown: true }), "qBittorrent isn't reachable");
+  assert.equal(Registry.preconditionMet("pluginsIdle", {}), true);
   const up = dispatch(state({ pane: "searchPlugins", searchPluginCount: 3, searchEnabledPlugins: 0 }), evFor("/"));
   assert.equal(up.blocked, "all plugins are off (P)", "the down reason only while down");
 });

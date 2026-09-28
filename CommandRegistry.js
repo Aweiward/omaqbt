@@ -659,7 +659,7 @@ function preconditionMet(needs, s) {
   if (needs === "searchResult") return !!s.searchResult && typeof s.searchResult === "object";
   if (needs === "searchPluginOn") return typeof s.searchEnabledPlugins === "number" && s.searchEnabledPlugins > 0;
   if (needs === "searchPlugin") return !!s.searchPlugin && typeof s.searchPlugin === "object" && s.searchPluginsBusy !== true;
-  if (needs === "pluginsIdle") return s.searchPluginsBusy !== true;
+  if (needs === "pluginsIdle") return s.searchPluginsBusy !== true && s.searchDown !== true;
   if (Object.prototype.hasOwnProperty.call(LIBRARY_NEEDS, needs)) return libraryKind(s, LIBRARY_NEEDS[needs]);
   return true;
 }
