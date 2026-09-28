@@ -247,6 +247,7 @@ Item {
     if (mode === "INSERT" && (inputPurpose === "settingsSearch" || inputPurpose === "settingEdit")) leaveInsert()
     settingsCmds.dropConfirm()
     settingsView.closeView()
+    helpOpen = false
     opened = false
     window.visible = false
     if (service) service.windowOpen = false
@@ -462,8 +463,9 @@ Item {
       helpOpen = false
       return
     }
-    // Esc on an open overlay closes it (no query clear, no Esc Esc).
-    if (View.overlayEscape(ev, regState.mode, layout, keyPane)) { setPane("table"); return }
+    // Esc on an open overlay closes it (no query clear, no Esc Esc). The
+    // torrent pane, not keyPane: a down screen dispatches as the table.
+    if (View.overlayEscape(ev, regState.mode, layout, settingsView.open ? keyPane : pane)) { setPane("table"); return }
     dispatchWith(function(st) { return Registry.dispatch(st, ev) }, ev)
   }
 
@@ -817,7 +819,7 @@ Item {
         anchors.fill: parent
         visible: root.mode === "COMMAND"
         mru: root.paletteMru
-        evalState: View.paletteState(root.tableState, root.cursorIndex >= 0, root.inspectorState, root.pane)
+        evalState: View.paletteState(root.tableState, root.cursorIndex >= 0, root.inspectorState, root.pane, settingsView.open)
         onKeyForwarded: function(event) { root.handleKey(event) }
         onActivated: function(row) { commands.runPaletteRow(row) }
         onDismissed: commands.closePalette()

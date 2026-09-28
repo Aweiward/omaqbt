@@ -51,6 +51,13 @@ var NUMBER_ERROR = "Use a number.";
 var WHOLE_NUMBER_ERROR = "Use a whole number.";
 // Ruling DH: multiline text is read-only in 4a (appended to its help).
 var MULTILINE_NOTE = " Editing multi-line settings arrives in 4b.";
+// A secret the user sets (not the read-only API key) says why it can't yet.
+var SECRET_NOTE = " Editing secrets arrives in 4b.";
+// qbt's own rules for three kinds of value (Rulings DQ, DR, DS), refused
+// here first with the same sentences.
+var CLEAN_PATH_ERROR = "Use a clean path without //, /./ or /../.";
+var IP_ERROR = "Use an IPv4 or IPv6 address, or leave it empty.";
+var USERNAME_ERROR = "Use at least 3 characters and no colon.";
 
 var TYPE_TAGS = {
   bool: "on/off",
@@ -160,6 +167,8 @@ function isSentinel(entry, value) {
 function isOtherKey(key, prefs) {
   if (!loaded(prefs) || !hasOwn(prefs, key) || hasOwn(SCHEMA, key)) return false;
   if (key === "banned_IPs" || key.indexOf("rss_") === 0) return false;
+  // qbt refuses the locks before it reads the schema; any case (Ruling DL).
+  if (Schema.matchesAny(key, Schema.LOCKED) || Schema.matchesAny(key.toLowerCase(), Schema.LOCKED)) return false;
   if (Schema.matchesAny(key.toLowerCase(), Schema.OTHER_REFUSED_PATTERNS)) return false;
   var v = prefs[key];
   if (typeof v === "boolean") return true;
@@ -288,12 +297,13 @@ function makeRow(key, entry, prefs) {
   var tag = entry.locked ? "OmaqBT" : entry.secret ? "secret" : entry.readOnly ? "read-only" :
     entry.multiline ? "multi-line" : (TYPE_TAGS[entry.type] || "text");
   var only4b = !!entry.multiline && !entry.readOnly && !entry.locked && !entry.secret;
+  var secret4b = !!entry.secret && !entry.readOnly && !entry.locked;
   return {
     key: key,
     label: entry.label,
     section: entry.section,
     group: entry.group,
-    help: only4b ? entry.help + MULTILINE_NOTE : entry.help,
+    help: only4b ? entry.help + MULTILINE_NOTE : secret4b ? entry.help + SECRET_NOTE : entry.help,
     value: value,
     text: text,
     typeTag: tag,
@@ -515,8 +525,59 @@ function parseTime(s) {
 function parsePath(entry, s) {
   if (/[\r\n]/.test(s)) return { error: LINE_ERROR };
   if (s === "") return entry.sentinels && hasOwn(entry.sentinels, "") ? { value: "" } : { error: PATH_ERROR };
-  if (s.charAt(0) === "/" || s.indexOf("~/") === 0) return { value: s };
-  return { error: PATH_ERROR };
+  if (s.charAt(0) !== "/" && s.indexOf("~/") !== 0) return { error: PATH_ERROR };
+  // qBittorrent cleans a path (Ruling DQ), so an unclean one would read back
+  // as something else: //, /./, /../ anywhere, or a trailing /. or /..
+  if (/\/\/|\/\.\.?(\/|$)/.test(s)) return { error: CLEAN_PATH_ERROR };
+  return { value: s };
+}
+
+// A dotted IPv4 address: four decimal parts 0-255, no leading zeros.
+function isIPv4(s) {
+  var parts = s.split(".");
+  if (parts.length !== 4) return false;
+  for (var i = 0; i < parts.length; i++) {
+    if (!/^(0|[1-9][0-9]{0,2})$/.test(parts[i]) || Number(parts[i]) > 255) return false;
+  }
+  return true;
+}
+
+// An IPv6 address: eight groups of 1-4 hex digits, one "::" standing for
+// one or more zero groups, and a dotted IPv4 tail counting as two groups.
+// No zone (%eth0), no brackets, no prefix length.
+function isIPv6(s) {
+  var halves = s.split("::");
+  if (halves.length > 2) return false;
+  var groups = 0;
+  for (var h = 0; h < halves.length; h++) {
+    if (halves[h] === "") continue;
+    var parts = halves[h].split(":");
+    for (var i = 0; i < parts.length; i++) {
+      var last = h === halves.length - 1 && i === parts.length - 1;
+      if (last && parts[i].indexOf(".") !== -1) {
+        if (!isIPv4(parts[i])) return false;
+        groups += 2;
+      } else if (/^[0-9A-Fa-f]{1,4}$/.test(parts[i])) {
+        groups += 1;
+      } else {
+        return false;
+      }
+    }
+  }
+  return halves.length === 2 ? groups <= 7 : groups === 8;
+}
+
+// Per-key rules the schema has no field for (Rulings DR, DS), after the
+// type's own parse accepted s. announce_ip is checked trimmed, as
+// qBittorrent trims it, but sent as typed.
+function parseByKey(key, s, parsed) {
+  if (parsed.error !== undefined) return parsed;
+  if (key === "announce_ip") {
+    var ip = s.trim();
+    if (s !== "" && !(isIPv4(ip) || isIPv6(ip))) return { error: IP_ERROR };
+  }
+  if (key === "web_ui_username" && (s.length < 3 || s.indexOf(":") !== -1)) return { error: USERNAME_ERROR };
+  return parsed;
 }
 
 function parseChoice(entry, s) {
@@ -548,8 +609,12 @@ function parseInput(key, text, prefs) {
     var t = otherType(prefs[key]);
     if (t === "bool") return parseBool(s);
     // An integer's key takes whole numbers only, never "-0" (Ruling DL).
-    if (t === "integer") return /^-?[1-9][0-9]*$|^0$/.test(s) ? { value: Number(s) } : { error: WHOLE_NUMBER_ERROR };
-    if (t === "number") return /^-?(0|[1-9][0-9]*)(\.[0-9]+)?$/.test(s) ? { value: Number(s) } : { error: NUMBER_ERROR };
+    // qbt's limits: at most 10 integer digits and 6 decimals, no exponent,
+    // no "-0" or "-0.0".
+    if (t === "integer") return /^(0|-?[1-9][0-9]{0,9})$/.test(s) ? { value: Number(s) } : { error: WHOLE_NUMBER_ERROR };
+    if (t === "number") {
+      return /^-?(0|[1-9][0-9]{0,9})(\.[0-9]{1,6})?$/.test(s) && !/^-0(\.0+)?$/.test(s) ? { value: Number(s) } : { error: NUMBER_ERROR };
+    }
     return /[\r\n]/.test(s) ? { error: LINE_ERROR } : { value: s };
   }
   if (!isVisible(entry) || entry.locked || entry.readOnly || entry.secret || entry.multiline) return { error: CANT_CHANGE };
@@ -562,7 +627,7 @@ function parseInput(key, text, prefs) {
     case "choice-string": return parseChoice(entry, s);
     case "time": return parseTime(s);
     case "path": return parsePath(entry, s);
-    default: return /[\r\n]/.test(s) ? { error: LINE_ERROR } : { value: s };
+    default: return parseByKey(key, s, /[\r\n]/.test(s) ? { error: LINE_ERROR } : { value: s });
   }
 }
 
@@ -634,6 +699,10 @@ if (typeof module !== "undefined") {
     NUMBER_ERROR: NUMBER_ERROR,
     WHOLE_NUMBER_ERROR: WHOLE_NUMBER_ERROR,
     MULTILINE_NOTE: MULTILINE_NOTE,
+    SECRET_NOTE: SECRET_NOTE,
+    CLEAN_PATH_ERROR: CLEAN_PATH_ERROR,
+    IP_ERROR: IP_ERROR,
+    USERNAME_ERROR: USERNAME_ERROR,
     sections: sections,
     rows: rows,
     rowFor: rowFor,

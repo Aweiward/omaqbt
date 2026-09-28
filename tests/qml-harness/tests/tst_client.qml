@@ -707,6 +707,16 @@ TestCase {
     compare(o.c.inspectorTab, "info")
   }
 
+  function test_closing_the_window_closes_help() {
+    var o = make()
+    key(o.c, "?", 0x3f, 0x02000000)
+    compare(o.c.helpOpen, true)
+    o.c.close()
+    compare(o.c.helpOpen, false)
+    o.c.open("")
+    compare(o.c.helpOpen, false, "reopening lands on the torrents, not the old help")
+  }
+
   function test_help_overlay() {
     var o = make()
     o.svc.torrents = list3()
@@ -1210,6 +1220,26 @@ TestCase {
     o.c.setPane("filters")
     compare(o.c.mode, "NORMAL", "a pane change leaves VISUAL")
     compare(paneTitled(o.c, "Filters").visible, true)
+  }
+
+  // A down screen or the empty library dispatches keys as the table, but
+  // Esc still closes the overlay Tab opened (not an Esc Esc sequence).
+  function test_narrow_esc_closes_the_overlay_on_api_down_and_empty() {
+    var states = ["api", "empty"]
+    for (var i = 0; i < states.length; i++) {
+      var o = narrow(850)
+      if (states[i] === "api") o.svc.api = false
+      else o.svc.torrents = []
+      compare(o.c.tableState, states[i])
+      var inspector = paneTitled(o.c, "Inspector")
+      tab(o.c)
+      compare(o.c.pane, "inspector", states[i] + ": Tab opens the inspector overlay")
+      compare(inspector.visible, true)
+      esc(o.c)
+      compare(o.c.pane, "table", states[i] + ": Esc closes it")
+      compare(inspector.visible, false)
+      compare(o.c.regState.prefix, null, states[i] + ": no Esc Esc is pending")
+    }
   }
 
   function test_narrow_filter_chip() {

@@ -835,7 +835,8 @@ function modeHints(mode, ctx) {
 var SETTINGS_EDITOR_KEYS = { toggle: { key: "Space", label: "toggle" }, input: { key: "Enter", label: "edit" }, picker: { key: "Enter", label: "choose" } };
 function settingsFooterKeys(column, searching, editor) {
   if (column === "settingsSections") {
-    return [{ key: "j/k", label: "section" }, { key: "l", label: "keys" }, { key: "/", label: "search all" }, { key: "Esc", label: "back" }];
+    return [{ key: "j/k", label: "section" }, { key: "l", label: "keys" }, { key: "/", label: "search all" },
+      { key: "Esc", label: searching === true ? "clear search" : "back" }];
   }
   var out = [{ key: "j/k", label: "move" }];
   if (Object.prototype.hasOwnProperty.call(SETTINGS_EDITOR_KEYS, editor)) out.push(SETTINGS_EDITOR_KEYS[editor]);
@@ -860,7 +861,11 @@ function settingQuestion(label, isBool, value, shown) {
 var PREF_SENTENCES = ["Set by OmaqBT's setup.", "OmaqBT needs this as it is.", "qBittorrent doesn't let this be changed.",
   "OmaqBT doesn't change secrets yet.", "OmaqBT doesn't change this setting.", "OmaqBT doesn't change this setting yet.",
   "Editing multi-line settings arrives in 4b.", "OmaqBT won't change this setting.",
-  "OmaqBT can only change on/off, number and text settings."];
+  "OmaqBT can only change on/off, number and text settings.",
+  // Rulings DQ, DR, DS (the backend lane adds them to qbt; the drift test
+  // in tests/client-view.test.js tolerates them until it merges).
+  "Use a clean path without //, /./ or /../.", "Use an IPv4 or IPv6 address, or leave it empty.",
+  "Use at least 3 characters and no colon."];
 
 // settingFailure(label, error) -> the status line after a failed write:
 // qbt's sentence as it is ("qBittorrent ignored DHT", "Couldn't confirm DHT
@@ -1906,6 +1911,10 @@ function paletteRowFrom(entry, state, indices) {
   } else if (!Registry.preconditionMet(entry.needs, state)) {
     enabled = false;
     reason = Registry.needsReason(entry.needs, state);
+  } else if (entry.id === "settings.open" && state && state.settingsOpen === true) {
+    // ":Settings" from Settings would only close and reopen it.
+    enabled = false;
+    reason = "already open";
   } else if (entry.id === "file.cycle" && (entry.tabs || []).indexOf("files") !== -1 && state.cursorNoMetadata === true) {
     // A no-metadata torrent has no files: Space there is Start download
     // (Deviation 3), which this row's title doesn't say.
@@ -2006,8 +2015,11 @@ function paletteRows(query, commands, mru, state) {
 // the table would; one that only runs in `pane` (the pane the palette was
 // opened from, "table" when omitted) is evaluated there, with the
 // inspector's fields (inspectorDispatch) so its reason can name the tab.
-function paletteState(tableState, hasCursorRow, inspector, pane) {
-  return dispatchState({ mode: "NORMAL" }, pane || "table", tableState, hasCursorRow, [], inspector);
+// settingsOpen: the Settings view is showing (":Settings" is disabled).
+function paletteState(tableState, hasCursorRow, inspector, pane, settingsOpen) {
+  var st = dispatchState({ mode: "NORMAL" }, pane || "table", tableState, hasCursorRow, [], inspector);
+  st.settingsOpen = settingsOpen === true;
+  return st;
 }
 
 // paletteSegments(title, indices) -> the title split into runs of
@@ -2230,6 +2242,7 @@ if (typeof module !== "undefined" && module.exports) {
     settingsFooterKeys: settingsFooterKeys,
     settingQuestion: settingQuestion,
     settingFailure: settingFailure,
+    PREF_SENTENCES: PREF_SENTENCES,
     settingsReadNote: settingsReadNote,
     settingsSectionStep: settingsSectionStep,
     settingsDownCopy: settingsDownCopy,
