@@ -510,7 +510,9 @@ Item {
   // Maps a command id from CommandRegistry to Service calls and view
   // changes (ClientCommands). Kept here for handleKey and the harness.
   function run(commandId, args, ev, targets) {
-    commands.run(commandId, args, ev, targets)
+    // Slice 4b: the list editor, secrets and narrow rows are SettingsCommands'.
+    if (settingsCmds.owns(commandId)) settingsCmds.run(commandId, args)
+    else commands.run(commandId, args, ev, targets)
   }
 
   // ---- wiring ----------------------------------------------------------------
@@ -762,6 +764,7 @@ Item {
         anchors.fill: panes
         service: root.service
         tableState: root.tableState
+        narrow: View.settingsNarrow(keyRoot.width)
       }
       StatusLine {
         id: statusLine
@@ -783,14 +786,14 @@ Item {
         inputPurpose: root.inputPurpose
         inputShown: commands.inputShown
         filterChip: View.filterChip(root.layout, root.filter)
-        hints: View.modeHints(root.mode, {
+        hints: View.modeHints(root.mode, View.copyState(settingsCmds.flags() || ({}), {
           accept: root.confirm ? View.confirmLine(root.confirm).accept : "",
           purpose: root.inputPurpose,
           pane: root.keyPane,
           searching: settingsView.searching,
           editor: settingsView.editorKind,
           filesTab: root.inspectorTab === "files" && !root.infoTab.noMeta
-        })
+        }))
 
         onInputEdited: function(text) {
           if (root.mode === "INSERT" && root.inputPurpose === "settingsSearch") settingsView.setSearch(text)
@@ -805,7 +808,7 @@ Item {
       HelpOverlay {
         anchors.fill: parent
         visible: root.helpOpen
-        groups: root.helpOpen ? View.helpRows(Registry.helpFor("NORMAL", root.helpPane, root.inspectorTab, root.inspectorNow)) : []
+        groups: root.helpOpen ? View.helpRows(Registry.helpFor("NORMAL", root.helpPane, root.inspectorTab, root.registryState([]))) : []
         mode: "NORMAL"
         paneName: Registry.isSettingsPane(root.helpPane) ? "settings" : root.helpPane
         onDismissed: {
@@ -819,7 +822,8 @@ Item {
         anchors.fill: parent
         visible: root.mode === "COMMAND"
         mru: root.paletteMru
-        evalState: View.paletteState(root.tableState, root.cursorIndex >= 0, root.inspectorState, root.pane, settingsView.open)
+        evalState: View.paletteState(root.tableState, root.cursorIndex >= 0, root.inspectorState, root.pane, settingsView.open,
+          settingsCmds.flags(), root.keyPane)
         onKeyForwarded: function(event) { root.handleKey(event) }
         onActivated: function(row) { commands.runPaletteRow(row) }
         onDismissed: commands.closePalette()

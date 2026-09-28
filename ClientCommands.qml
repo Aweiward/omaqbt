@@ -906,9 +906,11 @@ QtObject {
     closePalette()
     // From Settings, only : and ? run there; anything else runs on the
     // torrents, so Settings makes way first.
-    if (settingsView.open && !Registry.isSettingsPane(View.palettePane(Registry.commands, row.id, c.keyPane))) settingsView.closeView()
+    var inSettings = settingsView.open && Registry.isSettingsPane(View.palettePane(Registry.commands, row.id, c.keyPane))
+    if (settingsView.open && !inSettings) settingsView.closeView()
     c.paletteMru = View.mruPush(c.paletteMru, row.id)
-    c.setPane(View.palettePane(Registry.commands, row.id, c.pane))
+    // A Settings row runs in Settings: the torrent pane underneath stays.
+    if (!inSettings) c.setPane(View.palettePane(Registry.commands, row.id, c.pane))
     c.saveView()
     // A neutral event: the Enter that ran the palette must not also count
     // as Enter for the command (Files would start the daemon).

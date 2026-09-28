@@ -18,11 +18,17 @@
 // every row shows "—" and nothing is editable. Once prefs are loaded, a
 // schema key they lack (an older qBittorrent) isn't shown.
 //
-// 4a scope (eng D1): secrets show "set"/"not set" and aren't editable,
-// banned_IPs and rss_* never show, and done notes carry no "u undoes".
-// Multiline text (excluded_file_names, add_trackers,
-// bypass_auth_subnet_whitelist, web_ui_custom_http_headers) is read-only
-// until 4b (Ruling DH): tagged "multi-line", no editor, refused by parseInput.
+// Secrets show "set"/"not set" and never a value. Slice 4b (Task 3): the
+// three secretWritable secrets edit through a masked field (editorFor kind
+// "secret"; parseListLine("secret", ...) checks it); a dimmed one doesn't
+// (Ruling EB). rss_* never show; banned_IPs is its own section (a list).
+// The list keys (the schema's listKind: add_trackers, excluded_file_names,
+// banned_IPs) are edited a line at a time in the list editor: listItems
+// splits a value, listWithAdded / listWithout build the new value so every
+// untouched line round-trips exactly, parseListLine checks a typed line
+// (tests/fixtures/list-rules-cases.json's rules and messages). The other
+// multiline keys (the login-bypass whitelist, the custom headers) are
+// read-only or locked and show their first line plus " (+N more)".
 //
 // Speeds (Ruling DE): qBittorrent keeps global limits in whole KiB, so a
 // parsed speed on a step-1024 key is rounded to the NEAREST whole KiB,
@@ -49,10 +55,41 @@ var CHOICE_ERROR = "Choose one of the listed values.";
 var BOOL_ERROR = "Use true or false.";
 var NUMBER_ERROR = "Use a number.";
 var WHOLE_NUMBER_ERROR = "Use a whole number.";
-// Ruling DH: multiline text is read-only in 4a (appended to its help).
-var MULTILINE_NOTE = " Editing multi-line settings arrives in 4b.";
-// A secret the user sets (not the read-only API key) says why it can't yet.
-var SECRET_NOTE = " Editing secrets arrives in 4b.";
+// Slice 4b: the list editor and the secret field (list-rules-cases.json's
+// messages, exactly: qbt refuses the same lines with the same sentences).
+var LIST_ERRORS = {
+  ip: "Use an IPv4 or IPv6 address.",
+  trackerUrl: "Use an http, https or udp tracker URL.",
+  patternEmpty: "Use a pattern such as *.exe.",
+  patternLine: "Keep each pattern to one line.",
+  secretEmpty: "Type a value, or use --clear.",
+  secretLine: "Keep it to one line.",
+  secretNul: "Use a value without NUL characters.",
+  secretLong: "Use at most 1024 characters."
+};
+var SECRET_MAX = 1024;
+var TRACKER_URL_MAX = 2048;
+var BANNED = "Banned IPs";
+var BAN_KEY = "banned_IPs";
+var TIER_BREAK_TEXT = "— next tier —";
+var EMPTY_LINE_TEXT = "(empty line)";
+var LIST_EMPTY = {
+  banned_IPs: "No banned IPs. Ban a peer with b on the Peers tab, or a to add one here.",
+  add_trackers: "No trackers to add. Press a to add a tracker URL.",
+  excluded_file_names: "No excluded file names. Press a to add a pattern such as *.exe."
+};
+var LIST_PROMPTS = {
+  banned_IPs: "Ban an IP address",
+  add_trackers: "Add a tracker URL (empty: next tier)",
+  excluded_file_names: "Add a file name pattern"
+};
+// What a secret is called in its confirm and done note (the schema's
+// labels are short: dyndns_password's is "Password").
+var SECRET_NAMES = {
+  proxy_password: "proxy password",
+  dyndns_password: "dynamic DNS password",
+  mail_notification_password: "SMTP password"
+};
 // qbt's own rules for three kinds of value (Rulings DQ, DR, DS), refused
 // here first with the same sentences.
 var CLEAN_PATH_ERROR = "Use a clean path without //, /./ or /../.";
@@ -266,6 +303,7 @@ function formatValue(key, value) {
   }
   var s = String(value);
   if (s === "") return EMPTY;
+  if (entry.listKind) return listSummary(key, s);
   if (entry.multiline) {
     var lines = s.split("\n");
     if (lines.length > 1) return lines[0] + " (+" + (lines.length - 1) + " more)";
@@ -292,24 +330,22 @@ function makeRow(key, entry, prefs) {
   var reason = isLoading || entry.locked ? "" : dimReason(key, prefs);
   var text = value;
   if (reason !== "") text = value === EMPTY ? "(" + reason + ")" : value + " (" + reason + ")";
-  // add_trackers_url_list is read-only for good ("read-only"); the other
-  // multiline keys only until 4b ("multi-line", with MULTILINE_NOTE).
+  // A list key opens the list editor ("list"); a multiline key that isn't
+  // one is read-only (the whitelist, D9) or locked (the headers, D8).
   var tag = entry.locked ? "OmaqBT" : entry.secret ? "secret" : entry.readOnly ? "read-only" :
-    entry.multiline ? "multi-line" : (TYPE_TAGS[entry.type] || "text");
-  var only4b = !!entry.multiline && !entry.readOnly && !entry.locked && !entry.secret;
-  var secret4b = !!entry.secret && !entry.readOnly && !entry.locked;
+    entry.listKind ? "list" : (TYPE_TAGS[entry.type] || "text");
   return {
     key: key,
     label: entry.label,
     section: entry.section,
     group: entry.group,
-    help: only4b ? entry.help + MULTILINE_NOTE : secret4b ? entry.help + SECRET_NOTE : entry.help,
+    help: entry.help,
     value: value,
     text: text,
     typeTag: tag,
     muted: isLoading || !!entry.locked || reason !== "" || isMutedValue(entry, raw),
     locked: !!entry.locked,
-    readOnly: !!entry.readOnly || only4b,
+    readOnly: !!entry.readOnly,
     secret: !!entry.secret,
     restart: !!entry.restart,
     dimmed: reason !== "",
@@ -383,13 +419,18 @@ function rowFor(key, prefs) {
   return o.length ? o[0] : null;
 }
 
-// sections(prefs) -> [{name, label, count, dimmed}]: the seven schema
-// sections, then "Other" when it has rows, then a dimmed "RSS · slice 5"
+// sections(prefs) -> [{name, label, count, dimmed, list?}]: the seven
+// schema sections, "Banned IPs" (a list section: list is "banned_IPs", its
+// count the bans, its column the list editor; absent when loaded prefs lack
+// the key), then "Other" when it has rows, then a dimmed "RSS · slice 5"
 // with count 0.
 function sections(prefs) {
   var out = SECTIONS.map(function (s) {
     return { name: s, label: s, count: rows(s, prefs).length, dimmed: false };
   });
+  if (!loaded(prefs) || hasOwn(prefs, BAN_KEY)) {
+    out.push({ name: BANNED, label: BANNED, count: listItems(BAN_KEY, loaded(prefs) ? prefs[BAN_KEY] : "").length, dimmed: false, list: BAN_KEY });
+  }
   var other = otherRows(prefs).length;
   if (other > 0) out.push({ name: OTHER, label: OTHER, count: other, dimmed: false });
   out.push({ name: "RSS", label: RSS_LABEL, count: 0, dimmed: true });
@@ -437,9 +478,11 @@ function prefillOf(entry, value) {
 //   {kind: "toggle", key: "Space", next}           the flipped boolean
 //   {kind: "input", key: "Enter", prefill}
 //   {kind: "picker", key: "Enter", choices: [{value, label, current}]}
+//   {kind: "list", key: "Enter"}                    the list editor (4b)
+//   {kind: "secret", key: "Enter", set}             the masked field (4b)
 //   {kind: "none", why}  why: "loading", "hidden" (hidden or deferred),
-//                        "unknown", "locked", "secret", "readOnly",
-//                        "multiline" (until 4b, Ruling DH), "dimmed"
+//                        "unknown", "locked", "secret" (not writable),
+//                        "readOnly", "dimmed"
 // Other keys edit by their JSON type (a boolean toggles, the rest input).
 function editorFor(key, prefs) {
   if (!loaded(prefs)) return { kind: "none", why: "loading" };
@@ -453,11 +496,13 @@ function editorFor(key, prefs) {
   if (!isVisible(entry)) return { kind: "none", why: "hidden" };
   if (!present(key, entry, prefs)) return { kind: "none", why: "unknown" };
   if (entry.locked) return { kind: "none", why: "locked" };
-  if (entry.secret) return { kind: "none", why: "secret" };
+  if (entry.secret && !entry.secretWritable) return { kind: "none", why: "secret" };
   if (entry.readOnly) return { kind: "none", why: "readOnly" };
-  if (entry.multiline) return { kind: "none", why: "multiline" };
   if (dimReason(key, prefs) !== "") return { kind: "none", why: "dimmed" };
   var cur = currentValue(key, prefs);
+  if (entry.secret) return { kind: "secret", key: "Enter", set: secretIsSet(cur) };
+  if (entry.listKind) return { kind: "list", key: "Enter" };
+  if (entry.multiline) return { kind: "none", why: "readOnly" };
   if (entry.type === "bool") return { kind: "toggle", key: "Space", next: toBool(cur) !== true };
   if (entry.choices) {
     return {
@@ -598,8 +643,9 @@ function parseBool(s) {
 // choice-int; the choice's string for choice-string; true/false for bool;
 // "HH:MM" for a time composite (which also carries hour and min); the text
 // for path and text. prefs is needed only for Other keys (their JSON type).
-// Locked, read-only, multiline, secret, hidden, deferred and unknown keys give
-// CANT_CHANGE. A dimmed key still parses (the editor refuses it instead).
+// Locked, read-only, multiline (a list edits a line at a time:
+// parseListLine), secret (parseListLine("secret", ...)), hidden, deferred
+// and unknown keys give CANT_CHANGE. A dimmed key still parses (the editor refuses it instead).
 function parseInput(key, text, prefs) {
   var s = textOf(text);
   var entry = entryOf(key);
@@ -628,6 +674,223 @@ function parseInput(key, text, prefs) {
     case "path": return parsePath(entry, s);
     default: return parseByKey(key, s, /[\r\n]/.test(s) ? { error: LINE_ERROR } : { value: s });
   }
+}
+
+// --- Slice 4b: lists and secrets ----------------------------------------------------------
+
+// listKindOf(key) -> the schema's listKind ("ip", "trackerUrl", "pattern")
+// or "".
+function listKindOf(key) {
+  var e = entryOf(key);
+  return e && e.listKind ? e.listKind : "";
+}
+
+// Hex groups of an IPv6 address isIPv6 accepted: eight numbers, a dotted
+// tail counting as two.
+function ipv6Groups(s) {
+  var halves = s.split("::");
+  var sides = halves.map(function (h) {
+    if (h === "") return [];
+    var out = [];
+    h.split(":").forEach(function (p) {
+      if (p.indexOf(".") !== -1) {
+        var o = p.split(".").map(Number);
+        out.push(o[0] * 256 + o[1], o[2] * 256 + o[3]);
+      } else {
+        out.push(parseInt(p, 16));
+      }
+    });
+    return out;
+  });
+  if (sides.length === 1) return sides[0];
+  var zeros = [];
+  for (var i = sides[0].length + sides[1].length; i < 8; i++) zeros.push(0);
+  return sides[0].concat(zeros, sides[1]);
+}
+
+// normaliseIp(s) -> s in QHostAddress::toString's form (Qt 6.11, as Task
+// 2's qbt `qt_addr` checks it), "" when s isn't an address: IPv4 as it
+// is; IPv6 lowercase with the first longest run of two or more zero groups
+// as "::"; an IPv4-mapped address as ::ffff:a.b.c.d; an address whose
+// first 96 bits are zero and whose group 7 isn't as ::a.b.c.d (Python's
+// ipaddress, and so 4a's fixture, get that one wrong).
+function normaliseIp(text) {
+  var s = textOf(text);
+  if (isIPv4(s)) return s;
+  if (!isIPv6(s)) return "";
+  var g = ipv6Groups(s);
+  var dotted = [g[6] >> 8, g[6] & 255, g[7] >> 8, g[7] & 255].join(".");
+  if (g[0] === 0 && g[1] === 0 && g[2] === 0 && g[3] === 0 && g[4] === 0) {
+    if (g[5] === 0xffff) return "::ffff:" + dotted;
+    if (g[5] === 0 && g[6] !== 0) return "::" + dotted;
+  }
+  var best = -1, bestLen = 1, run = -1;
+  for (var i = 0; i <= 8; i++) {
+    if (i < 8 && g[i] === 0) {
+      if (run === -1) run = i;
+    } else if (run !== -1) {
+      if (i - run > bestLen) { best = run; bestLen = i - run; }
+      run = -1;
+    }
+  }
+  var hex = g.map(function (n) { return n.toString(16); });
+  if (best === -1) return hex.join(":");
+  return hex.slice(0, best).join(":") + "::" + hex.slice(best + bestLen).join(":");
+}
+
+// parseListLine(kind, text) -> {value} or {error}: one line typed into the
+// list editor (kind ip, trackerUrl, pattern) or the secret field (kind
+// secret), by list-rules-cases.json's rules, never trimmed. value is what
+// qBittorrent keeps: an ip in normaliseIp's form, anything else exactly as
+// typed. An empty tracker URL is a tier break ({value: "", tierBreak:
+// true}). A secret counts code points (Array.from), not UTF-16 units.
+function parseListLine(kind, text) {
+  var s = textOf(text);
+  if (kind === "ip") {
+    var ip = normaliseIp(s);
+    return ip === "" ? { error: LIST_ERRORS.ip } : { value: ip };
+  }
+  if (kind === "trackerUrl") {
+    if (s === "") return { value: "", tierBreak: true };
+    var good = s.length <= TRACKER_URL_MAX && /^(http|https|udp):\/\/[!-~]+$/.test(s) && s.indexOf("|") === -1;
+    return good ? { value: s } : { error: LIST_ERRORS.trackerUrl };
+  }
+  if (kind === "pattern") {
+    if (s === "") return { error: LIST_ERRORS.patternEmpty };
+    return /[\r\n]/.test(s) ? { error: LIST_ERRORS.patternLine } : { value: s };
+  }
+  if (kind === "secret") {
+    if (s === "") return { error: LIST_ERRORS.secretEmpty };
+    if (s.indexOf("\u0000") !== -1) return { error: LIST_ERRORS.secretNul };
+    if (/[\r\n]/.test(s)) return { error: LIST_ERRORS.secretLine };
+    return Array.from(s).length <= SECRET_MAX ? { value: s } : { error: LIST_ERRORS.secretLong };
+  }
+  return { error: CANT_CHANGE };
+}
+
+// The lines of a list value: "" is no lines; otherwise split on "\n"
+// keeping empty ones, so joinList gives the value back exactly.
+function splitList(value) {
+  var s = textOf(value);
+  return s === "" ? [] : s.split("\n");
+}
+
+// joinList(lines) -> the newline-joined value qBittorrent stores.
+function joinList(lines) {
+  return (lines || []).join("\n");
+}
+
+// listItems(key, value) -> [{index, value, tierBreak, text}]: the list
+// editor's rows. banned_IPs skips empty lines (qBittorrent does too);
+// add_trackers shows an empty line as a tier break ("— next tier —");
+// excluded_file_names keeps an empty entry as "(empty line)". index is
+// the line's position in the value (what listWithout checks).
+function listItems(key, value) {
+  var lines = splitList(value);
+  var tiers = !!(entryOf(key) && entryOf(key).tierBreaks);
+  var out = [];
+  for (var i = 0; i < lines.length; i++) {
+    var line = lines[i];
+    if (key === BAN_KEY) {
+      if (line !== "") out.push({ index: out.length, value: line, tierBreak: false, text: line });
+      continue;
+    }
+    var brk = tiers && line === "";
+    out.push({ index: i, value: line, tierBreak: brk, text: brk ? TIER_BREAK_TEXT : (line === "" ? EMPTY_LINE_TEXT : line) });
+  }
+  return out;
+}
+
+// listSummary(key, value) -> a list row's value: "3 trackers in 2 tiers",
+// "2 patterns", "2 addresses" (empty lines aren't counted).
+function listSummary(key, value) {
+  var items = listItems(key, value);
+  var n = 0;
+  var tiers = 1;
+  for (var i = 0; i < items.length; i++) {
+    if (items[i].value !== "") n++;
+    else if (items[i].tierBreak && i > 0 && !items[i - 1].tierBreak) tiers++;
+  }
+  // A break before the first URL or after the last starts no tier.
+  if (items.length && items[items.length - 1].tierBreak) tiers--;
+  if (n === 0) return EMPTY;
+  var kind = listKindOf(key);
+  var word = kind === "trackerUrl" ? ["tracker", "trackers"] : kind === "ip" ? ["address", "addresses"] : ["pattern", "patterns"];
+  var text = n + " " + word[n === 1 ? 0 : 1];
+  return kind === "trackerUrl" && tiers > 1 ? text + " in " + tiers + " tiers" : text;
+}
+
+// listWithAdded(key, value, after, line) -> {value, index} with line
+// inserted after line index `after` (-1: first; past the end: last), every
+// other line exactly as it was; index is the new line's. {same: true}
+// when nothing would change: a tier break into an empty list (qBittorrent
+// would read it back as nothing), or with a note, a line already there.
+function listWithAdded(key, value, after, line) {
+  var lines = splitList(value);
+  var l = textOf(line);
+  if (l === "" && lines.length === 0) return { same: true };
+  if (l !== "" && lines.indexOf(l) !== -1) return { same: true, note: l + " is already in the list." };
+  var at = Math.max(0, Math.min(lines.length, (Number(after) || 0) + 1));
+  if (Number(after) < 0) at = 0;
+  lines.splice(at, 0, l);
+  return { value: joinList(lines), index: at };
+}
+
+// listWithout(key, value, item) -> {value} without line item.index, every
+// other line exactly as it was; {stale: true} when that line isn't
+// item.value any more (the list changed since the key was pressed).
+function listWithout(key, value, item) {
+  var lines = splitList(value);
+  var i = item ? Number(item.index) : -1;
+  if (!(i >= 0 && i < lines.length) || lines[i] !== textOf(item.value)) return { stale: true };
+  lines.splice(i, 1);
+  return { value: joinList(lines) };
+}
+
+// banHas(value, ip) -> whether the ban list holds ip, compared in
+// QHostAddress's form.
+function banHas(value, ip) {
+  var want = normaliseIp(ip);
+  if (want === "") return false;
+  var items = listItems(BAN_KEY, value);
+  for (var i = 0; i < items.length; i++) if (normaliseIp(items[i].value) === want) return true;
+  return false;
+}
+
+function listEmptyText(key) { return hasOwn(LIST_EMPTY, key) ? LIST_EMPTY[key] : ""; }
+function listPrompt(key) { return hasOwn(LIST_PROMPTS, key) ? LIST_PROMPTS[key] : ""; }
+function listTitle(key) { var e = entryOf(key); return e ? e.label : String(key); }
+
+// listDoneNote(key, op, line) -> the note after a list write: "Banned
+// 1.2.3.4", "Unbanned 1.2.3.4", "Added *.exe to Excluded file names",
+// "Next tier added to Trackers to add".
+function listDoneNote(key, op, line) {
+  var l = textOf(line);
+  if (key === BAN_KEY) return (op === "add" ? "Banned " : "Unbanned ") + l;
+  var title = listTitle(key);
+  if (l === "" && entryOf(key) && entryOf(key).tierBreaks) {
+    return op === "add" ? "Next tier added to " + title : "Tier break removed from " + title;
+  }
+  if (op === "add") return "Added " + l + " to " + title;
+  return l === "" ? "Removed an empty line from " + title : "Removed " + l + " from " + title;
+}
+
+function secretName(key) {
+  if (hasOwn(SECRET_NAMES, key)) return SECRET_NAMES[key];
+  var e = entryOf(key);
+  return e ? e.label.toLowerCase() : String(key);
+}
+
+// secretQuestion(key) -> "Clear the proxy password?"
+function secretQuestion(key) {
+  return "Clear the " + secretName(key) + "?";
+}
+
+// secretDoneNote(key, op) -> "Proxy password set" / "... cleared": never
+// a value.
+function secretDoneNote(key, op) {
+  var n = secretName(key);
+  return n.charAt(0).toUpperCase() + n.slice(1) + (op === "clear" ? " cleared" : " set");
 }
 
 // --- equalValue -------------------------------------------------------------------------------
@@ -697,8 +960,10 @@ if (typeof module !== "undefined") {
     BOOL_ERROR: BOOL_ERROR,
     NUMBER_ERROR: NUMBER_ERROR,
     WHOLE_NUMBER_ERROR: WHOLE_NUMBER_ERROR,
-    MULTILINE_NOTE: MULTILINE_NOTE,
-    SECRET_NOTE: SECRET_NOTE,
+    LIST_ERRORS: LIST_ERRORS,
+    TIER_BREAK_TEXT: TIER_BREAK_TEXT,
+    BANNED: BANNED,
+    BAN_KEY: BAN_KEY,
     CLEAN_PATH_ERROR: CLEAN_PATH_ERROR,
     IP_ERROR: IP_ERROR,
     USERNAME_ERROR: USERNAME_ERROR,
@@ -715,6 +980,20 @@ if (typeof module !== "undefined") {
     confirmFor: confirmFor,
     doneNote: doneNote,
     formatValue: formatValue,
-    equalValue: equalValue
+    equalValue: equalValue,
+    listKindOf: listKindOf,
+    normaliseIp: normaliseIp,
+    parseListLine: parseListLine,
+    joinList: joinList,
+    listItems: listItems,
+    listWithAdded: listWithAdded,
+    listWithout: listWithout,
+    banHas: banHas,
+    listEmptyText: listEmptyText,
+    listPrompt: listPrompt,
+    listTitle: listTitle,
+    listDoneNote: listDoneNote,
+    secretQuestion: secretQuestion,
+    secretDoneNote: secretDoneNote
   };
 }
