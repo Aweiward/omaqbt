@@ -2,7 +2,8 @@
 """`qbt-serve`: a long-lived sidecar for OmaqBT's QML bar widget.
 
 It runs `qbt probe` once at startup (and again every 10s of ticking, or
-on an explicit `refresh`), holds a single in-memory WebUI session, and
+on an explicit `refresh`), holds a single in-memory WebUI session (search
+reads alone go through qbt's session instead: see `_search_load_session`), and
 polls `lib/qbtsync.build_status` on a cadence a QML `Process` controls
 over stdin. Every stdout line is one
 JSON object (`{"type":...}` first) with a trailing newline; diagnostics
@@ -34,6 +35,7 @@ import subprocess
 import sys
 import threading
 import time
+import warnings
 
 REPO_DIR = os.path.dirname(os.path.realpath(__file__))
 sys.path.insert(0, os.path.join(REPO_DIR, "lib"))
@@ -285,9 +287,40 @@ def _search_int(value, low, high):
     return isinstance(value, int) and not isinstance(value, bool) and low <= value <= high
 
 
+def _search_load_session(state):
+    """Points the search client at qbt's WebUI session: a fresh
+    `CurlCookieJar` read from the probe's cookieFile (curl's own jar), and a
+    new client around it. Search jobs are per session in qBittorrent 5.2.3
+    (webapplication.cpp:844, a SearchController per WebSession), and qbt
+    starts them in its session, so the sidecar must read through the same
+    SID. Returns False on a failed load (a half-written or unreadable
+    file), which is transient: the client is left as it was.
+
+    Read-only: the jar is never saved (curl rewrites that file on every
+    `qbt` run). A missing file is an empty jar -- qbt has made no request
+    yet, so it holds no job -- and a request without a SID then reads 404.
+    Nothing from a failed load is printed anywhere: a LoadError's message
+    quotes the offending line, SID and all."""
+    path = (state["probe"] or {}).get("cookieFile") or ""
+    jar = qbtsync.CurlCookieJar(path or None)
+    try:
+        if path and os.path.exists(path):
+            # A malformed line makes the stdlib print a "cookiejar bug!"
+            # warning and traceback on stderr before raising LoadError.
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                jar.load(path)
+        client = qbtsync.Client(state["probe"]["base"], jar, timeout=SEARCH_TIMEOUT)
+    except Exception:
+        return False
+    state["search_client"] = client
+    return True
+
+
 def _search_read(state, watch):
-    """One read for `watch`: (status, total, rows), "gone", or None for a
-    failure that is retried on the next poll. Below the cap it's one
+    """One read for `watch`: (status, total, rows), "missing" (a 404: not in
+    this session), "gone" (a results 409), or None for a failure that is
+    retried on the next poll. Below the cap it's one
     results page (status, total and rows from the same response); at the
     cap it's the job's status with no rows, since a results read with
     limit 0 would return every row (OV15)."""
@@ -305,7 +338,9 @@ def _search_read(state, watch):
         # (offset past the end) can't happen while the window's offset
         # invariant holds; if one does, it's treated the same, so a watch
         # never retries a bad offset forever.
-        if exc.code == 404 or (exc.code == 409 and limit):
+        if exc.code == 404:
+            return "missing"
+        if exc.code == 409 and limit:
             return "gone"
         # Anything else (qBittorrent down, another code) sends nothing: the
         # status line's api:false already says so, and the next poll retries.
@@ -331,15 +366,29 @@ def read_search(state):
     """Polls the search watch once and emits a reply when one is due: after
     a command, whenever rows arrive, whenever status or total changed, and
     always for the final reply (Ruling FB: Stopped and offset + rows ==
-    min(total, 2000), zero rows allowed), after which the watch drops."""
+    min(total, 2000), zero rows allowed), after which the watch drops.
+
+    Ruling FH: a watch whose session load failed loads again first (and
+    sends nothing if that fails too). A 404 reloads qbt's cookie file once
+    and retries, so a SID that rotated since the load is picked up; only a
+    second 404 is `gone`."""
     watch = state.get("search")
     state["search_next"] = time.monotonic() + SEARCH_POLL_INTERVAL
     if not watch:
         return
+    if not watch["session"]:
+        watch["session"] = _search_load_session(state)
+        if not watch["session"]:
+            return
     result = _search_read(state, watch)
+    if result == "missing":
+        watch["session"] = _search_load_session(state)
+        if not watch["session"]:
+            return
+        result = _search_read(state, watch)
     if result is None:
         return
-    if result == "gone":
+    if result in ("missing", "gone"):
         emit({"type": "search", "id": watch["id"], "error": "gone"})
         state["search"] = None
         return
@@ -454,7 +503,8 @@ def handle_command(cmd, state):
         if not _search_int(jid, 1, SEARCH_ID_MAX) or not _search_int(offset, 0, SEARCH_CAP):
             emit({"type": "error", "id": cid, "error": "bad command"})
             return
-        state["search"] = {"id": jid, "offset": offset, "status": None, "total": None, "due": True}
+        state["search"] = {"id": jid, "offset": offset, "status": None, "total": None, "due": True,
+                           "session": _search_load_session(state)}
         return
 
     emit({"type": "error", "id": cid, "error": "bad command"})
@@ -560,9 +610,13 @@ def main():
     # get their own short timeout, so a stalled inspect route can never
     # hold up the status client's much longer 5s budget.
     inspect_client = qbtsync.Client(probe["base"], jar, timeout=INSPECT_TIMEOUT)
-    # Search reads (slice 5a): the same GET-only client and jar, with their
-    # own timeout.
-    search_client = qbtsync.Client(probe["base"], jar, timeout=SEARCH_TIMEOUT)
+    # Search reads (slice 5a) are the one exception to the in-memory jar:
+    # qBittorrent keeps search jobs per WebUI session, so each search watch
+    # reads through qbt's own session, loaded read-only from its curl
+    # cookie file (Ruling FH, _search_load_session). Torrents, sync and
+    # preferences are global state, so the status and inspect clients keep
+    # their own session. Until a watch loads, this client has an empty jar.
+    search_client = qbtsync.Client(probe["base"], qbtsync.CurlCookieJar(), timeout=SEARCH_TIMEOUT)
     state = {
         "helper": helper,
         "probe": probe,

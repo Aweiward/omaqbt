@@ -8,6 +8,8 @@ offset + rows == min(total, 2000), zero rows allowed) is always sent, then
 the watch drops.
 """
 import json
+import os
+import subprocess
 import sys
 import time
 import unittest
@@ -18,6 +20,7 @@ from urllib.parse import parse_qs, urlencode
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent / "fixtures"))
 import harness  # noqa: E402
+import qbtsync  # noqa: E402
 from test_serve import ServeProcess, _read_log, _write_control  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -54,17 +57,15 @@ class SearchWatchCase(unittest.TestCase):
     def control(self, mapping):
         _write_control(self.control_path, mapping)
 
-    def start_job(self, spec, pattern="debian"):
+    def start_job(self, spec, pattern="debian", jar_path=None):
         """Starts a fixture job directly (the window would use qbt)."""
         self.control({"search": spec})
         body = urlencode({"pattern": pattern, "category": "all", "plugins": "enabled"}).encode()
-        req = urllib.request.Request(f"http://127.0.0.1:{self.port}/api/v2/search/start", data=body, method="POST")
-        with urllib.request.urlopen(req, timeout=5) as r:
-            return json.loads(r.read())["id"]
+        # In qbt's session (its cookie file), as `qbt search start` would.
+        return json.loads(harness.qbt_urlopen(self.env, "/api/v2/search/start", data=body, jar_path=jar_path))["id"]
 
     def post(self, path, body):
-        req = urllib.request.Request(f"http://127.0.0.1:{self.port}{path}", data=body.encode(), method="POST")
-        urllib.request.urlopen(req, timeout=5).read()
+        harness.qbt_urlopen(self.env, path, data=body.encode())
 
     def serve(self):
         sp = ServeProcess(self.env)
@@ -286,7 +287,10 @@ class SearchWatchTest(SearchWatchCase):
         sp = self.serve()
         self.assertEqual(self.collect_first(sp, 424242), {"type": "search", "id": 424242, "error": "gone"})
         jid = self.start_job({"total": 3})
+        count = len(self.search_reads())
         self.assertEqual(self.collect_first(sp, jid, offset=4), {"type": "search", "id": jid, "error": "gone"})
+        # A 409 is not a session miss: no reload, no retry.
+        self.assertEqual(len(self.search_reads()) - count, 1)
 
     def test_other_failures_send_nothing_and_retry(self):
         jid = self.start_job({"total": 4})
@@ -361,3 +365,166 @@ class SearchWatchTest(SearchWatchCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SearchSessionTest(SearchWatchCase):
+    """Ruling FH: qBittorrent 5.2.3 keeps search jobs per WebUI session
+    (webapplication.cpp:844, a SearchController per WebSession), so the
+    sidecar reads a job through qbt's own session: its curl cookie file
+    (the probe's cookieFile), loaded read-only at watch-set time and
+    reloaded once on a 404 before `gone`. A load that fails (a half-written
+    file) is transient: nothing is sent and the next tick tries again."""
+
+    def qbt_start(self, spec):
+        """`qbt search start`, in qbt's session (its cookie file)."""
+        self.control({"search": spec})
+        r = subprocess.run([str(ROOT / "qbt"), "search", "start", "--pattern", "debian", "--category", "all"],
+                           env=self.env, capture_output=True, text=True, timeout=30)
+        self.assertEqual((r.returncode, r.stderr), (0, ""))
+        return json.loads(r.stdout)["id"]
+
+    def qbt_jar(self):
+        return Path(harness.cookie_file(self.env))
+
+    def sids(self, path):
+        jar = qbtsync.CurlCookieJar(str(path))
+        jar.load()
+        return [c.value for c in jar if c.name == "SID"]
+
+    def other_session(self, name):
+        """A cookie file holding a second, job-less session."""
+        path = Path(self.env["QBT_STATE_DIR"]).parent / name
+        harness.qbt_urlopen(self.env, "/api/v2/search/plugins", jar_path=str(path))
+        return path
+
+    def serve_on(self, cookie_path=None):
+        env = dict(self.env)
+        if cookie_path is not None:
+            # `qbt probe` reports this file as cookieFile.
+            env["QBT_COOKIE_FILE"] = str(cookie_path)
+        sp = ServeProcess(env)
+        self.addCleanup(sp.cleanup)
+        seen = []
+        readline = sp.readline
+
+        def recording_readline(timeout=5):
+            obj = readline(timeout=timeout)
+            seen.append(obj)
+            return obj
+        sp.readline = recording_readline
+        sp.seen = seen
+        sp.readline(timeout=5)  # the first status line
+        return sp
+
+    def job_reads(self):
+        return [e for e in self.search_reads() if e["path"] in ("/api/v2/search/results", "/api/v2/search/status")]
+
+    def assert_no_sid(self, sp, sids):
+        out = json.dumps(sp.seen) + "".join(sp._stderr_lines)
+        for sid in sids:
+            self.assertNotIn(sid, out)
+
+    def test_a_job_qbt_started_streams_through_qbts_cookie_file(self):
+        jid = self.qbt_start({"total": 30, "rate": 20, "finish": 1.5})
+        jar = self.qbt_jar()
+        before = jar.read_bytes()
+        [sid] = self.sids(jar)
+        sp = self.serve_on()
+        sp.send({"cmd": "search", "id": jid, "offset": 0})
+        replies = self.collect_until_final(sp, jid)
+        rows = [row for r in replies for row in r["rows"]]
+        self.assertEqual(rows, [expected_row(i) for i in range(30)])
+        self.assertGreater(len(replies), 1, "it streamed while the job ran")
+        reads = self.job_reads()
+        self.assertTrue(reads)
+        self.assertTrue(all(f"SID={sid}" in e["cookie"] for e in reads), [e["cookie"] for e in reads])
+        sp.cleanup()
+        # Read-only: the sidecar never writes curl's file.
+        self.assertEqual(jar.read_bytes(), before)
+        self.assert_no_sid(sp, [sid])
+
+    def test_another_sessions_cookie_file_is_gone_after_one_reload(self):
+        jid = self.qbt_start({"total": 3, "finish": None})
+        [qbt_sid] = self.sids(self.qbt_jar())
+        other = self.other_session("other-cookies")
+        [other_sid] = self.sids(other)
+        header_only = Path(self.env["QBT_STATE_DIR"]).parent / "empty-cookies"
+        header_only.write_text("# Netscape HTTP Cookie File\n")
+        missing = Path(self.env["QBT_STATE_DIR"]).parent / "no-such-cookies"
+        for path, sid in ((other, other_sid), (header_only, None), (missing, None)):
+            with self.subTest(jar=path.name):
+                before = path.read_bytes() if path.exists() else None
+                count = len(self.job_reads())
+                sp = self.serve_on(path)
+                try:
+                    sp.send({"cmd": "search", "id": jid, "offset": 0})
+                    reply = sp.read_until(is_search, timeout=3)
+                    self.assertEqual(reply, {"type": "search", "id": jid, "error": "gone"})
+                    # One read, one reload of the file, one retry: then gone.
+                    reads = self.job_reads()[count:]
+                    self.assertEqual(len(reads), 2, reads)
+                    for e in reads:
+                        if sid:
+                            self.assertIn(f"SID={sid}", e["cookie"])
+                        self.assertNotIn(qbt_sid, e["cookie"])
+                finally:
+                    sp.cleanup()
+                self.assertEqual(path.read_bytes() if path.exists() else None, before)
+                self.assert_no_sid(sp, [qbt_sid, other_sid])
+        # The job itself is untouched, in qbt's session.
+        status = json.loads(harness.qbt_urlopen(self.env, f"/api/v2/search/status?id={jid}"))
+        self.assertEqual(status[0]["status"], "Running")
+
+    def test_a_sid_rotation_after_the_watch_is_set_is_recovered_by_one_reload(self):
+        spec = {"total": 4, "finish": None}
+        jid = self.qbt_start(spec)
+        [new_sid] = self.sids(self.qbt_jar())
+        # The file the sidecar reads holds an older session when the watch
+        # is set; qbt's (with the job) replaces it before the next poll.
+        path = self.other_session("rotating-cookies")
+        [old_sid] = self.sids(path)
+        # The first read fails (transient: no reload), so the second one
+        # goes out on the old SID from memory and gets the 404.
+        self.control({"search": spec, "search_results": "500@1"})
+        sp = self.serve_on(path)
+        sp.send({"cmd": "search", "id": jid, "offset": 0})
+        deadline = time.monotonic() + 3
+        while not self.job_reads():
+            self.assertLess(time.monotonic(), deadline, "no first read")
+            time.sleep(0.02)
+        tmp = path.with_name("rotating-cookies.new")
+        tmp.write_bytes(self.qbt_jar().read_bytes())
+        os.replace(tmp, path)
+        reply = sp.read_until(is_search, timeout=4)
+        self.assertNotIn("error", reply)
+        self.assertEqual((reply["offset"], len(reply["rows"])), (0, 4))
+        cookies = [e["cookie"] for e in self.job_reads()]
+        self.assertEqual(len(cookies), 3, cookies)
+        self.assertIn(f"SID={old_sid}", cookies[0])  # the 500
+        self.assertIn(f"SID={old_sid}", cookies[1])  # the 404
+        self.assertIn(f"SID={new_sid}", cookies[2])  # the retry after the reload
+        self.assert_no_sid(sp, [old_sid, new_sid])
+
+    def test_a_half_written_cookie_file_is_transient(self):
+        jid = self.qbt_start({"total": 5, "finish": None})
+        [sid] = self.sids(self.qbt_jar())
+        good = self.qbt_jar().read_bytes()
+        path = Path(self.env["QBT_STATE_DIR"]).parent / "half-cookies"
+        path.write_bytes(b"")
+        sp = self.serve_on(path)
+        sp.send({"cmd": "search", "id": jid, "offset": 0})
+        # An empty file, then one cut off mid-line (a field short):
+        # nothing is sent, the watch stays and no job read goes out.
+        self.no_search_reply_for(sp, 1.6)
+        cut = good.index(sid.encode()) + 3
+        path.write_bytes(good[:cut].rsplit(b"\t", 1)[0])
+        self.no_search_reply_for(sp, 1.6)
+        self.assertEqual(self.job_reads(), [])
+        path.write_bytes(good)
+        reply = sp.read_until(is_search, timeout=3)
+        self.assertEqual((reply["status"], reply["offset"], len(reply["rows"])), ("Running", 0, 5))
+        self.assertTrue(all(f"SID={sid}" in e["cookie"] for e in self.job_reads()))
+        self.assertEqual(path.read_bytes(), good)
+        self.assert_no_sid(sp, [sid])
+        # Not even the stdlib's "cookiejar bug!" warning reaches stderr.
+        self.assertEqual(sp._stderr_lines, [])

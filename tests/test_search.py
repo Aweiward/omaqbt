@@ -189,14 +189,12 @@ class SearchCase(unittest.TestCase):
         return parse_qs(entry["body"], keep_blank_values=True)
 
     def get(self, path):
-        with urllib.request.urlopen(self.url(path), timeout=5) as r:
-            return json.loads(r.read())
+        # Through qbt's own session: search jobs are per session.
+        return json.loads(harness.qbt_urlopen(self.env, path))
 
     def post(self, path, body):
-        req = urllib.request.Request(self.url(path), data=body.encode(), method="POST")
         try:
-            with urllib.request.urlopen(req, timeout=5) as r:
-                return r.status, r.read()
+            return harness.qbt_request(self.env, path, data=body.encode())
         except urllib.error.HTTPError as exc:
             return exc.code, exc.read()
 
@@ -574,6 +572,20 @@ class SearchStopDeleteTest(SearchCase):
         self.ok(self.run_qbt("search", "stop", str(jid)))
         self.ok(self.run_qbt("search", "stop", "77"))
         self.assertEqual(self.id_path().read_text(), f"{jid}\n")
+
+    def test_jobs_live_in_qbts_session(self):
+        # Search jobs are per WebUI session (Ruling FH): a request with no SID
+        # (a fresh session) can't see qbt's job, and qbt's own stop and
+        # delete reach it through its cookie file.
+        jid = self.job()
+        for path in (f"/api/v2/search/status?id={jid}", f"/api/v2/search/results?id={jid}"):
+            with self.assertRaises(urllib.error.HTTPError) as cm:
+                urllib.request.urlopen(self.url(path), timeout=5)
+            self.assertEqual(cm.exception.code, 404)
+        self.ok(self.run_qbt("search", "stop", str(jid)))
+        self.assertEqual([(j["id"], j["status"]) for j in self.jobs()], [(jid, "Stopped")])
+        self.ok(self.run_qbt("search", "delete", str(jid)))
+        self.assertEqual(self.jobs(), [])
 
     def test_delete_removes_the_job_and_search_id_when_it_names_it(self):
         jid = self.job()

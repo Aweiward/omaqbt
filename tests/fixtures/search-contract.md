@@ -29,6 +29,7 @@ qBittorrent 5.2.3 facts (from `searchcontroller.cpp`, `searchpluginmanager.cpp` 
 - The search process is cancelled after 3 minutes, and the job then reads `Stopped` with whatever it found.
 - `installPlugin` downloads asynchronously and always answers 200. The plugin is named after the URL's last path segment with its extension dropped, and a version that isn't newer than the installed one is refused silently. `uninstallPlugin` and `enablePlugin` trim each `|`-split name and answer 200 even for an unknown name.
 - `downloadTorrent` answers an empty 200 at once. The plugin's own downloader then fetches the file and adds it, or fails with nothing reported to the API.
+- **Search jobs are per WebUI session** (`webapplication.cpp:844` registers a `SearchController` per `WebSession`). A job started in one session reads 404 (`status`, `results`, `stop`, `delete`) from any other, and the 5-search cap counts per session. A request with no SID, or an unknown one, opens a fresh session (localhost bypass). Plugins are global.
 
 ## `qbt search` and `qbt search-plugin`
 
@@ -124,6 +125,13 @@ The window owns the offset (OV7). The sidecar keeps only the current watch: `{id
 - The `id` key must be present, null or an integer (Ruling FG). `{"cmd":"search"}` without it is not `id: null`: like any other malformed search command, it answers `{"type":"error","id":<its id, or null>,"error":"bad command"}` and leaves the watch as it was.
 - A restarted sidecar has no watch until the window (Service) sends its command again.
 
+**The session (Ruling FH).** `qbt search start` creates the job in qbt's session: the SID in its curl cookie file (`qbt probe`'s `cookieFile`). So the sidecar's search reads, and only those, go through that same session. The status and inspect reads keep the sidecar's own in-memory session, since torrents, sync and preferences are global.
+- The sidecar loads the cookie file (`qbtsync.CurlCookieJar`) when a watch is set, and never writes it: curl rewrites that file on every `qbt` run.
+- On a 404 it reloads the file once and retries the read, so a SID that rotated since the load is picked up. Only a second 404 is `gone`.
+- A load that fails (a half-written or unreadable file) is transient: nothing is sent, the watch stays, and the next poll loads again. It is never `gone`.
+- A missing file is an empty jar: qbt has made no request, so no job of its can exist, and the read without a SID gets the 404.
+- The SID never appears in a log line, an error or a reply.
+
 **Polling.** About every second while it watches, the sidecar reads GET `search/results?id=N&offset=<offset>&limit=<L>`, where `L = min(500, 2000 - offset)`. The reply's `status`, `total` and `rows` all come from that one `results` response (`{status, total, results}`), so they always agree.
 
 The sidecar never asks past row 2000 (OV15: the 2000-row cap is the sidecar's, so extra rows never cross into QML). Once `offset` reaches 2000, it reads GET `search/status?id=N` instead, for `status` and `total`, and `rows` is `[]`. The switch matters because a `results` read with `limit` 0 would return every row.
@@ -185,7 +193,9 @@ The sidecar drops the watch, and the window says "The search ended when qBittorr
 |---|---|---|---|
 | add, `via:"plugin"` | the plugin's download fails | nothing can report it (downloadTorrent's empty 200) | "Sent <name> to qBittorrent · it appears when its download finishes.", and nothing appears |
 | add, https `.torrent` | qBittorrent can't fetch the file | the same | "Sent <name> to qBittorrent · it appears when its download finishes.", and nothing appears |
-| results | the job is gone (404) | the watch drops | "The search ended when qBittorrent restarted." |
+| results | the job is gone (404), after one reload of qbt's cookie file and a retry | the watch drops | "The search ended when qBittorrent restarted." |
+| results | the job is in another session (the sidecar read a different cookie file, or qbt's session was replaced since the start) | the same 404 | the same "The search ended when qBittorrent restarted.": it looks exactly like a restart |
+| results | qbt's cookie file is half-written or unreadable | nothing sent; the next poll loads it again | nothing: the rows arrive once it loads |
 | start | 409 | status read (OV6) | "qBittorrent is running 5 searches; stop one first." / "Search needs Python on this machine." |
 | install | the download or the plugin fails | 20 s read-back | "Couldn't confirm the install of <name>." |
 | install | the same or an older version | read-back unchanged | "<name> v<version> is already installed." |

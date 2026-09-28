@@ -12,12 +12,15 @@ import os
 import shutil
 import socket
 import subprocess
+import sys
 import tempfile
 import time
 import urllib.request
 from pathlib import Path
 
 FIXTURES_DIR = Path(__file__).resolve().parent
+sys.path.insert(0, str(FIXTURES_DIR.parent.parent / "lib"))
+import qbtsync  # noqa: E402
 SERVER_SCRIPT = FIXTURES_DIR / "server.py"
 CONF_PATH = FIXTURES_DIR / "qBittorrent.conf"
 
@@ -130,6 +133,43 @@ def start_fixture_server(extra_env=None):
         raise RuntimeError("fixture server did not start")
 
     return proc, port, env, cleanup
+
+
+def cookie_file(env):
+    """qbt's curl cookie jar for `env` (qbt's COOKIE_FILE rule)."""
+    return env.get("QBT_COOKIE_FILE") or str(Path(env["QBT_RID_FILE"]).parent / "cookies")
+
+
+def qbt_request(env, path, data=None, timeout=5, jar_path=None):
+    """One request through qbt's WebUI session, the way its `curl -b F -c F`
+    makes it: the SID comes from the cookie file (`jar_path`, default qbt's
+    own) and whatever the server sets is written back. Search jobs live in
+    one session (tests/fixtures/search-contract.md), so a test that starts,
+    stops or reads a job the way qbt would goes through here. Returns the
+    (status, body bytes); an HTTP error raises urllib's HTTPError, as
+    urlopen does."""
+    path_ = jar_path or cookie_file(env)
+    jar = qbtsync.CurlCookieJar(path_)
+    if os.path.exists(path_):
+        jar.load()
+    opener = urllib.request.build_opener(
+        urllib.request.ProxyHandler({}), urllib.request.HTTPCookieProcessor(jar))
+    req = urllib.request.Request(env["QBT_BASE"] + path, data=data,
+                                 method="GET" if data is None else "POST")
+    try:
+        with opener.open(req, timeout=timeout) as resp:
+            return resp.status, resp.read()
+    finally:
+        old = os.umask(0o077)
+        try:
+            jar.save()
+        finally:
+            os.umask(old)
+
+
+def qbt_urlopen(env, path, data=None, timeout=5, jar_path=None):
+    """`qbt_request`'s body alone."""
+    return qbt_request(env, path, data, timeout, jar_path)[1]
 
 
 @contextlib.contextmanager

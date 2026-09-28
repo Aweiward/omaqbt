@@ -31,6 +31,7 @@ SECRET_ERROR_BODY = b"Conflict: udp://tracker.example:1337/SECRETPASSKEY123/anno
 # Real qBittorrent keeps sync rid state per WebUI session: a request without a
 # known SID cookie opens a new session and always gets a full update.
 SESSIONS = set()
+_SESSIONS_LOCK = threading.Lock()
 
 # Extra torrents/info rows for the fetch-metadata (Task 2, slice 2b) tests,
 # independent of the maindata-shaped FULL/DELTA fixtures above (torrents/info
@@ -655,8 +656,15 @@ def _set_preferences(body):
 # process (m_searchTimeout) and the job reads Stopped with what it found.
 # "search_python": "missing" makes start answer 409 the way it does without
 # Python. Each route's faults use _write_fault's key "search_<action>".
+#
+# Jobs belong to one WebUI session, as in 5.2.3 (webapplication.cpp:844
+# registers a SearchController per WebSession): SEARCH_SESSIONS maps a SID
+# to that session's {id: job}. A search request with no or an unknown SID
+# gets a fresh session and cookie (bypass_local_auth's sessionStart), so a
+# job started in qbt's session reads 404 from any other one. Plugins are
+# global (one SearchPluginManager), and ids are unique across sessions.
 _SEARCH_LOCK = threading.Lock()
-SEARCH_JOBS = {}
+SEARCH_SESSIONS = {}
 _SEARCH_IDS = [1000]
 MAX_CONCURRENT_SEARCHES = 5
 SEARCH_TIMEOUT = 180
@@ -741,12 +749,12 @@ def _search_view(job, now):
     return running, [_search_row(job, i) for i in range(n)]
 
 
-def _search_running():
+def _search_running(jobs):
     now = _search_now()
-    return [j for j in SEARCH_JOBS.values() if _search_view(j, now)[0]]
+    return [j for j in jobs.values() if _search_view(j, now)[0]]
 
 
-def _search_start(form):
+def _search_start(form, jobs):
     """-> (code, body). The Python check comes before the cap, as in
     startAction."""
     for key in ("pattern", "category", "plugins"):
@@ -757,12 +765,12 @@ def _search_start(form):
     spec = _control().get("search")
     spec = spec if isinstance(spec, dict) else {}
     with _SEARCH_LOCK:
-        if len(_search_running()) >= MAX_CONCURRENT_SEARCHES:
+        if len(_search_running(jobs)) >= MAX_CONCURRENT_SEARCHES:
             return 409, b"Unable to create more than 5 concurrent searches."
         _SEARCH_IDS[0] += 1
         jid = _SEARCH_IDS[0]
         rows = spec.get("rows") if isinstance(spec.get("rows"), list) else None
-        SEARCH_JOBS[jid] = {
+        jobs[jid] = {
             "id": jid,
             "pattern": form["pattern"][0].strip(),
             "category": form["category"][0].strip(),
@@ -777,8 +785,9 @@ def _search_start(form):
     return 200, json.dumps({"id": jid}).encode()
 
 
-def _search_get(path, query):
-    """GET status / results / plugins -> (code, body)."""
+def _search_get(path, query, jobs):
+    """GET status / results / plugins -> (code, body); `jobs` is the
+    request's session's."""
     q = parse_qs(query, keep_blank_values=True)
     with _SEARCH_LOCK:
         if path == "/api/v2/search/plugins":
@@ -786,18 +795,18 @@ def _search_get(path, query):
         now = _search_now()
         jid = _qt_int(q.get("id"))
         if path == "/api/v2/search/status":
-            if jid != 0 and jid not in SEARCH_JOBS:
+            if jid != 0 and jid not in jobs:
                 return 404, b""
-            ids = list(SEARCH_JOBS) if jid == 0 else [jid]
+            ids = list(jobs) if jid == 0 else [jid]
             out = []
             for i in ids:
-                running, rows = _search_view(SEARCH_JOBS[i], now)
+                running, rows = _search_view(jobs[i], now)
                 out.append({"id": i, "status": "Running" if running else "Stopped", "total": len(rows)})
             return 200, json.dumps(out).encode()
         if path == "/api/v2/search/results":
             if "id" not in q:
                 return 400, b"Missing required parameters"
-            job = SEARCH_JOBS.get(jid)
+            job = jobs.get(jid)
             if job is None:
                 return 404, b""
             running, rows = _search_view(job, now)
@@ -843,23 +852,24 @@ def _search_finish_install(source, spec):
             SEARCH_PLUGINS[SEARCH_PLUGINS.index(current)] = plugin
 
 
-def _search_post(path, body):
+def _search_post(path, body, jobs):
     """POST start / stop / delete / downloadTorrent and the plugin writes
-    -> (code, body). Unknown ids are 404; plugin writes always answer 200."""
+    -> (code, body). Unknown ids (in this session's `jobs`) are 404; plugin
+    writes always answer 200."""
     form = parse_qs(body, keep_blank_values=True)
     action = path.rsplit("/", 1)[1]
     if path == "/api/v2/search/start":
-        return _search_start(form)
+        return _search_start(form, jobs)
     if action in ("stop", "delete"):
         if "id" not in form:
             return 400, b"Missing required parameters"
         jid = _qt_int(form.get("id"))
         with _SEARCH_LOCK:
-            job = SEARCH_JOBS.get(jid)
+            job = jobs.get(jid)
             if job is None:
                 return 404, b""
             if action == "delete":
-                del SEARCH_JOBS[jid]
+                del jobs[jid]
             elif _search_view(job, _search_now())[0]:
                 job["stopped_at"] = _search_now()
         return 200, b""
@@ -913,14 +923,23 @@ class Handler(BaseHTTPRequestHandler):
         return self.rfile.read(n).decode("utf-8") if n else ""
 
     def _session(self):
-        """Return (sid, is_new) for this request, minting a SID when unknown."""
-        for part in (self.headers.get("Cookie") or "").split(";"):
-            name, _, value = part.strip().partition("=")
-            if name == "SID" and value in SESSIONS:
-                return value, False
-        sid = f"fixture-{len(SESSIONS) + 1}"
-        SESSIONS.add(sid)
-        return sid, True
+        """Return (sid, is_new) for this request, minting a SID when unknown.
+        Locked: qbt and the sidecar can both be minting at once."""
+        with _SESSIONS_LOCK:
+            for part in (self.headers.get("Cookie") or "").split(";"):
+                name, _, value = part.strip().partition("=")
+                if name == "SID" and value in SESSIONS:
+                    return value, False
+            sid = f"fixture-{len(SESSIONS) + 1}"
+            SESSIONS.add(sid)
+            return sid, True
+
+    def _search_session(self):
+        """(sid to set or None, this session's jobs) for a search route."""
+        sid, is_new = self._session()
+        with _SEARCH_LOCK:
+            jobs = SEARCH_SESSIONS.setdefault(sid, {})
+        return (sid if is_new else None), jobs
 
     def _send(self, code, body=b"", content_type="application/json", sid=None):
         if os.environ.get("QBT_FIXTURE_FORBIDDEN") == "1" or _control().get("forbidden") is True:
@@ -937,11 +956,11 @@ class Handler(BaseHTTPRequestHandler):
         if body:
             self.wfile.write(body)
 
-    def _fault_reply(self, fault):
+    def _fault_reply(self, fault, sid=None):
         if fault == "409secret":
-            self._send(409, SECRET_ERROR_BODY, content_type="text/plain")
+            self._send(409, SECRET_ERROR_BODY, content_type="text/plain", sid=sid)
         else:
-            self._send(int(fault), b"boom")
+            self._send(int(fault), b"boom", sid=sid)
 
     def do_GET(self):
         parsed = urlparse(self.path)
@@ -959,17 +978,18 @@ class Handler(BaseHTTPRequestHandler):
             return
         record("GET", parsed.path, "", parse_qs(parsed.query), self.headers.get("Cookie") or "")
         if parsed.path.startswith("/api/v2/search/"):
+            sid, jobs = self._search_session()
             fault = _write_fault("search_" + parsed.path.rsplit("/", 1)[1])
             if fault == "unreadable":
-                self._send(200, b"<html>not json</html>")
+                self._send(200, b"<html>not json</html>", sid=sid)
                 return
             if fault == "sleep7":
                 time.sleep(7)
             elif fault and fault != "noop":
-                self._fault_reply(fault)
+                self._fault_reply(fault, sid)
                 return
-            code, payload = _search_get(parsed.path, parsed.query)
-            self._send(code, payload, content_type="application/json" if code == 200 else "text/plain")
+            code, payload = _search_get(parsed.path, parsed.query, jobs)
+            self._send(code, payload, content_type="application/json" if code == 200 else "text/plain", sid=sid)
             return
         if parsed.path in ("/api/v2/torrents/categories", "/api/v2/torrents/tags"):
             key = parsed.path.rsplit("/", 1)[1]
@@ -1109,7 +1129,8 @@ class Handler(BaseHTTPRequestHandler):
             # Test-only and unrecorded: every job gone, and the plugin list
             # set to the body's JSON list (empty body: the defaults).
             with _SEARCH_LOCK:
-                SEARCH_JOBS.clear()
+                for jobs in SEARCH_SESSIONS.values():
+                    jobs.clear()
                 SEARCH_PLUGINS[:] = json.loads(body) if body else _default_plugins()
             with _LOG_LOCK:
                 # "<fault>@N" counts from here for the search routes.
@@ -1119,18 +1140,19 @@ class Handler(BaseHTTPRequestHandler):
             return
         record("POST", parsed.path, body, parse_qs(parsed.query))
         if parsed.path.startswith("/api/v2/search/"):
+            sid, jobs = self._search_session()
             fault = _write_fault("search_" + parsed.path.rsplit("/", 1)[1])
             if fault == "noop":
-                self._send(200, b"")
+                self._send(200, b"", sid=sid)
                 return
             if fault == "unreadable":
-                self._send(200, b"<html>not json</html>")
+                self._send(200, b"<html>not json</html>", sid=sid)
                 return
             if fault:
-                self._fault_reply(fault)
+                self._fault_reply(fault, sid)
                 return
-            code, payload = _search_post(parsed.path, body)
-            self._send(code, payload, content_type="application/json" if code == 200 and payload else "text/plain")
+            code, payload = _search_post(parsed.path, body, jobs)
+            self._send(code, payload, content_type="application/json" if code == 200 and payload else "text/plain", sid=sid)
             return
         if parsed.path == "/api/v2/torrents/add":
             import re
