@@ -903,6 +903,108 @@ TestCase {
     compare(second.prefs.save_path, "/two")
   }
 
+  // Fix round 1, the critical race: readPrefs's overlap guard checked only
+  // prefsProcess.running, which is already false during the failed-start
+  // window (running false, cb still set, no exited yet -- the same window
+  // test_readPrefs_failed_start_answers_could_not_run_and_starts_the_next_queued_call
+  // exercises from the other end). A second call landing in that exact
+  // window used to see running === false and start directly, silently
+  // overwriting prefsProcess.cb and losing the first caller's answer for
+  // good. The fix also guards on prefsProcess.cb !== null.
+  function test_readPrefs_second_call_in_the_failed_start_window_does_not_drop_the_first() {
+    var svc = createTemporaryObject(serviceComp, tc)
+    var p = prefsProc(svc)
+    var first = null, second = null
+    var firstCalls = 0, secondCalls = 0
+    svc.readPrefs(function(result) { first = result; firstCalls++ })
+    p.running = false                       // no exited: the helper never ran
+    // Before the fix this call would see p.running already false and call
+    // startPrefsRead(cb2) directly, clobbering prefsProcess.cb (still the
+    // first caller's callback, pending its own deferred guard) and running
+    // its own command over it -- the first caller's callback then never
+    // fires at all.
+    svc.readPrefs(function(result) { second = result; secondCalls++ })
+    compare(p.command, [svc.helperPath, "prefs"], "not yet overwritten by the second call")
+    wait(0)
+    compare(firstCalls, 1, "the first caller is still answered exactly once")
+    compare(first.ok, false)
+    compare(first.error, "Could not run the qbt helper")
+    compare(secondCalls, 0, "the second caller's own run has only just started")
+    compare(p.running, true, "the queued second call started its own run once the first was answered")
+    finish(p, 0, "{\"save_path\":\"/two\"}", "")
+    compare(secondCalls, 1, "the second caller is answered exactly once, from its own run")
+    compare(second.ok, true)
+    compare(second.prefs.save_path, "/two")
+  }
+
+  // ---- Fix round 1, Ruling DK: readPrefs across the Service lifecycle ---
+
+  // An inactive Service (the local-fallback case, Service.qml's own header
+  // comment) starts no Process at all, for readPrefs same as every other
+  // one-shot read here -- but unlike a fire-and-forget bash refresh, a
+  // callback-based read must still always answer, just with this error
+  // instead, asynchronously so a caller never sees it called reentrantly.
+  function test_readPrefs_on_an_inactive_service_answers_without_starting_a_process() {
+    var svc = createTemporaryObject(serviceComp, tc, { active: false })
+    compare(svc.started, false)
+    var p = prefsProc(svc)
+    var got = null, calls = 0
+    svc.readPrefs(function(result) { got = result; calls++ })
+    compare(p.running, false, "an inactive Service starts no Process at all")
+    compare(calls, 0, "the callback is deferred, never called synchronously")
+    wait(0)
+    compare(calls, 1)
+    compare(got.ok, false)
+    compare(got.error, "qBittorrent isn't running.")
+    compare(p.running, false, "still no Process, even once answered")
+  }
+
+  // stop() drains prefsQueue: a call already queued behind an in-flight
+  // run when the Service stops must not be left waiting on a pump that
+  // may never come (or, worse, resolve stale once memory later starts a
+  // fresh service and calls pump). The run already in flight on
+  // prefsProcess itself is untouched by stop() and still answers for real
+  // once it exits, same as any other in-flight bash Process here.
+  function test_stop_drains_the_prefs_queue_with_the_not_running_error() {
+    var svc = createTemporaryObject(serviceComp, tc)
+    var p = prefsProc(svc)
+    var first = null, second = null
+    svc.readPrefs(function(result) { first = result })    // starts a run
+    svc.readPrefs(function(result) { second = result })   // queued behind it
+    compare(p.running, true)
+    svc.stop()
+    compare(svc.prefsQueue.length, 0, "the queue is drained synchronously by stop()")
+    verify(second === null, "answered asynchronously, not yet")
+    wait(0)
+    verify(second !== null)
+    compare(second.ok, false)
+    compare(second.error, "qBittorrent isn't running.")
+    verify(first === null, "the run already in flight when stop() was called is untouched")
+    finish(p, 0, "{\"save_path\":\"/x\"}", "")
+    verify(first !== null, "and still answers for real once it exits")
+    compare(first.ok, true)
+    compare(first.prefs.save_path, "/x")
+  }
+
+  // Defensive belt for the same invariant, exercised directly: whatever
+  // reaches pumpPrefsQueue while stopped (stop() itself already drains the
+  // queue, so this only matters if something else ever leaves it
+  // non-empty) starts no new Process, and still answers rather than drops
+  // the callback.
+  function test_pumpPrefsQueue_starts_no_new_run_once_stopped() {
+    var svc = createTemporaryObject(serviceComp, tc)
+    var p = prefsProc(svc)
+    svc.stop()
+    var got = null
+    svc.prefsQueue = [function(result) { got = result }]
+    svc.pumpPrefsQueue()
+    compare(p.running, false, "no new run starts once stopped")
+    wait(0)
+    verify(got !== null, "the callback is still answered, never dropped")
+    compare(got.ok, false)
+    compare(got.error, "qBittorrent isn't running.")
+  }
+
   function test_setPref_runs_a_ticketed_pref_set_with_dash_dash() {
     var o = idleService(), svc = o.svc, p = o.p
     var spy = spyOn(svc)

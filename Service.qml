@@ -502,6 +502,15 @@ Scope {
     return ""
   }
 
+  // Answers cb, asynchronously (Qt.callLater), with the same "not running"
+  // error readPrefs, pumpPrefsQueue and stop() all use for a Service that
+  // isn't started: never called synchronously out of readPrefs itself, so
+  // a caller can always assume its callback fires on a later tick, never
+  // reentrantly within the call that asked for it.
+  function answerPrefsNotRunning(cb) {
+    Qt.callLater(function() { cb({ ok: false, error: "qBittorrent isn't running." }) })
+  }
+
   // Settings (Task 3): reads `qbt prefs` in its own Process, never the
   // ticketed action queue (it's a read, not a write). cb is called with
   // {ok:true, prefs} or {ok:false, error}; a qBittorrent-down failure is
@@ -509,9 +518,21 @@ Scope {
   // decides to show the api-down screen for it. Overlapping calls are
   // queued rather than coalesced: a caller who asks while another read is
   // still in flight gets its own fresh run and its own answer once its
-  // turn comes, so nobody's callback is ever silently dropped.
+  // turn comes, so nobody's callback is ever silently dropped. An
+  // inactive/stopped Service starts no Process at all (Ruling DK, same
+  // invariant the file header documents for every other Process here);
+  // its callback still always fires, just with that error instead.
   function readPrefs(cb) {
-    if (prefsProcess.running) {
+    if (!started) {
+      answerPrefsNotRunning(cb)
+      return
+    }
+    // prefsProcess.cb !== null also counts: in the failed-start window
+    // (running already false, no exited yet -- see prefsProcess's
+    // onRunningChanged below) a call landing here must still queue behind
+    // the pending callback rather than overwrite it, the same reasoning
+    // runAction's currentAction !== null check applies to actionProcess.
+    if (prefsProcess.running || prefsProcess.cb !== null) {
       prefsQueue = Model.enqueueAction(prefsQueue, cb)
       return
     }
@@ -524,10 +545,22 @@ Scope {
     prefsProcess.running = true
   }
 
+  // Started from prefsProcess.onExited (a real run just finished) and,
+  // defensively, from anywhere else that might find prefsQueue non-empty
+  // after the Service has stopped: stop() itself already drains the queue
+  // synchronously, so in practice this only ever sees !started if a run
+  // that was already in flight when stop() was called exits afterward.
+  // Either way, no new Process starts once stopped, and the callback is
+  // still answered rather than dropped.
   function pumpPrefsQueue() {
     var next = Model.shiftAction(prefsQueue)
     prefsQueue = next.rest
-    if (next.item) startPrefsRead(next.item)
+    if (!next.item) return
+    if (!started) {
+      answerPrefsNotRunning(next.item)
+      return
+    }
+    startPrefsRead(next.item)
   }
 
   // Settings (Task 3): a normal ticketed write, `qbt pref-set <key> --
@@ -1021,6 +1054,14 @@ Scope {
     // and inspectByKey stays exactly as it was.
     lastSentWatch = null
     sidecar.stop()
+    // Ruling DK: every readPrefs call still queued behind an in-flight (or
+    // already-finished) run is answered now, rather than left to time out
+    // whenever (if ever) pumpPrefsQueue next runs -- a run already in
+    // flight on prefsProcess itself is left alone and still answers its
+    // own caller for real once it exits.
+    var queued = prefsQueue
+    prefsQueue = []
+    for (var i = 0; i < queued.length; i++) answerPrefsNotRunning(queued[i])
   }
 
   function activate() {
