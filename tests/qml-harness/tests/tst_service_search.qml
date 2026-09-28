@@ -140,6 +140,97 @@ TestCase {
     compare(w[w.length - 1], { cmd: "search", id: null }, "a closed window drops the watch")
   }
 
+  // W1: the window is rebuilt on every toggle, so a start it gave up on
+  // (it closed) is Service's to clean up: its job is deleted once its id
+  // arrives, whether it was running or still queued at the close.
+  function test_a_start_the_closed_window_gave_up_on_is_deleted() {
+    var svc = createTemporaryObject(serviceComp, tc)
+    var s = spy(finishedSpy, svc)
+    var jobs = lane(svc, "jobs")
+    var h = svc.helperPath
+    svc.windowOpen = true
+    var t1 = svc.searchStart("one", "all")
+    var t2 = svc.searchStart("two", "all")
+    svc.windowOpen = false
+    svc.windowOpen = true
+    var t3 = svc.searchStart("three", "all")
+    finish(jobs, 0, "{\"id\":3}\n", "")
+    compare(s.signalArguments[0][0], t1, "the start still reports")
+    compare(jobs.command, [h, "search", "start", "--pattern", "two", "--category", "all"], "the queued start runs next")
+    compare(svc.searchJobQueue.length, 2, "then the new start, then the delete")
+    compare(svc.searchJobQueue[1].cmd, [h, "search", "delete", "3"], "the running start's job is deleted")
+    finish(jobs, 0, "{\"id\":4}\n", "")
+    compare(s.signalArguments[1][0], t2)
+    compare(jobs.command, [h, "search", "start", "--pattern", "three", "--category", "all"])
+    compare(svc.searchJobQueue[1].cmd, [h, "search", "delete", "4"], "and the queued start's job")
+    finish(jobs, 0, "{\"id\":5}\n", "")
+    compare(s.signalArguments[2][0], t3)
+    compare(jobs.command, [h, "search", "delete", "3"])
+    finish(jobs, 0, "{\"ok\":true}\n", "")
+    compare(jobs.command, [h, "search", "delete", "4"])
+    finish(jobs, 0, "{\"ok\":true}\n", "")
+    compare(svc.searchJobQueue.length, 0, "the reopened window's start is kept")
+    // A failed or unreadable abandoned start deletes nothing.
+    svc.searchStart("four", "all")
+    svc.searchStart("five", "all")
+    svc.windowOpen = false
+    finish(jobs, 1, "", "qBittorrent refused it (HTTP 409)\n")
+    finish(jobs, 0, "{\"id\":\"6; rm\"}\n", "")
+    compare(svc.searchJobQueue.length, 0)
+    verify(svc.searchJobItem === null, "nothing more runs")
+  }
+
+  // W1: a plugin change running (or queued) is Service's to say, so a
+  // reopened window still shows it and waits for it.
+  function test_the_plugin_change_flag() {
+    var svc = createTemporaryObject(serviceComp, tc)
+    var plug = lane(svc, "plugins")
+    compare(svc.searchPluginChange, "")
+    svc.searchPluginList()
+    compare(svc.searchPluginChange, "", "a list isn't a change")
+    svc.searchPluginUpdate()
+    compare(svc.searchPluginChange, "update", "queued behind the list")
+    finish(plug, 0, "[]")
+    compare(svc.searchPluginChange, "update")
+    svc.searchPluginEnable("eztv", true)
+    finish(plug, 0, "{\"ok\":true}")
+    compare(svc.searchPluginChange, "toggle")
+    finish(plug, 0, "")
+    compare(svc.searchPluginChange, "")
+    svc.searchPluginInstall("https://example.org/jackett.py")
+    compare(svc.searchPluginChange, "install")
+    finish(plug, 1, "", "no\n")
+    svc.searchPluginUninstall("eztv")
+    compare(svc.searchPluginChange, "uninstall")
+    finish(plug, 0, "")
+    compare(svc.searchPluginChange, "")
+  }
+
+  // A window that reads the list the moment the change flag clears (as
+  // SearchPane does) is queued behind the list already waiting, never
+  // started over it: every run reports once, in order.
+  function test_a_list_asked_for_as_the_change_ends_is_queued() {
+    var svc = createTemporaryObject(serviceComp, tc)
+    var s = spy(finishedSpy, svc)
+    var plug = lane(svc, "plugins")
+    var h = svc.helperPath
+    var t1 = svc.searchPluginUpdate()
+    var t2 = svc.searchPluginList()
+    var asked = []
+    var hook = function() { if (svc.searchPluginChange === "" && asked.length === 0) asked.push(svc.searchPluginList()) }
+    svc.searchPluginChangeChanged.connect(hook)
+    finish(plug, 0, "")
+    svc.searchPluginChangeChanged.disconnect(hook)
+    compare(asked.length, 1)
+    compare(plug.command, [h, "search-plugin", "list"])
+    compare(svc.searchPluginQueue.length, 1, "the new list waits behind the queued one")
+    finish(plug, 0, "[]")
+    finish(plug, 0, "[]")
+    compare(s.count, 3)
+    compare([s.signalArguments[0][0], s.signalArguments[1][0], s.signalArguments[2][0]], [t1, t2, asked[0]])
+    verify(svc.searchPluginItem === null)
+  }
+
   function test_opens_are_detached_and_only_http() {
     var svc = createTemporaryObject(serviceComp, tc)
     verify(!svc.openUrl("javascript:alert(1)"))

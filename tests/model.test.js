@@ -165,6 +165,20 @@ test("parseStatusJson reads helper snapshot and assigns torrentId", () => {
   assert.equal(status.torrents[0].bucket, "downloading");
 });
 
+test("parseStatusJson carries infohash_v1 and infohash_v2, \"\" when absent", () => {
+  const status = Model.parseStatusJson(JSON.stringify({ installed: true, torrents: [
+    { hash: "aa", infohash_v1: "aa", infohash_v2: "bb", name: "x", state: "uploading" },
+    { hash: "cc", name: "y", state: "uploading" },
+    { hash: "dd", infohash_v1: null, infohash_v2: 5, name: "z", state: "uploading" }
+  ] }));
+  assert.equal(status.torrents[0].infohash_v1, "aa");
+  assert.equal(status.torrents[0].infohash_v2, "bb");
+  assert.equal(status.torrents[1].infohash_v1, "");
+  assert.equal(status.torrents[1].infohash_v2, "");
+  assert.equal(status.torrents[2].infohash_v1, "");
+  assert.equal(status.torrents[2].infohash_v2, "");
+});
+
 test("parseStatusJson returns not-ok for garbage", () => {
   const status = Model.parseStatusJson("nope");
   assert.equal(status.ok, false);

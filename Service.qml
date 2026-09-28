@@ -140,6 +140,13 @@ Scope {
   property var searchPluginItem: null
   property int searchWatchId: 0
   property var searchRecent: []
+  // The plugin change running or waiting on the plugins lane: "install",
+  // "uninstall", "toggle" (on/off), "update" or "". Kept here, not in the
+  // window, so a reopened window still shows it and waits for it (Space,
+  // x, i and U; OV4's hold during an update). Set by syncPluginChange once
+  // the lane has settled (not a binding: a handler that asks for another
+  // run would re-enter it).
+  property string searchPluginChange: ""
 
   readonly property int refreshIntervalSec: {
     var n = parseInt(String(settings && settings.refreshIntervalSec != null ? settings.refreshIntervalSec : 5), 10)
@@ -1107,10 +1114,22 @@ Scope {
     if (p.running || (plugins ? searchPluginItem : searchJobItem) !== null) {
       if (plugins) searchPluginQueue = searchPluginQueue.concat([item])
       else searchJobQueue = searchJobQueue.concat([item])
-      return item.ticket
+    } else {
+      startSearchItem(plugins, item)
     }
-    startSearchItem(plugins, item)
+    if (plugins) syncPluginChange()
     return item.ticket
+  }
+
+  function syncPluginChange() {
+    var items = [searchPluginItem].concat(searchPluginQueue)
+    for (var i = 0; i < items.length; i++) {
+      var c = items[i] ? items[i].cmd : null
+      if (!c || c.length < 3 || c[1] !== "search-plugin") continue
+      if (c[2] === "enable") { searchPluginChange = "toggle"; return }
+      if (c[2] === "install" || c[2] === "uninstall" || c[2] === "update") { searchPluginChange = c[2]; return }
+    }
+    searchPluginChange = ""
   }
 
   function startSearchItem(plugins, item) {
@@ -1123,20 +1142,46 @@ Scope {
 
   // The end of a lane's run (exited, or never started): the next queued
   // run starts first, then the signal goes out.
+  // The lane's item goes straight from this run to the next one (never
+  // null in between), so a handler of searchPluginChange that asks for
+  // another run is queued behind it, never started over it.
   function finishSearchItem(plugins, ok, err, data) {
     var item = plugins ? searchPluginItem : searchJobItem
-    if (plugins) searchPluginItem = null
-    else searchJobItem = null
     var queue = plugins ? searchPluginQueue : searchJobQueue
-    if (queue.length > 0) {
+    if (queue.length > 0 && started) {
       if (plugins) searchPluginQueue = queue.slice(1)
       else searchJobQueue = queue.slice(1)
-      if (started) startSearchItem(plugins, queue[0])
-      else Qt.callLater(function() { root.searchFinished(queue[0].ticket, false, "qBittorrent isn't running.", null) })
+      startSearchItem(plugins, queue[0])
+    } else {
+      if (plugins) searchPluginItem = null
+      else searchJobItem = null
+      if (queue.length > 0) {
+        if (plugins) searchPluginQueue = queue.slice(1)
+        else searchJobQueue = queue.slice(1)
+        Qt.callLater(function() { root.searchFinished(queue[0].ticket, false, "qBittorrent isn't running.", null) })
+      }
     }
+    if (plugins) syncPluginChange()
     if (!item) return
     if (ok && item.cmd.length > 2 && item.cmd[1] === "search" && item.cmd[2] === "add") refresh()
+    // A start the window gave up on (it closed while the start ran or
+    // waited): nobody will watch or delete its job, so it goes here.
+    if (item.abandoned === true && ok) {
+      var id = data && typeof data === "object" ? data.id : undefined
+      if (typeof id === "number" && /^[1-9][0-9]{0,9}$/.test(String(id)) && id <= 2147483647) searchDelete(id)
+    }
     searchFinished(item.ticket, ok, err, data)
+  }
+
+  function isSearchStart(item) {
+    return !!item && item.cmd.length > 2 && item.cmd[1] === "search" && item.cmd[2] === "start"
+  }
+
+  // The window closed: the start running and every start still queued are
+  // abandoned (the window, rebuilt on every toggle, can't delete them).
+  function abandonSearchStarts() {
+    if (isSearchStart(searchJobItem)) searchJobItem.abandoned = true
+    for (var i = 0; i < searchJobQueue.length; i++) if (isSearchStart(searchJobQueue[i])) searchJobQueue[i].abandoned = true
   }
 
   function searchExited(plugins, exitCode, out, err) {
@@ -1368,8 +1413,9 @@ Scope {
 
   // The window is rebuilt on every toggle, so its Client may already be
   // destroyed by the time windowOpen flips false and could never send a
-  // clearing watch itself; Service does it here instead (see clearWatch).
-  onWindowOpenChanged: if (!windowOpen) { clearWatch(); searchUnwatch() }
+  // clearing watch itself; Service does it here instead (see clearWatch),
+  // and deletes the jobs of the starts it gave up on (abandonSearchStarts).
+  onWindowOpenChanged: if (!windowOpen) { clearWatch(); searchUnwatch(); abandonSearchStarts() }
 
   onSidecarCadenceMsChanged: if (sidecarState === "up") sendCadence()
 

@@ -108,8 +108,9 @@ function fill(template, vars) {
 // ---- characters ------------------------------------------------------------------
 
 // BAD (the case file's _doc): controls, every Unicode space, zero-widths,
-// bidi controls, and the backslash.
-var BAD = /[\u0000-\u0020\u007f-\u00a0\u1680\u2000-\u200f\u2028-\u202f\u205f-\u206f\u3000\ufeff\\]/;
+// bidi controls, the soft hyphen, the IDNA dots (U+3002, U+FF0E, U+FF61)
+// and the backslash.
+var BAD = /[\u0000-\u0020\u007f-\u00a0\u00ad\u1680\u2000-\u200f\u2028-\u202f\u205f-\u206f\u3000\u3002\ufeff\uff0e\uff61\\]/;
 var BIDI = /[\u202a-\u202e\u2066-\u2069]/g;
 var CONTROLS = /[\u0000-\u001f\u007f-\u009f]/g;
 var CONTROL = /[\u0000-\u001f\u007f-\u009f]/;
@@ -582,26 +583,38 @@ function matchesPlugin(row, engine) {
 
 // ---- the library match (OV11) -------------------------------------------------------------
 
-// librarySet(torrents) -> {id: true} for each torrent's hash, infohash_v1
-// and infohash_v2, lowercased.
+// librarySet(torrents) -> {v1, v2, v2id}: each a {id: true} map,
+// lowercased. v1: every torrent's hash and infohash_v1 (what a btih
+// matches); v2: every infohash_v2 (what a btmh matches, 1220 stripped);
+// v2id: the hash of a torrent whose row carries neither field (an older
+// helper; qBittorrent's id of a v2-only torrent is its first 40 hex, so
+// that hash-only row still matches a btmh).
 function librarySet(torrents) {
-  var out = {};
+  var out = { v1: {}, v2: {}, v2id: {} };
   var list = torrents || [];
+  function put(map, id) { if (typeof id === "string" && id !== "") map[id.toLowerCase()] = true; }
   for (var i = 0; i < list.length; i++) {
     var t = list[i] || {};
-    var ids = [t.hash, t.infohash_v1, t.infohash_v2];
-    for (var j = 0; j < ids.length; j++) if (typeof ids[j] === "string" && ids[j] !== "") out[ids[j].toLowerCase()] = true;
+    put(out.v1, t.hash);
+    put(out.v1, t.infohash_v1);
+    put(out.v2, t.infohash_v2);
+    var none = function(x) { return typeof x !== "string" || x === ""; };
+    if (none(t.infohash_v1) && none(t.infohash_v2)) put(out.v2id, t.hash);
   }
   return out;
 }
 
 // inLibrary(v1, v2, set): btih against hash/infohash_v1, btmh (1220
-// already stripped) against infohash_v2, and against qBittorrent's id of a
-// v2-only torrent (its first 40 hex, which the status rows' hash carries).
+// already stripped) against infohash_v2, and its first 40 hex against the
+// hash of a row with neither infohash field.
 function inLibrary(v1, v2, set) {
   var s = set || {};
-  if (typeof v1 === "string" && v1 !== "" && s[v1]) return true;
-  if (typeof v2 === "string" && v2 !== "" && (s[v2] || s[v2.slice(0, 40)])) return true;
+  var a = s.v1 || {}, b = s.v2 || {}, c = s.v2id || {};
+  if (typeof v1 === "string" && v1 !== "" && a[v1.toLowerCase()] === true) return true;
+  if (typeof v2 === "string" && v2 !== "") {
+    var k = v2.toLowerCase();
+    if (b[k] === true || c[k.slice(0, 40)] === true) return true;
+  }
   return false;
 }
 

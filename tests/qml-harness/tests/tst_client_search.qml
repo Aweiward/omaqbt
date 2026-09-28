@@ -96,10 +96,16 @@ TestCase {
       function searchDelete(id) { return rec("searchDelete", [id]) }
       function searchAdd(link, plugin) { return rec("searchAdd", plugin ? [link, plugin] : [link]) }
       function searchPluginList() { return rec("searchPluginList", []) }
-      function searchPluginInstall(u) { return rec("searchPluginInstall", [u]) }
-      function searchPluginUninstall(n) { return rec("searchPluginUninstall", [n]) }
-      function searchPluginEnable(n, on) { return rec("searchPluginEnable", [n, on]) }
-      function searchPluginUpdate() { return rec("searchPluginUpdate", []) }
+      // Service's searchPluginChange: set while a plugin change runs, clear
+      // before searchFinished reaches the window (this handler connects first).
+      property string searchPluginChange: ""
+      property int changeTicket: 0
+      function change(kind, name, args) { var t = rec(name, args); searchPluginChange = kind; changeTicket = t; return t }
+      onSearchFinished: function(ticket, ok, error, data) { if (ticket === changeTicket) { changeTicket = 0; searchPluginChange = "" } }
+      function searchPluginInstall(u) { return change("install", "searchPluginInstall", [u]) }
+      function searchPluginUninstall(n) { return change("uninstall", "searchPluginUninstall", [n]) }
+      function searchPluginEnable(n, on) { return change("toggle", "searchPluginEnable", [n, on]) }
+      function searchPluginUpdate() { return change("update", "searchPluginUpdate", []) }
       function searchWatch(id, off) { rec("searchWatch", [id, off]); return true }
       function searchUnwatch() { rec("searchUnwatch", []) }
     }
@@ -175,12 +181,25 @@ TestCase {
     c.shell = sh
     c.service = svc
     svc.torrents = [tt(hh("a"), "alpha", { addedOn: 3 }), tt(hh("b"), "beta", { addedOn: 2 })]
-    var o = { c: c, svc: svc }
+    var o = { c: c, svc: svc, sh: sh }
     if (width) {
       winOf(c).width = width
       tryVerify(function() { return winOf(c).contentItem.width === width }, 2000)
     }
     return o
+  }
+  // Closes the window and builds a new one on the same Service, as the
+  // shell does on every toggle (the old Client is destroyed).
+  function reopen(o) {
+    o.c.close()
+    o.c.destroy()
+    wait(0)
+    var c = createTemporaryObject(clientComp, tc)
+    o.sh.target = c
+    c.shell = o.sh
+    c.service = o.svc
+    c.open("")
+    o.c = c
   }
   // F, and the plugin list's answer.
   function openSearch(o, list) {
@@ -727,24 +746,135 @@ TestCase {
     verify(showsIn(o, "searchResultsPane", "qBittorrent searches through plugins it runs with Python on this machine. P manages them; i installs one from an https URL."))
   }
 
-  function test_a_close_while_starting_never_deletes_the_next_job() {
+  // W1: the start's job is Service's to delete (tst_service_search); the
+  // rebuilt window never touches the old start, and keeps its own job.
+  function test_a_close_while_starting_leaves_the_old_start_to_service() {
     var o = make()
     openSearch(o)
     slash(o); line(o).setInput("one"); enter(o)
     var first = last(o.svc, "searchStart")
-    o.c.close()
-    o.c.open("")
-    shifted(o, "F")
-    finishCall(o, "searchPluginList", true, "", plugins())
+    reopen(o)
+    compare(o.svc.windowOpen, true)
+    openSearch(o)
     slash(o); line(o).setInput("two"); enter(o)
     var second = last(o.svc, "searchStart")
     verify(second.ticket !== first.ticket)
     o.svc.searchFinished(first.ticket, true, "", { id: 3 })
-    compare(last(o.svc, "searchDelete").args, [3], "the orphaned start's job is deleted")
+    compare(calls(o.svc, "searchWatch").length, 0, "the old start's job is never watched")
+    compare(calls(o.svc, "searchDelete").length, 0, "nor deleted by the window (Service does it)")
     o.svc.searchFinished(second.ticket, true, "", { id: 4 })
-    compare(calls(o.svc, "searchDelete").length, 1, "the new job is kept")
+    compare(calls(o.svc, "searchDelete").length, 0, "the new job is kept")
     compare(last(o.svc, "searchWatch").args, [4, 0])
     verify(shows(o, "searching… · 0 results"))
+  }
+
+  // W1: a plugin change started before the window was rebuilt still shows,
+  // still holds Space/i/U, and OV4's hold still covers the update.
+  function test_a_reopened_window_waits_for_the_plugin_change() {
+    var o = make()
+    openSearch(o)
+    shifted(o, "P")
+    shifted(o, "U")
+    compare(calls(o.svc, "searchPluginUpdate").length, 1)
+    reopen(o)
+    openSearch(o)
+    shifted(o, "P")
+    compare(o.c.keyPane, "searchPluginList")
+    verify(shows(o, "updating…"))
+    shifted(o, "U")
+    space(o)
+    key(o.c, "i")
+    compare(o.c.mode, "NORMAL", "i waits")
+    compare(calls(o.svc, "searchPluginUpdate").length, 1, "U waits")
+    compare(calls(o.svc, "searchPluginEnable").length, 0, "Space waits")
+    o.svc.api = false
+    wait(50)
+    verify(!findName(content(o), "searchDown").visible, "one missed status line during the update keeps the view")
+    o.svc.api = true
+    wait(30)
+    var lists = calls(o.svc, "searchPluginList").length
+    finishCall(o, "searchPluginUpdate", true, "", { ok: true })
+    compare(calls(o.svc, "searchPluginList").length, lists + 1, "the list is read again")
+    verify(!shows(o, "updating…"))
+    shifted(o, "U")
+    compare(calls(o.svc, "searchPluginUpdate").length, 2)
+  }
+
+  // W2: over the down screen only Esc acts.
+  function test_the_down_screen_blocks_the_search_keys() {
+    var o = make()
+    streaming(o)
+    reply(o, { status: "Stopped", total: 2, offset: 2, rows: [] })
+    verify(sp(o).currentResult !== null)
+    o.svc.api = false
+    wait(50)
+    verify(findName(content(o), "searchDown").visible)
+    compare(sp(o).flags.result, null)
+    compare(sp(o).flags.plugin, null)
+    compare(sp(o).flags.enabledPlugins, 0)
+    enter(o)
+    compare(o.c.mode, "NORMAL", "Enter adds nothing")
+    compare(o.c.confirm, null)
+    slash(o)
+    compare(o.c.mode, "NORMAL", "/ is blocked")
+    shifted(o, "P")
+    compare(o.c.keyPane, "searchResults", "P is blocked")
+    key(o.c, "c")
+    compare(o.c.mode, "NORMAL", "c is blocked")
+    compare(calls(o.svc, "searchStart").length, 1)
+    esc(o)
+    compare(o.c.activeView, "torrents", "Esc still leaves")
+  }
+
+  // W3: a held row that gains the filtered plugin shows at once.
+  function test_a_row_gaining_the_filtered_plugin_shows_at_once() {
+    var o = make()
+    var list = plugins()
+    list[1].enabled = true
+    openSearch(o, list)
+    startSearch(o, "debian")
+    reply(o, { total: 3, rows: [row("c"), row("d", { engineName: "eztv" })] })
+    key(o.c, "h")
+    key(o.c, "j"); key(o.c, "j")
+    tryCompare(sp(o), "shownKeys", ["h:" + hh("d")], 1000, "filtered to EZTV")
+    reply(o, { total: 3, offset: 2, rows: [row("c", { engineName: "eztv" })] })
+    compare(sp(o).shownKeys, ["h:" + hh("d"), "h:" + hh("c")], "the merged row is appended while the search runs")
+    verify(showsIn(o, "searchResultsPane", "The Pirate Bay, EZTV"))
+    reply(o, { total: 3, offset: 3, rows: [row("c", { engineName: "eztv" })] })
+    compare(sp(o).shownKeys.length, 2, "once")
+  }
+
+  // Esc before the id with the sidecar down: the job is deleted once the id
+  // arrives, never stopped or watched.
+  function test_esc_before_the_id_with_the_sidecar_down_deletes_the_job() {
+    var o = make()
+    o.svc.sidecarState = "down"
+    o.svc.sidecarDown = true
+    openSearch(o)
+    slash(o)
+    line(o).setInput("debian")
+    enter(o)
+    esc(o)
+    compare(o.c.activeView, "search")
+    compare(calls(o.svc, "searchDelete").length, 0)
+    finishCall(o, "searchStart", true, "", { id: 9 })
+    compare(last(o.svc, "searchDelete").args, [9])
+    compare(calls(o.svc, "searchStop").length, 0)
+    compare(calls(o.svc, "searchWatch").length, 0)
+    verify(shows(o, "stopped · 0 results"))
+  }
+
+  // Ruling FG: the stalled line only once the sidecar is down, not while it starts.
+  function test_the_stalled_line_waits_for_the_sidecar_to_be_down() {
+    var o = make()
+    streaming(o)
+    o.svc.sidecarState = "starting"
+    wait(30)
+    verify(!findName(content(o), "searchStalled").visible, "a starting sidecar says nothing")
+    o.svc.sidecarState = "down"
+    verify(findName(content(o), "searchStalled").visible)
+    o.svc.sidecarState = "up"
+    verify(!findName(content(o), "searchStalled").visible)
   }
 
   function test_sidecar_down_says_nothing_arrives_and_esc_deletes_the_job() {
