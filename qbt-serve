@@ -50,6 +50,12 @@ INSPECT_TIMEOUT = 1
 WATCH_TABS = ("info", "trackers", "peers", "chart")
 WATCH_BACKOFF_SECONDS = 5.0
 WATCH_PIECES_INTERVAL = 5.0
+# Slice 5a: the search watch (tests/fixtures/search-contract.md).
+SEARCH_POLL_INTERVAL = 1.0
+SEARCH_CAP = 2000
+SEARCH_PAGE = 500
+SEARCH_TIMEOUT = 2
+SEARCH_ID_MAX = 2147483647
 
 _HASH_RE = re.compile(r"[0-9a-fA-F]{40}|[0-9a-fA-F]{64}")
 _STDOUT_LOCK = threading.Lock()
@@ -275,6 +281,89 @@ def read_inspect(state):
     _inspect_ok(state, {"type": "inspect", "hash": h, "tab": tab, "props": props, "pieces": pieces})
 
 
+def _search_int(value, low, high):
+    return isinstance(value, int) and not isinstance(value, bool) and low <= value <= high
+
+
+def _search_read(state, watch):
+    """One read for `watch`: (status, total, rows), "gone", or None for a
+    failure that is retried on the next poll. Below the cap it's one
+    results page (status, total and rows from the same response); at the
+    cap it's the job's status with no rows, since a results read with
+    limit 0 would return every row (OV15)."""
+    jid, offset = watch["id"], watch["offset"]
+    if offset < SEARCH_CAP:
+        limit = min(SEARCH_PAGE, SEARCH_CAP - offset)
+        path = f"/api/v2/search/results?id={jid}&limit={limit}&offset={offset}"
+    else:
+        limit = 0
+        path = f"/api/v2/search/status?id={jid}"
+    try:
+        body = state["search_client"].get(path)
+    except qbtsync.ApiError as exc:
+        # 404: the job is gone (a qBittorrent restart). A results 409
+        # (offset past the end) can't happen while the window's offset
+        # invariant holds; if one does, it's treated the same, so a watch
+        # never retries a bad offset forever.
+        if exc.code == 404 or (exc.code == 409 and limit):
+            return "gone"
+        # Anything else (qBittorrent down, another code) sends nothing: the
+        # status line's api:false already says so, and the next poll retries.
+        return None
+    try:
+        parsed = json.loads(body)
+    except ValueError:
+        return None
+    if not limit:
+        parsed = parsed[0] if isinstance(parsed, list) and len(parsed) == 1 else None
+    if not isinstance(parsed, dict):
+        return None
+    status, total = parsed.get("status"), parsed.get("total")
+    rows = parsed.get("results", []) if limit else []
+    if status not in ("Running", "Stopped") or not _search_int(total, 0, 2**53) or not isinstance(rows, list):
+        return None
+    # Never past row 2000, whatever came back; the rows themselves pass
+    # through untouched (OV9: sanitising lives only in SearchView.js).
+    return status, total, rows[:limit]
+
+
+def read_search(state):
+    """Polls the search watch once and emits a reply when one is due: after
+    a command, whenever rows arrive, whenever status or total changed, and
+    always for the final reply (Ruling FB: Stopped and offset + rows ==
+    min(total, 2000), zero rows allowed), after which the watch drops."""
+    watch = state.get("search")
+    state["search_next"] = time.monotonic() + SEARCH_POLL_INTERVAL
+    if not watch:
+        return
+    result = _search_read(state, watch)
+    if result is None:
+        return
+    if result == "gone":
+        emit({"type": "search", "id": watch["id"], "error": "gone"})
+        state["search"] = None
+        return
+    status, total, rows = result
+    offset = watch["offset"]
+    final = status == "Stopped" and offset + len(rows) == min(total, SEARCH_CAP)
+    changed = (status, total) != (watch.get("status"), watch.get("total"))
+    if watch.get("due") or rows or changed or final:
+        emit({
+            "type": "search",
+            "id": watch["id"],
+            "status": status,
+            "total": total,
+            "offset": offset,
+            "rows": rows,
+            "capped": total > SEARCH_CAP,
+        })
+        watch["status"], watch["total"] = status, total
+    watch["due"] = False
+    watch["offset"] = offset + len(rows)
+    if final:
+        state["search"] = None
+
+
 def handle_command(cmd, state):
     """Dispatches one non-`refresh` command. `refresh` is handled by the
     caller instead, so that several queued refreshes collapse into one
@@ -349,6 +438,20 @@ def handle_command(cmd, state):
         state["watch_due"] = True
         return
 
+    if name == "search":
+        # The window owns the offset (OV7): the watch is only the latest
+        # command's {id, offset} plus what was last reported.
+        jid = cmd.get("id")
+        if jid is None:
+            state["search"] = None
+            return
+        offset = cmd.get("offset")
+        if not _search_int(jid, 1, SEARCH_ID_MAX) or not _search_int(offset, 0, SEARCH_CAP):
+            emit({"type": "error", "id": cid, "error": "bad command"})
+            return
+        state["search"] = {"id": jid, "offset": offset, "status": None, "total": None, "due": True}
+        return
+
     emit({"type": "error", "id": cid, "error": "bad command"})
 
 
@@ -362,6 +465,11 @@ def _is_watch(item):
     return kind == "cmd" and payload is not None and payload.get("cmd") == "watch"
 
 
+def _is_search(item):
+    kind, payload = item
+    return kind == "cmd" and payload is not None and payload.get("cmd") == "search"
+
+
 def drain_and_dispatch(cmd_queue, first_item, state):
     """Handles `first_item` plus everything already queued behind it,
     without blocking for more. Any number of queued `refresh` commands
@@ -369,9 +477,11 @@ def drain_and_dispatch(cmd_queue, first_item, state):
     its HTTP round-trip) per queued refresh. Queued `watch` commands
     collapse the same way: only the last one in the batch is applied (a
     burst of cursor movement answers only where the cursor ended up, not
-    every torrent it passed over)."""
+    every torrent it passed over). So do queued `search` commands: each
+    replaces the whole watch, so only the last one matters."""
     pending_refresh = False
     pending_watch = None
+    pending_search = None
     item = first_item
     while item is not None:
         kind, payload = item
@@ -379,6 +489,8 @@ def drain_and_dispatch(cmd_queue, first_item, state):
             pending_refresh = True
         elif _is_watch(item):
             pending_watch = payload
+        elif _is_search(item):
+            pending_search = payload
         elif kind == "cmd":
             if payload is None:
                 emit({"type": "error", "id": None, "error": "bad command"})
@@ -390,6 +502,8 @@ def drain_and_dispatch(cmd_queue, first_item, state):
             item = None
     if pending_watch is not None:
         handle_command(pending_watch, state)
+    if pending_search is not None:
+        handle_command(pending_search, state)
     return pending_refresh
 
 
@@ -441,11 +555,17 @@ def main():
     # get their own short timeout, so a stalled inspect route can never
     # hold up the status client's much longer 5s budget.
     inspect_client = qbtsync.Client(probe["base"], jar, timeout=INSPECT_TIMEOUT)
+    # Search reads (slice 5a): the same GET-only client and jar, with their
+    # own timeout.
+    search_client = qbtsync.Client(probe["base"], jar, timeout=SEARCH_TIMEOUT)
     state = {
         "helper": helper,
         "probe": probe,
         "client": client,
         "inspect_client": inspect_client,
+        "search_client": search_client,
+        "search": None,
+        "search_next": 0,
         "sync": qbtsync.SyncState(),
         "slow": qbtsync.SlowCache(interval=10),
         "speedhist": speedhist.SpeedHistory(),
@@ -466,7 +586,12 @@ def main():
     # there is no in-band condition for this loop itself to break on.
     while True:
         now = time.monotonic()
-        timeout = max(0.0, state["next_tick"] - now)
+        wake = state["next_tick"]
+        if state["search"]:
+            # The search watch polls about once a second, whatever the
+            # status cadence is.
+            wake = min(wake, state["search_next"])
+        timeout = max(0.0, wake - now)
         try:
             item = cmd_queue.get(timeout=timeout)
         except queue.Empty:
@@ -485,11 +610,16 @@ def main():
                 # A changed watch is answered at once (F3), rather than
                 # waiting out the cadence for the next tick.
                 read_inspect(state)
+            if state["search"] and state["search"]["due"]:
+                # A search command is answered at once too.
+                read_search(state)
 
         now = time.monotonic()
         if now >= state["next_tick"]:
             do_tick(state)
             state["next_tick"] = now + state["cadence_ms"] / 1000.0
+        if state["search"] and time.monotonic() >= state["search_next"]:
+            read_search(state)
 
 
 if __name__ == "__main__":

@@ -314,12 +314,17 @@ cmd_probe() {
     '{installed:$installed, daemon:$daemon, lockHolder:$lock, vpnIface:$vpnIface, base:$base, stateDir:$stateDir, ridFile:$ridFile, cookieFile:$cookieFile}'
 }
 
-cmd_status() {
+# The lib/ directory next to this script (the python modules).
+qbt_lib_dir() {
   local exec_path
   exec_path=$(readlink -f "$0" 2>/dev/null || printf '%s' "$0")
   [[ $exec_path == /* ]] || exec_path="$PWD/$0"
+  printf '%s/lib' "$(dirname "$exec_path")"
+}
+
+cmd_status() {
   local lib_dir
-  lib_dir="$(dirname "$exec_path")/lib"
+  lib_dir=$(qbt_lib_dir)
   cmd_probe | python3 "$lib_dir/qbtsync.py" status
 }
 
@@ -1534,6 +1539,32 @@ category_save_path() {
 api_try() {
   local out rc=0
   out=$(api "$@" 2>&1) || rc=$?
+  api_try_result "$rc" "$out"
+}
+
+# Slice 5a: api_try for a form body that arrives on stdin (curl
+# --data-binary @-), so no value is ever on curl's argv. Feed it with a
+# process substitution (`< <(printf ...)`), never a pipe: a pipeline would
+# run it in a subshell and lose API_BODY/API_FAIL. The response body stays
+# in memory, as in api_exec.
+api_try_stdin() {
+  local method=$1 path=$2 out rc=0
+  out=$(api_stdin_exec "$method" "$path" 2>&1) || rc=$?
+  api_try_result "$rc" "$out"
+}
+
+api_stdin_exec() {
+  assert_local_base
+  local method=$1 path=$2
+  ensure_state_dir "$(dirname "$COOKIE_FILE")"
+  (umask 077; api_exec -sS -g --noproxy '*' --max-time 5 -X "$method" -b "$COOKIE_FILE" -c "$COOKIE_FILE" \
+    -H "Content-Type: application/x-www-form-urlencoded" --data-binary @- "$(base_url)$path")
+}
+
+# $1 the call's status, $2 its output: the body into API_BODY, or the
+# reason into API_FAIL (a code or a short reason, never a body).
+api_try_result() {
+  local rc=$1 out=$2
   API_BODY="" API_FAIL=""
   if (( rc == 0 )); then
     API_BODY=$out
@@ -2556,6 +2587,325 @@ cmd_ban_list() {
   esac
 }
 
+# ---------------------------------------------------------------------------
+# Slice 5a: `qbt search` and `qbt search-plugin`, exactly per
+# tests/fixtures/search-contract.md. Every rule and message comes from
+# tests/fixtures/search-rules-cases.json, enforced by lib/searchrules.py
+# (URLs split by the contract's text rule, never a URL library; Ruling FB).
+# Arguments are checked before any request; every value reaches curl on
+# stdin; failures report codes only (api_error_detail=code); response
+# bodies stay in memory and reach jq through printf pipes.
+# ---------------------------------------------------------------------------
+
+SEARCH_USAGE="usage: qbt search start|stop|delete|add"
+SEARCH_PLUGIN_USAGE="usage: qbt search-plugin list|install <url>|uninstall <name>|enable <name> on|off|update"
+
+# One case-file rule on a value sent to lib/searchrules.py on stdin (the
+# addLink plugin after a NUL, which argv can't carry). On success sets
+# RULE_NORM and RULE_HOST; a refusal dies with the rule's own message.
+search_rule() {
+  local kind=$1 out rc=0
+  shift
+  if [[ $kind == addLink && $# -eq 2 ]]; then
+    out=$(printf '%s\0%s' "$1" "$2" | python3 "$(qbt_lib_dir)/searchrules.py" "$kind" 2>/dev/null) || rc=$?
+  else
+    out=$(printf '%s' "$1" | python3 "$(qbt_lib_dir)/searchrules.py" "$kind" 2>/dev/null) || rc=$?
+  fi
+  if (( rc != 0 )); then
+    (( rc == 1 )) && [[ -n $out ]] && die "$out"
+    die "Couldn't check the value."
+  fi
+  RULE_NORM=${out%%$'\t'*}
+  RULE_HOST=${out#*$'\t'}
+}
+
+# @uri of a value that goes through a pipe, never jq's argv.
+uri_stdin() {
+  printf '%s' "$1" | jq -Rsrj '@uri'
+}
+
+# GET /search/plugins into PLUGINS_JSON (an array of objects), else dies
+# with the contract's sentence.
+search_plugins_read() {
+  api_try GET "/api/v2/search/plugins" || die "Couldn't read the search plugins (${API_FAIL})"
+  PLUGINS_JSON=$API_BODY
+  printf '%s' "$PLUGINS_JSON" | jq -e 'type == "array" and all(.[]; type == "object")' >/dev/null 2>&1 \
+    || die "qBittorrent sent something unreadable"
+}
+
+# "1:<version>" when PLUGINS_JSON lists $1, else "0:". $1 passed the
+# plugin-name rule.
+search_plugin_version() {
+  printf '%s' "$PLUGINS_JSON" | jq -rj --arg n "$1" \
+    'first(.[] | select(.name == $n) | "1:" + (.version | if type == "string" then . else tojson end)) // "0:"'
+}
+
+search_require_plugin() {
+  local v
+  v=$(search_plugin_version "$1")
+  [[ $v == 1:* ]] || die "There's no plugin named $1."
+}
+
+search_id_path() {
+  printf '%s/search.id' "$STATE_DIR"
+}
+
+# $STATE_DIR/search.id: mode 0600, the id and a newline. Written to a
+# temporary name and moved into place, so a planted symlink is replaced,
+# never followed. A failed write still lets start print the id: the window
+# deletes its job itself (the final read, the window closing).
+search_id_write() {
+  local f tmp
+  f=$(search_id_path)
+  (ensure_state_dir "$STATE_DIR") >/dev/null 2>&1 || return 0
+  tmp="$f.$$.tmp"
+  if (umask 077; printf '%s\n' "$1" >"$tmp") 2>/dev/null; then
+    mv -f -- "$tmp" "$f" 2>/dev/null || rm -f -- "$tmp" 2>/dev/null || true
+  fi
+}
+
+# The id a regular search.id holds, or nothing.
+search_id_read() {
+  local f old=""
+  f=$(search_id_path)
+  [[ -f $f && ! -L $f ]] || return 0
+  IFS= read -r old <"$f" 2>/dev/null || true
+  printf '%s' "$old"
+}
+
+# Step 3 (OV14): a job search.id still names (a crash leftover, or the job
+# a new / replaces) is deleted first; a 404 means it's already gone. Any
+# other failure keeps the file, so the next start tries again.
+search_drop_stale() {
+  local f old
+  f=$(search_id_path)
+  [[ -e $f || -L $f ]] || return 0
+  old=$(search_id_read)
+  if [[ $old =~ ^[1-9][[:digit:]]{0,9}$ ]] && (( 10#$old <= 2147483647 )); then
+    if ! api_try_stdin POST "/api/v2/search/delete" < <(printf 'id=%s' "$old"); then
+      [[ $API_FAIL == "HTTP 404" ]] || die "qBittorrent refused it (${API_FAIL})"
+    fi
+  fi
+  rm -f -- "$f" 2>/dev/null || true
+}
+
+search_start() {
+  local usage="usage: qbt search start --pattern <p> --category <c>"
+  local pattern="" category="" have_pattern=0 have_category=0
+  while [[ $# -gt 0 ]]; do
+    case $1 in
+      --pattern)
+        [[ $# -ge 2 && $have_pattern == 0 ]] || die "$usage"
+        pattern=$2 have_pattern=1
+        shift 2 ;;
+      --category)
+        [[ $# -ge 2 && $have_category == 0 ]] || die "$usage"
+        category=$2 have_category=1
+        shift 2 ;;
+      *) die "$usage" ;;
+    esac
+  done
+  [[ $have_pattern == 1 && $have_category == 1 ]] || die "$usage"
+  search_rule pattern "$pattern"
+  search_rule category "$category"
+  assert_local_base
+
+  # OV8: searches use only the enabled plugins.
+  search_plugins_read
+  printf '%s' "$PLUGINS_JSON" | jq -e 'any(.[]; .enabled == true)' >/dev/null 2>&1 \
+    || die "All search plugins are off."
+
+  search_drop_stale
+
+  local enc
+  enc=$(uri_stdin "$pattern") || die "Couldn't check the value."
+  if ! api_try_stdin POST "/api/v2/search/start" \
+      < <(printf 'pattern=%s&category=%s&plugins=enabled' "$enc" "$category"); then
+    [[ $API_FAIL == "HTTP 409" ]] || die "qBittorrent refused it (${API_FAIL})"
+    # OV6: one code, two causes; the jobs' status tells them apart.
+    api_try GET "/api/v2/search/status" || die "qBittorrent refused it (HTTP 409)"
+    local running
+    running=$(printf '%s' "$API_BODY" \
+      | jq -r 'if type == "array" then [.[] | select(type == "object" and .status == "Running")] | length else error end' \
+      2>/dev/null) || running=""
+    [[ $running =~ ^[[:digit:]]{1,6}$ ]] || die "qBittorrent refused it (HTTP 409)"
+    (( 10#$running >= 5 )) && die "qBittorrent is running 5 searches; stop one first."
+    die "Search needs Python on this machine."
+  fi
+
+  local id
+  id=$(printf '%s' "$API_BODY" | jq -r 'if type == "object" and (.id | type) == "number"
+      and .id == (.id | floor) and .id >= 1 and .id <= 2147483647 then .id else empty end' 2>/dev/null) || id=""
+  [[ $id =~ ^[1-9][[:digit:]]{0,9}$ ]] || die "qBittorrent sent something unreadable"
+  search_id_write "$id"
+  printf '{"id":%s}\n' "$id"
+}
+
+# stop or delete <id>. A 404 is fine: the job is already gone, and cleanup
+# must be idempotent. delete forgets search.id when it names <id>.
+search_stop_delete() {
+  local action=$1
+  shift
+  [[ $# -eq 1 ]] || die "usage: qbt search $action <id>"
+  search_rule searchId "$1"
+  assert_local_base
+  local id=$1
+  if ! api_try_stdin POST "/api/v2/search/$action" < <(printf 'id=%s' "$id"); then
+    [[ $API_FAIL == "HTTP 404" ]] || die "qBittorrent refused it (${API_FAIL})"
+  fi
+  if [[ $action == delete && $(search_id_read) == "$id" ]]; then
+    rm -f -- "$(search_id_path)" 2>/dev/null || true
+  fi
+  printf '%s\n' '{"ok":true}'
+}
+
+# OV3/OV5: a magnet, or an https .torrent without a plugin, goes through
+# torrents/add (the request `qbt add <link>` makes); an https link with its
+# plugin goes through search/downloadTorrent. via:"plugin" only means the
+# request was accepted (downloadTorrent answers an empty 200 at once).
+search_add() {
+  [[ $# -eq 1 || $# -eq 2 ]] || die "usage: qbt search add <link> [<plugin>]"
+  local link=$1 plugin=${2:-}
+  if [[ $# -eq 2 ]]; then
+    search_rule addLink "$link" "$plugin"
+  else
+    search_rule addLink "$link"
+  fi
+  assert_local_base
+  local via=$RULE_NORM enc
+  enc=$(uri_stdin "$link") || die "Couldn't check the value."
+  if [[ $via == plugin ]]; then
+    search_plugins_read
+    search_require_plugin "$plugin"
+    api_try_stdin POST "/api/v2/search/downloadTorrent" \
+      < <(printf 'torrentUrl=%s&pluginName=%s' "$enc" "$plugin") || die "qBittorrent refused it (${API_FAIL})"
+  else
+    api_try_stdin POST "/api/v2/torrents/add" < <(printf 'urls=%s' "$enc") \
+      || die "qBittorrent refused it (${API_FAIL})"
+  fi
+  printf '{"ok":true,"via":"%s"}\n' "$via"
+}
+
+cmd_search() {
+  local api_error_detail=code
+  case ${1:-} in
+    start) shift; search_start "$@" ;;
+    stop|delete) search_stop_delete "$@" ;;
+    add) shift; search_add "$@" ;;
+    *) die "$SEARCH_USAGE" ;;
+  esac
+}
+
+search_plugin_list() {
+  assert_local_base
+  search_plugins_read
+  printf '%s' "$PLUGINS_JSON" | jq -c 'map({name, fullName, version, enabled, url, supportedCategories})'
+}
+
+# The microseconds since the epoch (EPOCHREALTIME without its separator,
+# which follows the locale).
+search_now_us() {
+  printf '%s' "${EPOCHREALTIME//[!0-9]/}"
+}
+
+# A3/OV4: install, then re-read every 0.5 s for up to 20 s until the name
+# (qBittorrent's naming: the URL's last path segment without .py) is
+# listed with a version other than before. QBT_SEARCH_INSTALL_WAIT (whole
+# seconds, tests only) shortens the wait.
+search_plugin_install() {
+  search_rule pluginUrl "$1"
+  local name=$RULE_NORM enc before after fail=""
+  assert_local_base
+  search_plugins_read
+  before=$(search_plugin_version "$name")
+  enc=$(uri_stdin "$1") || die "Couldn't check the value."
+  api_try_stdin POST "/api/v2/search/installPlugin" < <(printf 'sources=%s' "$enc") \
+    || die "qBittorrent refused it (${API_FAIL})"
+
+  local wait=${QBT_SEARCH_INSTALL_WAIT:-20}
+  [[ $wait =~ ^[[:digit:]]{1,3}$ ]] || wait=20
+  local deadline=$(( $(search_now_us) + 10#$wait * 1000000 ))
+  after=$before
+  while true; do
+    sleep 0.5
+    if api_try GET "/api/v2/search/plugins"; then
+      PLUGINS_JSON=$API_BODY
+      if printf '%s' "$PLUGINS_JSON" | jq -e 'type == "array" and all(.[]; type == "object")' >/dev/null 2>&1; then
+        fail=""
+        after=$(search_plugin_version "$name")
+        if [[ $after == 1:* && $after != "$before" ]]; then
+          printf '%s\n' '{"ok":true}'
+          return 0
+        fi
+      else
+        fail=unreadable
+      fi
+    else
+      fail=$API_FAIL
+    fi
+    (( $(search_now_us) < deadline )) || break
+  done
+  [[ $fail == unreadable ]] && die "qBittorrent sent something unreadable"
+  [[ -n $fail ]] && die "Couldn't read the search plugins (${fail})"
+  [[ $before == 1:* && $after == "$before" ]] && die "$name v${before#1:} is already installed."
+  die "Couldn't confirm the install of $name."
+}
+
+search_plugin_uninstall() {
+  search_rule pluginName "$1"
+  assert_local_base
+  local name=$1
+  search_plugins_read
+  search_require_plugin "$name"
+  api_try_stdin POST "/api/v2/search/uninstallPlugin" < <(printf 'names=%s' "$name") \
+    || die "qBittorrent refused it (${API_FAIL})"
+  search_plugins_read
+  [[ $(search_plugin_version "$name") == 0: ]] || die "Couldn't confirm the uninstall of $name."
+  printf '%s\n' '{"ok":true}'
+}
+
+search_plugin_enable() {
+  search_rule pluginName "$1"
+  local name=$1 want=false
+  assert_local_base
+  [[ $2 == on ]] && want=true
+  search_plugins_read
+  search_require_plugin "$name"
+  api_try_stdin POST "/api/v2/search/enablePlugin" < <(printf 'names=%s&enable=%s' "$name" "$want") \
+    || die "qBittorrent refused it (${API_FAIL})"
+  search_plugins_read
+  local now
+  now=$(printf '%s' "$PLUGINS_JSON" | jq -rj --arg n "$name" 'first(.[] | select(.name == $n) | if .enabled == true then "true" else "false" end) // "gone"' 2>/dev/null) \
+    || now=""
+  if [[ $now != "$want" ]]; then
+    [[ $want == true ]] && die "Couldn't confirm $name is on."
+    die "Couldn't confirm $name is off."
+  fi
+  printf '%s\n' '{"ok":true}'
+}
+
+# A3: no version promise; qBittorrent checks and installs asynchronously.
+search_plugin_update() {
+  assert_local_base
+  api_try POST "/api/v2/search/updatePlugins" || die "qBittorrent refused it (${API_FAIL})"
+  search_plugins_read
+  printf '%s\n' '{"ok":true}'
+}
+
+cmd_search_plugin() {
+  local api_error_detail=code
+  case "${1:-}:$#" in
+    list:1) search_plugin_list ;;
+    install:2) search_plugin_install "$2" ;;
+    uninstall:2) search_plugin_uninstall "$2" ;;
+    enable:3)
+      [[ $3 == on || $3 == off ]] || die "$SEARCH_PLUGIN_USAGE"
+      search_plugin_enable "$2" "$3" ;;
+    update:1) search_plugin_update ;;
+    *) die "$SEARCH_PLUGIN_USAGE" ;;
+  esac
+}
+
 case ${1:-} in
   status) shift; cmd_status "$@" ;;
   probe) shift; cmd_probe "$@" ;;
@@ -2594,6 +2944,8 @@ case ${1:-} in
   prefs) shift; cmd_prefs "$@" ;;
   pref-set) shift; cmd_pref_set "$@" ;;
   ban-list) shift; cmd_ban_list "$@" ;;
+  search) shift; cmd_search "$@" ;;
+  search-plugin) shift; cmd_search_plugin "$@" ;;
   magnet-paths) shift; cmd_magnet_paths "$@" ;;
   magnet-snapshot) shift; cmd_magnet_snapshot "$@" ;;
   magnet-inbox) shift; cmd_magnet_inbox "$@" ;;
@@ -2603,5 +2955,5 @@ case ${1:-} in
   magnet-pending-drop) shift; cmd_magnet_pending_drop "$@" ;;
   magnet-install-handler) shift; cmd_magnet_install_handler "$@" ;;
   magnet-uninstall-handler) shift; cmd_magnet_uninstall_handler "$@" ;;
-  *) die "usage: qbt status|probe|add|start|stop|recheck|set-location|delete|reannounce|tracker-add|tracker-edit|tracker-remove|ban-peer|fetch-metadata|files|prio|turtle|limit|sequential|first-last|sharelimit|share-limits|category-add|category-path|category-remove|category-rename|set-category|tag-add|tag-remove|tag-rename|tags|prefs|pref-set|ban-list|install|start-daemon|stop-daemon|magnet-paths|magnet-inbox|magnet-drain|magnet-pending-list|magnet-pending-drop|magnet-install-handler|magnet-uninstall-handler" ;;
+  *) die "usage: qbt status|probe|add|start|stop|recheck|set-location|delete|reannounce|tracker-add|tracker-edit|tracker-remove|ban-peer|fetch-metadata|files|prio|turtle|limit|sequential|first-last|sharelimit|share-limits|category-add|category-path|category-remove|category-rename|set-category|tag-add|tag-remove|tag-rename|tags|prefs|pref-set|ban-list|search|search-plugin|install|start-daemon|stop-daemon|magnet-paths|magnet-inbox|magnet-drain|magnet-pending-list|magnet-pending-drop|magnet-install-handler|magnet-uninstall-handler" ;;
 esac
