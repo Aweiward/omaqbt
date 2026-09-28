@@ -462,8 +462,9 @@ Item {
       helpOpen = false
       return
     }
-    // Esc on an open overlay closes it (no query clear, no Esc Esc).
-    if (View.overlayEscape(ev, regState.mode, layout, keyPane)) { setPane("table"); return }
+    // Esc on an open overlay closes it (no query clear, no Esc Esc). The
+    // torrent pane, not keyPane: a down screen dispatches as the table.
+    if (View.overlayEscape(ev, regState.mode, layout, settingsView.open ? keyPane : pane)) { setPane("table"); return }
     dispatchWith(function(st) { return Registry.dispatch(st, ev) }, ev)
   }
 
