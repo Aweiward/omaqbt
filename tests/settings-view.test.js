@@ -294,7 +294,7 @@ test("editorFor: toggle, with the next value", () => {
 
 test("editorFor: input with a prefill per type", () => {
   const e = (k, o) => V.editorFor(k, prefs(o));
-  assert.deepEqual(e("listen_port"), { kind: "input", key: "Enter", prefill: "35763", multiline: false });
+  assert.deepEqual(e("listen_port"), { kind: "input", key: "Enter", prefill: "35763" });
   assert.equal(e("dl_limit").prefill, "u");
   assert.equal(e("alt_dl_limit").prefill, "10K");
   assert.equal(e("alt_dl_limit", { alt_dl_limit: 2097152 }).prefill, "2M");
@@ -303,9 +303,6 @@ test("editorFor: input with a prefill per type", () => {
   assert.equal(e("schedule_from", { scheduler_enabled: true }).prefill, "08:00");
   assert.equal(e("save_path").prefill, "/home/user/Downloads");
   assert.equal(e("locale").prefill, "en_US");
-  const m = e("bypass_auth_subnet_whitelist", { bypass_auth_subnet_whitelist_enabled: true });
-  assert.equal(m.multiline, true);
-  assert.equal(m.prefill, "127.0.0.1/32\n::1/128");
 });
 
 test("editorFor: picker with choices and the current value marked", () => {
@@ -342,20 +339,27 @@ test("editorFor: none for locked, read-only, secret, dimmed, loading and unknown
 test("editorFor: Other keys by JSON type", () => {
   const p = prefs({ new_flag: false, new_num: 2.5, new_text: "hi" });
   assert.deepEqual(V.editorFor("new_flag", p), { kind: "toggle", key: "Space", next: true });
-  assert.deepEqual(V.editorFor("new_num", p), { kind: "input", key: "Enter", prefill: "2.5", multiline: false });
-  assert.deepEqual(V.editorFor("new_text", p), { kind: "input", key: "Enter", prefill: "hi", multiline: false });
+  assert.deepEqual(V.editorFor("new_num", p), { kind: "input", key: "Enter", prefill: "2.5" });
+  assert.deepEqual(V.editorFor("new_text", p), { kind: "input", key: "Enter", prefill: "hi" });
 });
 
 // --- parseInput --------------------------------------------------------------
 
 test("parseInput: every window case in settings-cases.json", () => {
   let n = 0;
+  let multi = 0;
   for (const group of ["numbers", "choices", "times", "paths", "texts"]) {
     for (const c of CASES[group]) {
       if (c.only === "qbt") continue;
       n++;
       const r = V.parseInput(c.key, c.input, prefs());
       const label = group + " " + c.key + " " + JSON.stringify(c.input) + " (" + c.why + ")";
+      // Ruling DH: multiline keys are read-only in 4a, whatever the input.
+      if (Schema.SCHEMA[c.key].multiline) {
+        assert.deepEqual(r, { error: V.CANT_CHANGE }, label);
+        multi++;
+        continue;
+      }
       if (!c.ok) {
         assert.equal(typeof r.error, "string", label);
         assert.ok(r.error.length > 0, label);
@@ -373,6 +377,7 @@ test("parseInput: every window case in settings-cases.json", () => {
     }
   }
   assert.ok(n > 400, "window cases: " + n);
+  assert.ok(multi >= 9, "multiline cases: " + multi);
 });
 
 test("parseInput: the number messages name the range and the sentinels", () => {
@@ -436,14 +441,29 @@ test("parseInput: bools, Other keys by JSON type, and refused keys", () => {
   assert.deepEqual(V.parseInput("dht", "true", p), { value: true });
   assert.equal(V.parseInput("dht", "yes", p).error, "Use true or false.");
   assert.deepEqual(V.parseInput("new_flag", "true", p), { value: true });
-  assert.deepEqual(V.parseInput("new_num", "-3.25", p), { value: -3.25 });
-  assert.equal(V.parseInput("new_num", "3x", p).error, "Use a number.");
+  assert.deepEqual(V.parseInput("new_num", "-3", p), { value: -3 });
+  assert.deepEqual(V.parseInput("new_num", "0", p), { value: 0 });
+  assert.equal(V.parseInput("new_num", "3x", p).error, "Use a whole number.");
+  // Ruling DL: an integer's Other key refuses decimals and "-0"
+  assert.equal(V.parseInput("new_num", "-3.25", p).error, "Use a whole number.");
+  assert.equal(V.parseInput("new_num", "-0", p).error, "Use a whole number.");
+  assert.equal(V.WHOLE_NUMBER_ERROR, "Use a whole number.");
+  const f = prefs({ new_ratio: 2.5 });
+  assert.deepEqual(V.parseInput("new_ratio", "-3.25", f), { value: -3.25 });
+  assert.equal(V.parseInput("new_ratio", "3x", f).error, "Use a number.");
   assert.deepEqual(V.parseInput("new_text", "b c", p), { value: "b c" });
   assert.equal(V.parseInput("new_text", "b\nc", p).error, "Use one line.");
   for (const k of ["web_ui_port", "current_network_interface", "add_trackers_url_list", "proxy_password", "schedule_from_hour", "banned_IPs", "rss_refresh_interval", "nope"]) {
     assert.equal(V.parseInput(k, "1", p).error, V.CANT_CHANGE, k);
   }
   assert.equal(V.parseInput("web_ui_new", "1", prefs({ web_ui_new: 1 })).error, V.CANT_CHANGE);
+  // Ruling DL: refused patterns match case-insensitively
+  for (const k of ["Web_UI_New", "PROXY_x", "My_Interface", "smtp_Password", "use_HTTPS2", "AutoRun_x"]) {
+    const q = prefs({ [k]: 1 });
+    assert.equal(V.parseInput(k, "1", q).error, V.CANT_CHANGE, k);
+    assert.deepEqual(V.editorFor(k, q), { kind: "none", why: "unknown" }, k);
+    assert.deepEqual(V.otherRows(q), [], k);
+  }
   assert.equal(V.CANT_CHANGE, "This setting can't be changed here.");
 });
 
@@ -626,4 +646,47 @@ test("rows: a locked row is never dimmed; the lock is its reason", () => {
   assert.equal(r.text, r.value);
   assert.equal(r.typeTag, "OmaqBT");
   assert.equal(r.muted, true);
+});
+
+// --- Ruling DH: multiline keys are read-only in 4a -------------------------------------
+
+const MULTI = ["excluded_file_names", "add_trackers", "bypass_auth_subnet_whitelist", "web_ui_custom_http_headers"];
+
+test("multiline: exactly the four editable-in-4b keys are the schema's multiline, non-hidden, non-deferred, writable keys", () => {
+  const found = Schema.KEY_ORDER.filter((k) => {
+    const e = Schema.SCHEMA[k];
+    return e.multiline && !e.hidden && !e.deferred && !e.readOnly;
+  });
+  assert.deepEqual(found.sort(), MULTI.slice().sort());
+});
+
+test("multiline: rows say multi-line and read-only, with the 4b note after the schema help", () => {
+  const on = prefs({
+    excluded_file_names_enabled: true, add_trackers_enabled: true,
+    bypass_auth_subnet_whitelist_enabled: true, web_ui_use_custom_http_headers_enabled: true
+  });
+  for (const k of MULTI) {
+    const r = rowOf(k, on);
+    assert.equal(r.typeTag, "multi-line", k);
+    assert.equal(r.readOnly, true, k);
+    assert.equal(r.help, Schema.SCHEMA[k].help + " Editing multi-line settings arrives in 4b.", k);
+    assert.deepEqual(V.editorFor(k, on), { kind: "none", why: "multiline" }, k);
+    // before the dimmed check
+    assert.deepEqual(V.editorFor(k, prefs()), { kind: "none", why: "multiline" }, k);
+    assert.deepEqual(V.parseInput(k, "x", on), { error: V.CANT_CHANGE }, k);
+  }
+  assert.equal(V.MULTILINE_NOTE, " Editing multi-line settings arrives in 4b.");
+  assert.equal(rowOf("bypass_auth_subnet_whitelist", on).value, "127.0.0.1/32 (+1 more)");
+});
+
+test("multiline: add_trackers_url_list keeps its permanent read-only tag and help", () => {
+  const r = rowOf("add_trackers_url_list");
+  assert.equal(r.typeTag, "read-only");
+  assert.equal(r.readOnly, true);
+  assert.equal(r.help, Schema.SCHEMA.add_trackers_url_list.help);
+  assert.deepEqual(V.editorFor("add_trackers_url_list", prefs()), { kind: "none", why: "readOnly" });
+});
+
+test("multiline: section counts are unchanged", () => {
+  assert.deepEqual(V.sections(prefs()).slice(0, 7).map((x) => x.count), [33, 27, 11, 23, 12, 30, 72]);
 });

@@ -20,6 +20,9 @@
 //
 // 4a scope (eng D1): secrets show "set"/"not set" and aren't editable,
 // banned_IPs and rss_* never show, and done notes carry no "u undoes".
+// Multiline text (excluded_file_names, add_trackers,
+// bypass_auth_subnet_whitelist, web_ui_custom_http_headers) is read-only
+// until 4b (Ruling DH): tagged "multi-line", no editor, refused by parseInput.
 //
 // Speeds (Ruling DE): qBittorrent keeps global limits in whole KiB, so a
 // parsed speed on a step-1024 key is rounded to the NEAREST whole KiB,
@@ -45,6 +48,9 @@ var LINE_ERROR = "Use one line.";
 var CHOICE_ERROR = "Choose one of the listed values.";
 var BOOL_ERROR = "Use true or false.";
 var NUMBER_ERROR = "Use a number.";
+var WHOLE_NUMBER_ERROR = "Use a whole number.";
+// Ruling DH: multiline text is read-only in 4a (appended to its help).
+var MULTILINE_NOTE = " Editing multi-line settings arrives in 4b.";
 
 var TYPE_TAGS = {
   bool: "on/off",
@@ -149,12 +155,12 @@ function isSentinel(entry, value) {
 }
 
 // A key Other may show and edit: in prefs, unknown to the schema, not
-// banned_IPs or rss_*, not matching a refused pattern, and a scalar value
-// (a string on one line).
+// banned_IPs or rss_*, not matching a refused pattern (case-insensitively,
+// as qbt does: Ruling DL), and a scalar value (a string on one line).
 function isOtherKey(key, prefs) {
   if (!loaded(prefs) || !hasOwn(prefs, key) || hasOwn(SCHEMA, key)) return false;
   if (key === "banned_IPs" || key.indexOf("rss_") === 0) return false;
-  if (Schema.matchesAny(key, Schema.OTHER_REFUSED_PATTERNS)) return false;
+  if (Schema.matchesAny(key.toLowerCase(), Schema.OTHER_REFUSED_PATTERNS)) return false;
   var v = prefs[key];
   if (typeof v === "boolean") return true;
   if (typeof v === "number") return isFinite(v);
@@ -163,6 +169,7 @@ function isOtherKey(key, prefs) {
 
 function otherType(value) {
   if (typeof value === "boolean") return "bool";
+  if (typeof value === "number" && Math.floor(value) === value) return "integer";
   if (typeof value === "number") return "number";
   return "text";
 }
@@ -276,19 +283,23 @@ function makeRow(key, entry, prefs) {
   var reason = isLoading || entry.locked ? "" : dimReason(key, prefs);
   var text = value;
   if (reason !== "") text = value === EMPTY ? "(" + reason + ")" : value + " (" + reason + ")";
-  var tag = entry.locked ? "OmaqBT" : entry.secret ? "secret" : entry.readOnly ? "read-only" : (TYPE_TAGS[entry.type] || "text");
+  // add_trackers_url_list is read-only for good ("read-only"); the other
+  // multiline keys only until 4b ("multi-line", with MULTILINE_NOTE).
+  var tag = entry.locked ? "OmaqBT" : entry.secret ? "secret" : entry.readOnly ? "read-only" :
+    entry.multiline ? "multi-line" : (TYPE_TAGS[entry.type] || "text");
+  var only4b = !!entry.multiline && !entry.readOnly && !entry.locked && !entry.secret;
   return {
     key: key,
     label: entry.label,
     section: entry.section,
     group: entry.group,
-    help: entry.help,
+    help: only4b ? entry.help + MULTILINE_NOTE : entry.help,
     value: value,
     text: text,
     typeTag: tag,
     muted: isLoading || !!entry.locked || reason !== "" || isMutedValue(entry, raw),
     locked: !!entry.locked,
-    readOnly: !!entry.readOnly,
+    readOnly: !!entry.readOnly || only4b,
     secret: !!entry.secret,
     restart: !!entry.restart,
     dimmed: reason !== "",
@@ -315,7 +326,7 @@ function otherRows(prefs) {
       help: OTHER_HELP,
       value: value,
       text: value,
-      typeTag: TYPE_TAGS[otherType(v) === "number" ? "int" : otherType(v)],
+      typeTag: typeof v === "boolean" ? TYPE_TAGS.bool : typeof v === "number" ? TYPE_TAGS.int : TYPE_TAGS.text,
       muted: v === "",
       locked: false,
       readOnly: false,
@@ -406,16 +417,19 @@ function search(query, prefs) {
 // --- editorFor -----------------------------------------------------------------------------
 
 function prefillOf(entry, value) {
+  // Borrows 3b's editText for its speed shape ("u", "10K", "2M"): editText
+  // reads a status row's dlLimit, so the value goes in as a one-field row.
   if (entry.type === "speed") return Limits.editText("dlLimit", { dlLimit: value });
   return textOf(value);
 }
 
 // editorFor(key, prefs) -> how the row is edited:
 //   {kind: "toggle", key: "Space", next}           the flipped boolean
-//   {kind: "input", key: "Enter", prefill, multiline}
+//   {kind: "input", key: "Enter", prefill}
 //   {kind: "picker", key: "Enter", choices: [{value, label, current}]}
 //   {kind: "none", why}  why: "loading", "hidden" (hidden or deferred),
-//                        "unknown", "locked", "secret", "readOnly", "dimmed"
+//                        "unknown", "locked", "secret", "readOnly",
+//                        "multiline" (until 4b, Ruling DH), "dimmed"
 // Other keys edit by their JSON type (a boolean toggles, the rest input).
 function editorFor(key, prefs) {
   if (!loaded(prefs)) return { kind: "none", why: "loading" };
@@ -424,13 +438,14 @@ function editorFor(key, prefs) {
     if (!isOtherKey(key, prefs)) return { kind: "none", why: "unknown" };
     var v = prefs[key];
     if (typeof v === "boolean") return { kind: "toggle", key: "Space", next: !v };
-    return { kind: "input", key: "Enter", prefill: String(v), multiline: false };
+    return { kind: "input", key: "Enter", prefill: String(v) };
   }
   if (!isVisible(entry)) return { kind: "none", why: "hidden" };
   if (!present(key, entry, prefs)) return { kind: "none", why: "unknown" };
   if (entry.locked) return { kind: "none", why: "locked" };
   if (entry.secret) return { kind: "none", why: "secret" };
   if (entry.readOnly) return { kind: "none", why: "readOnly" };
+  if (entry.multiline) return { kind: "none", why: "multiline" };
   if (dimReason(key, prefs) !== "") return { kind: "none", why: "dimmed" };
   var cur = currentValue(key, prefs);
   if (entry.type === "bool") return { kind: "toggle", key: "Space", next: toBool(cur) !== true };
@@ -443,7 +458,7 @@ function editorFor(key, prefs) {
       })
     };
   }
-  return { kind: "input", key: "Enter", prefill: prefillOf(entry, cur), multiline: !!entry.multiline };
+  return { kind: "input", key: "Enter", prefill: prefillOf(entry, cur) };
 }
 
 // --- parseInput ------------------------------------------------------------------------------
@@ -523,7 +538,7 @@ function parseBool(s) {
 // choice-int; the choice's string for choice-string; true/false for bool;
 // "HH:MM" for a time composite (which also carries hour and min); the text
 // for path and text. prefs is needed only for Other keys (their JSON type).
-// Locked, read-only, secret, hidden, deferred and unknown keys give
+// Locked, read-only, multiline, secret, hidden, deferred and unknown keys give
 // CANT_CHANGE. A dimmed key still parses (the editor refuses it instead).
 function parseInput(key, text, prefs) {
   var s = textOf(text);
@@ -532,10 +547,12 @@ function parseInput(key, text, prefs) {
     if (!isOtherKey(key, prefs)) return { error: CANT_CHANGE };
     var t = otherType(prefs[key]);
     if (t === "bool") return parseBool(s);
+    // An integer's key takes whole numbers only, never "-0" (Ruling DL).
+    if (t === "integer") return /^-?[1-9][0-9]*$|^0$/.test(s) ? { value: Number(s) } : { error: WHOLE_NUMBER_ERROR };
     if (t === "number") return /^-?(0|[1-9][0-9]*)(\.[0-9]+)?$/.test(s) ? { value: Number(s) } : { error: NUMBER_ERROR };
     return /[\r\n]/.test(s) ? { error: LINE_ERROR } : { value: s };
   }
-  if (!isVisible(entry) || entry.locked || entry.readOnly || entry.secret) return { error: CANT_CHANGE };
+  if (!isVisible(entry) || entry.locked || entry.readOnly || entry.secret || entry.multiline) return { error: CANT_CHANGE };
   switch (entry.type) {
     case "bool": return parseBool(s);
     case "int":
@@ -545,7 +562,7 @@ function parseInput(key, text, prefs) {
     case "choice-string": return parseChoice(entry, s);
     case "time": return parseTime(s);
     case "path": return parsePath(entry, s);
-    default: return !entry.multiline && /[\r\n]/.test(s) ? { error: LINE_ERROR } : { value: s };
+    default: return /[\r\n]/.test(s) ? { error: LINE_ERROR } : { value: s };
   }
 }
 
@@ -564,7 +581,7 @@ function equalValue(key, a, b) {
     var x = toBool(a);
     return x !== undefined && x === toBool(b);
   }
-  if (type === "int" || type === "float" || type === "speed" || type === "choice-int" || type === "number") {
+  if (type === "int" || type === "float" || type === "speed" || type === "choice-int" || type === "number" || type === "integer") {
     var n = toNumber(a);
     return n !== undefined && n === toNumber(b);
   }
@@ -615,6 +632,8 @@ if (typeof module !== "undefined") {
     CHOICE_ERROR: CHOICE_ERROR,
     BOOL_ERROR: BOOL_ERROR,
     NUMBER_ERROR: NUMBER_ERROR,
+    WHOLE_NUMBER_ERROR: WHOLE_NUMBER_ERROR,
+    MULTILINE_NOTE: MULTILINE_NOTE,
     sections: sections,
     rows: rows,
     rowFor: rowFor,
