@@ -396,9 +396,9 @@ function tableState(s) {
 // with zero torrents (ruling BS); its `y` matches nothing there, and the
 // window reads an unmatched y in the empty library as add from clipboard.
 function dispatchPane(pane, state) {
-  // The Settings view (slice 4a) keeps its own columns whatever the torrent
-  // view shows: its Esc must work on its down screen too.
-  if (Registry.isSettingsPane(pane)) return String(pane);
+  // Settings (slice 4a) and Search (5a) keep their own panes whatever the
+  // torrent view shows: their Esc must work on its down screen too.
+  if (Registry.viewOfPane(pane) !== "torrents") return String(pane);
   if (state === "rows" || state === "noMatch") return String(pane || "table");
   if (state === "empty" && pane === "filters") return "filters";
   return "table";
@@ -539,6 +539,13 @@ function progressText(kind, count) {
 // LimitsView.shareConfirm writes.
 var LIBRARY_ACCEPT = { libraryRemove: "delete", libraryRename: "rename", libraryPath: "change", categorySet: "set", limitSet: "set" };
 
+// Search's confirms (slice 5a), which the window raises with
+// Registry.raiseConfirm and builds the line for (A1's add, D3's page, D4's
+// install, x's uninstall): kind -> the word `y` shows. `line` is the
+// question, `detail` an optional muted sentence after it (D4's "This runs
+// Python code as qBittorrent, with access to your downloads.").
+var SEARCH_ACCEPT = { searchAdd: "add", searchOpenPage: "open", pluginInstall: "install", pluginUninstall: "uninstall" };
+
 // confirmLine(confirm) -> the CONFIRM status line, from
 // CommandRegistry.dispatch's `confirm` result {commandId, count, withFiles}.
 // {lead, strong, tail, accept}: "Delete 2 torrents" + "and their files" +
@@ -551,6 +558,10 @@ function confirmLine(confirm) {
   // key time (LibraryView's delete/rename/path copy) and put it on `line`.
   if (Object.prototype.hasOwnProperty.call(LIBRARY_ACCEPT, c.kind)) {
     return { lead: String(c.line || ""), strong: "", tail: "", accept: c.accept ? String(c.accept) : LIBRARY_ACCEPT[c.kind] };
+  }
+  if (Object.prototype.hasOwnProperty.call(SEARCH_ACCEPT, c.kind)) {
+    var detail = String(c.detail || "");
+    return { lead: String(c.line || "") + (detail !== "" ? " " : ""), strong: "", tail: detail, accept: c.accept ? String(c.accept) : SEARCH_ACCEPT[c.kind] };
   }
   if (c.kind === "trackerRemove" || c.kind === "peerBan") {
     var label = String(c.label !== undefined && c.label !== null ? c.label : ((c.target || {}).label || ""));
@@ -773,6 +784,9 @@ function inputPrompt(purpose, shown) {
     return { prompt: LIMIT_PROMPTS[purpose][0] + " for " + String(shown || ""), placeholder: LIMIT_PROMPTS[purpose][1] };
   }
   if (purpose === "settingsSearch") return { prompt: "Search settings", placeholder: "label, help or key" };
+  // Search (slice 5a): `/`'s query and the plugins overlay's `i`.
+  if (purpose === "searchQuery") return { prompt: "Search", placeholder: "what to look for" };
+  if (purpose === "pluginInstall") return { prompt: "Install plugin from", placeholder: "https://…/name.py" };
   // A setting's input editor (Task 6); `shown` is its label.
   if (purpose === "settingEdit") return { prompt: String(shown || ""), placeholder: "" };
   return { prompt: "/", placeholder: "filter by name, or paste a magnet" };
@@ -792,6 +806,8 @@ function modeHints(mode, ctx) {
     if (c.purpose === "categoryAdd" || c.purpose === "tagAdd") return [{ key: "Enter", label: "create" }, { key: "Esc", label: "cancel" }];
     if (c.purpose === "categoryRename" || c.purpose === "tagRename") return [{ key: "Enter", label: "rename" }, { key: "Esc", label: "cancel" }];
     if (c.purpose === "settingsSearch") return [{ key: "Enter", label: "keep results" }, { key: "Esc", label: "clear" }];
+    if (c.purpose === "searchQuery") return [{ key: "Enter", label: "search" }, { key: "Esc", label: "cancel" }];
+    if (c.purpose === "pluginInstall") return [{ key: "Enter", label: "install" }, { key: "Esc", label: "cancel" }];
     if (c.purpose === "settingEdit" || c.purpose === "categoryPath" || Object.prototype.hasOwnProperty.call(LIMIT_PROMPTS, c.purpose)) return [{ key: "Enter", label: "set" }, { key: "Esc", label: "cancel" }];
     return [{ key: "Enter", label: "keep filter" }, { key: "Esc", label: "cancel" }];
   }
@@ -806,6 +822,7 @@ function modeHints(mode, ctx) {
     ];
   }
   if (Registry.isSettingsPane(c.pane)) return settingsFooterKeys(c.pane, c.searching === true, c.editor, c).concat([{ key: "?", label: "keys" }]);
+  if (Registry.isSearchPane(c.pane)) return searchFooterKeys(c.pane, c.search || {}).concat([{ key: "?", label: "keys" }]);
   if (c.pane === "filters") {
     return [
       { key: "j/k", label: "move" },
@@ -879,6 +896,43 @@ function settingsFooterKeys(column, searching, editor, ctx) {
   if (Object.prototype.hasOwnProperty.call(SETTINGS_EDITOR_KEYS, editor)) out.push(SETTINGS_EDITOR_KEYS[editor]);
   if (editor === "secret" && c.secretSet === true) out.push({ key: "x", label: "clear" });
   return out.concat([{ key: c.narrow === true ? "Tab" : "h", label: "sections" }, { key: "/", label: "search" }, esc]);
+}
+
+// --- Search (slice 5a) ---------------------------------------------------------
+
+// searchFooterKeys(pane, flags) -> [{key, label}] for the focused Search
+// pane's footer. flags is the Search view's dispatch flags (SearchPane.flags:
+// {narrow, result, plugin, plugins, enabledPlugins, pluginsBusy, running}).
+// The results: move, add and open a page (with a result under the cursor),
+// a new search (with a plugin on), the plugins, and Esc, which stops a
+// running search before it leaves. The Plugins column filters with j/k;
+// narrow it's an overlay that Esc closes. The plugins overlay: on/off and
+// uninstall on a plugin, install and update all, Esc closes; while a change
+// runs only Esc.
+function searchFooterKeys(pane, flags) {
+  var f = flags || {};
+  var esc = { key: "Esc", label: f.running === true ? "stop" : "back" };
+  var canSearch = Number(f.enabledPlugins) > 0;
+  if (pane === "searchPluginList") {
+    if (f.pluginsBusy === true) return [{ key: "j/k", label: "move" }, { key: "Esc", label: "close" }];
+    var list = [{ key: "j/k", label: "move" }];
+    if (f.plugin) list.push({ key: "Space", label: "on/off" });
+    list.push({ key: "i", label: "install" });
+    if (f.plugin) list.push({ key: "x", label: "uninstall" });
+    if (Number(f.plugins) > 0) list.push({ key: "U", label: "update all" });
+    return list.concat([{ key: "Esc", label: "close" }]);
+  }
+  if (pane === "searchPlugins") {
+    var col = [{ key: "j/k", label: "filter" }, { key: "l", label: "results" }];
+    if (canSearch) col.push({ key: "/", label: "search" });
+    col.push({ key: "P", label: "plugins" });
+    return col.concat([f.narrow === true && f.running !== true ? { key: "Esc", label: "close" } : esc]);
+  }
+  var out = [{ key: "j/k", label: "move" }];
+  if (f.result) out.push({ key: "Enter", label: "add" }, { key: "d", label: "page" });
+  if (canSearch) out.push({ key: "/", label: "search" });
+  out.push({ key: f.narrow === true ? "Tab" : "h", label: "plugins column" }, { key: "P", label: "plugins" });
+  return out.concat([esc]);
 }
 
 // settingQuestion(label, isBool, value, shown) -> {line, accept}: what a
@@ -1048,7 +1102,7 @@ function targetHashes(mode, rows, cursorHash, anchorHash) {
 // always written too. `settings` is SettingsCommands.flags() while the
 // Settings view is open ({key, toggle, editable}: the setting under its
 // cursor and whether Space/Enter edit it), or null; written every time.
-function dispatchState(regState, pane, state, hasCursorRow, targets, inspector, picker, settings) {
+function dispatchState(regState, pane, state, hasCursorRow, targets, inspector, picker, settings, search) {
   var st = {};
   var r = regState || {};
   for (var k in r) {
@@ -1083,6 +1137,16 @@ function dispatchState(regState, pane, state, hasCursorRow, targets, inspector, 
   st.listItem = sv.listItem && typeof sv.listItem === "object" ? sv.listItem : null;
   st.narrow = sv.narrow === true;
   st.settingsUndoCount = typeof sv.undoCount === "number" ? sv.undoCount : 0;
+  // Slice 5a: `search` is the Search view's flags (SearchPane.flags) while
+  // it's the active view, or null; written every time. narrow comes from
+  // whichever view is showing.
+  var se = search || {};
+  if (se.narrow === true) st.narrow = true;
+  st.searchResult = se.result && typeof se.result === "object" ? se.result : null;
+  st.searchPlugin = se.plugin && typeof se.plugin === "object" ? se.plugin : null;
+  st.searchPluginCount = typeof se.plugins === "number" ? se.plugins : 0;
+  st.searchEnabledPlugins = typeof se.enabledPlugins === "number" ? se.enabledPlugins : 0;
+  st.searchPluginsBusy = se.pluginsBusy === true;
   return st;
 }
 
@@ -1854,12 +1918,19 @@ function paletteRunsFrom(rows, pane) {
   return false;
 }
 
-function paletteRunsFromSettings(rows) {
+// paletteRunsFromView(rows, view): one of the rows names a pane of `view`
+// ("settings", "search"): a row of that view, judged from the pane the
+// palette opened in while that view shows (state.viewPane).
+function paletteRunsFromView(rows, view) {
   for (var i = 0; i < rows.length; i++) {
     var panes = rows[i].panes || [];
-    for (var j = 0; j < panes.length; j++) if (Registry.isSettingsPane(panes[j])) return true;
+    for (var j = 0; j < panes.length; j++) if (panes[j] !== "*" && Registry.viewOfPane(panes[j]) === view) return true;
   }
   return false;
+}
+
+function paletteRunsFromSettings(rows) {
+  return paletteRunsFromView(rows, "settings");
 }
 
 function paletteRunsFromTable(rows) {
@@ -1887,9 +1958,30 @@ function paletteSettingsReason(rows, state) {
   return list ? "open a list" : "";
 }
 
+// Slice 5a: a Search action from elsewhere names the step it needs: Search
+// open, then the results (Enter, y, d, s, S) or the plugins overlay (P).
+function paletteSearchReason(rows, state) {
+  var results = false, list = false, any = false;
+  for (var i = 0; i < rows.length; i++) {
+    var panes = rows[i].panes || [];
+    for (var j = 0; j < panes.length; j++) {
+      if (!Registry.isSearchPane(panes[j])) continue;
+      any = true;
+      if (panes[j] === "searchResults") results = true;
+      if (panes[j] === "searchPluginList") list = true;
+    }
+  }
+  if (!any) return "";
+  if (!(state && state.activeView === "search")) return "open Search";
+  if (list && !results) return "open the plugins (P)";
+  return results ? "focus the results" : "leave the plugins";
+}
+
 function paletteFocusReason(rows, state) {
   var settings = paletteSettingsReason(rows, state);
   if (settings !== "") return settings;
+  var search = paletteSearchReason(rows, state);
+  if (search !== "") return search;
   for (var i = 0; i < rows.length; i++) {
     var panes = rows[i].panes || [];
     for (var j = 0; j < panes.length; j++) {
@@ -1987,7 +2079,9 @@ function paletteRowFrom(entry, state, indices) {
   // Slice 4b: a Settings row is judged from the Settings column the
   // palette opened from (state.settingsPane); every other row from the
   // torrent pane, as before.
+  // Slice 5a: likewise a Search row from Search's pane (state.viewPane).
   if (state && state.settingsPane && paletteRunsFromSettings(entry.rows)) pane = String(state.settingsPane);
+  if (state && state.activeView === "search" && state.viewPane && paletteRunsFromView(entry.rows, "search")) pane = String(state.viewPane);
   if (!paletteRunsFromTable(entry.rows) && !paletteRunsFrom(entry.rows, pane)) {
     enabled = false;
     reason = paletteFocusReason(entry.rows, state);
@@ -1997,8 +2091,9 @@ function paletteRowFrom(entry, state, indices) {
   } else if (!Registry.preconditionMet(entry.needs, state)) {
     enabled = false;
     reason = Registry.needsReason(entry.needs, state);
-  } else if (entry.id === "settings.open" && state && state.settingsOpen === true) {
-    // ":Settings" from Settings would only close and reopen it.
+  } else if (state && VIEW_OPENERS[entry.id] !== undefined && state.activeView === VIEW_OPENERS[entry.id]) {
+    // ":Settings" from Settings (":Search" from Search) would only close
+    // and reopen it.
     enabled = false;
     reason = "already open";
   } else if (entry.id === "file.cycle" && (entry.tabs || []).indexOf("files") !== -1 && state.cursorNoMetadata === true) {
@@ -2045,8 +2140,22 @@ function paletteTitleAsc(a, b) {
 // A command is eligible when its id isn't null or "palette.*" and its
 // `modes` include "NORMAL" -- the same table `commands` (as passed in)
 // that helpFor/dispatch read.
+// Slice 5a: Search's own rows (every row of the command names a Search
+// pane) are listed only while Search shows, so the torrent view's palette
+// is unchanged but for ":Search" itself.
+function paletteListed(entry, state) {
+  var rows = entry.rows || [];
+  for (var i = 0; i < rows.length; i++) {
+    var panes = rows[i].panes || [];
+    for (var j = 0; j < panes.length; j++) if (!Registry.isSearchPane(panes[j])) return true;
+  }
+  return !!state && state.activeView === "search";
+}
+
 function paletteRows(query, commands, mru, state) {
-  var entries = paletteCommandEntries(commands).map(function(e) { return paletteEntryFor(e, state); });
+  var entries = paletteCommandEntries(commands)
+    .filter(function(e) { return paletteListed(e, state); })
+    .map(function(e) { return paletteEntryFor(e, state); });
   var byId = {};
   var i;
   for (i = 0; i < entries.length; i++) byId[entries[i].id] = entries[i];
@@ -2105,11 +2214,43 @@ function paletteRows(query, commands, mru, state) {
 // settings (slice 4b): SettingsCommands.flags(), so a Settings action from
 // the palette is judged as its key would be; settingsPane: the Settings
 // column the palette opened from, which the Settings rows are judged in.
-function paletteState(tableState, hasCursorRow, inspector, pane, settingsOpen, settings, settingsPane) {
-  var st = dispatchState({ mode: "NORMAL" }, pane || "table", tableState, hasCursorRow, [], inspector, null, settings);
-  st.settingsOpen = settingsOpen === true;
-  st.settingsPane = settingsOpen === true && settingsPane ? String(settingsPane) : "";
+// Slice 5a: `view` is Client.activeView ("torrents", "settings" or
+// "search"; the 4b callers' `true` still means "settings" and false
+// "torrents"), viewPane the pane keys go to in that view (Client.keyPane),
+// and search the Search view's flags while it shows.
+function paletteState(tableState, hasCursorRow, inspector, pane, view, settings, viewPane, search) {
+  var v = view === true ? "settings" : (typeof view === "string" && view !== "" ? view : "torrents");
+  var st = dispatchState({ mode: "NORMAL" }, pane || "table", tableState, hasCursorRow, [], inspector, null, settings, search);
+  st.activeView = v;
+  st.viewPane = v !== "torrents" && viewPane ? String(viewPane) : "";
+  st.settingsOpen = v === "settings";
+  st.settingsPane = v === "settings" ? st.viewPane : "";
   return st;
+}
+
+// The INSERT purposes a view owns (slice 5a): closing the window ends
+// them (Client.close), and ClientCommands hands Search's to SearchPane.
+var SEARCH_INPUT_PURPOSES = ["searchQuery", "pluginInstall"];
+var VIEW_INPUT_PURPOSES = ["settingsSearch", "settingEdit"].concat(SEARCH_INPUT_PURPOSES);
+
+// The opener of each view (":Settings", ":Search").
+var VIEW_OPENERS = { "settings.open": "settings", "search.open": "search" };
+
+// paletteView(commandsTable, id, keyPane) -> the view a palette row runs
+// in when the palette was opened on keyPane: that pane's view when one of
+// the command's NORMAL rows works there (a Settings row from Settings, a
+// Search row from Search, : and ? anywhere), otherwise the torrents. The
+// window leaves Settings or Search first for a row that runs on the
+// torrents (ClientCommands.runPaletteRow).
+function paletteView(commandsTable, id, keyPane) {
+  return Registry.viewOfPane(palettePane(commandsTable, id, keyPane));
+}
+
+// helpPaneName(pane) -> the `?` overlay's pane word: the view's name for a
+// Settings or Search pane ("NORMAL · settings"), else the pane itself.
+function helpPaneName(pane) {
+  var v = Registry.viewOfPane(pane);
+  return v === "torrents" ? String(pane || "") : v;
 }
 
 // paletteSegments(title, indices) -> the title split into runs of
@@ -2332,6 +2473,16 @@ if (typeof module !== "undefined" && module.exports) {
     confirmLine: confirmLine,
     modeHints: modeHints,
     settingsFooterKeys: settingsFooterKeys,
+    searchFooterKeys: searchFooterKeys,
+    SEARCH_ACCEPT: SEARCH_ACCEPT,
+    paletteRunsFromView: paletteRunsFromView,
+    paletteSearchReason: paletteSearchReason,
+    paletteView: paletteView,
+    paletteListed: paletteListed,
+    helpPaneName: helpPaneName,
+    VIEW_OPENERS: VIEW_OPENERS,
+    SEARCH_INPUT_PURPOSES: SEARCH_INPUT_PURPOSES,
+    VIEW_INPUT_PURPOSES: VIEW_INPUT_PURPOSES,
     settingQuestion: settingQuestion,
     settingFailure: settingFailure,
     PREF_SENTENCES: PREF_SENTENCES,

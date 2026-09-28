@@ -92,13 +92,13 @@ var commands = [
   { id: "inspector.chart", title: "Chart", group: "View", keys: ["5"], modes: ["NORMAL"], panes: [PANE_ANY], needs: "none" },
   { id: "pane.next", title: "Next pane", group: "View", keys: ["Tab", "Ctrl-l"], modes: ["NORMAL"], panes: [PANE_ANY], needs: "none" },
   { id: "pane.prev", title: "Prev pane", group: "View", keys: ["Shift-Tab", "Ctrl-h"], modes: ["NORMAL"], panes: [PANE_ANY], needs: "none" },
-  { id: "help.toggle", title: "Help", group: "App", keys: ["?"], modes: ["NORMAL"], panes: [PANE_ANY], needs: "none", inSettings: true },
+  { id: "help.toggle", title: "Help", group: "App", keys: ["?"], modes: ["NORMAL"], panes: [PANE_ANY], needs: "none", inViews: true },
   { id: "window.close", title: "Close window", group: "App", keys: ["q"], modes: ["NORMAL"], panes: [PANE_ANY], needs: "none" },
   { id: "filter.clearText", title: "Clear filter", group: "View", keys: ["Esc"], modes: ["NORMAL"], panes: [PANE_ANY], needs: "none" },
   { id: "filter.reset", title: "Reset filters", group: "View", keys: ["Esc Esc"], modes: ["NORMAL"], panes: [PANE_ANY], needs: "none" },
   // From VISUAL too (Task 6): the palette then runs a range command on the
   // range (args.range tells the window to keep what it captured).
-  { id: "palette.open", title: "Command palette", group: "App", keys: [":"], modes: ["NORMAL", "VISUAL"], panes: [PANE_ANY], needs: "none", inSettings: true },
+  { id: "palette.open", title: "Command palette", group: "App", keys: [":"], modes: ["NORMAL", "VISUAL"], panes: [PANE_ANY], needs: "none", inViews: true },
 
   // COMMAND (the palette's TextField owns typing; these are the only keys
   // dispatch resolves itself).
@@ -172,7 +172,7 @@ var commands = [
   // Settings (slice 4a, eng D6). `,` (or ":Settings" in the palette)
   // swaps the torrent panes for the Settings view; its two columns are the
   // panes settingsSections and settingsKeys. Inside them the any-pane rows
-  // above are dead except : and ? (inSettings, see paneMatches). The
+  // above are dead except : and ? (inViews, see paneMatches). The
   // navigation rows are paletteHidden: the palette lists only "Settings".
   { id: "settings.open", title: "Settings", group: "App", keys: [","], modes: ["NORMAL"], panes: ["filters", "table", "inspector"], needs: "none" },
   { id: "settings.down", title: "Down", group: "View", keys: ["j", "Down"], modes: ["NORMAL"], panes: ["settingsSections", "settingsKeys"], needs: "none", paletteHidden: true },
@@ -230,6 +230,57 @@ var commands = [
   { id: "list.add", title: "Add to the list", group: "App", keys: ["a"], modes: ["NORMAL"], panes: ["settingsList"], needs: "listEditable" },
   { id: "list.remove", title: "Remove from the list", group: "App", keys: ["x"], modes: ["NORMAL"], panes: ["settingsList"], needs: "listItem" },
   { id: "list.back", title: "Back to the settings", group: "View", keys: ["Esc"], modes: ["NORMAL"], panes: ["settingsList"], needs: "none", paletteHidden: true },
+
+  // Search (slice 5a, eng OV2: F, since S is reverse sort). `F` (or
+  // ":Search") swaps the torrent panes for the Search view, as `,` does for
+  // Settings; like `,` it works from the torrent panes only, so there is no
+  // direct Settings <-> Search key (the palette's ":Search" and
+  // ":Settings" leave one view for the other). Its panes: searchResults
+  // (the results table), searchPlugins (the Plugins column: All results,
+  // each plugin, Recent queries; j/k there filter the results) and the
+  // overlay searchPluginList (P: each plugin's name, version, on/off).
+  // Inside them the any-pane rows are dead except : and ? (paneMatches).
+  // Every handler is the Search view's (SearchPane.run), except the
+  // opener, which sets Client.activeView. The window raises the CONFIRMs
+  // (Enter's add, d's page, x's uninstall, i's install) with raiseConfirm,
+  // so a key never carries confirmed. Rows that act on the row under a
+  // cursor capture it at key time: args.result (s.searchResult) and
+  // args.plugin (s.searchPlugin), frozen copies.
+  { id: "search.open", title: "Search", group: "App", keys: ["F"], modes: ["NORMAL"], panes: ["filters", "table", "inspector"], needs: "none" },
+  { id: "search.down", title: "Down", group: "View", keys: ["j", "Down"], modes: ["NORMAL"], panes: ["searchResults", "searchPlugins"], needs: "none", paletteHidden: true },
+  { id: "search.up", title: "Up", group: "View", keys: ["k", "Up"], modes: ["NORMAL"], panes: ["searchResults", "searchPlugins"], needs: "none", paletteHidden: true },
+  // h/l switch columns (design); narrow, the Plugins column is a chip in
+  // the query bar and Tab, h and Shift-Tab open it as an overlay (the
+  // window focuses searchPlugins while it shows), as Settings' sections.
+  { id: "search.focusResults", title: "Go to the results", group: "View", keys: ["l", "Enter", "Tab"], modes: ["NORMAL"], panes: ["searchPlugins"], needs: "none", paletteHidden: true },
+  { id: "search.pluginsOverlay", title: "Plugins column", group: "View", keys: ["Tab", "h", "Shift-Tab"], modes: ["NORMAL"], panes: ["searchResults"], needs: "narrow", when: "narrow", paletteHidden: true },
+  { id: "search.focusPlugins", title: "Go to the plugins column", group: "View", keys: ["h", "Shift-Tab"], modes: ["NORMAL"], panes: ["searchResults"], needs: "none", when: "wide", paletteHidden: true },
+  { id: "search.pluginsClose", title: "Close the plugins column", group: "View", keys: ["Esc"], modes: ["NORMAL"], panes: ["searchPlugins"], needs: "narrow", when: "narrow", paletteHidden: true },
+  // Esc stops a running search first, then leaves Search (the window
+  // decides which; D7: the results and cursor survive leaving).
+  { id: "search.back", title: "Stop the search, or back to torrents", group: "App", keys: ["Esc"], modes: ["NORMAL"], panes: ["searchPlugins"], needs: "none", when: "wide", paletteHidden: true },
+  { id: "search.back", title: "Stop the search, or back to torrents", group: "App", keys: ["Esc"], modes: ["NORMAL"], panes: ["searchResults"], needs: "none", paletteHidden: true },
+  // `/` opens the query INSERT (purpose searchQuery); OV8: it needs an
+  // enabled plugin.
+  { id: "search.new", title: "New search", group: "App", keys: ["/"], modes: ["NORMAL"], panes: ["searchResults", "searchPlugins"], needs: "searchPluginOn" },
+  { id: "search.add", title: "Add the result", group: "App", keys: ["Enter"], modes: ["NORMAL"], panes: ["searchResults"], needs: "searchResult" },
+  { id: "search.copyLink", title: "Copy the result's link", group: "App", keys: ["y"], modes: ["NORMAL"], panes: ["searchResults"], needs: "searchResult" },
+  { id: "search.openPage", title: "Open the result's page", group: "App", keys: ["d"], modes: ["NORMAL"], panes: ["searchResults"], needs: "searchResult" },
+  { id: "search.sort", title: "Sort the results", group: "View", keys: ["s"], modes: ["NORMAL"], panes: ["searchResults"], needs: "none" },
+  { id: "search.sortReverse", title: "Reverse the results' sort", group: "View", keys: ["S"], modes: ["NORMAL"], panes: ["searchResults"], needs: "none" },
+  { id: "search.plugins", title: "Search plugins", group: "App", keys: ["P"], modes: ["NORMAL"], panes: ["searchResults", "searchPlugins"], needs: "none" },
+  // The plugins overlay (pane searchPluginList, design D4, eng OV3/OV4).
+  // Space, x, i and U wait while a plugin change runs (pluginsIdle).
+  { id: "plugin.down", title: "Down", group: "View", keys: ["j", "Down"], modes: ["NORMAL"], panes: ["searchPluginList"], needs: "none", paletteHidden: true },
+  { id: "plugin.up", title: "Up", group: "View", keys: ["k", "Up"], modes: ["NORMAL"], panes: ["searchPluginList"], needs: "none", paletteHidden: true },
+  { id: "plugin.toggle", title: "Turn the plugin on or off", group: "App", keys: ["Space"], modes: ["NORMAL"], panes: ["searchPluginList"], needs: "searchPlugin" },
+  { id: "plugin.install", title: "Install a search plugin", group: "App", keys: ["i"], modes: ["NORMAL"], panes: ["searchPluginList"], needs: "pluginsIdle" },
+  { id: "plugin.uninstall", title: "Uninstall the plugin", group: "App", keys: ["x"], modes: ["NORMAL"], panes: ["searchPluginList"], needs: "searchPlugin" },
+  { id: "plugin.updateAll", title: "Update all search plugins", group: "App", keys: ["U"], modes: ["NORMAL"], panes: ["searchPluginList"], needs: "pluginsIdle" },
+  { id: "plugin.close", title: "Close the plugins", group: "View", keys: ["Esc"], modes: ["NORMAL"], panes: ["searchPluginList"], needs: "none", paletteHidden: true },
+  // Design D4: the official plugin list stays on the web; the palette
+  // copies its URL (SEARCH_PLUGIN_LIST_URL).
+  { id: "plugin.copyListUrl", title: "Copy the official plugin list's URL", group: "App", keys: [], paletteOnly: true, modes: ["NORMAL"], panes: ["searchResults", "searchPlugins", "searchPluginList"], needs: "none" },
 
   // VISUAL (j/k/Space/x/X/e reuse the NORMAL,table rows above; this is the exit)
   { id: "visual.exit", title: "Exit visual", group: "View", keys: ["Esc", "V"], modes: ["VISUAL"], panes: ["table"], needs: "none" },
@@ -357,7 +408,16 @@ function normalizeState(state) {
     settingsUndoCount: typeof s.settingsUndoCount === "number" ? s.settingsUndoCount : 0,
     listEditable: s.listEditable === true,
     listItem: s.listItem && typeof s.listItem === "object" ? s.listItem : null,
-    narrow: s.narrow === true
+    narrow: s.narrow === true,
+    // Search (slice 5a), all default off: the result under the results
+    // cursor and the plugin under the overlay's cursor (objects, or null),
+    // how many plugins there are and how many are on, and whether a plugin
+    // change (install, uninstall, on/off, update) is still running.
+    searchResult: s.searchResult && typeof s.searchResult === "object" ? s.searchResult : null,
+    searchPlugin: s.searchPlugin && typeof s.searchPlugin === "object" ? s.searchPlugin : null,
+    searchPluginCount: typeof s.searchPluginCount === "number" ? s.searchPluginCount : 0,
+    searchEnabledPlugins: typeof s.searchEnabledPlugins === "number" ? s.searchEnabledPlugins : 0,
+    searchPluginsBusy: s.searchPluginsBusy === true
   };
 }
 
@@ -397,24 +457,62 @@ function matchLabel(label, ev) {
   }
 }
 
-// The Settings view's two columns (slice 4a) and the list editor (4b).
-var SETTINGS_PANES = ["settingsSections", "settingsKeys", "settingsList"];
+// The window's views (slice 5a, eng C1/OV2): each pane belongs to one.
+// "torrents" is the three torrent panes; Settings (slice 4a) is its two
+// columns and the list editor (4b); Search (5a) is its results, its
+// Plugins column and the plugins overlay. Client.activeView is one of
+// these names, and keys dispatch in a pane of that view.
+var VIEWS = ["torrents", "settings", "search"];
+var VIEW_OF_PANE = {
+  filters: "torrents",
+  table: "torrents",
+  inspector: "torrents",
+  settingsSections: "settings",
+  settingsKeys: "settings",
+  settingsList: "settings",
+  searchResults: "search",
+  searchPlugins: "search",
+  searchPluginList: "search"
+};
+
+// viewOfPane(pane) -> the view a pane belongs to; anything unknown is a
+// torrent pane (normalizeState's default pane is "table").
+function viewOfPane(pane) {
+  var p = String(pane === undefined || pane === null ? "" : pane);
+  return Object.prototype.hasOwnProperty.call(VIEW_OF_PANE, p) ? VIEW_OF_PANE[p] : "torrents";
+}
+
+function panesOfView(view) {
+  var out = [];
+  for (var p in VIEW_OF_PANE) {
+    if (Object.prototype.hasOwnProperty.call(VIEW_OF_PANE, p) && VIEW_OF_PANE[p] === view) out.push(p);
+  }
+  return out;
+}
+
+var SETTINGS_PANES = panesOfView("settings");
+var SEARCH_PANES = panesOfView("search");
 
 function isSettingsPane(pane) {
-  return SETTINGS_PANES.indexOf(pane) !== -1;
+  return viewOfPane(pane) === "settings";
+}
+
+function isSearchPane(pane) {
+  return viewOfPane(pane) === "search";
 }
 
 // paneMatches(row, pane) -> whether row's panes cover pane. PANE_ANY means
-// any torrent pane. Inside Settings it covers only a row marked inSettings
-// (: and ?) and the modal rows -- those with no NORMAL or VISUAL mode
-// (INSERT, COMMAND, CONFIRM, PICKER), which their mode already gates. So
-// t, s, z, r, q, 1-5, Tab, Esc, f and the rest can't act on the hidden
-// torrents from Settings (the any-pane audit, pinned by node tests).
+// any torrent pane. Inside another view (Settings, Search) it covers only
+// a row marked inViews (: and ?) and the modal rows -- those with no
+// NORMAL or VISUAL mode (INSERT, COMMAND, CONFIRM, PICKER), which their
+// mode already gates. So t, s, z, r, q, 1-5, Tab, Esc, f and the rest
+// can't act on the hidden torrents from Settings or Search (the any-pane
+// audit and the view audit, pinned by node tests).
 function paneMatches(row, pane) {
   if (row.panes.indexOf(pane) !== -1) return true;
   if (row.panes.indexOf(PANE_ANY) === -1) return false;
-  if (!isSettingsPane(pane)) return true;
-  if (row.inSettings === true) return true;
+  if (viewOfPane(pane) === "torrents") return true;
+  if (row.inViews === true) return true;
   return row.modes.indexOf("NORMAL") === -1 && row.modes.indexOf("VISUAL") === -1;
 }
 
@@ -509,6 +607,20 @@ function libraryKind(s, want) {
 
 var LIBRARY_NEEDS = { libraryGroup: "group", libraryName: "name", categoryName: "category" };
 
+// Search's dim reasons (slice 5a): the palette's dimmed-row text and, as a
+// sentence, the muted note a blocked key leaves (ClientCommands.handleBlocked
+// capitalises it and adds the full stop).
+var SEARCH_REASONS = {
+  noResult: "needs a result",
+  allOff: "all plugins are off (P)",
+  noPlugins: "no search plugins yet (P)",
+  noPlugin: "needs a plugin",
+  busy: "wait for the plugin change to finish"
+};
+
+// The official plugin list (design D4), which plugin.copyListUrl copies.
+var SEARCH_PLUGIN_LIST_URL = "https://github.com/qbittorrent/search-plugins/wiki";
+
 // preconditionMet(needs, s): torrent/selection need a cursor torrent (or
 // a VISUAL range); tracker/peer need that kind of row under the inspector
 // cursor (s.inspectorTarget); trackersTab needs the trackers tab focused
@@ -536,6 +648,11 @@ function preconditionMet(needs, s) {
   if (needs === "listEditable") return s.listEditable === true;
   if (needs === "listItem") return s.listEditable === true && !!s.listItem && typeof s.listItem === "object";
   if (needs === "narrow") return s.narrow === true;
+  // Search (slice 5a).
+  if (needs === "searchResult") return !!s.searchResult && typeof s.searchResult === "object";
+  if (needs === "searchPluginOn") return typeof s.searchEnabledPlugins === "number" && s.searchEnabledPlugins > 0;
+  if (needs === "searchPlugin") return !!s.searchPlugin && typeof s.searchPlugin === "object" && s.searchPluginsBusy !== true;
+  if (needs === "pluginsIdle") return s.searchPluginsBusy !== true;
   if (Object.prototype.hasOwnProperty.call(LIBRARY_NEEDS, needs)) return libraryKind(s, LIBRARY_NEEDS[needs]);
   return true;
 }
@@ -556,6 +673,10 @@ function needsReason(needs, s) {
   // Slice 4b: the row, list or width already shows why; only undo speaks.
   if (needs === "listRow" || needs === "secretSet" || needs === "listEditable" || needs === "listItem" || needs === "narrow") return "";
   if (needs === "undoEntry") return "nothing to undo";
+  // Search (slice 5a). OV8: `/` with every plugin off says so.
+  if (needs === "searchResult") return SEARCH_REASONS.noResult;
+  if (needs === "searchPluginOn") return s.searchPluginCount > 0 ? SEARCH_REASONS.allOff : SEARCH_REASONS.noPlugins;
+  if (needs === "searchPlugin" || needs === "pluginsIdle") return s.searchPluginsBusy === true ? SEARCH_REASONS.busy : SEARCH_REASONS.noPlugin;
   if (needs === "noMetadata") {
     if (s.cursorPendingMagnet === true) return "already fetching metadata";
     if (s.hasTorrent === true) return "already has metadata";
@@ -605,6 +726,20 @@ function copyTarget(t) {
   return Object.freeze(out);
 }
 
+// copyPlain(obj) -> a frozen copy of obj's own string, number, boolean and
+// null fields (a search result or a plugin under a cursor, slice 5a), so a
+// refresh or a re-sort can't change what `y` or a confirm acts on.
+function copyPlain(obj) {
+  if (!obj || typeof obj !== "object") return null;
+  var out = {};
+  for (var k in obj) {
+    if (!Object.prototype.hasOwnProperty.call(obj, k)) continue;
+    var v = obj[k];
+    if (v === null || typeof v === "string" || typeof v === "number" || typeof v === "boolean") out[k] = v;
+  }
+  return Object.freeze(out);
+}
+
 // copyListItem(item) -> a frozen {index, value, tierBreak} copy of the list
 // line under the cursor (slice 4b), so a refresh can't change what x removes.
 function copyListItem(item) {
@@ -640,6 +775,9 @@ function buildArgs(row, s) {
   }
   // The list line under the list cursor, frozen like a target.
   if (row.needs === "listItem") args.listItem = copyListItem(s.listItem);
+  // Search (slice 5a): the result or plugin under the cursor at key time.
+  if (row.needs === "searchResult") args.result = copyPlain(s.searchResult);
+  if (row.needs === "searchPlugin") args.plugin = copyPlain(s.searchPlugin);
   // ":" on a VISUAL range: the palette acts on that range (the window keeps it).
   if (row.id === "palette.open" && s.mode === "VISUAL") args.range = true;
   if (EXTEND_IDS[row.id] === true && s.mode === "VISUAL") {
@@ -735,9 +873,10 @@ function dispatch(state, event) {
     }
   }
 
-  // Settings has no key sequences: a prefix left over from the torrent
-  // view never completes there (Esc Esc would reset the hidden filters).
-  if (isSettingsPane(s.pane) && s.prefix !== null) s = clearPrefix(s);
+  // Settings and Search have no key sequences: a prefix left over from the
+  // torrent view never completes there (Esc Esc would reset the hidden
+  // filters).
+  if (viewOfPane(s.pane) !== "torrents" && s.prefix !== null) s = clearPrefix(s);
 
   // Continue an active "g" prefix (cursor.top).
   if (s.prefix === "g") {
@@ -905,7 +1044,15 @@ if (typeof module !== "undefined" && module.exports) {
     needsConfirm: needsConfirm,
     paneMatches: paneMatches,
     isSettingsPane: isSettingsPane,
+    isSearchPane: isSearchPane,
     SETTINGS_PANES: SETTINGS_PANES,
+    SEARCH_PANES: SEARCH_PANES,
+    VIEWS: VIEWS,
+    VIEW_OF_PANE: VIEW_OF_PANE,
+    viewOfPane: viewOfPane,
+    panesOfView: panesOfView,
+    SEARCH_REASONS: SEARCH_REASONS,
+    SEARCH_PLUGIN_LIST_URL: SEARCH_PLUGIN_LIST_URL,
     tabMatches: tabMatches,
     whenMatches: whenMatches
   };

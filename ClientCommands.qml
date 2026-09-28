@@ -33,6 +33,9 @@ QtObject {
   // Its editors (Task 6, SettingsCommands): settings.toggle/edit/write, the
   // settingEdit INSERT and the choice picker are forwarded there.
   property var settingsCommands: null
+  // The Search view (slice 5a, SearchPane): its INSERTs (searchQuery,
+  // pluginInstall) are forwarded there; its commands go there from Client.run.
+  property var searchView: null
 
   // ---- trackers and peers (inspector tabs 2, 3) ---------------------------
 
@@ -142,9 +145,10 @@ QtObject {
   // blocked: the registry's reason (needsReason), "" for none. In Settings
   // only u's "nothing to undo" has one (every other Settings row's reason
   // is "": its row already says why), shown as a muted sentence (Ruling EI).
+  // Search (slice 5a) is the same: its reasons are muted sentences.
   function handleBlocked(ev, blocked) {
     var c = client
-    if (settingsView.open) {
+    if (c.activeView !== "torrents") {
       var why = String(blocked || "")
       if (c.mode === "NORMAL" && why !== "") c.note(why.charAt(0).toUpperCase() + why.slice(1) + ".", "muted")
       return
@@ -819,6 +823,13 @@ QtObject {
 
   function commitInput() {
     var c = client
+    // Search's query and plugin URL (slice 5a): SearchPane ends or keeps
+    // the INSERT itself (endInput / stayInInsert).
+    if (View.SEARCH_INPUT_PURPOSES.indexOf(c.inputPurpose) !== -1) {
+      if (searchView) searchView.commitInput(c.inputPurpose, inputLine.inputValue())
+      else endInput()
+      return
+    }
     // The Settings search: never an add target or a torrent filter.
     if (c.inputPurpose === "settingsSearch") {
       settingsView.commitSearch(inputLine.inputValue())
@@ -869,6 +880,7 @@ QtObject {
   function cancelInput() {
     var c = client
     if (c.inputPurpose === "settingsSearch") settingsView.clearSearch()
+    if (searchView && View.SEARCH_INPUT_PURPOSES.indexOf(c.inputPurpose) !== -1) searchView.cancelInput(c.inputPurpose)
     if (c.inputPurpose === "filter") {
       c.textQuery = c.queryBeforeEdit
       c.rebuildRows(true)
@@ -912,13 +924,15 @@ QtObject {
     }
     var range = paletteRange
     closePalette()
-    // From Settings, only : and ? run there; anything else runs on the
-    // torrents, so Settings makes way first.
-    var inSettings = settingsView.open && Registry.isSettingsPane(View.palettePane(Registry.commands, row.id, c.keyPane))
-    if (settingsView.open && !inSettings) settingsView.closeView()
+    // From Settings or Search, only that view's rows (and : and ?) run
+    // there; anything else runs on the torrents, so the view makes way
+    // first (Client.activeView decides; ":Search" from Settings leaves
+    // Settings, then opens Search from the torrents).
+    var inView = c.activeView !== "torrents" && View.paletteView(Registry.commands, row.id, c.keyPane) === c.activeView
+    if (c.activeView !== "torrents" && !inView) c.leaveView()
     c.paletteMru = View.mruPush(c.paletteMru, row.id)
-    // A Settings row runs in Settings: the torrent pane underneath stays.
-    if (!inSettings) c.setPane(View.palettePane(Registry.commands, row.id, c.pane))
+    // A view's row runs in that view: the torrent pane underneath stays.
+    if (!inView) c.setPane(View.palettePane(Registry.commands, row.id, c.pane))
     c.saveView()
     // A neutral event: the Enter that ran the palette must not also count
     // as Enter for the command (Files would start the daemon).
@@ -1344,7 +1358,12 @@ QtObject {
       return
 
     case "settings.open":
-      settingsView.openView()
+      c.showView("settings")
+      return
+
+    // Slice 5a: every other Search row is SearchPane's (Client.run).
+    case "search.open":
+      c.showView("search")
       return
 
     case "settings.back":

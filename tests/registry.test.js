@@ -708,8 +708,10 @@ test("every command row has the documented shape", () => {
   // limitRow/limitToggle: slice 3b Task 4, for Task 5's Info-tab Limits cursor.
   // toggleRow/editableRow: slice 4a Task 6, the Settings editors.
   // listRow/secretSet/undoEntry/listEditable/listItem/narrow: slice 4b Task 1.
+  // searchResult/searchPluginOn/searchPlugin/pluginsIdle: slice 5a Task 1.
   const validNeeds = ["none", "torrent", "selection", "tracker", "peer", "trackersTab", "noMetadata", "libraryGroup", "libraryName", "categoryName", "limitRow", "limitToggle", "toggleRow", "editableRow",
-    "listRow", "secretSet", "undoEntry", "listEditable", "listItem", "narrow"];
+    "listRow", "secretSet", "undoEntry", "listEditable", "listItem", "narrow",
+    "searchResult", "searchPluginOn", "searchPlugin", "pluginsIdle"];
   const validTabs = ["info", "trackers", "peers", "files", "chart"];
   for (const row of commands) {
     assert.ok(row.id === null || typeof row.id === "string");
@@ -2236,4 +2238,265 @@ test("4b: the new needs default unmet, and only undo names a reason", () => {
   for (const need of ["listRow", "secretSet", "listEditable", "listItem", "narrow"]) assert.equal(Registry.needsReason(need, {}), "", need);
   assert.equal(Registry.needsReason("undoEntry", {}), "nothing to undo");
   assert.equal(Registry.needsReason("undoEntry", { settingsUndoCount: 1 }), "");
+});
+
+// --- Views and Search (slice 5a, Task 1: eng C1, OV2) ---------------------------------
+
+const SEARCH_PANES = ["searchResults", "searchPlugins", "searchPluginList"];
+const VIEW_PANES = ALL_SETTINGS_PANES.concat(SEARCH_PANES);
+// A row "touches torrents" when its need is about a torrent, a torrent's
+// tracker or peer, the Info tab's Limits or the filters' categories/tags.
+const TORRENT_NEEDS = ["torrent", "selection", "noMetadata", "tracker", "peer", "trackersTab", "limitRow", "limitToggle",
+  "libraryGroup", "libraryName", "categoryName"];
+// The only rows allowed to be live in every view: help, the palette, and
+// the view openers (which live on the torrent panes only, see below).
+const VIEW_EXEMPT = ["help.toggle", "palette.open", "settings.open", "search.open"];
+
+test("views: every pane belongs to exactly one view, and the view pane lists derive from the map", () => {
+  assert.deepEqual(Registry.VIEWS, ["torrents", "settings", "search"]);
+  for (const p of TORRENT_PANES) assert.equal(Registry.viewOfPane(p), "torrents", p);
+  for (const p of ALL_SETTINGS_PANES) assert.equal(Registry.viewOfPane(p), "settings", p);
+  for (const p of SEARCH_PANES) assert.equal(Registry.viewOfPane(p), "search", p);
+  assert.equal(Registry.viewOfPane(undefined), "torrents", "normalizeState's default pane is the table");
+  assert.equal(Registry.viewOfPane("nonsense"), "torrents");
+  assert.deepEqual(Registry.SEARCH_PANES, SEARCH_PANES);
+  assert.deepEqual(Registry.SETTINGS_PANES, ALL_SETTINGS_PANES);
+  for (const p of SEARCH_PANES) assert.equal(Registry.isSearchPane(p), true, p);
+  for (const p of TORRENT_PANES.concat(ALL_SETTINGS_PANES)) assert.equal(Registry.isSearchPane(p), false, p);
+  // Every pane any row names is in the map (a new pane needs a view).
+  for (const row of commands) for (const p of row.panes) if (p !== "*") assert.ok(Object.prototype.hasOwnProperty.call(Registry.VIEW_OF_PANE, p), row.id + " " + p);
+});
+
+// OV2: otherwise t, z, r, q, 1-5 (and every other torrent key) would act on
+// the hidden torrents from Settings or Search. Every row in the Library or
+// View group and every row whose `needs` touches torrents, except help, the
+// palette and the view openers, is checked against every Settings and
+// Search pane: it may match one only by naming it (that view's own
+// navigation, e.g. settings.down), and a row that touches torrents names
+// none at all.
+test("views: no torrent row reaches a Settings or Search pane", () => {
+  const checked = commands.filter((r) => (r.group === "Library" || r.group === "View" || TORRENT_NEEDS.includes(r.needs)) && !VIEW_EXEMPT.includes(r.id));
+  assert.ok(checked.length > 40, "the audit covers the torrent rows");
+  for (const row of checked) {
+    for (const pane of VIEW_PANES) {
+      assert.equal(Registry.paneMatches(row, pane), row.panes.includes(pane), row.id + " reaches " + pane);
+      if (TORRENT_NEEDS.includes(row.needs)) assert.equal(Registry.paneMatches(row, pane), false, row.id + " (needs " + row.needs + ") in " + pane);
+    }
+    const named = row.panes.filter((p) => VIEW_PANES.includes(p));
+    if (named.length > 0) {
+      // A view's own row names only that view's panes, never "*" or a torrent pane.
+      const views = new Set(named.map((p) => Registry.viewOfPane(p)));
+      assert.equal(views.size, 1, row.id + " spans views");
+      assert.deepEqual(row.panes.filter((p) => !VIEW_PANES.includes(p)), [], row.id + " mixes a view's panes with the torrents'");
+    }
+  }
+  // And through dispatch: every such row's keys, in every view pane, with every flag on.
+  for (const pane of VIEW_PANES) {
+    for (const row of checked.filter((r) => !r.panes.includes(pane))) {
+      for (const label of row.keys) {
+        if (label === "g g" || label === "Esc Esc") continue;
+        for (const mode of row.modes.filter((m) => m === "NORMAL" || m === "VISUAL")) {
+          const r = dispatch(state(Object.assign({ pane: pane, mode: mode, cursorNoMetadata: true, selectionCount: 2,
+            inspectorTarget: { kind: "tracker", value: "udp://t.example/a", label: "t.example" }, trackersTab: true, limitCursorKey: "dlLimit", limitToggle: true,
+            libraryTarget: { kind: "category", value: "films", label: "films" } }, ALL_ON)), evFor(label));
+          assert.notEqual(r.commandId, row.id, row.id + " (" + label + ") ran in " + pane);
+        }
+      }
+      assert.equal(Registry.dispatchCommand(state({ pane: pane }), row.id).commandId === row.id, false, row.id + ": the palette can't run it in " + pane);
+    }
+  }
+});
+
+test("views: help, the palette and the openers are the only exempt rows, and the openers live on the torrent panes only", () => {
+  for (const id of ["help.toggle", "palette.open"]) {
+    const row = commands.find((r) => r.id === id);
+    assert.equal(row.inViews, true, id);
+    for (const pane of VIEW_PANES) assert.equal(Registry.paneMatches(row, pane), true, id + " " + pane);
+  }
+  assert.deepEqual(commands.filter((r) => r.inViews === true).map((r) => r.id).sort(), ["help.toggle", "palette.open"]);
+  assert.equal(commands.some((r) => r.inSettings !== undefined), false, "inSettings became inViews");
+  for (const id of ["settings.open", "search.open"]) {
+    const row = commands.find((r) => r.id === id);
+    assert.deepEqual(row.panes, TORRENT_PANES, id);
+    for (const pane of VIEW_PANES) assert.equal(Registry.paneMatches(row, pane), false, id + " " + pane);
+  }
+});
+
+test("F opens Search from every torrent pane in NORMAL; there is no key between Settings and Search", () => {
+  for (const pane of TORRENT_PANES) {
+    const r = dispatch(state({ pane: pane, inspectorTab: pane === "inspector" ? "info" : "" }), evFor("F"));
+    assert.deepEqual([r.commandId, r.state.mode, r.args], ["search.open", "NORMAL", {}], pane);
+  }
+  assert.equal(dispatch(state({ mode: "VISUAL", selectionCount: 2 }), evFor("F")).commandId, null, "not from VISUAL");
+  for (const pane of VIEW_PANES) {
+    assert.equal(dispatch(state(Object.assign({ pane: pane }, ALL_ON)), evFor("F")).commandId, null, "F in " + pane);
+    assert.equal(dispatch(state(Object.assign({ pane: pane }, ALL_ON)), evFor(",")).commandId, null, ", in " + pane);
+  }
+  const row = commands.find((r) => r.id === "search.open");
+  assert.deepEqual([row.keys, row.title, row.group, row.needs], [["F"], "Search", "App", "none"], "the palette shows it as :Search");
+  assert.equal(commands.filter((r) => r.keys.includes("F")).length, 1, "F means nothing else");
+  // The palette runs :Search and :Settings only from the torrents (the window leaves a view first).
+  for (const pane of TORRENT_PANES) assert.equal(Registry.dispatchCommand(state({ pane: pane }), "search.open").commandId, "search.open", pane);
+  for (const pane of VIEW_PANES) {
+    assert.equal(Registry.dispatchCommand(state({ pane: pane }), "search.open").commandId, null, pane);
+    assert.equal(Registry.dispatchCommand(state({ pane: pane }), "settings.open").commandId, null, pane);
+  }
+});
+
+test("search: the any-pane torrent keys are dead in every Search pane; : and ? stay; the modal rows stay", () => {
+  for (const pane of SEARCH_PANES) {
+    for (const row of anyPaneViewRows()) {
+      for (const label of row.keys) {
+        if (label === "g g" || label === "Esc Esc") continue;
+        for (const mode of row.modes.filter((m) => m === "NORMAL" || m === "VISUAL")) {
+          const r = dispatch(state({ pane: pane, mode: mode, cursorNoMetadata: true, hasTorrent: true, selectionCount: 2 }), evFor(label));
+          if (ANY_PANE_LIVE_IN_SETTINGS.includes(row.id)) assert.equal(r.commandId, row.id, pane + " " + mode + " " + label);
+          else assert.ok(r.commandId === null || /^(search|plugin)\./.test(r.commandId), row.id + " " + label + " in " + pane + " resolved to " + r.commandId);
+        }
+      }
+    }
+    assert.equal(dispatch(state({ pane: pane, mode: "INSERT" }), evFor("Esc")).commandId, "insert.cancel", pane);
+    assert.equal(dispatch(state({ pane: pane, mode: "INSERT" }), evFor("Enter")).commandId, "insert.commit", pane);
+    assert.equal(dispatch(state({ pane: pane, mode: "COMMAND" }), evFor("Esc")).commandId, "palette.close", pane);
+    const c = Registry.raiseConfirm(state({ pane: pane }), "search.add", "searchAdd", { result: { fileName: "x" } });
+    assert.equal(dispatch(c.state, evFor("y")).commandId, "search.add", pane);
+    assert.equal(dispatch(c.state, evFor("n")).commandId, "confirm.cancel", pane);
+    // A stale prefix from the torrents never completes here.
+    assert.equal(dispatch(state({ pane: pane, prefix: "Esc", prefixAt: 0 }), ev("\u001b", KEY.Escape, undefined, 10)).commandId !== "filter.reset", true, pane);
+    assert.equal(dispatch(state({ pane: pane, prefix: "g", prefixAt: 0 }), ev("g", keyOf("g"), undefined, 10)).commandId, null, pane);
+  }
+});
+
+// Every flag a Search row needs, on.
+const SEARCH_ON = {
+  searchResult: { fileName: "debian-13.0.0-amd64-netinst.iso", fileUrl: "magnet:?xt=urn:btih:" + "ab".repeat(20), descrLink: "https://example.org/t/1", engineName: "example", siteUrl: "https://example.org", fileSize: 1, nbSeeders: 2 },
+  searchPlugin: { name: "example", fullName: "Example", version: "1.2", enabled: true, url: "https://example.org" },
+  searchPluginCount: 2, searchEnabledPlugins: 1
+};
+const KEYS_5A = ["j", "k", "Down", "Up", "l", "h", "Enter", "Tab", "Shift-Tab", "Esc", "/", "Space", "x", "y", "d", "s", "S", "P", "i", "U", "u", "a",
+  "?", ":", "t", "z", "r", "q", "1", "4", "F", ",", "Ctrl-l", "Ctrl-h", "g", "G", "V"];
+const RESULTS_WIDE = { j: "search.down", Down: "search.down", k: "search.up", Up: "search.up", h: "search.focusPlugins", "Shift-Tab": "search.focusPlugins",
+  Enter: "search.add", Esc: "search.back", "/": "search.new", y: "search.copyLink", d: "search.openPage", s: "search.sort", S: "search.sortReverse",
+  P: "search.plugins", "?": "help.toggle", ":": "palette.open" };
+const PLUGINS_WIDE = { j: "search.down", Down: "search.down", k: "search.up", Up: "search.up", l: "search.focusResults", Enter: "search.focusResults",
+  Tab: "search.focusResults", Esc: "search.back", "/": "search.new", P: "search.plugins", "?": "help.toggle", ":": "palette.open" };
+const PLUGIN_LIST = { j: "plugin.down", Down: "plugin.down", k: "plugin.up", Up: "plugin.up", Space: "plugin.toggle", i: "plugin.install",
+  x: "plugin.uninstall", U: "plugin.updateAll", Esc: "plugin.close", "?": "help.toggle", ":": "palette.open" };
+const KEY_MAP_5A = {
+  searchResults: { wide: RESULTS_WIDE, narrow: Object.assign({}, RESULTS_WIDE, { h: "search.pluginsOverlay", Tab: "search.pluginsOverlay", "Shift-Tab": "search.pluginsOverlay" }) },
+  searchPlugins: { wide: PLUGINS_WIDE, narrow: Object.assign({}, PLUGINS_WIDE, { Esc: "search.pluginsClose" }) },
+  searchPluginList: { wide: PLUGIN_LIST, narrow: PLUGIN_LIST }
+};
+
+test("search: every key x Search pane x narrow resolves as pinned, and nothing else resolves", () => {
+  for (const pane of SEARCH_PANES) {
+    for (const width of ["wide", "narrow"]) {
+      const want = KEY_MAP_5A[pane][width];
+      for (const label of KEYS_5A) {
+        const r = dispatch(state(Object.assign({ pane: pane, narrow: width === "narrow" }, SEARCH_ON)), evFor(label));
+        assert.equal(r.commandId, want[label] || null, pane + " " + width + " " + label);
+      }
+    }
+  }
+});
+
+test("search: 5a's keys never change a torrent or Settings pane's keys", () => {
+  for (const pane of TORRENT_PANES.concat(ALL_SETTINGS_PANES)) {
+    for (const label of ["d", "i", "U", "P"]) {
+      const r = dispatch(state(Object.assign({ pane: pane, inspectorTab: pane === "inspector" ? "info" : "" }, ALL_ON, SEARCH_ON)), evFor(label));
+      assert.equal(r.commandId, null, pane + " " + label);
+    }
+  }
+});
+
+test("search: Enter, y and d need a result and capture it frozen at key time", () => {
+  for (const [label, id] of [["Enter", "search.add"], ["y", "search.copyLink"], ["d", "search.openPage"]]) {
+    const res = Object.assign({}, SEARCH_ON.searchResult, { extra: { nested: true } });
+    const r = dispatch(state({ pane: "searchResults", searchResult: res }), evFor(label));
+    assert.equal(r.commandId, id, label);
+    assert.equal(r.confirm, undefined, label + ": the window raises any confirm");
+    assert.equal(r.state.mode, "NORMAL", label);
+    assert.ok(Object.isFrozen(r.args.result), label);
+    assert.equal(r.args.result.fileName, res.fileName);
+    assert.equal(r.args.result.extra, undefined, "only plain fields are copied");
+    res.fileName = "changed";
+    assert.equal(r.args.result.fileName, SEARCH_ON.searchResult.fileName, "a later re-sort can't change it");
+    const none = dispatch(state({ pane: "searchResults" }), evFor(label));
+    assert.deepEqual([none.commandId, none.blocked], [null, "needs a result"], label);
+  }
+});
+
+test("search: / needs an enabled plugin and says why (OV8); it never sets the mode itself", () => {
+  const ok = dispatch(state({ pane: "searchResults", searchPluginCount: 1, searchEnabledPlugins: 1 }), evFor("/"));
+  assert.deepEqual([ok.commandId, ok.state.mode], ["search.new", "NORMAL"], "the window opens the searchQuery INSERT");
+  const off = dispatch(state({ pane: "searchPlugins", searchPluginCount: 3, searchEnabledPlugins: 0 }), evFor("/"));
+  assert.deepEqual([off.commandId, off.blocked], [null, "all plugins are off (P)"]);
+  const none = dispatch(state({ pane: "searchResults" }), evFor("/"));
+  assert.deepEqual([none.commandId, none.blocked], [null, "no search plugins yet (P)"]);
+});
+
+test("search: the plugin overlay's Space and x need a plugin, and every write waits for a change still running", () => {
+  const plugin = Object.assign({}, SEARCH_ON.searchPlugin);
+  for (const [label, id] of [["Space", "plugin.toggle"], ["x", "plugin.uninstall"]]) {
+    const r = dispatch(state({ pane: "searchPluginList", searchPlugin: plugin }), evFor(label));
+    assert.equal(r.commandId, id, label);
+    assert.deepEqual(r.args.plugin, SEARCH_ON.searchPlugin, label);
+    assert.ok(Object.isFrozen(r.args.plugin));
+    assert.equal(r.confirm, undefined, label + ": x's confirm is the window's");
+    const none = dispatch(state({ pane: "searchPluginList" }), evFor(label));
+    assert.deepEqual([none.commandId, none.blocked], [null, "needs a plugin"], label);
+  }
+  for (const [label, id] of [["i", "plugin.install"], ["U", "plugin.updateAll"]]) {
+    const r = dispatch(state({ pane: "searchPluginList" }), evFor(label));
+    assert.deepEqual([r.commandId, r.args], [id, {}], label + " works with no plugins");
+  }
+  for (const label of ["Space", "x", "i", "U"]) {
+    const busy = dispatch(state({ pane: "searchPluginList", searchPlugin: plugin, searchPluginsBusy: true }), evFor(label));
+    assert.deepEqual([busy.commandId, busy.blocked], [null, "wait for the plugin change to finish"], label);
+  }
+  // j/k and Esc still work while busy.
+  assert.equal(dispatch(state({ pane: "searchPluginList", searchPluginsBusy: true }), evFor("j")).commandId, "plugin.down");
+  assert.equal(dispatch(state({ pane: "searchPluginList", searchPluginsBusy: true }), evFor("Esc")).commandId, "plugin.close");
+});
+
+test("search: the new needs default unmet, with their reasons", () => {
+  for (const need of ["searchResult", "searchPluginOn", "searchPlugin"]) assert.equal(Registry.preconditionMet(need, {}), false, need);
+  assert.equal(Registry.preconditionMet("pluginsIdle", {}), true, "idle unless told otherwise");
+  assert.equal(Registry.preconditionMet("searchPluginOn", { searchEnabledPlugins: "1" }), false, "a number, never a string");
+  assert.equal(Registry.preconditionMet("searchResult", { searchResult: "x" }), false, "an object");
+  assert.deepEqual(Registry.SEARCH_REASONS, { noResult: "needs a result", allOff: "all plugins are off (P)", noPlugins: "no search plugins yet (P)",
+    noPlugin: "needs a plugin", busy: "wait for the plugin change to finish" });
+  assert.equal(Registry.needsReason("searchResult", { searchResult: {} }), "");
+});
+
+// The palette shows Search's actions; its navigation rows stay hidden.
+const SEARCH_PALETTE_VISIBLE = ["search.open", "search.new", "search.add", "search.copyLink", "search.openPage", "search.sort", "search.sortReverse",
+  "search.plugins", "plugin.toggle", "plugin.install", "plugin.uninstall", "plugin.updateAll", "plugin.copyListUrl"];
+
+test("search: the palette lists the Search actions; navigation stays hidden; only the opener lives outside Search", () => {
+  const rows = commands.filter((r) => /^(search|plugin)\./.test(r.id));
+  assert.deepEqual(Array.from(new Set(rows.filter((r) => r.paletteHidden !== true).map((r) => r.id))).sort(), SEARCH_PALETTE_VISIBLE.slice().sort());
+  for (const row of rows) {
+    for (const p of row.panes) assert.ok(row.id === "search.open" ? TORRENT_PANES.includes(p) : SEARCH_PANES.includes(p), row.id + " " + p);
+  }
+  const copy = commands.find((r) => r.id === "plugin.copyListUrl");
+  assert.deepEqual([copy.keys, copy.paletteOnly], [[], true]);
+  assert.equal(Registry.SEARCH_PLUGIN_LIST_URL, "https://github.com/qbittorrent/search-plugins/wiki");
+  assert.equal(Registry.dispatchCommand(state({ pane: "searchPluginList" }), "plugin.copyListUrl").commandId, "plugin.copyListUrl");
+  assert.equal(Registry.dispatchCommand(state({ pane: "table" }), "plugin.copyListUrl").commandId, null);
+});
+
+test("search: ? lists each Search pane's keys, plus : and ?", () => {
+  const ids = (pane, st) => Array.from(new Set(helpFor("NORMAL", pane, undefined, st).map((r) => r.id))).sort();
+  assert.deepEqual(ids("searchResults", {}), ["help.toggle", "palette.open", "search.add", "search.back", "search.copyLink", "search.down", "search.focusPlugins",
+    "search.new", "search.openPage", "search.plugins", "search.sort", "search.sortReverse", "search.up"]);
+  assert.ok(ids("searchResults", { narrow: true }).includes("search.pluginsOverlay"));
+  assert.ok(!ids("searchResults", { narrow: true }).includes("search.focusPlugins"));
+  assert.deepEqual(ids("searchPlugins", {}), ["help.toggle", "palette.open", "search.back", "search.down", "search.focusResults", "search.new", "search.plugins", "search.up"]);
+  assert.deepEqual(ids("searchPlugins", { narrow: true }), ["help.toggle", "palette.open", "search.down", "search.focusResults", "search.new", "search.plugins",
+    "search.pluginsClose", "search.up"]);
+  assert.deepEqual(ids("searchPluginList", {}), ["help.toggle", "palette.open", "plugin.close", "plugin.down", "plugin.install", "plugin.toggle", "plugin.uninstall",
+    "plugin.up", "plugin.updateAll"]);
+  assert.ok(helpFor("NORMAL", "table").some((r) => r.id === "search.open"), "the torrent view's ? lists F");
+  assert.ok(!helpFor("NORMAL", "table").some((r) => /^(search\.(?!open)|plugin\.)/.test(r.id)), "and none of Search's keys");
 });

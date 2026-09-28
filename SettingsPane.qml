@@ -42,7 +42,12 @@ Item {
   // failed read is retried once qBittorrent is back.
   property string tableState: "rows"
 
+  // Showing: bound by the Client to activeView === "settings" (slice 5a,
+  // eng C1). The Client owns opening and leaving: it calls openView() and
+  // closeView() as the view comes and goes, and Esc here only asks it to
+  // leave (leaveRequested).
   property bool open: false
+  signal leaveRequested()
   // Below the breakpoint (the Client's View.settingsNarrow).
   property bool narrow: false
   // The focused column, the registry pane keys dispatch in:
@@ -113,8 +118,8 @@ Item {
 
   // ---- open, close, read -------------------------------------------------------
 
+  // The Client just made Settings the active view: a fresh visit.
   function openView() {
-    open = true
     // Narrow, the sections are a chip: the settings take the keys, or the
     // Banned IPs list once the read shows which section this is (reload).
     column = narrow ? "settingsKeys" : "settingsSections"
@@ -124,8 +129,8 @@ Item {
     reload(false)
   }
 
+  // The Client just left Settings: drop the visit (a late read is ignored).
   function closeView() {
-    open = false
     pickerOpen = false
     query = ""
     searchIndex = 0
@@ -224,7 +229,7 @@ Item {
   // section (Banned IPs, whose Esc brought you here) it leaves Settings, so
   // the list and the overlay never bounce.
   function closeSections() {
-    if (section.list) closeView()
+    if (section.list) leaveRequested()
     else { listKey = ""; column = "settingsKeys" }
   }
 
@@ -282,7 +287,7 @@ Item {
   // Esc: clears a search first, then leaves Settings.
   function back() {
     if (searching) clearSearch()
-    else closeView()
+    else leaveRequested()
   }
 
   // ---- search -----------------------------------------------------------------------

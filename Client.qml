@@ -59,6 +59,13 @@ Item {
   property string inspectorTab: "info"
 
   // ---- per-view, not persisted --------------------------------------------
+  // The view standing in the window (slice 5a, eng C1): "torrents" (the
+  // three panes), "settings" (`,`) or "search" (`F`). Only showView() and
+  // leaveView() change it: they open and close Settings and Search, Esc
+  // leaves through them (each view's leaveRequested), and they decide what
+  // a browser magnet's CONFIRM or a torrent row from the palette closes.
+  // Never saved: a reopened window lands on the torrents.
+  property string activeView: "torrents"
   property string textQuery: ""
   property var regState: ({ mode: "NORMAL", pane: "table", prefix: null, prefixAt: 0, hasTorrent: false, selectionCount: 0, pending: null })
   property var confirm: null
@@ -184,7 +191,8 @@ Item {
   onMagnetStateChanged: magnetRow.sync()
   // Deferred, so the key that changed the mode (palette.close, insert.cancel)
   // finishes before a waiting magnet takes the CONFIRM.
-  onModeChanged: { Qt.callLater(magnetRow.sync); if (View.isMagnetConfirm(regState)) settingsView.closeView() }
+  // Its question is on the torrent view: whichever view stands in leaves.
+  onModeChanged: { Qt.callLater(magnetRow.sync); if (View.isMagnetConfirm(regState)) leaveView() }
   onPaneChanged: Qt.callLater(magnetRow.sync)
   onHelpOpenChanged: Qt.callLater(magnetRow.sync)
   // When handleKey last ran (ms): a waiting magnet settles after it.
@@ -223,8 +231,13 @@ Item {
   })
   readonly property var stateCopy: View.stateCopy(tableState, { query: textQuery, filter: filter, matchesInAll: matchesInAll })
   readonly property string mode: regState.mode
-  // The registry pane keys go to: a Settings column while Settings is open.
-  readonly property string keyPane: settingsView.open ? settingsView.column : View.dispatchPane(pane, tableState)
+  // The registry pane keys go to: the active view's pane (a Settings column,
+  // a Search pane) while one stands in, else the torrent pane.
+  readonly property string keyPane: activeView === "settings" ? settingsView.column
+    : (activeView === "search" ? searchView.column : View.dispatchPane(pane, tableState))
+  // Search's dispatch flags while it shows (null otherwise), as
+  // SettingsCommands.flags() is Settings'.
+  readonly property var searchFlags: activeView === "search" ? searchView.flags : null
 
   // ---- lifecycle functions ------------------------------------------------
 
@@ -244,9 +257,11 @@ Item {
     closing = true
     // An open palette/picker would lose its field focus; reopening lands on the torrents.
     if (mode === "COMMAND") commands.closePalette(); else if (mode === "PICKER") commands.closePicker()
-    if (mode === "INSERT" && (inputPurpose === "settingsSearch" || inputPurpose === "settingEdit")) leaveInsert()
+    if (mode === "INSERT" && View.VIEW_INPUT_PURPOSES.indexOf(inputPurpose) !== -1) leaveInsert()
     settingsCmds.dropConfirm()
-    settingsView.closeView()
+    // D7/OV14: leaving Search keeps its job; closing the window doesn't.
+    searchView.windowClosed()
+    leaveView()
     helpOpen = false
     opened = false
     window.visible = false
@@ -263,6 +278,25 @@ Item {
   }
 
   function windowActive() { return wmFocus.windowActive() }
+
+  // ---- views (slice 5a, eng C1) ----------------------------------------------
+
+  // Makes `name` the active view: the one standing in leaves first
+  // (closeView), then the new one opens (openView) with activeView already
+  // set, so its `open` is true while it starts. "torrents" just leaves.
+  function showView(name) {
+    var next = Registry.VIEWS.indexOf(name) !== -1 ? name : "torrents"
+    if (next === activeView) return
+    var from = activeView
+    activeView = next
+    if (from === "settings") settingsView.closeView()
+    else if (from === "search") searchView.closeView()
+    if (next === "settings") settingsView.openView()
+    else if (next === "search") searchView.openView()
+  }
+
+  // Back to the torrents, with their pane, cursor and filter as they were.
+  function leaveView() { showView("torrents") }
   function typingField() { return commands.typingField() }
 
   // ---- view state ----------------------------------------------------------
@@ -465,7 +499,7 @@ Item {
     }
     // Esc on an open overlay closes it (no query clear, no Esc Esc). The
     // torrent pane, not keyPane: a down screen dispatches as the table.
-    if (View.overlayEscape(ev, regState.mode, layout, settingsView.open ? keyPane : pane)) { setPane("table"); return }
+    if (View.overlayEscape(ev, regState.mode, layout, activeView !== "torrents" ? keyPane : pane)) { setPane("table"); return }
     dispatchWith(function(st) { return Registry.dispatch(st, ev) }, ev)
   }
 
@@ -496,7 +530,7 @@ Item {
 
   // The state a key or palette command resolves against, as it stands now.
   function registryState(targets) {
-    return View.dispatchState(regState, keyPane, tableState, cursorIndex >= 0, targets, inspectorNow, commands.pickerFlags(), settingsCmds.flags())
+    return View.dispatchState(regState, keyPane, tableState, cursorIndex >= 0, targets, inspectorNow, commands.pickerFlags(), settingsCmds.flags(), searchFlags)
   }
 
   // Ends INSERT the way Esc does (insert.cancel: the filter query goes
@@ -511,7 +545,9 @@ Item {
   // changes (ClientCommands). Kept here for handleKey and the harness.
   function run(commandId, args, ev, targets) {
     // Slice 4b: the list editor, secrets and narrow rows are SettingsCommands'.
+    // Slice 5a: Search's rows (all but its opener) are SearchPane's.
     if (settingsCmds.owns(commandId)) settingsCmds.run(commandId, args)
+    else if (searchView.owns(commandId)) searchView.run(commandId, args)
     else commands.run(commandId, args, ev, targets)
   }
 
@@ -568,6 +604,7 @@ Item {
     palette: cmdPalette
     settingsView: settingsView
     settingsCommands: settingsCmds
+    searchView: searchView
     magnet: magnetRow
     categoryPicker: catPicker
     tagPicker: tagPicker
@@ -644,7 +681,7 @@ Item {
           width: Style.space(210)
           height: panes.height
           title: "Filters"
-          swappedOut: settingsView.open
+          swappedOut: root.activeView !== "torrents"
           focusedPane: root.pane === "filters"
           collapsed: !root.filtersDocked
 
@@ -671,7 +708,7 @@ Item {
           width: Math.max(0, panes.width - x - (root.inspectorDocked ? Style.space(380) : 0))
           height: panes.height
           title: "Torrents"
-          swappedOut: settingsView.open
+          swappedOut: root.activeView !== "torrents"
           titleRight: View.paneTitle(root.filter, root.textQuery, root.sortMode, root.sortDesc)
           focusedPane: root.pane === "table"
 
@@ -711,7 +748,7 @@ Item {
           width: Style.space(380)
           height: panes.height
           title: "Inspector"
-          swappedOut: settingsView.open
+          swappedOut: root.activeView !== "torrents"
           titleRight: inspector.titleRight
           focusedPane: root.pane === "inspector"
           collapsed: !root.inspectorDocked
@@ -765,6 +802,21 @@ Item {
         service: root.service
         tableState: root.tableState
         narrow: View.settingsNarrow(keyRoot.width)
+        open: root.activeView === "settings"
+        onLeaveRequested: root.leaveView()
+      }
+      // Slice 5a: the Search view's mount point (SearchPane.qml documents
+      // what it gets and what it must provide).
+      SearchPane {
+        id: searchView
+        anchors.fill: panes
+        service: root.service
+        client: root
+        commands: commands
+        tableState: root.tableState
+        narrow: View.settingsNarrow(keyRoot.width)
+        open: root.activeView === "search"
+        onLeaveRequested: root.leaveView()
       }
       StatusLine {
         id: statusLine
@@ -790,6 +842,7 @@ Item {
           accept: root.confirm ? View.confirmLine(root.confirm).accept : "",
           purpose: root.inputPurpose,
           pane: root.keyPane,
+          search: root.searchFlags,
           searching: settingsView.searching,
           editor: settingsView.editorKind,
           filesTab: root.inspectorTab === "files" && !root.infoTab.noMeta
@@ -797,6 +850,7 @@ Item {
 
         onInputEdited: function(text) {
           if (root.mode === "INSERT" && root.inputPurpose === "settingsSearch") settingsView.setSearch(text)
+          if (root.mode === "INSERT" && View.SEARCH_INPUT_PURPOSES.indexOf(root.inputPurpose) !== -1) searchView.inputEdited(root.inputPurpose, text)
           if (root.mode !== "INSERT" || root.inputPurpose !== "filter") return
           // "Matches update as you type"; a pasted magnet/URL/path is an
           // add target, not a query, so it doesn't filter the table empty.
@@ -810,7 +864,7 @@ Item {
         visible: root.helpOpen
         groups: root.helpOpen ? View.helpRows(Registry.helpFor("NORMAL", root.helpPane, root.inspectorTab, root.registryState([]))) : []
         mode: "NORMAL"
-        paneName: Registry.isSettingsPane(root.helpPane) ? "settings" : root.helpPane
+        paneName: View.helpPaneName(root.helpPane)
         onDismissed: {
           root.helpOpen = false
           keyRoot.forceActiveFocus()
@@ -822,8 +876,8 @@ Item {
         anchors.fill: parent
         visible: root.mode === "COMMAND"
         mru: root.paletteMru
-        evalState: View.paletteState(root.tableState, root.cursorIndex >= 0, root.inspectorState, root.pane, settingsView.open,
-          settingsCmds.flags(), root.keyPane)
+        evalState: View.paletteState(root.tableState, root.cursorIndex >= 0, root.inspectorState, root.pane, root.activeView,
+          settingsCmds.flags(), root.keyPane, root.searchFlags)
         onKeyForwarded: function(event) { root.handleKey(event) }
         onActivated: function(row) { commands.runPaletteRow(row) }
         onDismissed: commands.closePalette()

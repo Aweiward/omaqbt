@@ -11,8 +11,9 @@ import qs.Commons
 // above the table's edge, on an opaque background that takes the clicks
 // its content doesn't, with the focused outline as its border.
 //
-// A swapped-out pane (slice 4a) is hidden while the Settings view stands in
-// for the torrent panes; it keeps its state and comes back as it was.
+// A swapped-out pane (slice 4a) is hidden while another view (Settings,
+// or Search from slice 5a: Client.activeView) stands in for the torrent
+// panes; it keeps its state and comes back as it was.
 Item {
   id: paneItem
   property string title: ""
