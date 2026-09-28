@@ -1503,35 +1503,58 @@ class SecretArgvTest(StdinCase):
         self.assertLess(get, post)
         self.assertEqual(names[get + 1:post].count("jq"), 1, names[get:post + 1])
 
-    def test_a_killed_read_leaves_no_temp_file(self):
-        # Fix round 1: the preferences body (every secret) goes through a
-        # temp file; a signal mid-curl must not leave it behind.
+    def test_no_response_body_ever_touches_disk(self):
+        # Ruling EG: the preferences body holds every stored secret, so
+        # api_exec keeps it in memory only. TMPDIR is a fresh empty dir and
+        # must stay empty during every read, including a SIGKILL mid-request
+        # (nothing could clean up after that).
         import signal
         import subprocess
         import time
-        for group in (True, False):
-            tmpdir = Path(tempfile.mkdtemp(prefix="qbt-tmp-"))
-            self.addCleanup(__import__("shutil").rmtree, tmpdir, True)
-            full = dict(self.env, TMPDIR=str(tmpdir))
+        tmpdir = Path(tempfile.mkdtemp(prefix="qbt-tmp-"))
+        self.addCleanup(__import__("shutil").rmtree, tmpdir, True)
+        env = {"TMPDIR": str(tmpdir), "TMP": str(tmpdir), "TEMP": str(tmpdir)}
+        self.assertEqual(self.run_qbt("prefs", env=env).returncode, 0)
+        self.secret_ok("proxy_password", "S3CRET-disk-1", env=env)
+        self.assertEqual(self.run_qbt("pref-set", "add_trackers", "--", "udp://a.example:1/x", env=env).returncode, 0)
+        self.assertEqual(self.run_qbt("ban-list", "add", "203.0.113.4", env=env).returncode, 0)
+        self.assertEqual(list(tmpdir.iterdir()), [])
+        for sig, group in ((signal.SIGKILL, True), (signal.SIGTERM, True), (signal.SIGTERM, False)):
             self.control({"preferences": "sleep7"})
-            p = subprocess.Popen([QBT, "prefs"], env=full, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                 start_new_session=True)
-            deadline = time.monotonic() + 4
-            while not any(tmpdir.iterdir()) and time.monotonic() < deadline:
+            p = subprocess.Popen([QBT, "prefs"], env=dict(self.env, **env), stdout=subprocess.PIPE,
+                                 stderr=subprocess.PIPE, start_new_session=True)
+            deadline = time.monotonic() + 1.5
+            while time.monotonic() < deadline:
+                self.assertEqual(list(tmpdir.iterdir()), [], "nothing on disk mid-request")
                 time.sleep(0.05)
-            self.assertTrue(any(tmpdir.iterdir()), "the read's temp file exists mid-curl")
             if group:
-                os.killpg(p.pid, signal.SIGTERM)
+                os.killpg(p.pid, sig)
             else:
-                p.send_signal(signal.SIGTERM)
+                p.send_signal(sig)
             p.wait(timeout=5)
             p.stdout.close()
             p.stderr.close()
-            deadline = time.monotonic() + 8
-            while any(tmpdir.iterdir()) and time.monotonic() < deadline:
-                time.sleep(0.1)
-            self.assertEqual(list(tmpdir.iterdir()), [], f"group kill: {group}")
+            self.assertEqual(list(tmpdir.iterdir()), [], f"{sig!r} group={group}")
             self.control({})
+        # And nothing in api_exec can write one.
+        text = (ROOT / "qbt").read_text()
+        body = re.search(r"^api_exec\(\) \{\n(.*?)^\}", text, re.S | re.M).group(1)
+        for word in ("mktemp", "-o ", "tee", "> ", ">>"):
+            self.assertNotIn(word, re.sub(r"(?m)^\s*#.*$", "", body), word)
+
+    def test_api_exec_keeps_bodies_and_codes_apart(self):
+        # Ruling EG: the status is split off curl's stdout, so an error
+        # body, an empty body and an unreachable server all stay distinct.
+        self.control({"preferences": "409state"})
+        r = self.run_qbt("prefs")
+        self.assertEqual((r.returncode, r.stdout, r.stderr.strip()), (1, "", "qBittorrent refused it (HTTP 409)"))
+        self.control({})
+        r = self.run_qbt("prefs", env={"QBT_BASE": "http://127.0.0.1:9"})
+        self.assertEqual((r.returncode, r.stderr.strip()), (1, "qBittorrent refused it (couldn't reach qBittorrent)"))
+        self.assertEqual(self.run_qbt("pref-set", "dht", "--", "true").returncode, 0)
+        r = self.run_qbt("prefs")
+        self.assertEqual(json.loads(r.stdout), json.loads(r.stdout.strip()))
+        self.assertEqual(r.stdout.count("\n"), 1)
 
     def test_secret_never_reaches_stdout_or_stderr(self):
         value = "S3CRET-out-" + "z" * 5

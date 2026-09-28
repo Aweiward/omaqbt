@@ -237,20 +237,22 @@ is_daemon() {
 
 api_exec() {
   local out code resp
-  # The response (for preferences, every secret) passes through a temp
-  # file. A subshell owns it and removes it when it ends, or on a signal
-  # (bash skips the EXIT trap when a signal trap exits, hence both), so a
-  # kill mid-curl leaves nothing behind (Ruling EE; SIGKILL excepted).
-  out=$(
-    tmp=$(mktemp) || exit 1
-    trap 'rm -f -- "$tmp"' EXIT
-    trap 'rm -f -- "$tmp"; exit 1' HUP INT TERM
-    printf '%s\n' "$(curl -o "$tmp" -w '%{http_code}' "$@" || true)"
-    cat -- "$tmp"
-  ) || true
-  code=${out%%$'\n'*}
-  resp=${out#*$'\n'}
-  [[ $out == *$'\n'* ]] || resp=""
+  # Ruling EG: the body stays in memory, never in a file (for preferences
+  # it holds every stored secret, and a kill mid-curl would leave a file
+  # behind). curl appends "\n<status>" and the last line is split off; no
+  # output at all, or a last line that isn't three digits, counts as 000,
+  # never as a body.
+  out=$(curl -w '\n%{http_code}' "$@" || true)
+  if [[ $out == *$'\n'* ]]; then
+    code=${out##*$'\n'}
+    resp=${out%$'\n'*}
+  else
+    code=$out
+    resp=""
+  fi
+  [[ $code =~ ^[[:digit:]]{3}$ ]] || code=000
+  # As the old $(cat "$tmp") did: trailing newlines go.
+  while [[ $resp == *$'\n' ]]; do resp=${resp%$'\n'}; done
   if [[ $code == 403 ]]; then
     die "localhost auth is required"
   fi
