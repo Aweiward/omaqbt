@@ -92,13 +92,13 @@ var commands = [
   { id: "inspector.chart", title: "Chart", group: "View", keys: ["5"], modes: ["NORMAL"], panes: [PANE_ANY], needs: "none" },
   { id: "pane.next", title: "Next pane", group: "View", keys: ["Tab", "Ctrl-l"], modes: ["NORMAL"], panes: [PANE_ANY], needs: "none" },
   { id: "pane.prev", title: "Prev pane", group: "View", keys: ["Shift-Tab", "Ctrl-h"], modes: ["NORMAL"], panes: [PANE_ANY], needs: "none" },
-  { id: "help.toggle", title: "Help", group: "App", keys: ["?"], modes: ["NORMAL"], panes: [PANE_ANY], needs: "none" },
+  { id: "help.toggle", title: "Help", group: "App", keys: ["?"], modes: ["NORMAL"], panes: [PANE_ANY], needs: "none", inSettings: true },
   { id: "window.close", title: "Close window", group: "App", keys: ["q"], modes: ["NORMAL"], panes: [PANE_ANY], needs: "none" },
   { id: "filter.clearText", title: "Clear filter", group: "View", keys: ["Esc"], modes: ["NORMAL"], panes: [PANE_ANY], needs: "none" },
   { id: "filter.reset", title: "Reset filters", group: "View", keys: ["Esc Esc"], modes: ["NORMAL"], panes: [PANE_ANY], needs: "none" },
   // From VISUAL too (Task 6): the palette then runs a range command on the
   // range (args.range tells the window to keep what it captured).
-  { id: "palette.open", title: "Command palette", group: "App", keys: [":"], modes: ["NORMAL", "VISUAL"], panes: [PANE_ANY], needs: "none" },
+  { id: "palette.open", title: "Command palette", group: "App", keys: [":"], modes: ["NORMAL", "VISUAL"], panes: [PANE_ANY], needs: "none", inSettings: true },
 
   // COMMAND (the palette's TextField owns typing; these are the only keys
   // dispatch resolves itself).
@@ -169,6 +169,21 @@ var commands = [
   // with stopCondition MetadataReceived (qbt fetch-metadata, F4).
   { id: "torrent.fetchMetadata", title: "Fetch metadata only", group: "Torrent", keys: ["f"], modes: ["NORMAL"], panes: [PANE_ANY], needs: "noMetadata" },
 
+  // Settings (slice 4a, eng D6). `,` (or ":Settings" in the palette)
+  // swaps the torrent panes for the Settings view; its two columns are the
+  // panes settingsSections and settingsKeys. Inside them the any-pane rows
+  // above are dead except : and ? (inSettings, see paneMatches). The
+  // navigation rows are paletteHidden: the palette lists only "Settings".
+  { id: "settings.open", title: "Settings", group: "App", keys: [","], modes: ["NORMAL"], panes: ["filters", "table", "inspector"], needs: "none" },
+  { id: "settings.down", title: "Down", group: "View", keys: ["j", "Down"], modes: ["NORMAL"], panes: ["settingsSections", "settingsKeys"], needs: "none", paletteHidden: true },
+  { id: "settings.up", title: "Up", group: "View", keys: ["k", "Up"], modes: ["NORMAL"], panes: ["settingsSections", "settingsKeys"], needs: "none", paletteHidden: true },
+  { id: "settings.enter", title: "Go to the settings", group: "View", keys: ["l", "Enter", "Tab"], modes: ["NORMAL"], panes: ["settingsSections"], needs: "none", paletteHidden: true },
+  { id: "settings.leave", title: "Back to the sections", group: "View", keys: ["h", "Shift-Tab"], modes: ["NORMAL"], panes: ["settingsKeys"], needs: "none", paletteHidden: true },
+  { id: "settings.search", title: "Search all settings", group: "View", keys: ["/"], modes: ["NORMAL"], panes: ["settingsSections", "settingsKeys"], needs: "none", paletteHidden: true },
+  // Esc clears an active search first, then leaves Settings (the window
+  // decides which; the registry only names the key).
+  { id: "settings.back", title: "Clear search, or back to torrents", group: "App", keys: ["Esc"], modes: ["NORMAL"], panes: ["settingsSections", "settingsKeys"], needs: "none", paletteHidden: true },
+
   // VISUAL (j/k/Space/x/X/e reuse the NORMAL,table rows above; this is the exit)
   { id: "visual.exit", title: "Exit visual", group: "View", keys: ["Esc", "V"], modes: ["VISUAL"], panes: ["table"], needs: "none" },
 
@@ -204,6 +219,7 @@ var MODE_AFTER = {
   "visual.enter": "VISUAL",
   "visual.exit": "NORMAL",
   "filter.text": "INSERT",
+  "settings.search": "INSERT",
   "insert.cancel": "NORMAL",
   "insert.commit": "NORMAL",
   "palette.open": "COMMAND",
@@ -316,8 +332,25 @@ function matchLabel(label, ev) {
   }
 }
 
+// The Settings view's two columns (slice 4a).
+var SETTINGS_PANES = ["settingsSections", "settingsKeys"];
+
+function isSettingsPane(pane) {
+  return SETTINGS_PANES.indexOf(pane) !== -1;
+}
+
+// paneMatches(row, pane) -> whether row's panes cover pane. PANE_ANY means
+// any torrent pane. Inside Settings it covers only a row marked inSettings
+// (: and ?) and the modal rows -- those with no NORMAL or VISUAL mode
+// (INSERT, COMMAND, CONFIRM, PICKER), which their mode already gates. So
+// t, s, z, r, q, 1-5, Tab, Esc, f and the rest can't act on the hidden
+// torrents from Settings (the any-pane audit, pinned by node tests).
 function paneMatches(row, pane) {
-  return row.panes.indexOf(PANE_ANY) !== -1 || row.panes.indexOf(pane) !== -1;
+  if (row.panes.indexOf(pane) !== -1) return true;
+  if (row.panes.indexOf(PANE_ANY) === -1) return false;
+  if (!isSettingsPane(pane)) return true;
+  if (row.inSettings === true) return true;
+  return row.modes.indexOf("NORMAL") === -1 && row.modes.indexOf("VISUAL") === -1;
 }
 
 // tabMatches(row, tab) -> whether row.tabs (D7) covers the inspector's
@@ -601,6 +634,10 @@ function dispatch(state, event) {
     }
   }
 
+  // Settings has no key sequences: a prefix left over from the torrent
+  // view never completes there (Esc Esc would reset the hidden filters).
+  if (isSettingsPane(s.pane) && s.prefix !== null) s = clearPrefix(s);
+
   // Continue an active "g" prefix (cursor.top).
   if (s.prefix === "g") {
     if (withinPrefix(now, s.prefixAt) && !ctrl && text === "g") {
@@ -766,6 +803,8 @@ if (typeof module !== "undefined" && module.exports) {
     needsReason: needsReason,
     needsConfirm: needsConfirm,
     paneMatches: paneMatches,
+    isSettingsPane: isSettingsPane,
+    SETTINGS_PANES: SETTINGS_PANES,
     tabMatches: tabMatches,
     whenMatches: whenMatches
   };

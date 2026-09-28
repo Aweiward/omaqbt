@@ -10,6 +10,9 @@ import qs.Commons
 // width in the layout; while it has focus it shows as an overlay: raised
 // above the table's edge, on an opaque background that takes the clicks
 // its content doesn't, with the focused outline as its border.
+//
+// A swapped-out pane (slice 4a) is hidden while the Settings view stands in
+// for the torrent panes; it keeps its state and comes back as it was.
 Item {
   id: paneItem
   property string title: ""
@@ -17,11 +20,12 @@ Item {
   property bool focusedPane: false
   property bool rightLine: true
   property bool collapsed: false
+  property bool swappedOut: false
   readonly property bool overlay: collapsed && focusedPane
   default property alias content: paneBody.data
   readonly property color lineColor: Util.alpha(Color.foreground, Style.normalBorderAlpha)
 
-  visible: !collapsed || overlay
+  visible: !swappedOut && (!collapsed || overlay)
   z: overlay ? 1 : 0
 
   Rectangle {

@@ -382,6 +382,9 @@ function tableState(s) {
 // with zero torrents (ruling BS); its `y` matches nothing there, and the
 // window reads an unmatched y in the empty library as add from clipboard.
 function dispatchPane(pane, state) {
+  // The Settings view (slice 4a) keeps its own columns whatever the torrent
+  // view shows: its Esc must work on its down screen too.
+  if (Registry.isSettingsPane(pane)) return String(pane);
   if (state === "rows" || state === "noMatch") return String(pane || "table");
   if (state === "empty" && pane === "filters") return "filters";
   return "table";
@@ -746,6 +749,7 @@ function inputPrompt(purpose, shown) {
   if (Object.prototype.hasOwnProperty.call(LIMIT_PROMPTS, purpose)) {
     return { prompt: LIMIT_PROMPTS[purpose][0] + " for " + String(shown || ""), placeholder: LIMIT_PROMPTS[purpose][1] };
   }
+  if (purpose === "settingsSearch") return { prompt: "Search settings", placeholder: "label, help or key" };
   return { prompt: "/", placeholder: "filter by name, or paste a magnet" };
 }
 
@@ -762,6 +766,7 @@ function modeHints(mode, ctx) {
     if (c.purpose === "trackerEdit") return [{ key: "Enter", label: "change" }, { key: "Esc", label: "cancel" }];
     if (c.purpose === "categoryAdd" || c.purpose === "tagAdd") return [{ key: "Enter", label: "create" }, { key: "Esc", label: "cancel" }];
     if (c.purpose === "categoryRename" || c.purpose === "tagRename") return [{ key: "Enter", label: "rename" }, { key: "Esc", label: "cancel" }];
+    if (c.purpose === "settingsSearch") return [{ key: "Enter", label: "keep results" }, { key: "Esc", label: "clear" }];
     if (c.purpose === "categoryPath" || Object.prototype.hasOwnProperty.call(LIMIT_PROMPTS, c.purpose)) return [{ key: "Enter", label: "set" }, { key: "Esc", label: "cancel" }];
     return [{ key: "Enter", label: "keep filter" }, { key: "Esc", label: "cancel" }];
   }
@@ -775,6 +780,7 @@ function modeHints(mode, ctx) {
       { key: "Esc", label: "cancel" }
     ];
   }
+  if (Registry.isSettingsPane(c.pane)) return settingsFooterKeys(c.pane, c.searching === true).concat([{ key: "?", label: "keys" }]);
   if (c.pane === "filters") {
     return [
       { key: "j/k", label: "move" },
@@ -809,6 +815,77 @@ function modeHints(mode, ctx) {
     { key: "?", label: "keys" },
     { key: "q", label: "close" }
   ];
+}
+
+// --- Settings (slice 4a) ----------------------------------------------------
+
+// settingsFooterKeys(column, searching) -> [{key, label}] for the focused
+// Settings column's footer (the mockup's): the sections move and open a
+// section; the settings list moves and goes back. While a search shows,
+// Esc clears it first. Task 6 adds Enter and Space for the editors.
+function settingsFooterKeys(column, searching) {
+  if (column === "settingsSections") {
+    return [{ key: "j/k", label: "section" }, { key: "l", label: "settings" }, { key: "/", label: "search all" }, { key: "Esc", label: "back" }];
+  }
+  return [{ key: "j/k", label: "move" }, { key: "h", label: "sections" }, { key: "/", label: "search" },
+    { key: "Esc", label: searching === true ? "clear search" : "back" }];
+}
+
+// settingsSectionStep(sections, index, delta) -> the section cursor moved
+// by delta, clamped at the ends, skipping dimmed sections (RSS · slice 5 is
+// never a stop). delta 0 re-clamps a stale index. 0 with no stops.
+function settingsSectionStep(sections, index, delta) {
+  var list = sections || [];
+  var stops = [];
+  for (var i = 0; i < list.length; i++) if (list[i] && list[i].dimmed !== true) stops.push(i);
+  if (stops.length === 0) return 0;
+  var at = Number(index) || 0;
+  // The stop at or before index (the first stop when index is before them).
+  var pos = 0;
+  for (var j = 0; j < stops.length; j++) if (stops[j] <= at) pos = j;
+  pos = Math.max(0, Math.min(stops.length - 1, pos + (Number(delta) || 0)));
+  return stops[pos];
+}
+
+// settingsDownCopy(tableState) -> the down screen Settings shows when
+// preferences can't be read: the torrent view's own blocking copy when it
+// shows one (daemon down, Qt open, not installed, API down), else the
+// api-down copy -- never a new screen. Its keys are the one that works in
+// Settings: Esc, back to the torrents (whose screen has the fix).
+function settingsDownCopy(tableState) {
+  var blocking = ["gui", "notInstalled", "daemon", "api"];
+  var c = stateCopy(blocking.indexOf(tableState) !== -1 ? tableState : "api");
+  return { title: c.title, tone: c.tone, body: c.body, keys: [{ key: "Esc", label: "Back to torrents" }] };
+}
+
+// settingsTitle(section, count, query) -> {title, right} for the settings
+// list's pane title: the section and "12 settings", or while a search
+// shows, "Search" and "“port” · 7 matches".
+function settingsTitle(section, count, query) {
+  var n = Number(count) || 0;
+  var q = String(query || "").trim();
+  if (q !== "") return { title: "Search", right: "“" + q + "” · " + plural(n, "match", "matches") };
+  return { title: String(section || ""), right: plural(n, "setting", "settings") };
+}
+
+// settingsEntries(rows, searching) -> [{kind: "header", label} |
+// {kind: "row", row, index}] for the settings list: a muted group header
+// before the first row of each group (SettingsView.rows are in group
+// order), none in search results, where each row names its section
+// instead. index is the row's position in rows (the cursor's).
+function settingsEntries(rows, searching) {
+  var list = rows || [];
+  var out = [];
+  var group = null;
+  for (var i = 0; i < list.length; i++) {
+    var r = list[i];
+    if (searching !== true && r.group !== group) {
+      group = r.group;
+      out.push({ kind: "header", label: String(group || ""), row: null, index: -1 });
+    }
+    out.push({ kind: "row", label: "", row: r, index: i });
+  }
+  return out;
 }
 
 // --- Tones ----------------------------------------------------------------
@@ -1691,6 +1768,8 @@ function paletteCommandEntries(commandsTable) {
     if (!row || row.id === null || row.id === undefined) continue;
     if (String(row.id).indexOf("palette.") === 0) continue;
     if (!row.modes || row.modes.indexOf("NORMAL") === -1) continue;
+    // Settings' own navigation (slice 4a): only "Settings" itself is listed.
+    if (row.paletteHidden === true) continue;
     if (!byId[row.id]) {
       byId[row.id] = { id: row.id, title: row.title, group: row.group, needs: row.needs, tabs: row.tabs, rows: [] };
       order.push(row.id);
@@ -2090,6 +2169,11 @@ if (typeof module !== "undefined" && module.exports) {
     progressText: progressText,
     confirmLine: confirmLine,
     modeHints: modeHints,
+    settingsFooterKeys: settingsFooterKeys,
+    settingsSectionStep: settingsSectionStep,
+    settingsDownCopy: settingsDownCopy,
+    settingsTitle: settingsTitle,
+    settingsEntries: settingsEntries,
     inputPrompt: inputPrompt,
     vpnPart: vpnPart,
     isAbsolutePath: isAbsolutePath,

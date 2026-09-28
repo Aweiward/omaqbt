@@ -184,7 +184,7 @@ Item {
   onMagnetStateChanged: magnetRow.sync()
   // Deferred, so the key that changed the mode (palette.close, insert.cancel)
   // finishes before a waiting magnet takes the CONFIRM.
-  onModeChanged: Qt.callLater(magnetRow.sync)
+  onModeChanged: { Qt.callLater(magnetRow.sync); if (View.isMagnetConfirm(regState)) settingsView.closeView() }
   onPaneChanged: Qt.callLater(magnetRow.sync)
   onHelpOpenChanged: Qt.callLater(magnetRow.sync)
   // When handleKey last ran (ms): a waiting magnet settles after it.
@@ -223,6 +223,8 @@ Item {
   })
   readonly property var stateCopy: View.stateCopy(tableState, { query: textQuery, filter: filter, matchesInAll: matchesInAll })
   readonly property string mode: regState.mode
+  // The registry pane keys go to: a Settings column while Settings is open.
+  readonly property string keyPane: settingsView.open ? settingsView.column : View.dispatchPane(pane, tableState)
 
   // ---- lifecycle functions ------------------------------------------------
 
@@ -240,8 +242,8 @@ Item {
   function close() {
     if (closing) return
     closing = true
-    // A palette or picker left open would come back without its field focused.
-    if (mode === "COMMAND") commands.closePalette(); else if (mode === "PICKER") commands.closePicker()
+    // An open palette/picker would lose its field focus; reopening lands on the torrents.
+    if (mode === "COMMAND") commands.closePalette(); else if (mode === "PICKER") commands.closePicker(); settingsView.closeView()
     opened = false
     window.visible = false
     if (service) service.windowOpen = false
@@ -458,7 +460,7 @@ Item {
       return
     }
     // Esc on an open overlay closes it (no query clear, no Esc Esc).
-    if (View.overlayEscape(ev, regState.mode, layout, pane)) { setPane("table"); return }
+    if (View.overlayEscape(ev, regState.mode, layout, keyPane)) { setPane("table"); return }
     dispatchWith(function(st) { return Registry.dispatch(st, ev) }, ev)
   }
 
@@ -489,7 +491,7 @@ Item {
 
   // The state a key or palette command resolves against, as it stands now.
   function registryState(targets) {
-    return View.dispatchState(regState, pane, tableState, cursorIndex >= 0, targets, inspectorNow, commands.pickerFlags())
+    return View.dispatchState(regState, keyPane, tableState, cursorIndex >= 0, targets, inspectorNow, commands.pickerFlags())
   }
 
   // Ends INSERT the way Esc does (insert.cancel: the filter query goes
@@ -556,6 +558,7 @@ Item {
     inputLine: statusLine
     keyItem: keyRoot
     palette: cmdPalette
+    settingsView: settingsView
     magnet: magnetRow
     categoryPicker: catPicker
     tagPicker: tagPicker
@@ -625,6 +628,7 @@ Item {
           width: Style.space(210)
           height: panes.height
           title: "Filters"
+          swappedOut: settingsView.open
           focusedPane: root.pane === "filters"
           collapsed: !root.filtersDocked
 
@@ -651,6 +655,7 @@ Item {
           width: Math.max(0, panes.width - x - (root.inspectorDocked ? Style.space(380) : 0))
           height: panes.height
           title: "Torrents"
+          swappedOut: settingsView.open
           titleRight: View.paneTitle(root.filter, root.textQuery, root.sortMode, root.sortDesc)
           focusedPane: root.pane === "table"
 
@@ -690,6 +695,7 @@ Item {
           width: Style.space(380)
           height: panes.height
           title: "Inspector"
+          swappedOut: settingsView.open
           titleRight: inspector.titleRight
           focusedPane: root.pane === "inspector"
           collapsed: !root.inspectorDocked
@@ -737,6 +743,13 @@ Item {
         }
       }
 
+      SettingsPane {
+        id: settingsView
+        anchors.fill: panes
+        service: root.service
+        tableState: root.tableState
+      }
+
       StatusLine {
         id: statusLine
         anchors.left: parent.left
@@ -760,11 +773,13 @@ Item {
         hints: View.modeHints(root.mode, {
           accept: root.confirm ? View.confirmLine(root.confirm).accept : "",
           purpose: root.inputPurpose,
-          pane: View.dispatchPane(root.pane, root.tableState),
+          pane: root.keyPane,
+          searching: settingsView.searching,
           filesTab: root.inspectorTab === "files" && !root.infoTab.noMeta
         })
 
         onInputEdited: function(text) {
+          if (root.mode === "INSERT" && root.inputPurpose === "settingsSearch") settingsView.setSearch(text)
           if (root.mode !== "INSERT" || root.inputPurpose !== "filter") return
           // "Matches update as you type"; a pasted magnet/URL/path is an
           // add target, not a query, so it doesn't filter the table empty.
@@ -778,7 +793,7 @@ Item {
         visible: root.helpOpen
         groups: root.helpOpen ? View.helpRows(Registry.helpFor("NORMAL", root.helpPane, root.inspectorTab, root.inspectorNow)) : []
         mode: "NORMAL"
-        paneName: root.helpPane
+        paneName: Registry.isSettingsPane(root.helpPane) ? "settings" : root.helpPane
         onDismissed: {
           root.helpOpen = false
           keyRoot.forceActiveFocus()
