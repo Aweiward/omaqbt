@@ -707,6 +707,16 @@ TestCase {
     compare(o.c.inspectorTab, "info")
   }
 
+  function test_closing_the_window_closes_help() {
+    var o = make()
+    key(o.c, "?", 0x3f, 0x02000000)
+    compare(o.c.helpOpen, true)
+    o.c.close()
+    compare(o.c.helpOpen, false)
+    o.c.open("")
+    compare(o.c.helpOpen, false, "reopening lands on the torrents, not the old help")
+  }
+
   function test_help_overlay() {
     var o = make()
     o.svc.torrents = list3()

@@ -516,7 +516,7 @@ TestCase {
     var o = make()
     focusKey(o, "announce_ip")
     enter(o)
-    typeAndEnter(o, "not.an.ip")
+    typeAndEnter(o, "10.0.0.1")
     compare(valueText(o, "announce_ip"), "saving…")
     var reads = calls(o.svc, "readPrefs").length
     finish(o, false, "qBittorrent ignored IP reported to trackers\n")
@@ -686,6 +686,151 @@ TestCase {
     comma(o)
     o.svc.answer({ ok: false, error: "qBittorrent refused it (couldn't reach qBittorrent)" })
     compare(status(o), "", "the api-down screen says it already")
+  }
+
+  // ---- final fix wave (Ruling DU) ------------------------------------------------------
+
+  function test_a_write_still_running_keeps_saving_across_a_close_and_reopen() {
+    var o = make()
+    focusKey(o, "zz_new_flag")
+    space(o)
+    compare(writes(o), [["zz_new_flag", "true"]])
+    var ticket = o.svc.seq
+    compare(valueText(o, "zz_new_flag"), "saving…")
+    o.c.close()
+    o.c.open("")
+    comma(o)
+    o.svc.answer({ ok: true, prefs: prefs() })
+    focusKey(o, "zz_new_flag")
+    compare(valueText(o, "zz_new_flag"), "saving…", "the write is still running")
+    space(o)
+    compare(writes(o).length, 1, "and Space does nothing on it")
+    o.svc.actionFinished(ticket, true, "", "window", [])
+    o.svc.answer({ ok: true, prefs: prefs({ zz_new_flag: true }) })
+    compare(valueText(o, "zz_new_flag"), "on")
+  }
+
+  function test_qbittorrent_going_down_while_settings_shows_switches_to_the_down_screen() {
+    var o = make()
+    focusKey(o, "dht")
+    compare(view(o).failed, false)
+    o.svc.api = false
+    compare(o.c.tableState, "api")
+    compare(view(o).failed, true, "the down screen shows")
+    compare(status(o), "", "the down screen says it; no read note")
+    space(o)
+    compare(writes(o).length, 0, "nothing is editable on the down screen")
+    var reads = calls(o.svc, "readPrefs").length
+    o.svc.api = true
+    compare(calls(o.svc, "readPrefs").length, reads + 1, "qBittorrent is back: read again")
+    o.svc.answer({ ok: true, prefs: prefs() })
+    compare(view(o).failed, false)
+
+    // A read in flight when it goes down can't land over the down screen.
+    esc(o)
+    comma(o)
+    o.svc.daemon = false
+    compare(view(o).failed, true)
+    o.svc.answer({ ok: true, prefs: prefs() })
+    compare(view(o).failed, true, "the late answer is dropped")
+  }
+
+  // Rulings DQ, DR, DS: the window refuses first, with qbt's sentences.
+  function test_an_unclean_path_a_bad_ip_and_a_short_username_stay_in_insert() {
+    var o = make(prefs({ web_ui_username: "admin" }))
+    var cases = [["save_path", "/srv//dl", "Use a clean path without //, /./ or /../."],
+      ["announce_ip", "not.an.ip", "Use an IPv4 or IPv6 address, or leave it empty."],
+      ["web_ui_username", "a:b", "Use at least 3 characters and no colon."]]
+    for (var i = 0; i < cases.length; i++) {
+      focusKey(o, cases[i][0])
+      enter(o)
+      typeAndEnter(o, cases[i][1])
+      compare(o.c.mode, "INSERT", cases[i][0] + " stays in INSERT")
+      compare(status(o), cases[i][2])
+      esc(o)
+      compare(o.c.mode, "NORMAL")
+    }
+    compare(writes(o).length, 0)
+  }
+
+  function choiceItem(o, value) {
+    return (function find(obj) {
+      if (!obj) return null
+      if (obj.isRow === true && obj.modelData && String(obj.modelData.value) === String(value)) return obj
+      var kids = obj.children || []
+      for (var i = 0; i < kids.length; i++) { var r = find(kids[i]); if (r) return r }
+      return null
+    })(picker(o))
+  }
+
+  function test_a_click_on_a_choice_sets_it() {
+    var o = make()
+    focusKey(o, "disk_io_type")
+    enter(o)
+    compare(o.c.mode, "PICKER")
+    wait(30)
+    var item = choiceItem(o, 1)
+    verify(item !== null, "the choice is on screen")
+    mouseClick(item)
+    compare(o.c.mode, "NORMAL")
+    verify(!picker(o), "the picker is gone")
+    compare(writes(o), [["disk_io_type", "1"]])
+  }
+
+  function test_a_click_on_the_scrim_dismisses_the_picker_and_sends_nothing() {
+    var o = make()
+    focusKey(o, "disk_io_type")
+    enter(o)
+    compare(o.c.mode, "PICKER")
+    wait(30)
+    mouseClick(picker(o), 4, 4)
+    compare(o.c.mode, "NORMAL")
+    verify(!picker(o))
+    compare(view(o).pickerOpen, false)
+    compare(writes(o).length, 0)
+  }
+
+  function sectionsFooter(o) {
+    return (function find(obj) {
+      if (!obj) return null
+      if (Array.isArray(obj.keys) && obj.keys.length > 1 && obj.keys[0].key === "j/k" && obj.keys[1].label === "keys") return obj
+      var kids = obj.children || []
+      for (var i = 0; i < kids.length; i++) { var r = find(kids[i]); if (r) return r }
+      return null
+    })(view(o))
+  }
+
+  function test_the_sections_footer_says_esc_clears_a_live_search() {
+    var o = make()
+    var f = sectionsFooter(o)
+    verify(f !== null)
+    compare(f.keys[f.keys.length - 1].label, "back")
+    view(o).setSearch("port")
+    compare(f.keys[f.keys.length - 1].label, "clear search")
+    view(o).clearSearch()
+    compare(f.keys[f.keys.length - 1].label, "back")
+  }
+
+  function test_the_palette_disables_settings_while_settings_is_open() {
+    var o = make()
+    key(o.c, ":", 0x3a)
+    compare(o.c.mode, "COMMAND")
+    var pal = (function find(obj) {
+      if (!obj) return null
+      if (obj.totalCount !== undefined && obj.evalState !== undefined) return obj
+      var kids = obj.children || []
+      for (var i = 0; i < kids.length; i++) { var r = find(kids[i]); if (r) return r }
+      return null
+    })(content(o))
+    var row = pal.rows.filter(function(r) { return r.id === "settings.open" })[0]
+    compare(row.enabled, false)
+    compare(row.reason, "already open")
+    pal.setQuery("Settings")
+    pal.cursor = pal.rows.map(function(r) { return r.id }).indexOf("settings.open")
+    enter(o)
+    compare(o.c.mode, "COMMAND", "Enter on it keeps the palette open")
+    compare(status(o), "Settings: already open.")
+    verify(view(o).open, "Settings stays open")
   }
 
   // ---- end to end, through the real Service ---------------------------------------------

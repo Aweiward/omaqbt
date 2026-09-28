@@ -2300,3 +2300,47 @@ test("settingsFooterKeys and modeHints: the settings list names its editor's key
   assert.deepEqual(V.modeHints("INSERT", { purpose: "settingEdit" }).map((h) => h.key + " " + h.label), ["Enter set", "Esc cancel"]);
   assert.deepEqual(V.inputPrompt("settingEdit", "Port for incoming connections"), { prompt: "Port for incoming connections", placeholder: "" });
 });
+
+// --- Slice 4a final fix wave (Ruling DU) ---------------------------------------------------
+
+test("settingsFooterKeys: the sections column's Esc clears a live search", () => {
+  const esc = (keys) => keys.find((k) => k.key === "Esc").label;
+  assert.equal(esc(V.settingsFooterKeys("settingsSections", true)), "clear search");
+  assert.equal(esc(V.settingsFooterKeys("settingsSections", false)), "back");
+});
+
+test("palette: Settings is disabled, with a reason, while Settings is open", () => {
+  const find = (st) => V.paletteRows("", Registry.commands, [], st).find((r) => r.id === "settings.open");
+  const open = find(V.paletteState("rows", true, null, "table", true));
+  assert.equal(open.enabled, false);
+  assert.equal(open.reason, "already open");
+  assert.equal(V.paletteReasonNote(open), "Settings: already open.");
+  const closed = find(V.paletteState("rows", true, null, "table", false));
+  assert.equal(closed.enabled, true);
+  assert.equal(find(V.paletteState("rows", true, null, "table")).enabled, true, "omitted means closed");
+});
+
+// PREF_SENTENCES is copied by hand from qbt's pref-set sentences: each must
+// still be in qbt, or a failure would lose its bare sentence.
+// Pending the backend lane (lane-4a-fb, Rulings DQ/DR/DS): qbt gains these
+// three; tolerated while missing. Delete this list once that lane merges.
+const PENDING_BACKEND_SENTENCES = [
+  "Use a clean path without //, /./ or /../.",
+  "Use an IPv4 or IPv6 address, or leave it empty.",
+  "Use at least 3 characters and no colon."
+];
+
+test("PREF_SENTENCES: every sentence is still one qbt says", () => {
+  const qbt = fs.readFileSync(path.join(__dirname, "..", "qbt"), "utf8");
+  assert.ok(Array.isArray(V.PREF_SENTENCES) && V.PREF_SENTENCES.length > 0);
+  assert.equal(new Set(V.PREF_SENTENCES).size, V.PREF_SENTENCES.length, "no duplicates");
+  for (const s of PENDING_BACKEND_SENTENCES) assert.ok(V.PREF_SENTENCES.includes(s), "pending sentence listed: " + s);
+  for (const s of V.PREF_SENTENCES) {
+    if (PENDING_BACKEND_SENTENCES.includes(s) && !qbt.includes(s)) continue;
+    assert.ok(qbt.includes(s), "qbt still says: " + s);
+  }
+});
+
+test("settingFailure: qbt's new validation sentences show as they are", () => {
+  for (const s of PENDING_BACKEND_SENTENCES) assert.equal(V.settingFailure("Default save path", s), s);
+});

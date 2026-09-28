@@ -247,6 +247,7 @@ Item {
     if (mode === "INSERT" && (inputPurpose === "settingsSearch" || inputPurpose === "settingEdit")) leaveInsert()
     settingsCmds.dropConfirm()
     settingsView.closeView()
+    helpOpen = false
     opened = false
     window.visible = false
     if (service) service.windowOpen = false
@@ -818,7 +819,7 @@ Item {
         anchors.fill: parent
         visible: root.mode === "COMMAND"
         mru: root.paletteMru
-        evalState: View.paletteState(root.tableState, root.cursorIndex >= 0, root.inspectorState, root.pane)
+        evalState: View.paletteState(root.tableState, root.cursorIndex >= 0, root.inspectorState, root.pane, settingsView.open)
         onKeyForwarded: function(event) { root.handleKey(event) }
         onActivated: function(row) { commands.runPaletteRow(row) }
         onDismissed: commands.closePalette()

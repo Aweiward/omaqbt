@@ -690,3 +690,78 @@ test("multiline: add_trackers_url_list keeps its permanent read-only tag and hel
 test("multiline: section counts are unchanged", () => {
   assert.deepEqual(V.sections(prefs()).slice(0, 7).map((x) => x.count), [33, 27, 11, 23, 12, 30, 72]);
 });
+
+// --- Final fix wave (Ruling DU) --------------------------------------------------------
+
+test("secret rows: the help says editing secrets arrives in 4b; the API key keeps its own text", () => {
+  for (const k of ["proxy_password", "dyndns_password", "mail_notification_password"]) {
+    const r = V.rowFor(k, prefs());
+    assert.equal(r.help, Schema.SCHEMA[k].help + " Editing secrets arrives in 4b.", k);
+  }
+  assert.equal(V.SECRET_NOTE, " Editing secrets arrives in 4b.");
+  assert.equal(V.rowFor("web_ui_api_key", prefs()).help, Schema.SCHEMA.web_ui_api_key.help);
+});
+
+test("parseInput (DQ): a path must be clean, without //, /./, /../ or a trailing /. or /..", () => {
+  const msg = "Use a clean path without //, /./ or /../.";
+  assert.equal(V.CLEAN_PATH_ERROR, msg);
+  for (const bad of ["/srv//dl", "//srv", "/srv/./dl", "/srv/../dl", "/srv/.", "/srv/..", "~/a//b", "~/./a", "~/..", "/."]) {
+    assert.deepEqual(V.parseInput("save_path", bad), { error: msg }, bad);
+  }
+  for (const ok of ["/srv/dl", "/srv/dl/", "/srv/.hidden", "/srv/..x", "/srv/x.", "~/Downloads", "/", "/a/b..c/d"]) {
+    assert.deepEqual(V.parseInput("save_path", ok), { value: ok }, ok);
+  }
+  // A relative path still gets the absolute-path message first.
+  assert.deepEqual(V.parseInput("save_path", "a//b"), { error: V.PATH_ERROR });
+  // The sentinel "" stays a sentinel.
+  assert.deepEqual(V.parseInput("python_executable_path", ""), { value: "" });
+});
+
+test("parseInput (DR): announce_ip takes an IPv4 or IPv6 address, or nothing", () => {
+  const msg = "Use an IPv4 or IPv6 address, or leave it empty.";
+  assert.equal(V.IP_ERROR, msg);
+  for (const ok of ["", "10.0.0.1", "0.0.0.0", "255.255.255.255", " 10.0.0.1", "10.0.0.1 ", "::", "::1", "2001:db8::1",
+    "2001:DB8:0:0:0:0:0:1", "fe80::1:2:3:4", "::ffff:10.0.0.1", "1:2:3:4:5:6:7:8", "1::", "1:2:3:4:5:6::8", "::2:3:4:5:6:7:8"]) {
+    assert.deepEqual(V.parseInput("announce_ip", ok), { value: ok }, JSON.stringify(ok));
+  }
+  for (const bad of ["example.com", "10.0.0", "10.0.0.256", "10.0.0.1.2", "010.0.0.1", "1.2.3.-4", "1:2:3:4:5:6:7:8:9", "1::2::3",
+    "12345::", "::g", "fe80::1%eth0", "[::1]", ":1:2:3:4:5:6:7", "1:2:3:4:5:6:7:", "1:2:3:4:5:6:7::8", "::ffff:10.0.0", " ", "10.0.0.1/24"]) {
+    assert.deepEqual(V.parseInput("announce_ip", bad), { error: msg }, JSON.stringify(bad));
+  }
+  assert.deepEqual(V.parseInput("announce_ip", "10.0.0.1\n"), { error: V.LINE_ERROR });
+});
+
+test("parseInput (DS): the Web UI username needs 3 characters and no colon", () => {
+  const msg = "Use at least 3 characters and no colon.";
+  assert.equal(V.USERNAME_ERROR, msg);
+  for (const bad of ["", "ab", "a:b", "admin:", ":admin"]) {
+    assert.deepEqual(V.parseInput("web_ui_username", bad), { error: msg }, bad);
+  }
+  for (const ok of ["abc", "admin", "ünï", "a b"]) assert.deepEqual(V.parseInput("web_ui_username", ok), { value: ok }, ok);
+  assert.deepEqual(V.parseInput("web_ui_username", "abc\n"), { error: V.LINE_ERROR });
+});
+
+test("Other: a key matching a lock is refused, whatever its case", () => {
+  const p = prefs({ web_ui_https_zz: true, alternative_webui_zz: "x", BYPASS_LOCAL_AUTH: true, bypass_local_auth_zz: 1, Use_Https: false });
+  const keys = V.otherRows(p).map((r) => r.key);
+  for (const k of ["web_ui_https_zz", "alternative_webui_zz", "BYPASS_LOCAL_AUTH", "Use_Https"]) {
+    assert.ok(!keys.includes(k), k + " is locked");
+    assert.deepEqual(V.parseInput(k, "1", p), { error: V.CANT_CHANGE }, k);
+    assert.equal(V.editorFor(k, p).kind, "none", k);
+  }
+  assert.ok(keys.includes("bypass_local_auth_zz"), "only an exact lock match is refused");
+});
+
+test("Other numbers: qbt's limits, no exponents, at most 10 integer digits and 6 decimals", () => {
+  const p = prefs({ zz_count: 7, zz_ratio: 1.5 });
+  for (const bad of ["1e5", "1E5", "0x10", "Infinity", "NaN", "12345678901", "1.0", "-0", "+1", " 1", "01"]) {
+    assert.deepEqual(V.parseInput("zz_count", bad, p), { error: V.WHOLE_NUMBER_ERROR }, bad);
+  }
+  for (const ok of ["0", "1234567890", "-1234567890", "-1"]) assert.deepEqual(V.parseInput("zz_count", ok, p), { value: Number(ok) }, ok);
+  for (const bad of ["1e5", "1.5e2", "1E-3", "Infinity", "12345678901", "12345678901.5", "0.1234567", "-0", "-0.0", "-0.000", ".5", "5.", "01.5"]) {
+    assert.deepEqual(V.parseInput("zz_ratio", bad, p), { error: V.NUMBER_ERROR }, bad);
+  }
+  for (const ok of ["0", "1234567890", "1234567890.123456", "-0.5", "0.000001", "-3", "2.25"]) {
+    assert.deepEqual(V.parseInput("zz_ratio", ok, p), { value: Number(ok) }, ok);
+  }
+});

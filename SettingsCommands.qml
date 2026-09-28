@@ -236,7 +236,8 @@ QtObject {
   property Connections viewLink: Connections {
     target: edits.settingsView
     function onPrefsChanged() { edits.dropDone() }
-    function onOpenChanged() { if (!edits.settingsView.open) edits.settingsView.saving = ({}) }
+    // A write still running keeps its mark across a close and reopen.
+    function onOpenChanged() { if (!edits.settingsView.open) edits.dropDone() }
     function onFailedChanged() {
       var v = edits.settingsView
       if (v.failed) edits.dropDone()

@@ -125,8 +125,19 @@ Item {
     })
   }
 
-  // qBittorrent came back while the down screen showed: read again.
-  onTableStateChanged: if (open && failed && ["gui", "notInstalled", "daemon", "api", "loading"].indexOf(tableState) === -1) reload(false)
+  // qBittorrent came back while the down screen showed: read again. It went
+  // down while Settings showed: the down screen, and a read in flight is
+  // dropped so it can't land over it.
+  onTableStateChanged: {
+    if (!open) return
+    if (failed && ["gui", "notInstalled", "daemon", "api", "loading"].indexOf(tableState) === -1) {
+      reload(false)
+    } else if (!failed && ["gui", "notInstalled", "daemon", "api"].indexOf(tableState) !== -1) {
+      readSeq = readSeq + 1
+      error = ""
+      failed = true
+    }
+  }
 
   // ---- navigation (the settings.* commands) --------------------------------------
 
@@ -452,7 +463,7 @@ Item {
 
     KeyFooter {
       id: sectionsFooter
-      keys: View.settingsFooterKeys("settingsSections", false)
+      keys: View.settingsFooterKeys("settingsSections", settings.searching)
     }
   }
 
