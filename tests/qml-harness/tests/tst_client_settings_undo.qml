@@ -700,4 +700,145 @@ TestCase {
     compare(o.c.confirm, null)
     compare(stack(o), [])
   }
+
+  // ---- the final fix wave (window lane) ------------------------------------------
+
+  // E1 (Ruling EI): u as a key with nothing to undo says so; the other
+  // Settings keys a row blocks stay silent (their row already says why).
+  function test_u_as_a_key_with_nothing_to_undo_says_so() {
+    var o = make()
+    focusKey(o, "listen_port")
+    key(o.c, "u")
+    compare(status(o), "Nothing to undo.")
+    compare(calls(o.svc, "readPrefs").length, 1, "only the read on open")
+    compare(writes(o).length, 0)
+    key(o.c, "j")
+    compare(status(o), "")
+    focusKey(o, "listen_port")
+    space(o)
+    compare(status(o), "", "Space on a value row is still blocked with no note")
+    focusKey(o, "dht")
+    enter(o)
+    compare(status(o), "", "Enter on an on/off row too")
+  }
+
+  // E2: a failed undo write goes back at its own depth, under newer entries.
+  function test_a_failed_undo_write_goes_back_under_newer_entries() {
+    var o = make()
+    editTo(o, "up_limit", "10M")
+    saved(o, prefs({ up_limit: 10485760 }))
+    editTo(o, "dl_limit", "2M")
+    saved(o, prefs({ up_limit: 10485760, dl_limit: 2097152 }))
+    undo(o, prefs({ up_limit: 10485760, dl_limit: 2097152 }))
+    compare(writes(o)[2], ["dl_limit", "0"])
+    var undoTicket = o.svc.seq
+    editTo(o, "max_connec", "600")
+    compare(writes(o)[3], ["max_connec", "600"])
+    saved(o, prefs({ up_limit: 10485760, dl_limit: 2097152, max_connec: 600 }))
+    compare(stack(o).map(function(e) { return e.key }), ["up_limit", "max_connec"])
+    o.svc.actionFinished(undoTicket, false, "qBittorrent ignored Download limit", "window", [])
+    compare(stack(o).map(function(e) { return e.key }), ["up_limit", "dl_limit", "max_connec"], "back where it was")
+    compare(Object.keys(stack(o)[1]).sort(), ["from", "key", "label", "to"], "as it was recorded")
+  }
+
+  function test_a_failed_confirmed_undo_write_goes_back_under_newer_entries_too() {
+    var o = make()
+    editTo(o, "up_limit", "10M")
+    saved(o, prefs({ up_limit: 10485760 }))
+    editTo(o, "dl_limit", "2M")
+    saved(o, prefs({ up_limit: 10485760, dl_limit: 2097152 }))
+    undo(o, prefs({ up_limit: 10485760, dl_limit: 4194304 }))
+    compare(o.c.mode, "CONFIRM", "changed since: asks")
+    key(o.c, "y")
+    compare(writes(o)[2], ["dl_limit", "0"])
+    var undoTicket = o.svc.seq
+    editTo(o, "max_connec", "600")
+    saved(o, prefs({ up_limit: 10485760, dl_limit: 4194304, max_connec: 600 }))
+    compare(stack(o).map(function(e) { return e.key }), ["up_limit", "max_connec"])
+    o.svc.actionFinished(undoTicket, false, "qBittorrent ignored Download limit", "window", [])
+    compare(stack(o).map(function(e) { return e.key }), ["up_limit", "dl_limit", "max_connec"], "back where it was")
+    compare(Object.keys(stack(o)[1]).sort(), ["from", "key", "label", "to"])
+  }
+
+  // E3: u does nothing under the down screen.
+  function test_u_under_the_down_screen_reads_and_writes_nothing() {
+    var o = make()
+    editTo(o, "up_limit", "10M")
+    saved(o, prefs({ up_limit: 10485760 }))
+    o.svc.api = false
+    verify(view(o).failed)
+    var reads = calls(o.svc, "readPrefs").length
+    key(o.c, "u")
+    compare(calls(o.svc, "readPrefs").length, reads, "no read under the down screen")
+    compare(status(o), "The settings aren't loaded; nothing was undone.")
+    compare(writes(o).length, 1)
+    compare(stack(o).length, 1, "the entry stays for when they're back")
+  }
+
+  function test_u_whose_read_lands_on_the_down_screen_writes_nothing() {
+    var o = make()
+    editTo(o, "up_limit", "10M")
+    saved(o, prefs({ up_limit: 10485760 }))
+    key(o.c, "u")
+    o.svc.api = false
+    verify(view(o).failed)
+    o.svc.answer({ ok: true, prefs: prefs({ up_limit: 10485760 }) })
+    verify(view(o).failed, "the down screen stays")
+    compare(writes(o).length, 1)
+    compare(stack(o).length, 1)
+  }
+
+  // E4: a second u while the first one's read is out says so.
+  function test_a_second_u_while_the_read_is_out_says_so() {
+    var o = make()
+    editTo(o, "up_limit", "10M")
+    saved(o, prefs({ up_limit: 10485760 }))
+    var reads = calls(o.svc, "readPrefs").length
+    key(o.c, "u")
+    key(o.c, "u")
+    compare(calls(o.svc, "readPrefs").length, reads + 1, "one read")
+    compare(status(o), "Still checking the last undo.")
+    o.svc.answer({ ok: true, prefs: prefs({ up_limit: 10485760 }) })
+    compare(writes(o)[1], ["up_limit", "1048576"])
+    compare(writes(o).length, 2, "one undo")
+  }
+
+  // E5 (Ruling EJ): a write u can undo says so; ban adds, secrets and undo's
+  // own writes don't.
+  function test_the_done_note_of_an_undoable_write_says_u_undoes() {
+    var o = make(lists(secrets()))
+    editTo(o, "up_limit", "10M")
+    finish(o, true)
+    compare(status(o), "Upload limit set to 10 MiB/s · u undoes")
+    o.svc.answer({ ok: true, prefs: lists(secrets({ up_limit: 10485760 })) })
+    undo(o, lists(secrets({ up_limit: 10485760 })))
+    finish(o, true)
+    verify(status(o).indexOf("u undoes") === -1, "an undo's own note: " + status(o))
+    o.svc.answer({ ok: true, prefs: lists(secrets()) })
+    focusKey(o, "proxy_password")
+    enter(o)
+    typeAndEnter(o, secret)
+    finishSecret(o, true)
+    compare(status(o), "Proxy password set")
+    o.svc.answer({ ok: true, prefs: lists(secrets({ proxy_password: { set: true } })) })
+    key(o.c, "h")
+    focusSection(o, "Banned IPs")
+    key(o.c, "l")
+    key(o.c, "a")
+    typeAndEnter(o, "198.51.100.7")
+    finish(o, true)
+    compare(status(o), "Banned 198.51.100.7")
+    o.svc.answer({ ok: true, prefs: lists(secrets({ banned_IPs: "10.0.0.1\n2001:db8::1\n198.51.100.7" })) })
+    key(o.c, "x")
+    finish(o, true)
+    verify(/^Unbanned \S+ · u undoes$/.test(status(o)), "an unban: " + status(o))
+  }
+
+  function test_a_write_that_ends_after_leaving_does_not_offer_u() {
+    var o = make()
+    editTo(o, "up_limit", "10M")
+    leaveSettings(o)
+    finish(o, true)
+    compare(status(o), "Upload limit set to 10 MiB/s")
+  }
 }

@@ -488,7 +488,7 @@ Item {
     if (res.state.mode !== "CONFIRM") confirm = null
     // An unmatched key goes there too (the empty library's filters pane).
     if (res.blocked || !res.commandId) {
-      commands.handleBlocked(ev)
+      commands.handleBlocked(ev, res.blocked || "")
       return
     }
     run(res.commandId, res.args || ({}), ev, targets)

@@ -139,9 +139,17 @@ QtObject {
   // empty state's copy), since there is no torrent to copy a magnet from.
   // Client also sends an unmatched key here: the empty library's filters
   // pane keeps its own keys (ruling BS), where y matches nothing.
-  function handleBlocked(ev) {
+  // blocked: the registry's reason (needsReason), "" for none. In Settings
+  // only u's "nothing to undo" has one (every other Settings row's reason
+  // is "": its row already says why), shown as a muted sentence (Ruling EI).
+  function handleBlocked(ev, blocked) {
     var c = client
-    if (!c.service || !ev || c.mode !== "NORMAL" || settingsView.open) return
+    if (settingsView.open) {
+      var why = String(blocked || "")
+      if (c.mode === "NORMAL" && why !== "") c.note(why.charAt(0).toUpperCase() + why.slice(1) + ".", "muted")
+      return
+    }
+    if (!c.service || !ev || c.mode !== "NORMAL") return
     if (c.tableState === "empty" && ev.text === "y" && !ev.modifiers.ctrl) {
       c.clipboardAskedAt = ev.now
       c.service.readClipboard()

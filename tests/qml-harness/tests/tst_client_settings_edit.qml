@@ -213,7 +213,7 @@ TestCase {
     finish(o, true)
     compare(calls(o.svc, "readPrefs").length, reads + 1, "a success re-reads")
     verify(view(o).prefs !== null, "the values stay up while re-reading (reload(true))")
-    compare(status(o), "UPnP / NAT-PMP port forwarding on")
+    compare(status(o), "UPnP / NAT-PMP port forwarding on · u undoes")
     compare(valueText(o, "upnp"), "saving…", "still saving until qBittorrent's value is back")
     o.svc.answer({ ok: true, prefs: prefs({ upnp: true }) })
     compare(valueText(o, "upnp"), "on")
@@ -249,7 +249,7 @@ TestCase {
     compare(o.c.mode, "NORMAL")
     compare(writes(o), [["max_connec", "-1"]])
     finish(o, true)
-    compare(status(o), "Global connections set to unlimited")
+    compare(status(o), "Global connections set to unlimited · u undoes")
   }
 
   function test_a_speed_rounds_to_whole_kib_before_it_is_written() {
@@ -260,7 +260,7 @@ TestCase {
     typeAndEnter(o, "1.5K")
     compare(writes(o), [["dl_limit", "2048"]])
     finish(o, true)
-    compare(status(o), "Download limit set to 2 KiB/s")
+    compare(status(o), "Download limit set to 2 KiB/s · u undoes")
   }
 
   function test_a_time_composite_writes_hh_mm_under_its_own_key() {
@@ -274,7 +274,7 @@ TestCase {
     typeAndEnter(o, "09:15")
     compare(writes(o), [["schedule_from", "09:15"]], "qbt splits it into hour and minute")
     finish(o, true)
-    compare(status(o), "From set to 09:15")
+    compare(status(o), "From set to 09:15 · u undoes")
   }
 
   function test_a_path_takes_a_tilde_path_as_typed() {
@@ -298,7 +298,7 @@ TestCase {
     typeAndEnter(o, " padded ")
     compare(writes(o), [["app_instance_name", " padded "]], "never trimmed by the window")
     finish(o, true)
-    compare(status(o), "Instance name set to  padded ")
+    compare(status(o), "Instance name set to  padded  · u undoes")
   }
 
   function test_an_other_number_edits_by_its_json_type() {
@@ -311,7 +311,7 @@ TestCase {
     typeAndEnter(o, "9")
     compare(writes(o), [["zz_new_count", "9"]])
     finish(o, true)
-    compare(status(o), "zz_new_count set to 9")
+    compare(status(o), "zz_new_count set to 9 · u undoes")
   }
 
   function test_an_unchanged_value_sends_nothing() {
@@ -358,7 +358,7 @@ TestCase {
     verify(!picker(o), "the picker is gone")
     compare(writes(o), [["disk_io_type", "1"]])
     finish(o, true)
-    compare(status(o), "Disk I/O type set to Memory-mapped files" + SettingsView.RESTART_NOTE)
+    compare(status(o), "Disk I/O type set to Memory-mapped files" + SettingsView.RESTART_NOTE + " · u undoes")
   }
 
   function test_a_choice_string_goes_through_the_picker_and_esc_cancels_it() {
@@ -890,6 +890,6 @@ TestCase {
     compare(valueText(o, "dht"), "saving…")
     endProc(again, 0, JSON.stringify(prefs({ dht: false })), "")
     compare(valueText(o, "dht"), "off")
-    compare(status(o), "DHT off")
+    compare(status(o), "DHT off · u undoes")
   }
 }

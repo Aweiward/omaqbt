@@ -274,7 +274,7 @@ TestCase {
     key(o.c, "a")
     compare(o.c.mode, "NORMAL", "no second write while one saves")
     finish(o, true)
-    compare(status(o), "Added *.bat to Excluded file names")
+    compare(status(o), "Added *.bat to Excluded file names · u undoes")
     o.svc.answer({ ok: true, prefs: prefs({ excluded_file_names: "*.exe\n*.bat\n\n say \"hi\" \\ \u{1F98A}" }) })
     compare(view(o).listItem.value, "*.bat", "the cursor on the new line")
   }
@@ -330,7 +330,7 @@ TestCase {
     typeAndEnter(o, "")
     compare(writes(o), [["add_trackers", "udp://a.example/announce\n\nhttp://b.example/announce\n"]])
     finish(o, true)
-    compare(status(o), "Next tier added to Trackers to add")
+    compare(status(o), "Next tier added to Trackers to add · u undoes")
   }
 
   // Ruling EC: qbt checks only the lines it doesn't already store.
@@ -793,5 +793,193 @@ TestCase {
     esc(o)
     compare(o.c.keyPane, "settingsKeys")
     compare(view(o).cursorRow.key, "add_trackers")
+  }
+
+  // ---- the final fix wave (window lane) ------------------------------------------
+
+  function slash(o) { key(o.c, "/", 0x2f) }
+  function footerKeys(o) {
+    wait(30)
+    var out = []
+    var walk = function(obj) {
+      if (!obj || obj.visible === false) return
+      if (Array.isArray(obj.keys) && obj.keys.length && obj.keys[0].key !== undefined && obj.keys[0].label !== undefined) out = out.concat(obj.keys.map(function(k) { return k.key }))
+      var kids = obj.children || []
+      for (var i = 0; i < kids.length; i++) walk(kids[i])
+    }
+    walk(view(o))
+    return out
+  }
+
+  // W1: a search from the Banned IPs section shows its results, not the
+  // ban list, so the keys act on rows that show.
+  function test_a_search_from_the_banned_ips_section_shows_the_rows_its_keys_act_on() {
+    var o = make(lists())
+    focusSection(o, "Banned IPs")
+    compare(listTexts(o), ["10.0.0.1", "2001:db8::1"])
+    slash(o)
+    line(o).setInput("scheduler")
+    verify(rowItem(o, "scheduler_enabled") !== null, "the results show while typing")
+    compare(listTexts(o), [], "the ban list steps aside")
+    enter(o)
+    compare(o.c.keyPane, "settingsKeys")
+    compare(view(o).cursorRow.key, "scheduler_enabled")
+    verify(rowItem(o, "scheduler_enabled") !== null, "the cursor row shows")
+    compare(rowItem(o, "scheduler_enabled").current, true)
+    compare(listTexts(o), [])
+    space(o)
+    compare(o.c.confirm, null)
+    compare(writes(o), [["scheduler_enabled", "false"]])
+    esc(o)
+    compare(o.c.keyPane, "settingsSections", "Esc clears the search, back where / was pressed")
+    compare(listTexts(o), ["10.0.0.1", "2001:db8::1"], "the ban list is back")
+  }
+
+  function test_narrow_a_search_typed_in_the_overlay_on_banned_ips_shows_its_results() {
+    var o = narrowClient(lists())
+    tab(o)
+    focusSection(o, "Banned IPs")
+    slash(o)
+    line(o).setInput("port")
+    verify(rowItem(o, "listen_port") !== null, "the results show while typing")
+    compare(listTexts(o), [])
+    enter(o)
+    compare(o.c.keyPane, "settingsKeys")
+    verify(rowItem(o, "listen_port") !== null)
+    compare(listTexts(o), [])
+  }
+
+  // W2: narrow, choosing a section ends the search, as wide h does.
+  function test_narrow_opening_the_sections_ends_a_search() {
+    var o = narrowClient(lists())
+    slash(o)
+    typeAndEnter(o, "port")
+    verify(view(o).searching)
+    compare(o.c.keyPane, "settingsKeys")
+    tab(o)
+    compare(o.c.keyPane, "settingsSections")
+    verify(!view(o).searching, "Tab ends the search")
+    compare(view(o).query, "")
+    focusSection(o, "Speed")
+    enter(o)
+    compare(o.c.keyPane, "settingsKeys")
+    compare(view(o).title.title, "Speed")
+    compare(view(o).cursorRow.section, "Speed")
+    // h and Shift-Tab too.
+    slash(o)
+    typeAndEnter(o, "port")
+    key(o.c, "h")
+    verify(!view(o).searching, "h ends the search")
+    esc(o)
+    slash(o)
+    typeAndEnter(o, "port")
+    backtab(o)
+    verify(!view(o).searching, "Shift-Tab ends the search")
+    // Esc in the overlay on a list section leaves with no search set.
+    focusSection(o, "Banned IPs")
+    esc(o)
+    verify(!view(o).open)
+    compare(view(o).query, "")
+  }
+
+  // W3: narrow, reopening Settings on the Banned IPs section focuses its list.
+  function test_narrow_reopening_on_banned_ips_focuses_its_list() {
+    var o = narrowClient(lists())
+    tab(o)
+    focusSection(o, "Banned IPs")
+    enter(o)
+    compare(o.c.keyPane, "settingsList")
+    esc(o)
+    esc(o)
+    verify(!view(o).open)
+    comma(o)
+    o.svc.answer({ ok: true, prefs: lists() })
+    compare(view(o).sectionName, "Banned IPs")
+    compare(o.c.keyPane, "settingsList", "the list has the keys")
+    compare(view(o).listKey, "banned_IPs")
+    compare(footerKeys(o).indexOf("a") !== -1, true, "the footer is the list's")
+    key(o.c, "a")
+    compare(o.c.mode, "INSERT")
+    compare(line(o).inputPrompt.prompt, "Ban an IP address")
+  }
+
+  function test_narrow_reopening_on_banned_ips_over_a_down_screen_focuses_its_list_once_back() {
+    var o = narrowClient(lists())
+    tab(o)
+    focusSection(o, "Banned IPs")
+    enter(o)
+    esc(o)
+    esc(o)
+    verify(!view(o).open)
+    o.svc.api = false
+    comma(o)
+    o.svc.answer({ ok: false, error: "HTTP 500" })
+    verify(view(o).failed)
+    o.svc.api = true
+    o.svc.answer({ ok: true, prefs: lists() })
+    verify(!view(o).failed)
+    compare(o.c.keyPane, "settingsList")
+    compare(view(o).listKey, "banned_IPs")
+    key(o.c, "a")
+    compare(line(o).inputPrompt.prompt, "Ban an IP address")
+  }
+
+  function test_a_resize_to_narrow_under_the_down_screen_on_banned_ips_focuses_its_list_once_back() {
+    var o = make(lists())
+    focusSection(o, "Banned IPs")
+    o.svc.api = false
+    verify(view(o).failed)
+    winOf(o.c).width = 800
+    wait(30)
+    verify(view(o).narrow)
+    o.svc.api = true
+    o.svc.answer({ ok: true, prefs: lists() })
+    verify(!view(o).failed)
+    compare(o.c.keyPane, "settingsList")
+    compare(view(o).listKey, "banned_IPs")
+  }
+
+  // Reopening on Other: the read decides the section (sections(null) has no
+  // Other, so its index names Banned IPs until then).
+  function test_narrow_reopening_on_other_keeps_the_settings() {
+    var sets = [prefs(), lists()]
+    for (var i = 0; i < sets.length; i++) {
+      var o = narrowClient(sets[i])
+      focusKey(o, "zz_new_count")
+      compare(view(o).sectionName, "Other")
+      esc(o)
+      verify(!view(o).open)
+      comma(o)
+      o.svc.answer({ ok: true, prefs: sets[i] })
+      compare(view(o).sectionName, "Other")
+      compare(o.c.keyPane, "settingsKeys")
+      compare(view(o).listKey, "")
+      compare(view(o).cursorRow.key, "zz_new_count")
+    }
+  }
+
+  // W4: a second secret while another saves is refused in place, the value
+  // kept (masked) so nothing is retyped; nothing reaches setSecret.
+  function test_a_second_secret_while_another_saves_stays_in_its_field() {
+    var o = make(secrets())
+    focusKey(o, "proxy_password")
+    enter(o)
+    typeAndEnter(o, "first-one")
+    compare(calls(o.svc, "setSecret").length, 1)
+    focusKey(o, "dyndns_password")
+    enter(o)
+    typeAndEnter(o, secret)
+    compare(o.c.mode, "INSERT", "the field stays open")
+    compare(status(o), "Another password is still saving; try again.")
+    compare(field(o).text, secret, "nothing to retype")
+    compare(field(o).echoMode, TextInput.Password)
+    compare(calls(o.svc, "setSecret").length, 1)
+    finishSecret(o, true)
+    o.svc.answer({ ok: true, prefs: secrets({ proxy_password: { set: true } }) })
+    enter(o)
+    compare(o.c.mode, "NORMAL")
+    compare(calls(o.svc, "setSecret").map(function(x) { return x.args[0] }), ["proxy_password", "dyndns_password"])
+    compare(field(o).text, "")
+    compare(sweepAll(o, secret), [])
   }
 }

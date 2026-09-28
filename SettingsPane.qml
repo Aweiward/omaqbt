@@ -95,7 +95,9 @@ Item {
   readonly property string editorKind: cursorEditor.kind
   // The list the settings column shows: the open one, or the Banned IPs
   // section's (a preview while the sections have focus); "" for settings.
-  readonly property string listShown: column === "settingsList" ? listKey : (section.list ? String(section.list) : "")
+  // A search (typed or committed) shows its results instead: the keys act
+  // on them.
+  readonly property string listShown: column === "settingsList" ? listKey : (!searching && section.list ? String(section.list) : "")
   readonly property var listItems: listShown !== "" && prefs ? SettingsView.listItems(listShown, prefs[listShown]) : []
   readonly property int listIndex: View.moveIndex(listItems.length, listCursors[listShown] || 0, 0)
   // The line under the list cursor, or null.
@@ -113,7 +115,8 @@ Item {
 
   function openView() {
     open = true
-    // Narrow, the sections are a chip: the settings take the keys.
+    // Narrow, the sections are a chip: the settings take the keys, or the
+    // Banned IPs list once the read shows which section this is (reload).
     column = narrow ? "settingsKeys" : "settingsSections"
     listKey = ""
     query = ""
@@ -152,6 +155,7 @@ Item {
       if (res && res.ok === true && res.prefs) {
         settings.prefs = res.prefs
         settings.failed = false
+        settings.settleNarrow()
       } else {
         // error first: a failed read's note (SettingsCommands) reads it.
         settings.error = res && res.error ? String(res.error) : ""
@@ -207,9 +211,12 @@ Item {
 
   // ---- narrow: the sections overlay (slice 4b, D13) ---------------------------
 
-  // Tab/h/Shift-Tab from the settings: the overlay (the sections column).
+  // Tab/h/Shift-Tab from the settings: the overlay (the sections column),
+  // ending a search as wide h does (leave()).
   function openSections() {
     if (failed) return
+    query = ""
+    searchIndex = 0
     column = "settingsSections"
   }
 
@@ -221,9 +228,19 @@ Item {
     else { listKey = ""; column = "settingsKeys" }
   }
 
-  // The focus handoff when the sections collapse: to what the section shows.
+  // Narrow, the settings column has the keys on a list section (opening
+  // Settings, or the down screen gone): the list takes them. Only once
+  // prefs are in: sections(null) has no Other, so the index may name
+  // another section until then.
+  function settleNarrow() {
+    if (narrow && open && column === "settingsKeys" && !searching && !failed && section.list) openList(String(section.list))
+  }
+
+  // The focus handoff when the sections collapse: to what the section
+  // shows. Under the down screen a list can't open: the settings column
+  // holds the keys until the read is back (onTableStateChanged).
   function showSection() {
-    if (section.list) openList(String(section.list))
+    if (section.list && !failed) openList(String(section.list))
     else { listKey = ""; column = "settingsKeys" }
   }
 
