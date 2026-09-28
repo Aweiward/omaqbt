@@ -684,3 +684,72 @@ if guard_failures:
     sys.exit(1)
 print("localhost-guard-contract ok")
 PY
+
+# Slice 4a: /app/preferences and setPreferences as 5.2.3 behaves (the
+# fixture's contract that tests/test_prefs.py leans on), and qbt prefs'
+# shape against the whole 223-key dump.
+python3 - <<'PY'
+import json, subprocess, sys, urllib.request
+from pathlib import Path
+from urllib.parse import quote
+
+sys.path.insert(0, "tests/fixtures")
+import harness  # noqa: E402
+
+DUMP_PATH = Path("tests/fixtures/preferences-5.2.3.json")
+DUMP = json.loads(DUMP_PATH.read_text())
+failures = []
+
+
+def check(label, cond):
+    print(("ok - " if cond else "FAIL - ") + label)
+    if not cond:
+        failures.append(label)
+
+
+with harness.fixture_server(extra_env={"QBT_FIXTURE_PREFS": str(DUMP_PATH)}) as (port, env):
+    base = f"http://127.0.0.1:{port}/api/v2/app"
+
+    def get():
+        with urllib.request.urlopen(f"{base}/preferences", timeout=5) as r:
+            return json.loads(r.read())
+
+    def post(raw):
+        req = urllib.request.Request(f"{base}/setPreferences", data=f"json={quote(raw)}".encode(), method="POST")
+        with urllib.request.urlopen(req, timeout=5) as r:
+            return r.status
+
+    check("preferences GET serves the 223-key dump", get() == DUMP and len(DUMP) == 223)
+    check("setPreferences: malformed JSON is 200 and changes nothing", post("{not json") == 200 and get() == DUMP)
+    check("setPreferences: an unknown key is 200 and ignored", post('{"no_such_key": 1}') == 200 and "no_such_key" not in get())
+    check("setPreferences: a bad value is ignored", post('{"dht": "yes", "encryption": 9, "proxy_type": "socks5"}') == 200 and get() == DUMP)
+    check("setPreferences: a read-only key is ignored", post('{"add_trackers_url_list": "x"}') == 200 and get() == DUMP)
+    post('{"schedule_from_hour": 3}')
+    check("setPreferences: an hour alone doesn't apply", get()["schedule_from_hour"] == DUMP["schedule_from_hour"])
+    post('{"schedule_from_hour": 3, "schedule_from_min": 7}')
+    got = get()
+    check("setPreferences: hour and minute together apply", (got["schedule_from_hour"], got["schedule_from_min"]) == (3, 7))
+    post('{"dl_limit": 1536, "app_instance_name": "  x  ", "save_path": "/srv/t/"}')
+    got = get()
+    check("setPreferences: speeds store whole KiB, strings trimmed, paths lose the trailing slash",
+          (got["dl_limit"], got["app_instance_name"], got["save_path"]) == (1024, "x", "/srv/t"))
+
+    r = subprocess.run(["./qbt", "prefs"], env=env, text=True, capture_output=True)
+    out = json.loads(r.stdout) if r.returncode == 0 else {}
+    check("qbt prefs: one object with every key", r.returncode == 0 and set(out) == set(DUMP))
+    check("qbt prefs: the four secrets as {set: bool}", all(out.get(k) == {"set": False} for k in (
+        "proxy_password", "dyndns_password", "mail_notification_password", "web_ui_api_key")))
+
+    for bad in ("http://example.invalid:1", "http://127.0.0.1:80@127.0.0.2:1"):
+        genv = dict(env, QBT_BASE=bad)
+        log = Path(env["QBT_FIXTURE_LOG"])
+        before = len(json.loads(log.read_text() or "[]"))
+        r = subprocess.run(["./qbt", "pref-set", "dht", "--", "true"], env=genv, text=True, capture_output=True)
+        check(f"qbt pref-set refuses QBT_BASE={bad!r} with no request",
+              r.returncode != 0 and len(json.loads(log.read_text() or "[]")) == before and "example" not in r.stderr)
+
+if failures:
+    print(f"\n{len(failures)} preferences-contract check(s) failed", file=sys.stderr)
+    sys.exit(1)
+print("preferences-contract ok")
+PY
