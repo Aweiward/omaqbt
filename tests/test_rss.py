@@ -643,14 +643,14 @@ class MarkReadTest(RssCase):
         # More than the count now is fine: fewer are left to mark.
         self.ok(self.rss("mark-read", "Linux", "", "9"), {"ok": True})
 
-    def test_a_missing_path_is_caught_before_the_silent_200(self):
+    def test_a_missing_path_is_caught_before_the_silent_204(self):
         before = len(self.log())
         self.refused(self.rss("mark-read", "Linux\\Gone", "", "0"), S["feedGone"])
         self.assertEqual(self.posts_since(before), [])
-        # qBittorrent itself answers 200 and does nothing.
+        # qBittorrent itself answers 204 (no content) and does nothing.
         with urllib.request.urlopen(urllib.request.Request(self.url("/api/v2/rss/markAsRead"),
                                                            data=b"itemPath=Nope", method="POST"), timeout=5) as r:
-            self.assertEqual(r.status, 200)
+            self.assertEqual(r.status, 204)
 
     def test_expect_must_be_a_whole_number(self):
         for bad in ("", "-1", "x", "1.5", "１", "99999999999"):

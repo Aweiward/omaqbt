@@ -1136,7 +1136,9 @@ def _rss_post(action, body):
         elif action == "markAsRead":
             item = _rss_item(arg("itemPath"))
             if item is None:
-                return 200, b""
+                # rsscontroller.cpp: `if (!item) return;` before setResult,
+                # so a missing path answers 204 with no content.
+                return 204, b""
             article_id = arg("articleId")
             if article_id is not None:
                 # rsscontroller.cpp:143: an articleId, even an empty one,

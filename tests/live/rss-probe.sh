@@ -17,7 +17,7 @@
 #     refreshes the new feed, so this works while RSS processing is off);
 #   - waits up to 20 s for both articles, then checks that the news item's
 #     torrentURL equals its link, that hasTorrent is false for it and true
-#     for the magnet, that markAsRead on a missing path answers 200 through
+#     for the magnet, that markAsRead on a missing path answers 200 or 204 through
 #     the raw API, and that a GET on rss/addFolder answers 405 (its path is
 #     inside omaqbt-probe, so if it ever made a folder, cleanup removes it);
 #   - removes omaqbt-probe and stops the http server, on every exit (trap).
@@ -147,7 +147,7 @@ fi
 
 code=$(curl -s --noproxy '*' --max-time 5 -o /dev/null -w '%{http_code}' -X POST \
   --data-urlencode "itemPath=$FOLDER\\no-such-feed" "$base/api/v2/rss/markAsRead" || true)
-[[ $code == 200 ]] && pass "markAsRead on a missing path answers 200" || fail "markAsRead on a missing path: $code"
+[[ $code == 200 || $code == 204 ]] && pass "markAsRead on a missing path answers $code (200 or 204)" || fail "markAsRead on a missing path: $code"
 code=$(curl -s --noproxy '*' --max-time 5 -o /dev/null -w '%{http_code}' "$base/api/v2/rss/addFolder?path=omaqbt-probe%5Cget" || true)
 [[ $code == 405 ]] && pass "GET rss/addFolder answers 405" || fail "GET rss/addFolder: $code"
 

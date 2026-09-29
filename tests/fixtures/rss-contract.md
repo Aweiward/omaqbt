@@ -10,7 +10,7 @@ qBittorrent 5.2.3 facts (the eng review's list, from `rsscontroller.cpp`, `rss_s
 - RSS state is **global**: no SID keying, unlike search jobs.
 - `rss/items` is GET. addFolder, addFeed, removeItem, moveItem, markAsRead and refreshItem are POST; a GET on them answers 405.
 - The path separator is `\`. A valid path is `\A[^\\]+(\\[^\\]+)*\z`. addFolder, addFeed, moveItem and removeItem answer 409 with a reason text.
-- markAsRead and refreshItem on a missing path do nothing and answer 200. So every write reads back.
+- markAsRead on a missing path does nothing and answers 204 (no content: rsscontroller.cpp returns before setResult); refreshItem on a missing path does nothing and answers 200. A missing article in an existing feed still answers 200. qbt accepts 200 or 204. So every write reads back.
 - `items?withData=true` is a nested object: a folder is `{name: child}`, a feed is `{uid, url, title, lastBuildDate, isLoading, hasError, articles:[{id, date, title, author, description, torrentURL, link, isRead}]}`. `date` is RFC 2822.
 - torrentURL falls back to `link` when an item has no enclosure.
 - There is no mark-unread. markAsRead without an article id marks a whole feed or folder.
