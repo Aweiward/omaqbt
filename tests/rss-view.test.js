@@ -241,12 +241,22 @@ test("inLibrary: btih, base32 btih and btmh match; an http link never does", () 
   assert.equal(rows[3].v1, "");
 });
 
-test("articleMeta: the Article pane's lines", () => {
-  assert.deepEqual(R.articleMeta({ title: "Debian 13", host: "debian.org", hasTorrent: true, date: 5 }),
-    { title: "Debian 13", host: "debian.org", torrent: W.hasTorrentYes, date: 5 });
-  assert.deepEqual(R.articleMeta({ title: "News", host: "", hasTorrent: false, date: null }),
-    { title: "News", host: Links.EMPTY, torrent: W.hasTorrentNo, date: null });
+test("articleMeta: the Article pane's lines, with the feed's title and the read state as text", () => {
+  const feeds = R.feedRows({ feeds: [folder("Distros", { feeds: 1 }), feed("Distros\\Debian", { title: "Debian ‮News\u0007 " }), feed("News")] });
+  assert.deepEqual(R.articleMeta({ feedPath: "Distros\\Debian", title: "Debian 13", host: "debian.org", hasTorrent: true, date: 5, isRead: false }, feeds),
+    { title: "Debian 13", host: "debian.org", torrent: W.hasTorrentYes, date: 5, state: W.articleUnread, feed: "Debian News" });
+  assert.deepEqual(R.articleMeta({ feedPath: "News", title: "News", host: "", hasTorrent: false, date: null, isRead: true }, feeds),
+    { title: "News", host: Links.EMPTY, torrent: W.hasTorrentNo, date: null, state: W.articleRead, feed: "News" },
+    "no title: the feed's name (OV4)");
+  assert.equal(R.articleMeta({ feedPath: "Gone", title: "x", isRead: false }, feeds).feed, Links.EMPTY, "a feed that's gone");
+  assert.equal(R.articleMeta({ feedPath: "News", title: "x" }).feed, Links.EMPTY, "no feed list");
   assert.equal(R.articleMeta(null), null);
+});
+
+test("feedRows: a feed's title is sanitised, and falls back to its name; a folder's is its name", () => {
+  const rows = R.feedRows({ feeds: [folder("Distros", { title: "ignored" }), feed("Distros\\A", { title: "  ‮Arch\u0000Linux  " }),
+    feed("Distros\\B", { title: "" }), feed("C", { title: " \u0007 " }), feed("D", { title: 5 })] });
+  assert.deepEqual(rows.map((r) => r.title), [W.unreadRow, W.allRow, "Distros", "Arch Linux", "B", "C", "D"]);
 });
 
 // ---- the confirms -------------------------------------------------------------------------

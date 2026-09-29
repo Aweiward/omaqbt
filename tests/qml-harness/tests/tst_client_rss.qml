@@ -267,6 +267,26 @@ TestCase {
     compare(o.c.keyPane, "rssArticles")
   }
   function current(o) { var a = rp(o).currentArticle; return a ? a.guid : "" }
+  // A window short enough that the Articles column scrolls.
+  function small(o) {
+    winOf(o.c).width = 1200
+    winOf(o.c).height = 700
+    tryVerify(function() { return winOf(o.c).contentItem.height === 700 }, 2000)
+  }
+  // Row idx of the Articles column is wholly inside its viewport.
+  function articleInView(o, idx) {
+    var list = findName(content(o), "rssArticleList")
+    var it = list.itemAtIndex(idx)
+    return !!it && it.y >= list.contentY - 0.5 && it.y + it.height <= list.contentY + list.height + 0.5
+  }
+  function viewInfo(o) {
+    var list = findName(content(o), "rssArticleList")
+    return "cursor " + rp(o).cursorIndex + ", contentY " + list.contentY + ", height " + list.height
+  }
+  function countIn(o, name, text) {
+    wait(30)
+    return visibleTexts(findName(content(o), name)).filter(function(t) { return t === text }).length
+  }
 
   // ---- open, the banner, O --------------------------------------------------------------------
 
@@ -518,7 +538,8 @@ TestCase {
     j(o, 2)
     compare(current(o), "d2")
     enter(o)
-    compare(confirmText(o), fill(w.confirmAdd, { title: "Debian 13 DVD", host: "www.debian.org" }))
+    // The torrent comes from the enclosure's host, not the page's.
+    compare(confirmText(o), fill(w.confirmAdd, { title: "Debian 13 DVD", host: "cdimage.debian.org" }))
     key(o.c, "y")
     finishCall(o, "rssAdd", true, "", { ok: true, via: "url" })
     compare(statusText(o), w.sent)
@@ -786,6 +807,7 @@ TestCase {
 
   function test_rf4_the_cursor_stays_on_its_article_across_a_read_that_inserts_50_above() {
     var o = make()
+    small(o)
     openRss(o)
     toAll(o)
     j(o, 3)
@@ -798,6 +820,7 @@ TestCase {
     items(o, data)
     compare(current(o), "n1", "the cursor stays on its article")
     compare(rp(o).cursorIndex, 53)
+    tryVerify(function() { return articleInView(o, 53) }, 1000, "the list follows the cursor down: " + viewInfo(o))
     compare(rp(o).articleKeys().length, 55)
     compare(rp(o).articleKeys()[0], "News\nnew49", "newest first")
     // The same stdout again: nothing is applied.
@@ -1007,5 +1030,160 @@ TestCase {
     key(o.c, "y")
     finishCall(o, "rssAdd", false, err)
     compare(statusText(o), err, "the same write failure again still speaks")
+  }
+
+  // ---- final fix wave ----------------------------------------------------------------------------------
+
+  // All: d1, a1, d2, n1, x0…x49, n2; x0…x29 read, so Unread has x36 at 10.
+  function manyArticles() {
+    var data = fx()
+    for (var i = 0; i < 50; i++) data.articles.push({ feedPath: "News", guid: "x" + i, title: "extra " + i, date: 200 - i, isRead: i < 30,
+      torrentURL: "", link: "", hasTorrent: false, host: "news.example" })
+    return data
+  }
+
+  function test_final_the_articles_cursor_follows_a_feed_switch_and_shows() {
+    var o = make()
+    small(o)
+    openRss(o, manyArticles())
+    toAll(o)
+    j(o, 40)
+    compare(current(o), "x36")
+    compare(rp(o).cursorIndex, 40)
+    tryVerify(function() { return articleInView(o, 40) }, 1000, viewInfo(o))
+    // Up to Unread: the same article, at its own index, in view.
+    key(o.c, "h")
+    key(o.c, "k")
+    compare(rp(o).currentFeed.kind, "unread")
+    compare(current(o), "x36", "the article survives the switch")
+    compare(rp(o).cursorIndex, 10)
+    tryVerify(function() { return articleInView(o, 10) }, 1000, viewInfo(o))
+    // Back to All: still x36, at 40, in view.
+    j(o)
+    compare(current(o), "x36")
+    compare(rp(o).cursorIndex, 40)
+    tryVerify(function() { return articleInView(o, 40) }, 1000, viewInfo(o))
+    // To Distros: x36 isn't there, so row 0, in view (never a clamp to 2).
+    j(o)
+    compare(rp(o).currentFeed.path, "Distros")
+    compare(rp(o).cursorIndex, 0)
+    compare(current(o), "d1")
+    tryVerify(function() { return articleInView(o, 0) }, 1000, viewInfo(o))
+    // A same-scope re-read that drops the cursor's article clamps to its
+    // neighbour (Space in Unread).
+    key(o.c, "k")
+    key(o.c, "k")
+    compare(rp(o).currentFeed.kind, "unread")
+    key(o.c, "l")
+    j(o, 2)
+    compare(current(o), "d2")
+    var data = manyArticles()
+    data.articles[2].isRead = true
+    rp(o).cmds.readItems()
+    items(o, data)
+    compare(current(o), "n1", "the next unread one")
+    compare(rp(o).cursorIndex, 2)
+  }
+
+  function test_final_the_article_pane_names_its_feed_title_or_its_name() {
+    var o = make()
+    openRss(o, fx({ debian: { title: " Debian ‮News\u0007 " } }))
+    toAll(o)
+    compare(current(o), "d1")
+    verify(showsIn(o, "rssArticlePane", "Debian News"), "the feed's title, sanitised (OV4)")
+    j(o)
+    compare(current(o), "a1")
+    verify(showsIn(o, "rssArticlePane", "Arch"), "no title: the feed's name")
+    compare(findName(content(o), "rssArticleFeed").textFormat, Text.PlainText)
+  }
+
+  function test_final_unread_shows_a_dot_and_the_pane_says_unread_or_read() {
+    var o = make()
+    openRss(o)
+    toAll(o)
+    compare(countIn(o, "rssArticleList", "●"), 4, "d1, a1, d2 and n1 are unread; n2 isn't")
+    verify(showsIn(o, "rssArticlePane", w.articleUnread))
+    j(o, 4)
+    compare(current(o), "n2")
+    verify(showsIn(o, "rssArticlePane", w.articleRead))
+    verify(!showsIn(o, "rssArticlePane", w.articleUnread))
+  }
+
+  function test_final_the_article_pane_says_why_a_feed_with_no_articles_fails() {
+    var o = make()
+    var bad = fx({ arch: { hasError: true } })
+    bad.articles = bad.articles.filter(function(a) { return a.guid !== "a1" })
+    openRss(o, bad)
+    j(o, 3)
+    compare(rp(o).currentFeed.path, "Distros\\Arch")
+    compare(rp(o).currentArticle, null)
+    answer(o, "rssError", true, "", { reason: "HTTP 404" })
+    verify(showsIn(o, "rssArticlePane", fill(w.errorReason, { reason: "HTTP 404" })))
+    verify(showsIn(o, "rssArticlesPane", fill(w.errorReason, { reason: "HTTP 404" })), "the notice stays")
+    // A failing feed with an article: the article shows, not the reason.
+    var o2 = make()
+    openRss(o2, fx({ arch: { hasError: true } }))
+    j(o2, 3)
+    answer(o2, "rssError", true, "", { reason: null })
+    verify(!showsIn(o2, "rssArticlePane", w.errorNoReason))
+    verify(showsIn(o2, "rssArticlesPane", w.errorNoReason))
+  }
+
+  function test_final_r_never_caches_a_reason_while_the_feed_refreshes() {
+    var o = make()
+    var bad = fx({ arch: { hasError: true } })
+    var loading = fx({ arch: { hasError: true, isLoading: true } })
+    openRss(o, bad)
+    j(o, 3)
+    answer(o, "rssError", true, "", { reason: "old" })
+    verify(showsIn(o, "rssArticlesPane", fill(w.errorReason, { reason: "old" })))
+    key(o.c, "r")
+    finishCall(o, "rssRefresh", true, "", { ok: true })
+    answerWaiting(o, loading)
+    compare(calls(o.svc, "rssError").length, 1, "not asked while it refreshes")
+    verify(!showsIn(o, "rssArticlesPane", fill(w.errorReason, { reason: "old" })), "the old reason is gone")
+    rp(o).cmds.readItems()
+    answerWaiting(o, loading)
+    compare(calls(o.svc, "rssError").length, 1)
+    rp(o).cmds.readItems()
+    answerWaiting(o, bad)
+    compare(calls(o.svc, "rssError").length, 2, "asked once the refresh ends")
+    answer(o, "rssError", true, "", { reason: "new" })
+    verify(showsIn(o, "rssArticlesPane", fill(w.errorReason, { reason: "new" })))
+  }
+
+  function test_final_more_arrived_never_replaces_an_insert() {
+    var o = make()
+    openRss(o)
+    shifted(o, "A")
+    key(o.c, "y")
+    compare(o.c.mode, "NORMAL")
+    key(o.c, "a")
+    compare(o.c.mode, "INSERT")
+    var reads = calls(o.svc, "rssItems").length
+    finishCall(o, "rssMarkRead", true, "", { ok: false, unread: 6 })
+    compare(o.c.mode, "INSERT", "the INSERT stays")
+    compare(o.c.messages.note, fill(w.moreArrivedNote, { n: 6 }))
+    compare(o.c.messages.noteTone, "muted")
+    compare(calls(o.svc, "rssItems").length, reads + 1, "the counts are read again")
+    compare(calls(o.svc, "rssMarkRead").length, 1, "nothing is re-posted")
+  }
+
+  function test_final_an_enclosure_add_names_the_enclosures_punycode_host() {
+    var o = make()
+    var data = fx()
+    data.articles.push({ feedPath: "News", guid: "n3", title: "A book", date: 600, isRead: false, torrentURL: "https://dl.bücher.example/b.torrent",
+      link: "https://news.example/n3", hasTorrent: true, host: "news.example" })
+    openRss(o, data)
+    toAll(o)
+    compare(current(o), "n3")
+    enter(o)
+    compare(confirmText(o), fill(w.confirmAdd, { title: "A book", host: "dl.xn--bcher-kva.example" }))
+    key(o.c, "n")
+    // A magnet keeps the page's host.
+    j(o)
+    compare(current(o), "d1")
+    enter(o)
+    compare(confirmText(o), fill(w.confirmAdd, { title: "Debian 13 released", host: "www.debian.org" }))
   }
 }

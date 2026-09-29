@@ -22,7 +22,8 @@ import "LinkRules.js" as Links
 //   the cursor follows qbt's new path.
 // - x, A, Enter, d and O raise the view's own CONFIRMs (View.RSS_ACCEPT);
 //   `y` comes back as the same command with args.confirmed. A's
-//   {"ok":false,"unread":M} asks again with the moreArrived line (OV11).
+//   {"ok":false,"unread":M} asks again with the moreArrived line (OV11),
+//   or, when the user is already in another mode, notes the count.
 // - Enter: in the library says so; no torrent link says the rule's
 //   sentence; a magnet is awaited in the library (AddAwaiter, tagged with
 //   its article) and marked read once it's there, or reported after
@@ -176,10 +177,12 @@ QtObject {
     checkError()
   }
 
-  // The feed under the Feeds cursor fails: its reason, once per URL.
+  // The feed under the Feeds cursor fails: its reason, once per URL. Not
+  // while it refreshes: qBittorrent keeps the old hasError (and the log its
+  // old line) until the refresh ends, so asking then caches a stale reason.
   function checkError() {
     var f = view.currentFeed
-    if (!f || f.kind !== "feed" || !f.hasError || f.url === "" || view.downShown) return
+    if (!f || f.kind !== "feed" || !f.hasError || f.isLoading || f.url === "" || view.downShown) return
     if (errorCache[f.url] !== undefined || !svcHas("rssError")) return
     var url = f.url
     errorToken++
@@ -345,12 +348,15 @@ QtObject {
     if (svcHas("rssMarkRead")) remember(service.rssMarkRead(article.feedPath, article.guid, 0), { kind: "write" })
   }
 
-  // The confirm's <host>: the page link's (qbt's), else an http(s)
-  // enclosure's own, else "—" (a magnet on a feed with no page link).
-  function addHost(article) {
+  // The confirm's <host>: where the torrent comes from. An http(s)
+  // enclosure (torrentURL ≠ link) names its own host (punycode, as
+  // checkPageLink gives it); a magnet or an enclosure-less .torrent link
+  // names the page's (qbt's), else the torrent URL's, else "—".
+  function addHost(article, via) {
+    var t = Links.checkPageLink(article.torrentURL)
+    if (via === "url" && article.torrentURL !== article.link && t.ok) return t.host
     if (article.host !== "") return article.host
-    var h = Links.checkPageLink(article.torrentURL)
-    return h.ok ? h.host : RssView.EMPTY
+    return t.ok ? t.host : RssView.EMPTY
   }
 
   function add(article, confirmed) {
@@ -359,7 +365,7 @@ QtObject {
     var r = RssView.checkHasTorrent({ torrentURL: article.torrentURL, link: article.link })
     if (!r.ok) { note(r.message, "urgent"); return }
     if (confirmed !== true) {
-      raise("rss.add", "rssAdd", { article: article }, RssView.confirmLine("rssAdd", { title: article.title, host: addHost(article) }))
+      raise("rss.add", "rssAdd", { article: article }, RssView.confirmLine("rssAdd", { title: article.title, host: addHost(article, r.normalised) }))
       return
     }
     if (!svcHas("rssAdd")) return
@@ -415,9 +421,15 @@ QtObject {
     }
     if (e.kind === "follow") view.pendingFollow = data && typeof data === "object" && typeof data.path === "string" ? data.path : e.path
     if (e.kind === "markAll" && data && typeof data === "object" && data.ok === false && typeof data.unread === "number") {
-      // OV11: nothing was marked; the new count is asked about (while RSS
-      // is still up and showing).
-      if (view.open && !view.downShown) markAllRead(e.item, data.unread, false, true)
+      // OV11: nothing was marked; the new count is asked about while RSS
+      // shows in NORMAL. Anything else up (an INSERT, another CONFIRM) is
+      // never replaced: the count is a note and the column is read again.
+      if (view.open && !view.downShown && client && client.mode === "NORMAL") {
+        markAllRead(e.item, data.unread, false, true)
+        return
+      }
+      note(RssView.sentence("moreArrivedNote", { n: data.unread }), "muted")
+      readItems()
       return
     }
     readItems()

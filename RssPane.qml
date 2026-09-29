@@ -22,9 +22,11 @@ import "Model.js" as Model
 // `N` or ":RSS" makes it the active view (Client.activeView "rss"): it
 // replaces the three torrent panes, like Search, and the status line stays.
 // Three columns: Feeds (Unread, All articles, then the folders and their
-// feeds, indented, with unread counts), Articles, and the Article pane (the
-// article under the cursor: title, date, host, "Torrent link" or "No torrent
-// link", and the description as PlainText, first 12 lines; the description
+// feeds, indented, with unread counts), Articles (a ● for unread), and the
+// Article pane (the article under the cursor: title, its feed's title, date,
+// host, "unread" or "read", "Torrent link" or "No torrent link", and the
+// description as PlainText, first 12 lines; with no article, a failing
+// feed's "Couldn't refresh: <reason>"; the description
 // comes from `qbt rss article` once the cursor settles for 150 ms, cached per
 // (feed url, guid)). Narrow, one
 // column at a time: a feed chip, Tab opens the feeds overlay (pane
@@ -349,10 +351,14 @@ Item {
       for (var k = 0; k < rows.length; k++) if (rows[k].key === feedKey) { at = k; break }
     }
     if (at === -1) at = Math.max(0, Math.min(feedIndex, rows.length - 1))
+    var was = RssView.scopeOf(currentFeed)
     feedRowsList = rows
     feedIndex = at
     syncFeed()
-    applyArticles()
+    var now = RssView.scopeOf(currentFeed)
+    // A write's new path or a feed gone elsewhere moves the Feeds cursor:
+    // that's a scope change, not a re-read.
+    applyArticles(was.kind !== now.kind || was.path !== now.path)
     rssCmds.itemsApplied()
     showFeedCursor()
   }
@@ -383,7 +389,7 @@ Item {
     if (at === feedIndex && currentFeed && currentFeed.key === feedKey) return
     feedIndex = at
     syncFeed()
-    applyArticles()
+    applyArticles(true)
     rssCmds.checkError()
     showFeedCursor()
   }
@@ -416,7 +422,11 @@ Item {
   // The Articles column again, from the items, the Feeds cursor's scope
   // and the library: patched in place with Model.diffRows (the torrent
   // table's keyed diff), the cursor kept on its article by key.
-  function applyArticles() {
+  // scopeChanged (the Feeds cursor moved): an article that survives keeps
+  // the cursor, else row 0. A re-read of the same scope: an article that
+  // went clamps to its neighbour (Space in Unread lands on the next one).
+  // Either way the list scrolls to the cursor when its index changed.
+  function applyArticles(scopeChanged) {
     var rows = RssView.articleRows(items, RssView.scopeOf(currentFeed), libSet)
     var byKey = ({})
     var next = []
@@ -427,7 +437,7 @@ Item {
     var ops = Model.diffRows(lastRows, next, ["title", "dateText", "isRead", "inLibrary", "hasTorrent"])
     if (!Array.isArray(ops)) {
       articleModel.clear()
-      for (var r = 0; r < next.length; r++) articleModel.append(next[r])
+      if (next.length > 0) articleModel.append(next)
     } else {
       for (var j = 0; j < ops.length; j++) {
         var op = ops[j]
@@ -441,10 +451,16 @@ Item {
     lastRows = next
     articleByKey = byKey
     if (byKey[articleKey] === undefined) {
-      var at = Math.max(0, Math.min(before < 0 ? 0 : before, next.length - 1))
+      var at = scopeChanged === true ? 0 : Math.max(0, Math.min(before < 0 ? 0 : before, next.length - 1))
       articleKey = next.length > 0 ? next[at].hash : ""
     }
     syncArticle()
+    if (cursorIndex >= 0 && (scopeChanged === true || cursorIndex !== before)) showArticleCursor()
+  }
+
+  function showArticleCursor() {
+    articleList.forceLayout()
+    articleList.positionViewAtIndex(cursorIndex, ListView.Contain)
   }
 
   function syncArticle() {
@@ -866,12 +882,28 @@ Item {
           height: parent.height
           color: Color.accent
         }
+        // Unread: a ● before the title (and bold); the Article pane says
+        // "unread" or "read" in words.
         Text {
-          id: titleText
+          id: unreadMark
+          objectName: "rssUnreadMark"
+          visible: !articleRow.isRead
           anchors.left: parent.left
           anchors.leftMargin: rss.padX
           anchors.verticalCenter: parent.verticalCenter
-          width: Math.min(implicitWidth, articleRow.width - 2 * rss.padX - dateCell.width - (libTag.visible ? libTag.width + Style.space(8) : 0) - Style.space(12))
+          width: articleRow.isRead ? 0 : implicitWidth
+          text: "●"
+          textFormat: Text.PlainText
+          font.family: Style.fontFamily
+          font.pixelSize: Style.font.caption
+          color: Color.accent
+        }
+        Text {
+          id: titleText
+          anchors.left: unreadMark.right
+          anchors.leftMargin: articleRow.isRead ? 0 : Style.space(6)
+          anchors.verticalCenter: parent.verticalCenter
+          width: Math.min(implicitWidth, articleRow.width - 2 * rss.padX - (articleRow.isRead ? 0 : unreadMark.width + Style.space(6)) - dateCell.width - (libTag.visible ? libTag.width + Style.space(8) : 0) - Style.space(12))
           elide: Text.ElideRight
           text: articleRow.title
           textFormat: Text.PlainText
@@ -962,7 +994,28 @@ Item {
     rightLine: false
     swappedOut: rss.downShown || (rss.narrow && !rss.wide)
 
-    readonly property var meta: RssView.articleMeta(rss.currentArticle)
+    readonly property var meta: RssView.articleMeta(rss.currentArticle, rss.feedRowsList)
+
+    // No article, the Feeds cursor on a failing feed: the pane says why.
+    Text {
+      objectName: "rssArticleError"
+      visible: articlePane.meta === null && text !== ""
+      anchors.left: parent.left
+      anchors.right: parent.right
+      anchors.top: parent.top
+      topPadding: Style.space(8)
+      leftPadding: rss.padX
+      rightPadding: rss.padX
+      wrapMode: Text.Wrap
+      text: {
+        void rss.cmds.errorVersion
+        return rss.cmds.errorLine(rss.currentFeed)
+      }
+      textFormat: Text.PlainText
+      font.family: Style.fontFamily
+      font.pixelSize: Style.font.body
+      color: Color.urgent
+    }
 
     Flickable {
       anchors.left: parent.left
@@ -995,6 +1048,17 @@ Item {
           font.bold: true
           color: Color.foreground
         }
+        // The feed's own title (OV4), else its name.
+        Text {
+          objectName: "rssArticleFeed"
+          width: parent.width
+          elide: Text.ElideRight
+          text: articlePane.meta ? articlePane.meta.feed : ""
+          textFormat: Text.PlainText
+          font.family: Style.fontFamily
+          font.pixelSize: Style.font.bodySmall
+          color: Color.muted
+        }
         Text {
           width: parent.width
           elide: Text.ElideRight
@@ -1003,6 +1067,15 @@ Item {
           font.family: Style.fontFamily
           font.pixelSize: Style.font.bodySmall
           color: Color.muted
+        }
+        Text {
+          objectName: "rssArticleState"
+          width: parent.width
+          text: articlePane.meta ? articlePane.meta.state : ""
+          textFormat: Text.PlainText
+          font.family: Style.fontFamily
+          font.pixelSize: Style.font.bodySmall
+          color: rss.currentArticle && !rss.currentArticle.isRead ? Color.accent : Color.muted
         }
         Text {
           width: parent.width
