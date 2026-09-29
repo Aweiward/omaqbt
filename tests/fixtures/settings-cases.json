@@ -2888,6 +2888,132 @@
    "input": "",
    "ok": false,
    "why": "empty"
+  },
+  {
+   "key": "rss_refresh_interval",
+   "input": "1",
+   "ok": true,
+   "why": "min"
+  },
+  {
+   "key": "rss_refresh_interval",
+   "input": "999999",
+   "ok": true,
+   "why": "max"
+  },
+  {
+   "key": "rss_refresh_interval",
+   "input": "0",
+   "ok": false,
+   "why": "below min"
+  },
+  {
+   "key": "rss_refresh_interval",
+   "input": "1000000",
+   "ok": false,
+   "why": "above max"
+  },
+  {
+   "key": "rss_refresh_interval",
+   "input": "abc",
+   "ok": false,
+   "why": "not a number"
+  },
+  {
+   "key": "rss_refresh_interval",
+   "input": "1.5",
+   "ok": false,
+   "why": "not a whole number"
+  },
+  {
+   "key": "rss_refresh_interval",
+   "input": "",
+   "ok": false,
+   "why": "empty"
+  },
+  {
+   "key": "rss_fetch_delay",
+   "input": "0",
+   "ok": true,
+   "why": "min"
+  },
+  {
+   "key": "rss_fetch_delay",
+   "input": "2147483646",
+   "ok": true,
+   "why": "max"
+  },
+  {
+   "key": "rss_fetch_delay",
+   "input": "-1",
+   "ok": false,
+   "why": "below min"
+  },
+  {
+   "key": "rss_fetch_delay",
+   "input": "2147483647",
+   "ok": false,
+   "why": "above max"
+  },
+  {
+   "key": "rss_fetch_delay",
+   "input": "abc",
+   "ok": false,
+   "why": "not a number"
+  },
+  {
+   "key": "rss_fetch_delay",
+   "input": "1.5",
+   "ok": false,
+   "why": "not a whole number"
+  },
+  {
+   "key": "rss_fetch_delay",
+   "input": "",
+   "ok": false,
+   "why": "empty"
+  },
+  {
+   "key": "rss_max_articles_per_feed",
+   "input": "0",
+   "ok": true,
+   "why": "min"
+  },
+  {
+   "key": "rss_max_articles_per_feed",
+   "input": "2147483646",
+   "ok": true,
+   "why": "max"
+  },
+  {
+   "key": "rss_max_articles_per_feed",
+   "input": "-1",
+   "ok": false,
+   "why": "below min"
+  },
+  {
+   "key": "rss_max_articles_per_feed",
+   "input": "2147483647",
+   "ok": false,
+   "why": "above max"
+  },
+  {
+   "key": "rss_max_articles_per_feed",
+   "input": "abc",
+   "ok": false,
+   "why": "not a number"
+  },
+  {
+   "key": "rss_max_articles_per_feed",
+   "input": "1.5",
+   "ok": false,
+   "why": "not a whole number"
+  },
+  {
+   "key": "rss_max_articles_per_feed",
+   "input": "",
+   "ok": false,
+   "why": "empty"
   }
  ],
  "choices": [

@@ -709,9 +709,11 @@ test("every command row has the documented shape", () => {
   // toggleRow/editableRow: slice 4a Task 6, the Settings editors.
   // listRow/secretSet/undoEntry/listEditable/listItem/narrow: slice 4b Task 1.
   // searchResult/searchPluginOn/searchPlugin/pluginsIdle: slice 5a Task 1.
+  // rssFeedRow/rssItem/rssArticle/rssUnread/rssProcessingOff/rssUp: slice 5b1 Task 1.
   const validNeeds = ["none", "torrent", "selection", "tracker", "peer", "trackersTab", "noMetadata", "libraryGroup", "libraryName", "categoryName", "limitRow", "limitToggle", "toggleRow", "editableRow",
     "listRow", "secretSet", "undoEntry", "listEditable", "listItem", "narrow",
-    "searchResult", "searchPluginOn", "searchPlugin", "pluginsIdle"];
+    "searchResult", "searchPluginOn", "searchPlugin", "pluginsIdle",
+    "rssFeedRow", "rssItem", "rssArticle", "rssUnread", "rssProcessingOff", "rssUp"];
   const validTabs = ["info", "trackers", "peers", "files", "chart"];
   for (const row of commands) {
     assert.ok(row.id === null || typeof row.id === "string");
@@ -2243,18 +2245,23 @@ test("4b: the new needs default unmet, and only undo names a reason", () => {
 // --- Views and Search (slice 5a, Task 1: eng C1, OV2) ---------------------------------
 
 const SEARCH_PANES = ["searchResults", "searchPlugins", "searchPluginList"];
-const VIEW_PANES = ALL_SETTINGS_PANES.concat(SEARCH_PANES);
+const RSS_PANES = ["rssFeeds", "rssArticles", "rssFeedList"];
+const VIEW_PANES = ALL_SETTINGS_PANES.concat(SEARCH_PANES).concat(RSS_PANES);
 // A row "touches torrents" when its need is about a torrent, a torrent's
 // tracker or peer, the Info tab's Limits or the filters' categories/tags.
 const TORRENT_NEEDS = ["torrent", "selection", "noMetadata", "tracker", "peer", "trackersTab", "limitRow", "limitToggle",
   "libraryGroup", "libraryName", "categoryName"];
 // The only rows allowed to be live in every view: help, the palette, and
 // the view openers (which live on the torrent panes only, see below).
-const VIEW_EXEMPT = ["help.toggle", "palette.open", "settings.open", "search.open"];
+const VIEW_EXEMPT = ["help.toggle", "palette.open", "settings.open", "search.open", "rss.open"];
 
 test("views: every pane belongs to exactly one view, and the view pane lists derive from the map", () => {
-  assert.deepEqual(Registry.VIEWS, ["torrents", "settings", "search"]);
+  assert.deepEqual(Registry.VIEWS, ["torrents", "settings", "search", "rss"]);
   for (const p of TORRENT_PANES) assert.equal(Registry.viewOfPane(p), "torrents", p);
+  for (const p of RSS_PANES) assert.equal(Registry.viewOfPane(p), "rss", p);
+  assert.deepEqual(Registry.RSS_PANES, RSS_PANES);
+  for (const p of RSS_PANES) assert.equal(Registry.isRssPane(p), true, p);
+  for (const p of TORRENT_PANES.concat(ALL_SETTINGS_PANES, SEARCH_PANES)) assert.equal(Registry.isRssPane(p), false, p);
   for (const p of ALL_SETTINGS_PANES) assert.equal(Registry.viewOfPane(p), "settings", p);
   for (const p of SEARCH_PANES) assert.equal(Registry.viewOfPane(p), "search", p);
   assert.equal(Registry.viewOfPane(undefined), "torrents", "normalizeState's default pane is the table");
@@ -2315,7 +2322,7 @@ test("views: help, the palette and the openers are the only exempt rows, and the
   }
   assert.deepEqual(commands.filter((r) => r.inViews === true).map((r) => r.id).sort(), ["help.toggle", "palette.open"]);
   assert.equal(commands.some((r) => r.inSettings !== undefined), false, "inSettings became inViews");
-  for (const id of ["settings.open", "search.open"]) {
+  for (const id of ["settings.open", "search.open", "rss.open"]) {
     const row = commands.find((r) => r.id === id);
     assert.deepEqual(row.panes, TORRENT_PANES, id);
     for (const pane of VIEW_PANES) assert.equal(Registry.paneMatches(row, pane), false, id + " " + pane);
@@ -2542,4 +2549,222 @@ test("every view but the torrents has VIEW_META with a real opener", () => {
     assert.ok(Registry.commands.some((c) => c.id === Registry.VIEW_META[v].opener), v);
     assert.equal(typeof Registry.VIEW_META[v].listedOutside, "boolean", v);
   }
+});
+
+// --- Slice 5b1: RSS (Task 1, the contract) --------------------------------------
+
+// Every flag an RSS row needs, on (RssPane.flags through VIEW_FLAG_STATE.rss).
+const RSS_ITEM = { path: "Linux\\Debian security", name: "Debian security", folder: false, feeds: 0 };
+const RSS_ARTICLE = { feedPath: "Linux\\Debian security", guid: "dsa-6000", title: "DSA-6000 openssl", isRead: false, hasTorrent: true, inLibrary: false,
+  link: "https://www.debian.org/security/2026/dsa-6000", torrentURL: "magnet:?xt=urn:btih:" + "ab".repeat(20), host: "www.debian.org" };
+const RSS_ON = { rssItem: RSS_ITEM, rssFeedRow: true, rssArticle: RSS_ARTICLE, rssUnread: 3, rssProcessingOff: true, rssUp: true };
+
+// The brief's registry table, row by row (NORMAL): id, keys, panes, needs,
+// and the row's `when` and paletteHidden. j/k also take Down/Up, and the
+// navigation rows are paletteHidden, as Settings' and Search's are.
+const RSS_ROWS = [
+  ["rss.open", ["N"], TORRENT_PANES, "none", undefined, undefined],
+  ["rss.down", ["j", "Down"], RSS_PANES, "none", undefined, true],
+  ["rss.up", ["k", "Up"], RSS_PANES, "none", undefined, true],
+  ["rss.toArticles", ["l", "Enter"], ["rssFeeds"], "rssFeedRow", undefined, true],
+  ["rss.toFeeds", ["h"], ["rssArticles"], "none", undefined, true],
+  ["rss.switch", ["Tab"], ["rssFeeds", "rssArticles"], "none", undefined, true],
+  ["rss.articleWide", ["l"], ["rssArticles"], "rssArticle", "narrow", true],
+  ["rss.addFeed", ["a"], ["rssFeeds", "rssArticles"], "rssUp", undefined, undefined],
+  ["rss.addFolder", ["N"], ["rssFeeds"], "rssUp", undefined, undefined],
+  ["rss.rename", ["n"], ["rssFeeds"], "rssItem", undefined, undefined],
+  ["rss.remove", ["x"], ["rssFeeds"], "rssItem", undefined, undefined],
+  ["rss.refresh", ["r"], ["rssFeeds", "rssArticles"], "rssUp", undefined, undefined],
+  ["rss.markAllRead", ["A"], ["rssFeeds", "rssArticles"], "rssUnread", undefined, undefined],
+  ["rss.markRead", ["Space"], ["rssArticles"], "rssArticle", undefined, undefined],
+  ["rss.add", ["Enter"], ["rssArticles"], "rssArticle", undefined, undefined],
+  ["rss.openPage", ["d"], ["rssArticles"], "rssArticle", undefined, undefined],
+  ["rss.processingOn", ["O"], ["rssFeeds", "rssArticles"], "rssProcessingOff", undefined, undefined],
+  ["rss.back", ["Esc"], ["rssFeeds", "rssArticles"], "none", undefined, true],
+  ["rss.feedsClose", ["Esc"], ["rssFeedList"], "none", undefined, true],
+  ["rss.feedsPick", ["Enter"], ["rssFeedList"], "none", undefined, true]
+];
+
+test("rss: the rows are the brief's table, NORMAL only", () => {
+  const rows = commands.filter((r) => /^rss\./.test(r.id));
+  assert.deepEqual(rows.map((r) => [r.id, r.keys, r.panes, r.needs, r.when, r.paletteHidden]), RSS_ROWS);
+  for (const r of rows) assert.deepEqual(r.modes, ["NORMAL"], r.id);
+  const row = (id) => commands.find((r) => r.id === id);
+  assert.deepEqual([row("rss.open").title, row("rss.open").group], ["RSS", "App"], "the palette shows it as :RSS");
+  assert.equal(row("rss.processingOn").title, "RSS processing on", "OV3: :RSS processing on");
+  // Every RSS pane's row names only RSS panes (rss.open only the torrent panes).
+  for (const r of rows) for (const p of r.panes) assert.ok(r.id === "rss.open" ? TORRENT_PANES.includes(p) : RSS_PANES.includes(p), r.id + " " + p);
+});
+
+test("rss: VIEW_META names the opener, and RSS's rows aren't listed outside RSS", () => {
+  assert.deepEqual(Registry.VIEW_META.rss, { opener: "rss.open", listedOutside: false });
+});
+
+test("N opens RSS from every torrent pane in NORMAL; in the Feeds column it adds a folder; nowhere else", () => {
+  for (const pane of TORRENT_PANES) {
+    const r = dispatch(state({ pane: pane, inspectorTab: pane === "inspector" ? "info" : "" }), evFor("N"));
+    assert.deepEqual([r.commandId, r.state.mode, r.args], ["rss.open", "NORMAL", {}], pane);
+    assert.equal(Registry.dispatchCommand(state({ pane: pane }), "rss.open").commandId, "rss.open", pane);
+  }
+  assert.equal(dispatch(state({ mode: "VISUAL", selectionCount: 2 }), evFor("N")).commandId, null, "not from VISUAL");
+  const add = dispatch(state(Object.assign({ pane: "rssFeeds" }, RSS_ON)), evFor("N"));
+  assert.deepEqual([add.commandId, add.state.mode], ["rss.addFolder", "NORMAL"], "the RSS view starts the INSERT itself");
+  assert.deepEqual(add.args.item, RSS_ITEM);
+  for (const pane of ALL_SETTINGS_PANES.concat(SEARCH_PANES, ["rssArticles", "rssFeedList"])) {
+    assert.equal(dispatch(state(Object.assign({ pane: pane }, ALL_ON, RSS_ON)), evFor("N")).commandId, null, "N in " + pane);
+  }
+  for (const pane of VIEW_PANES) assert.equal(Registry.dispatchCommand(state({ pane: pane }), "rss.open").commandId, null, ":RSS from " + pane);
+  // Ctrl-n (the palette's and the pickers' Down) is not N.
+  assert.equal(dispatch(state({ pane: "table" }), evFor("Ctrl-n")).commandId, null);
+  assert.equal(commands.filter((r) => r.keys.includes("N")).map((r) => r.id).join(" "), "rss.open rss.addFolder", "N means nothing else");
+  for (const k of ["O", "A"]) assert.deepEqual(commands.filter((r) => r.keys.includes(k)).map((r) => r.panes.every((p) => RSS_PANES.includes(p))), [true], k + " is RSS's only");
+});
+
+const KEYS_RSS = ["j", "k", "Down", "Up", "l", "h", "Enter", "Tab", "Shift-Tab", "Esc", "a", "N", "n", "x", "r", "A", "Space", "d", "O",
+  "?", ":", "t", "z", "s", "S", "q", "1", "4", "F", ",", "/", "c", "y", "P", "i", "U", "u", "g", "G", "V", "f", "e", "m", "o", "C", "T", "Ctrl-l", "Ctrl-h"];
+const RSS_FEEDS = { j: "rss.down", Down: "rss.down", k: "rss.up", Up: "rss.up", l: "rss.toArticles", Enter: "rss.toArticles", Tab: "rss.switch",
+  a: "rss.addFeed", N: "rss.addFolder", n: "rss.rename", x: "rss.remove", r: "rss.refresh", A: "rss.markAllRead", O: "rss.processingOn",
+  Esc: "rss.back", "?": "help.toggle", ":": "palette.open" };
+const RSS_ARTICLES = { j: "rss.down", Down: "rss.down", k: "rss.up", Up: "rss.up", h: "rss.toFeeds", Tab: "rss.switch", a: "rss.addFeed",
+  r: "rss.refresh", A: "rss.markAllRead", Space: "rss.markRead", Enter: "rss.add", d: "rss.openPage", O: "rss.processingOn", Esc: "rss.back",
+  "?": "help.toggle", ":": "palette.open" };
+const RSS_FEED_LIST = { j: "rss.down", Down: "rss.down", k: "rss.up", Up: "rss.up", Enter: "rss.feedsPick", Esc: "rss.feedsClose", "?": "help.toggle", ":": "palette.open" };
+const KEY_MAP_RSS = {
+  rssFeeds: { wide: RSS_FEEDS, narrow: RSS_FEEDS },
+  rssArticles: { wide: RSS_ARTICLES, narrow: Object.assign({}, RSS_ARTICLES, { l: "rss.articleWide" }) },
+  rssFeedList: { wide: RSS_FEED_LIST, narrow: RSS_FEED_LIST }
+};
+
+test("rss: every key x RSS pane x narrow resolves as pinned, and nothing else resolves", () => {
+  for (const pane of RSS_PANES) {
+    for (const width of ["wide", "narrow"]) {
+      const want = KEY_MAP_RSS[pane][width];
+      for (const label of KEYS_RSS) {
+        const r = dispatch(state(Object.assign({ pane: pane, narrow: width === "narrow" }, ALL_ON, SEARCH_ON, RSS_ON)), evFor(label));
+        assert.equal(r.commandId, want[label] || null, pane + " " + width + " " + label);
+        assert.equal(r.confirm, undefined, pane + " " + label + ": the window raises any RSS confirm");
+      }
+    }
+  }
+});
+
+test("rss: the any-pane torrent keys are dead in every RSS pane; : and ? stay; the modal rows stay", () => {
+  for (const pane of RSS_PANES) {
+    for (const row of anyPaneViewRows()) {
+      for (const label of row.keys) {
+        if (label === "g g" || label === "Esc Esc") continue;
+        for (const mode of row.modes.filter((m) => m === "NORMAL" || m === "VISUAL")) {
+          const r = dispatch(state(Object.assign({ pane: pane, mode: mode, cursorNoMetadata: true, hasTorrent: true, selectionCount: 2 }, RSS_ON)), evFor(label));
+          if (ANY_PANE_LIVE_IN_SETTINGS.includes(row.id)) assert.equal(r.commandId, row.id, pane + " " + mode + " " + label);
+          else assert.ok(r.commandId === null || /^rss\./.test(r.commandId), row.id + " " + label + " in " + pane + " resolved to " + r.commandId);
+        }
+      }
+    }
+    for (const id of ANY_PANE_TORRENT_ROWS.filter((x) => !ANY_PANE_LIVE_IN_SETTINGS.includes(x))) {
+      assert.equal(Registry.dispatchCommand(state(Object.assign({ pane: pane, cursorNoMetadata: true }, RSS_ON)), id).commandId, null, id + " in " + pane);
+    }
+    assert.equal(dispatch(state({ pane: pane, mode: "INSERT" }), evFor("Esc")).commandId, "insert.cancel", pane);
+    assert.equal(dispatch(state({ pane: pane, mode: "INSERT" }), evFor("Enter")).commandId, "insert.commit", pane);
+    assert.equal(dispatch(state({ pane: pane, mode: "COMMAND" }), evFor("Esc")).commandId, "palette.close", pane);
+    assert.equal(dispatch(state({ pane: pane, mode: "PICKER" }), evFor("Enter")).commandId, "picker.accept", pane);
+    // The window's CONFIRMs (View.RSS_ACCEPT's kinds): y is the command again, confirmed.
+    for (const [id, kind] of [["rss.add", "rssAdd"], ["rss.openPage", "rssOpenPage"], ["rss.remove", "rssRemove"], ["rss.markAllRead", "rssMarkRead"], ["rss.processingOn", "rssProcessingOn"]]) {
+      const c = Registry.raiseConfirm(state({ pane: pane }), id, kind, { article: RSS_ARTICLE });
+      const y = dispatch(c.state, evFor("y"));
+      assert.deepEqual([y.commandId, y.args.confirmed, y.args.article.guid, y.state.mode], [id, true, "dsa-6000", "NORMAL"], pane + " " + kind);
+      assert.equal(dispatch(c.state, evFor("n")).commandId, "confirm.cancel", pane + " " + kind);
+    }
+    // A stale prefix from the torrents never completes here.
+    assert.equal(dispatch(state({ pane: pane, prefix: "Esc", prefixAt: 0 }), ev("\u001b", KEY.Escape, undefined, 10)).commandId !== "filter.reset", true, pane);
+    assert.equal(dispatch(state({ pane: pane, prefix: "g", prefixAt: 0 }), ev("g", keyOf("g"), undefined, 10)).commandId, null, pane);
+  }
+});
+
+test("rss: 5b1's keys never change a torrent, Settings or Search pane's keys", () => {
+  for (const pane of TORRENT_PANES.concat(ALL_SETTINGS_PANES, SEARCH_PANES)) {
+    for (const label of ["O", "A"]) {
+      const r = dispatch(state(Object.assign({ pane: pane, inspectorTab: pane === "inspector" ? "info" : "" }, ALL_ON, SEARCH_ON, RSS_ON)), evFor(label));
+      assert.equal(r.commandId, null, pane + " " + label);
+    }
+  }
+});
+
+test("rss: each need's reason, and qBittorrent down names the down client first", () => {
+  const blocked = (pane, label, flags) => {
+    const r = dispatch(state(Object.assign({ pane: pane }, RSS_ON, flags)), evFor(label));
+    return [r.commandId, r.blocked];
+  };
+  assert.deepEqual(blocked("rssFeeds", "x", { rssItem: null }), [null, "pick a feed or folder"], "OV5: x on Unread or All");
+  assert.deepEqual(blocked("rssFeeds", "n", { rssItem: null }), [null, "pick a feed or folder"], "OV5: n on Unread or All");
+  for (const label of ["Space", "Enter", "d"]) assert.deepEqual(blocked("rssArticles", label, { rssArticle: null }), [null, "no article here"], label);
+  assert.deepEqual(blocked("rssArticles", "l", { rssArticle: null, narrow: true }), [null, "no article here"], "narrow l");
+  assert.deepEqual(blocked("rssFeeds", "A", { rssUnread: 0 }), [null, "nothing unread"]);
+  assert.deepEqual(blocked("rssArticles", "A", { rssUnread: 0 }), [null, "nothing unread"]);
+  assert.deepEqual(blocked("rssFeeds", "O", { rssProcessingOff: false }), [null, "RSS is already on"]);
+  // Over the api-down screen every RSS key that needs qBittorrent names it.
+  for (const [pane, label] of [["rssFeeds", "a"], ["rssFeeds", "N"], ["rssFeeds", "r"], ["rssFeeds", "n"], ["rssFeeds", "x"], ["rssFeeds", "A"], ["rssFeeds", "O"],
+    ["rssArticles", "Space"], ["rssArticles", "Enter"], ["rssArticles", "d"], ["rssArticles", "a"]]) {
+    assert.deepEqual(blocked(pane, label, { rssUp: false }), [null, "qBittorrent isn't reachable"], pane + " " + label);
+  }
+  // Moving needs nothing; l/Enter to the articles needs a Feeds row, silently.
+  assert.deepEqual(blocked("rssFeeds", "l", { rssFeedRow: false }), [null, ""]);
+  assert.equal(blocked("rssFeeds", "j", { rssUp: false })[0], "rss.down");
+  assert.equal(blocked("rssFeeds", "Esc", { rssUp: false })[0], "rss.back");
+  // The reasons and their defaults (every RSS need is unmet in a bare state).
+  const R = Registry.needsReason;
+  const up = { rssUp: true };
+  assert.equal(R("rssItem", up), "pick a feed or folder");
+  assert.equal(R("rssArticle", up), "no article here");
+  assert.equal(R("rssUnread", up), "nothing unread");
+  assert.equal(R("rssProcessingOff", up), "RSS is already on");
+  assert.equal(R("rssFeedRow", up), "");
+  for (const need of ["rssItem", "rssArticle", "rssUnread", "rssProcessingOff", "rssUp"]) {
+    assert.equal(Registry.preconditionMet(need, {}), false, need + " defaults unmet");
+    assert.equal(R(need, {}), "qBittorrent isn't reachable", need);
+    assert.equal(Registry.preconditionMet(need, Object.assign({}, RSS_ON, { rssUp: false })), false, need + " needs qBittorrent up");
+    assert.equal(Registry.preconditionMet(need, RSS_ON), true, need);
+  }
+  assert.equal(Registry.preconditionMet("rssFeedRow", {}), false);
+  assert.equal(Registry.preconditionMet("rssFeedRow", { rssFeedRow: true }), true, "a Feeds row needs no qBittorrent");
+  assert.equal(Registry.preconditionMet("rssUnread", Object.assign({}, RSS_ON, { rssUnread: "3" })), false, "a number, never a string");
+  assert.equal(Registry.preconditionMet("rssItem", Object.assign({}, RSS_ON, { rssItem: "Linux" })), false, "an object, never a string");
+});
+
+test("rss: rows that act on a cursor capture it frozen at key time", () => {
+  const item = Object.assign({}, RSS_ITEM, { nested: { x: 1 } });
+  const article = Object.assign({}, RSS_ARTICLE, { nested: { x: 1 } });
+  const s = (pane) => state(Object.assign({ pane: pane }, RSS_ON, { rssItem: item, rssArticle: article, rssUnread: 7 }));
+  for (const [pane, label, id] of [["rssFeeds", "a", "rss.addFeed"], ["rssFeeds", "N", "rss.addFolder"], ["rssFeeds", "n", "rss.rename"], ["rssFeeds", "x", "rss.remove"],
+    ["rssFeeds", "r", "rss.refresh"], ["rssArticles", "r", "rss.refresh"], ["rssFeeds", "A", "rss.markAllRead"], ["rssArticles", "A", "rss.markAllRead"]]) {
+    const r = dispatch(s(pane), evFor(label));
+    assert.equal(r.commandId, id, pane + " " + label);
+    assert.ok(Object.isFrozen(r.args.item), id + ": args.item is frozen");
+    assert.deepEqual(r.args.item, RSS_ITEM, id + ": plain fields only");
+    assert.equal(r.args.article, undefined, id);
+  }
+  for (const [label, id] of [["Space", "rss.markRead"], ["Enter", "rss.add"], ["d", "rss.openPage"]]) {
+    const r = dispatch(s("rssArticles"), evFor(label));
+    assert.equal(r.commandId, id, label);
+    assert.ok(Object.isFrozen(r.args.article), id);
+    assert.deepEqual(r.args.article, RSS_ARTICLE, id);
+  }
+  // A's count is the one its confirm names (qbt's `expect`, OV11).
+  assert.equal(dispatch(s("rssFeeds"), evFor("A")).args.unread, 7);
+  // On Unread or All there's no item: everything (qbt's path "").
+  const all = dispatch(state(Object.assign({ pane: "rssFeeds" }, RSS_ON, { rssItem: null })), evFor("r"));
+  assert.deepEqual([all.commandId, all.args.item], ["rss.refresh", null]);
+  const allRead = dispatch(state(Object.assign({ pane: "rssArticles" }, RSS_ON, { rssItem: null })), evFor("A"));
+  assert.deepEqual([allRead.commandId, allRead.args.item, allRead.args.unread], ["rss.markAllRead", null, 3]);
+  // Navigation carries nothing.
+  assert.deepEqual(dispatch(s("rssFeeds"), evFor("j")).args, {});
+  assert.deepEqual(dispatch(s("rssArticles"), evFor("O")).args, {});
+});
+
+test("rss: ? lists each RSS pane's keys, plus : and ?", () => {
+  for (const pane of RSS_PANES) {
+    const ids = helpFor("NORMAL", pane, undefined, { narrow: true }).map((r) => r.id);
+    const want = Object.values(KEY_MAP_RSS[pane].narrow);
+    assert.deepEqual(Array.from(new Set(ids)).sort(), Array.from(new Set(want)).sort(), pane);
+  }
+  assert.ok(!helpFor("NORMAL", "rssArticles", undefined, { narrow: false }).some((r) => r.id === "rss.articleWide"), "l is narrow-only");
 });

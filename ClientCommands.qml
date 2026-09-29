@@ -164,7 +164,8 @@ QtObject {
     var c = client
     if (c.activeView !== "torrents") {
       var why = String(blocked || "")
-      if (c.mode === "NORMAL" && why !== "") c.note(why.charAt(0).toUpperCase() + why.slice(1) + ".", "muted")
+      // "qBittorrent …" keeps its lower-case q (Search's and RSS's down reason).
+      if (c.mode === "NORMAL" && why !== "") c.note((why.indexOf("qBittorrent") === 0 ? why : why.charAt(0).toUpperCase() + why.slice(1)) + ".", "muted")
       return
     }
     if (!c.service || !ev || c.mode !== "NORMAL") return

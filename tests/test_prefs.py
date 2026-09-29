@@ -449,7 +449,7 @@ class PrefSetFidelityTest(PrefsCase):
         # Slice 4b Task 1: the headers are locked (D8), the whitelist read-only (D9).
         keys = [k for k, e in SCHEMA["keys"].items()
                 if e.get("multiline") and not (e.get("hidden") or e.get("deferred") or e.get("readOnly") or e.get("locked"))]
-        self.assertEqual(sorted(keys), sorted(["excluded_file_names", "add_trackers"]))
+        self.assertEqual(sorted(keys), sorted(["excluded_file_names", "add_trackers", "rss_smart_episode_filters"]))
         for key in keys:
             self.assertIn(SCHEMA["keys"][key].get("listKind"), ("trackerUrl", "pattern"), key)
         # Bans travel only through ban-list (eng 4b D3), never pref-set.

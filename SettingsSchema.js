@@ -2514,41 +2514,37 @@ var SCHEMA = {
   "section": "RSS",
   "group": "RSS",
   "label": "Fetch RSS feeds",
-  "help": "Fetch RSS feeds. Slice 5.",
-  "type": "bool",
-  "deferred": true
+  "help": "Fetch RSS feeds.",
+  "type": "bool"
  },
  "rss_refresh_interval": {
   "section": "RSS",
   "group": "RSS",
   "label": "Feed refresh interval",
-  "help": "How often feeds are fetched. Slice 5.",
+  "help": "How often feeds are fetched.",
   "type": "int",
   "unit": "min",
   "min": 1,
-  "max": 999999,
-  "deferred": true
+  "max": 999999
  },
  "rss_fetch_delay": {
   "section": "RSS",
   "group": "RSS",
   "label": "Feed fetch delay",
-  "help": "The wait between fetches from one host. Slice 5.",
+  "help": "The wait between fetches from one host.",
   "type": "int",
   "unit": "s",
   "min": 0,
-  "max": 2147483646,
-  "deferred": true
+  "max": 2147483646
  },
  "rss_max_articles_per_feed": {
   "section": "RSS",
   "group": "RSS",
   "label": "Articles per feed",
-  "help": "The most articles kept per feed. Slice 5.",
+  "help": "The most articles kept per feed.",
   "type": "int",
   "min": 0,
-  "max": 2147483646,
-  "deferred": true
+  "max": 2147483646
  },
  "rss_auto_downloading_enabled": {
   "section": "RSS",
@@ -2562,18 +2558,17 @@ var SCHEMA = {
   "section": "RSS",
   "group": "RSS",
   "label": "Download REPACK/PROPER",
-  "help": "Also download REPACK and PROPER episodes. Slice 5.",
-  "type": "bool",
-  "deferred": true
+  "help": "Also download REPACK and PROPER episodes.",
+  "type": "bool"
  },
  "rss_smart_episode_filters": {
   "section": "RSS",
   "group": "RSS",
   "label": "Smart episode filters",
-  "help": "Patterns that find episode numbers, one per line. Slice 5.",
+  "help": "Patterns that find episode numbers, one per line.",
   "type": "text",
-  "deferred": true,
-  "multiline": true
+  "multiline": true,
+  "listKind": "pattern"
  }
 };
 

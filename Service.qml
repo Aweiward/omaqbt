@@ -147,6 +147,13 @@ Scope {
   // the lane has settled (not a binding: a handler that asks for another
   // run would re-enter it).
   property string searchPluginChange: ""
+  // Slice 5b1 (RSS): the one `qbt rss` lane's running item and queue
+  // (rssRun), and the last `qbt rss items` answer (its raw stdout and what
+  // it parsed to), so a read that didn't change is flagged `same`.
+  property var rssQueue: []
+  property var rssItem: null
+  property string rssLastItemsText: ""
+  property var rssLastItems: null
 
   readonly property int refreshIntervalSec: {
     var n = parseInt(String(settings && settings.refreshIntervalSec != null ? settings.refreshIntervalSec : 5), 10)
@@ -212,6 +219,11 @@ Scope {
   // A (re)started sidecar came up with no search watch while the window
   // still watches a job: the window re-sends it at the rows it holds (OV7).
   signal searchWatchLost()
+  // Slice 5b1 (RSS): the end of a `qbt rss` write (rssRun's ticket): ok,
+  // qbt's one-line sentence on a failure, and its stdout JSON on success
+  // (null when there was none or it didn't parse). The reads (items,
+  // article, error) answer their callback instead.
+  signal rssFinished(int ticket, bool ok, string error, var data)
 
   function clearError() { lastError = "" }
 
@@ -1248,6 +1260,126 @@ Scope {
     searchReply(data)
   }
 
+  // ---- slice 5b1: RSS (Task 3) ------------------------------------------------------
+
+  // One serial lane of `qbt rss <sub>` runs, one at a time in order
+  // (tests/fixtures/rss-contract.md). argv holds only the subcommand; every
+  // value goes on stdin, NUL-joined with no trailing NUL (fields null: no
+  // stdin at all, `items`). A read passes cb, answered as cb(ok, error,
+  // data, same); a write passes none and ends in rssFinished. Returns the
+  // ticket, or 0 on a Service that isn't started (nothing runs, and no
+  // callback or signal follows).
+  function rssRun(sub, fields, cb) {
+    if (!started) return 0
+    var item = { ticket: mintTicket(), sub: sub, cmd: [helperPath, "rss", sub], stdin: fields === null ? null : fields.join("\u0000"), cb: cb || null }
+    if (rssProcess.running || rssItem !== null) rssQueue = rssQueue.concat([item])
+    else startRssItem(item)
+    return item.ticket
+  }
+
+  function startRssItem(item) {
+    rssItem = item
+    rssProcess.command = item.cmd
+    rssProcess.stdinEnabled = item.stdin !== null
+    rssProcess.running = true
+  }
+
+  // The child runs: its values go to stdin once, then stdin closes (EOF).
+  function rssStarted() {
+    var item = rssItem
+    if (!item || item.stdin === null || item.written === true) return
+    item.written = true
+    rssProcess.write(item.stdin)
+    rssProcess.stdinEnabled = false
+  }
+
+  // The end of a run (exited, or never started): the next queued run
+  // starts first, then the answer goes out.
+  function finishRssItem(ok, err, text) {
+    var item = rssItem
+    rssProcess.stdinEnabled = false
+    if (rssQueue.length > 0 && started) {
+      var next = rssQueue[0]
+      rssQueue = rssQueue.slice(1)
+      startRssItem(next)
+    } else {
+      rssItem = null
+      if (rssQueue.length > 0) {
+        var dropped = rssQueue
+        rssQueue = []
+        Qt.callLater(function() { for (var i = 0; i < dropped.length; i++) root.answerRss(dropped[i], false, "qBittorrent isn't running.", null, false) })
+      }
+    }
+    if (!item) return
+    var data = null
+    var same = false
+    if (ok) {
+      var t = String(text || "").trim()
+      if (item.sub === "items" && t !== "" && t === rssLastItemsText && rssLastItems !== null) {
+        same = true
+        data = rssLastItems
+      } else if (t !== "") {
+        try { data = JSON.parse(t) } catch (e) { data = null }
+      }
+      if (item.sub === "items") {
+        rssLastItemsText = data !== null ? t : ""
+        rssLastItems = data
+      }
+      if (item.sub === "add") refresh()
+    } else if (item.sub === "items") {
+      rssLastItemsText = ""
+      rssLastItems = null
+    }
+    answerRss(item, ok, err, data, same)
+  }
+
+  function answerRss(item, ok, err, data, same) {
+    if (item.cb) {
+      var cb = item.cb
+      item.cb = null
+      cb(ok, err, data, same)
+    } else if (item.read !== true) {
+      rssFinished(item.ticket, ok, err, data)
+    }
+  }
+
+  function rssExited(exitCode, out, err) {
+    if (rssItem === null) return
+    if (exitCode !== 0) finishRssItem(false, Model.sanitizeError(lastStderrLine(err) || "Could not run the qbt helper"), "")
+    else finishRssItem(true, "", out)
+  }
+
+  function rssLost(pending) {
+    if (rssProcess.running || rssItem !== pending) return
+    finishRssItem(false, "Could not run the qbt helper", "")
+  }
+
+  // The window closed: its reads answer nobody (it is rebuilt, never
+  // reopened; a callback would reach a destroyed view).
+  function dropRssCallbacks() {
+    var items = [rssItem].concat(rssQueue)
+    for (var i = 0; i < items.length; i++) if (items[i] && items[i].cb) { items[i].cb = null; items[i].read = true }
+  }
+
+  // A read always has a callback (a missing one answers nobody).
+  function rssRead(sub, fields, cb) {
+    return rssRun(sub, fields, typeof cb === "function" ? cb : function() {})
+  }
+
+  function rssItems(cb) { return rssRead("items", null, cb) }
+  function rssArticle(path, guid, cb) { return rssRead("article", [String(path), String(guid)], cb) }
+  function rssError(url, cb) { return rssRead("error", [String(url)], cb) }
+  function rssAddFeed(url, path) { return rssRun("add-feed", [String(url), String(path)], null) }
+  function rssAddFolder(path) { return rssRun("add-folder", [String(path)], null) }
+  function rssRename(from, to) { return rssRun("rename", [String(from), String(to)], null) }
+  function rssRemove(path) { return rssRun("remove", [String(path)], null) }
+  // path "" refreshes everything (one empty field).
+  function rssRefresh(path) { return rssRun("refresh", [String(path)], null) }
+  // guid "" marks a whole feed or folder (path "" everything); expect is
+  // the count the window's confirm named (0 with a guid).
+  function rssMarkRead(path, guid, expect) { return rssRun("mark-read", [String(path), String(guid), String(Number(expect) || 0)], null) }
+  function rssAdd(torrentURL, link) { return rssRun("add", [String(torrentURL), String(link)], null) }
+
   // opts: {origin: "window"} returns a ticket that covers the install and
   // the daemon start that follows it, reported through actionFinished; the
   // widget's actionStatus and lastError are left alone. Without opts (the
@@ -1415,7 +1547,7 @@ Scope {
   // destroyed by the time windowOpen flips false and could never send a
   // clearing watch itself; Service does it here instead (see clearWatch),
   // and deletes the jobs of the starts it gave up on (abandonSearchStarts).
-  onWindowOpenChanged: if (!windowOpen) { clearWatch(); searchUnwatch(); abandonSearchStarts() }
+  onWindowOpenChanged: if (!windowOpen) { clearWatch(); searchUnwatch(); abandonSearchStarts(); dropRssCallbacks() }
 
   onSidecarCadenceMsChanged: if (sidecarState === "up") sendCadence()
 
@@ -1761,6 +1893,27 @@ Scope {
       Qt.callLater(function() { root.searchLost(true, pending) })
     }
     onExited: function(exitCode) { root.searchExited(true, exitCode, searchPluginOut.text, searchPluginErr.text) }
+  }
+
+  // Slice 5b1: the `qbt rss` lane (rssRun). rssLane is what a test finds it
+  // by. stdin is opened per run and closed after its one write. A run that
+  // never starts emits no exited, only running going false: deferred a
+  // turn, like prefsProcess.
+  Process {
+    id: rssProcess
+    readonly property string rssLane: "rss"
+    running: false
+    command: []
+    stdinEnabled: false
+    stdout: StdioCollector { id: rssOut; waitForEnd: true }
+    stderr: StdioCollector { id: rssErr; waitForEnd: true }
+    onStarted: root.rssStarted()
+    onRunningChanged: {
+      if (running || root.rssItem === null) return
+      var pending = root.rssItem
+      Qt.callLater(function() { root.rssLost(pending) })
+    }
+    onExited: function(exitCode) { root.rssExited(exitCode, rssOut.text, rssErr.text) }
   }
 
   Process {
