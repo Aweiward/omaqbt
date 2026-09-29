@@ -1062,8 +1062,8 @@ function settingsReadNote(tableState, failed, error) {
 }
 
 // settingsSectionStep(sections, index, delta) -> the section cursor moved
-// by delta, clamped at the ends, skipping dimmed sections (RSS · slice 5 is
-// never a stop). delta 0 re-clamps a stale index. 0 with no stops.
+// by delta, clamped at the ends, skipping dimmed sections (none since RSS
+// went live in slice 5b1). delta 0 re-clamps a stale index. 0 with no stops.
 function settingsSectionStep(sections, index, delta) {
   var list = sections || [];
   var stops = [];

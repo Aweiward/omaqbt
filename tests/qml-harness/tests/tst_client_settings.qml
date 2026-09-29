@@ -319,9 +319,10 @@ TestCase {
     key(o.c, "k"); key(o.c, "k")
     compare(v.sectionName, "Downloads", "stops at the top")
     for (var i = 0; i < 12; i++) key(o.c, "j")
-    compare(v.sectionName, "Advanced", "RSS · slice 5 is never a stop")
-    verify(shows(o, "RSS · slice 5"))
-    key(o.c, "k"); key(o.c, "k"); key(o.c, "k"); key(o.c, "k")
+    // Slice 5b1: RSS is live, the last stop (no Banned IPs in these prefs).
+    compare(v.sectionName, "RSS", "stops at the bottom, on RSS")
+    verify(!shows(o, "RSS · slice 5"))
+    key(o.c, "k"); key(o.c, "k"); key(o.c, "k"); key(o.c, "k"); key(o.c, "k")
     compare(v.sectionName, "Speed")
     key(o.c, "l")
     compare(o.c.keyPane, "settingsKeys")

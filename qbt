@@ -2923,6 +2923,383 @@ cmd_search_plugin() {
   esac
 }
 
+# ---------------------------------------------------------------------------
+# Slice 5b1: `qbt rss`, exactly per tests/fixtures/rss-contract.md. Every
+# rule and message comes from tests/fixtures/rss-rules-cases.json, enforced
+# by lib/rssrules.py (5b0's lib/linkrules.py underneath); lib/rssitems.py
+# reads qBittorrent's feed tree. Every value arrives on stdin, NUL-separated
+# (argv holds only the subcommand), and reaches python, jq and curl on
+# stdin too. Values are checked before any request; every write is a POST
+# and every write but `add` reads rss/items back; failures report codes
+# only, except the three 409s passed through in plain words. Response
+# bodies stay in shell variables and reach python through printf pipes.
+# ---------------------------------------------------------------------------
+
+RSS_USAGE="usage: qbt rss items|article|error|add-feed|add-folder|rename|remove|refresh|mark-read|add"
+RSS_FEED_GONE="That feed is gone."
+RSS_FOLDER_GONE="That folder is gone."
+RSS_ARTICLE_GONE="That article is gone."
+RSS_FEED_DUP="That feed is already added."
+RSS_UNCONFIRMED_RENAME="Couldn't confirm the rename."
+RSS_UNCONFIRMED_READ="Couldn't confirm the articles were marked read."
+
+rss_usage() {
+  printf '%s\n' "$RSS_USAGE" >&2
+  exit 2
+}
+
+# Reads stdin to EOF into RSS_FIELDS, split on NUL: no trailing NUL (a
+# trailing one is one more, empty, field), and an empty stdin is one empty
+# field. Anything but exactly $1 fields is the usage line.
+rss_fields() {
+  local want=$1 f=""
+  RSS_FIELDS=()
+  while IFS= read -r -d '' f; do
+    RSS_FIELDS+=("$f")
+  done
+  RSS_FIELDS+=("$f")
+  (( ${#RSS_FIELDS[@]} == want )) || rss_usage
+}
+
+# The last `\`-separated segment of a path (for messages).
+rss_name_of() { printf '%s' "${1##*\\}"; }
+
+# RSS_PARENT: everything before the last `\` ("" at the root). A variable,
+# never a command substitution, which would drop trailing newlines.
+rss_parent_of() {
+  RSS_PARENT=""
+  if [[ $1 == *\\* ]]; then RSS_PARENT=${1%\\*}; fi
+}
+
+# One rule of lib/rssrules.py on a value sent on stdin (hasTorrent: two
+# values). Sets RULE_NORM; a refusal dies with the rule's own message.
+rss_rule() {
+  local kind=$1 out rc=0
+  shift
+  if [[ $kind == hasTorrent ]]; then
+    out=$(printf '%s\0%s' "$1" "$2" | python3 "$(qbt_lib_dir)/rssrules.py" "$kind" 2>/dev/null) || rc=$?
+  else
+    out=$(printf '%s' "$1" | python3 "$(qbt_lib_dir)/rssrules.py" "$kind" 2>/dev/null) || rc=$?
+  fi
+  if (( rc != 0 )); then
+    (( rc == 1 )) && [[ -n $out ]] && die "$out"
+    die "Couldn't check the value."
+  fi
+  RULE_NORM=$out
+}
+
+# The name rule on the segment a command creates (the last one of $1): a
+# refusal is the rule's message, and a segment the rule would change (a Qt
+# space at either end) is the usage line, since the window always sends
+# trimmed names. Existing segments are never checked (qBittorrent names a
+# feed after its channel title, untrimmed).
+rss_new_segment() {
+  local seg=${1##*\\}
+  rss_rule name "$seg"
+  [[ $RULE_NORM == "$seg" ]] || rss_usage
+}
+
+# GET rss/items?withData=true into RSS_TREE, else dies.
+rss_read_tree() {
+  api_try GET "/api/v2/rss/items?withData=true" || die "qBittorrent refused it (${API_FAIL})"
+  RSS_TREE=$API_BODY
+}
+
+# lib/rssitems.py <mode> with the NUL-joined values $2... on stdin (the
+# last is usually RSS_TREE). Prints its answer; an unreadable body dies.
+rss_items_py() {
+  local mode=$1 out rc=0
+  shift
+  local IFS=
+  out=$( { printf '%s' "$1"; shift; (( $# == 0 )) || printf '\0%s' "$@"; } \
+    | python3 "$(qbt_lib_dir)/rssitems.py" "$mode" 2>/dev/null) || rc=$?
+  (( rc == 4 )) && die "qBittorrent sent something unreadable"
+  (( rc == 3 )) && { RSS_PY_RC=3; return 0; }
+  (( rc == 0 )) || die "qBittorrent sent something unreadable"
+  RSS_PY_RC=0
+  RSS_PY_OUT=$out
+}
+
+# RSS_KIND: "feed", "folder" or "none" for a path in RSS_TREE ("" is the
+# root folder). Never in a command substitution, so an unreadable tree
+# ends the command.
+rss_kind() {
+  rss_items_py kind "$1" "$RSS_TREE"
+  RSS_KIND=$RSS_PY_OUT
+}
+
+# POST a form body read from stdin (feed it with `< <(printf ...)`). The
+# body stays in memory: a 409's text lands in RSS_409 for the three plain
+# words below and is never printed; any other failure sets API_FAIL to a
+# code or a short reason. $2 = 1 takes a 202 (torrents/add of a URL
+# qBittorrent must download first) as success.
+rss_post() {
+  local path=$1 accept_202=${2:-0} out code resp
+  assert_local_base
+  ensure_state_dir "$(dirname "$COOKIE_FILE")"
+  out=$(umask 077; curl -sS -g --noproxy '*' --max-time 5 -w '\n%{http_code}' -X POST \
+    -b "$COOKIE_FILE" -c "$COOKIE_FILE" -H "Content-Type: application/x-www-form-urlencoded" \
+    --data-binary @- "$(base_url)$path" 2>/dev/null) || true
+  if [[ $out == *$'\n'* ]]; then
+    code=${out##*$'\n'}
+    resp=${out%$'\n'*}
+  else
+    code=$out
+    resp=""
+  fi
+  RSS_409="" API_FAIL=""
+  [[ $code =~ ^[[:digit:]]{3}$ ]] || code=000
+  [[ $code == 202 && $accept_202 == 1 ]] && code=200
+  case $code in
+    200|204) return 0 ;;
+    409) RSS_409=$resp API_FAIL="HTTP 409" ;;
+    403) API_FAIL="localhost auth is required" ;;
+    000) API_FAIL="couldn't reach qBittorrent" ;;
+    *) API_FAIL="HTTP $code" ;;
+  esac
+  return 1
+}
+
+# A failed write: qBittorrent's 409 bodies end in ": <path>." (rss_session.cpp
+# :156/:434/:439), so each is matched on its prefix. $1 names the item.
+rss_write_failed() {
+  local name=$1
+  if [[ $API_FAIL == "HTTP 409" ]]; then
+    case $RSS_409 in
+      "RSS feed with given URL already exists"*) die "$RSS_FEED_DUP" ;;
+      "RSS item with given path already exists"*) die "There's already a feed or folder called ${name} there." ;;
+      "Parent folder doesn't exist"*) die "$RSS_FOLDER_GONE" ;;
+    esac
+  fi
+  die "qBittorrent refused it (${API_FAIL})"
+}
+
+# A JSON line {"ok":true,"path":<path>} (the path through jq's stdin).
+rss_ok_path() {
+  printf '%s' "$1" | jq -Rsc '{ok: true, path: .}'
+}
+
+rss_items() {
+  local tree out rc=0
+  assert_local_base
+  rss_read_tree
+  tree=$RSS_TREE
+  api_try GET "/api/v2/app/preferences" || die "qBittorrent refused it (${API_FAIL})"
+  out=$(printf '%s\0%s' "$tree" "$API_BODY" | python3 "$(qbt_lib_dir)/rssitems.py" flatten 2>/dev/null) || rc=$?
+  (( rc == 0 )) || die "qBittorrent sent something unreadable"
+  printf '%s\n' "$out"
+}
+
+rss_article() {
+  rss_fields 2
+  local path=${RSS_FIELDS[0]} guid=${RSS_FIELDS[1]}
+  assert_local_base
+  rss_read_tree
+  rss_items_py article "$path" "$guid" "$RSS_TREE"
+  (( RSS_PY_RC == 0 )) || die "$RSS_ARTICLE_GONE"
+  printf '%s\n' "$RSS_PY_OUT"
+}
+
+# D6/OV13: the reason a failing feed's refresh gave, from log/main's
+# warnings, cached in $STATE_DIR/rss-errors.json (0600, written by
+# rssitems.py to a fresh name and moved into place). log/main is asked from
+# one below the stored lastId, so the row lastId names comes back while the
+# log still holds it; a reply without it means qBittorrent restarted, and
+# the whole log is read again.
+rss_error() {
+  rss_fields 1
+  local url=${RSS_FIELDS[0]} state since log full=""
+  assert_local_base
+  ensure_state_dir "$STATE_DIR"
+  state="$STATE_DIR/rss-errors.json"
+  since=$(python3 "$(qbt_lib_dir)/rssitems.py" error-since "$state" 2>/dev/null) || since=-1
+  [[ $since =~ ^-?[[:digit:]]{1,15}$ ]] || since=-1
+  local q="/api/v2/log/main?normal=false&info=false&warning=true&critical=false&last_known_id="
+  api_try GET "$q$since" || die "qBittorrent refused it (${API_FAIL})"
+  log=$API_BODY
+  local restarted rc=0
+  restarted=$(printf '%s' "$log" | python3 "$(qbt_lib_dir)/rssitems.py" error-restarted "$state" 2>/dev/null) || rc=$?
+  (( rc == 0 )) || die "qBittorrent sent something unreadable"
+  if [[ $restarted == yes ]]; then
+    api_try GET "${q}-1" || die "qBittorrent refused it (${API_FAIL})"
+    log=$API_BODY
+    full=full
+  fi
+  rss_read_tree
+  local out
+  rc=0
+  out=$(printf '%s\0%s\0%s\0%s' "$url" "$RSS_TREE" "$log" "$full" \
+    | python3 "$(qbt_lib_dir)/rssitems.py" error "$state" 2>/dev/null) || rc=$?
+  (( rc == 0 )) || die "qBittorrent sent something unreadable"
+  printf '%s\n' "$out"
+}
+
+rss_add_feed() {
+  rss_fields 2
+  local url=${RSS_FIELDS[0]} path=${RSS_FIELDS[1]} name enc_url enc_path
+  rss_rule feedUrl "$url"
+  rss_new_segment "$path"
+  name=$(rss_name_of "$path")
+  assert_local_base
+  enc_url=$(uri_stdin "$url") || die "Couldn't check the value."
+  enc_path=$(uri_stdin "$path") || die "Couldn't check the value."
+  rss_post "/api/v2/rss/addFeed" < <(printf 'url=%s&path=%s' "$enc_url" "$enc_path") || rss_write_failed "$name"
+  rss_read_tree
+  rss_kind "$path"
+  [[ $RSS_KIND != none ]] || die "Couldn't confirm ${name} was added."
+  # D8: a new feed fills at once, even while processing is off. The feed
+  # is added either way, so a refused refresh doesn't undo the answer.
+  rss_post "/api/v2/rss/refreshItem" < <(printf 'itemPath=%s' "$enc_path") || true
+  rss_ok_path "$path"
+}
+
+rss_add_folder() {
+  rss_fields 1
+  local path=${RSS_FIELDS[0]} name enc
+  rss_new_segment "$path"
+  name=$(rss_name_of "$path")
+  assert_local_base
+  enc=$(uri_stdin "$path") || die "Couldn't check the value."
+  rss_post "/api/v2/rss/addFolder" < <(printf 'path=%s' "$enc") || rss_write_failed "$name"
+  rss_read_tree
+  rss_kind "$path"
+  [[ $RSS_KIND != none ]] || die "Couldn't confirm ${name} was added."
+  rss_ok_path "$path"
+}
+
+# moveItem, for renames only: `to` must be in the same folder as `from`.
+rss_rename() {
+  rss_fields 2
+  local from=${RSS_FIELDS[0]} to=${RSS_FIELDS[1]} enc_from enc_to
+  local parent
+  rss_parent_of "$from"
+  parent=$RSS_PARENT
+  rss_parent_of "$to"
+  [[ $RSS_PARENT == "$parent" ]] || rss_usage
+  rss_new_segment "$to"
+  assert_local_base
+  [[ -n $from ]] || die "$RSS_FEED_GONE"
+  rss_read_tree
+  rss_kind "$from"
+  [[ $RSS_KIND != none ]] || die "$RSS_FEED_GONE"
+  enc_from=$(uri_stdin "$from") || die "Couldn't check the value."
+  enc_to=$(uri_stdin "$to") || die "Couldn't check the value."
+  rss_post "/api/v2/rss/moveItem" < <(printf 'itemPath=%s&destPath=%s' "$enc_from" "$enc_to") \
+    || rss_write_failed "$(rss_name_of "$to")"
+  rss_read_tree
+  rss_kind "$to"
+  [[ $RSS_KIND != none ]] || die "$RSS_UNCONFIRMED_RENAME"
+  rss_kind "$from"
+  [[ $RSS_KIND == none ]] || die "$RSS_UNCONFIRMED_RENAME"
+  rss_ok_path "$to"
+}
+
+rss_remove() {
+  rss_fields 1
+  local path=${RSS_FIELDS[0]} name enc
+  name=$(rss_name_of "$path")
+  assert_local_base
+  [[ -n $path ]] || die "$RSS_FEED_GONE"
+  rss_read_tree
+  rss_kind "$path"
+  [[ $RSS_KIND != none ]] || die "$RSS_FEED_GONE"
+  enc=$(uri_stdin "$path") || die "Couldn't check the value."
+  rss_post "/api/v2/rss/removeItem" < <(printf 'path=%s' "$enc") || rss_write_failed "$name"
+  rss_read_tree
+  rss_kind "$path"
+  [[ $RSS_KIND == none ]] || die "Couldn't confirm ${name} was removed."
+  printf '%s\n' '{"ok":true}'
+}
+
+# "" refreshes everything (qBittorrent's root folder).
+rss_refresh() {
+  rss_fields 1
+  local path=${RSS_FIELDS[0]} enc
+  assert_local_base
+  rss_read_tree
+  rss_kind "$path"
+  [[ $RSS_KIND != none ]] || die "$RSS_FEED_GONE"
+  enc=$(uri_stdin "$path") || die "Couldn't check the value."
+  rss_post "/api/v2/rss/refreshItem" < <(printf 'itemPath=%s' "$enc") || rss_write_failed ""
+  printf '%s\n' '{"ok":true}'
+}
+
+# path NUL guid NUL expect. With a guid, one article; without, a whole
+# feed or folder ("" is everything) after OV11's re-count: more unread
+# than the confirm named answers {"ok":false,"unread":M} and posts
+# nothing. The whole-scope POST omits articleId entirely
+# (rsscontroller.cpp:143 branches on it being null).
+rss_mark_read() {
+  rss_fields 3
+  local path=${RSS_FIELDS[0]} guid=${RSS_FIELDS[1]} expect=${RSS_FIELDS[2]} enc enc_guid unread
+  # LC_ALL=C: under a UTF-8 locale [1-9] collates in non-ASCII digits.
+  (LC_ALL=C; [[ $expect =~ ^(0|[1-9][[:digit:]]{0,8})$ ]]) || rss_usage
+  assert_local_base
+  rss_read_tree
+  enc=$(uri_stdin "$path") || die "Couldn't check the value."
+  if [[ -n $guid ]]; then
+    rss_items_py read "$path" "$guid" "$RSS_TREE"
+    case $RSS_PY_OUT in
+      nofeed)
+        rss_kind "$path"
+        [[ $RSS_KIND == folder ]] && die "$RSS_ARTICLE_GONE"
+        die "$RSS_FEED_GONE" ;;
+      noarticle) die "$RSS_ARTICLE_GONE" ;;
+    esac
+    enc_guid=$(uri_stdin "$guid") || die "Couldn't check the value."
+    rss_post "/api/v2/rss/markAsRead" < <(printf 'itemPath=%s&articleId=%s' "$enc" "$enc_guid") \
+      || rss_write_failed ""
+    rss_read_tree
+    rss_items_py read "$path" "$guid" "$RSS_TREE"
+    [[ $RSS_PY_OUT == read ]] || die "$RSS_UNCONFIRMED_READ"
+    printf '%s\n' '{"ok":true}'
+    return 0
+  fi
+  rss_items_py unread "$path" "$RSS_TREE"
+  unread=$RSS_PY_OUT
+  [[ $unread != none ]] || die "$RSS_FEED_GONE"
+  [[ $unread =~ ^[[:digit:]]{1,9}$ ]] || die "qBittorrent sent something unreadable"
+  if (( 10#$unread > 10#$expect )); then
+    printf '{"ok":false,"unread":%s}\n' "$(( 10#$unread ))"
+    return 0
+  fi
+  rss_post "/api/v2/rss/markAsRead" < <(printf 'itemPath=%s' "$enc") || rss_write_failed ""
+  rss_read_tree
+  rss_items_py unread "$path" "$RSS_TREE"
+  [[ $RSS_PY_OUT == 0 ]] || die "$RSS_UNCONFIRMED_READ"
+  printf '%s\n' '{"ok":true}'
+}
+
+# torrentURL NUL link: the hasTorrent rule, then torrents/add (the window
+# confirms a magnet through AddAwaiter; nothing here reads rss/items).
+rss_add() {
+  rss_fields 2
+  local torrent_url=${RSS_FIELDS[0]} link=${RSS_FIELDS[1]} via enc
+  rss_rule hasTorrent "$torrent_url" "$link"
+  via=$RULE_NORM
+  assert_local_base
+  enc=$(uri_stdin "$torrent_url") || die "Couldn't check the value."
+  rss_post "/api/v2/torrents/add" 1 < <(printf 'urls=%s' "$enc") || die "qBittorrent refused it (${API_FAIL})"
+  printf '{"ok":true,"via":"%s"}\n' "$via"
+}
+
+cmd_rss() {
+  local api_error_detail=code
+  case "${1:-}:$#" in
+    items:1) rss_items ;;
+    article:1) rss_article ;;
+    error:1) rss_error ;;
+    add-feed:1) rss_add_feed ;;
+    add-folder:1) rss_add_folder ;;
+    rename:1) rss_rename ;;
+    remove:1) rss_remove ;;
+    refresh:1) rss_refresh ;;
+    mark-read:1) rss_mark_read ;;
+    add:1) rss_add ;;
+    *) rss_usage ;;
+  esac
+}
+
 case ${1:-} in
   status) shift; cmd_status "$@" ;;
   probe) shift; cmd_probe "$@" ;;
@@ -2963,6 +3340,7 @@ case ${1:-} in
   ban-list) shift; cmd_ban_list "$@" ;;
   search) shift; cmd_search "$@" ;;
   search-plugin) shift; cmd_search_plugin "$@" ;;
+  rss) shift; cmd_rss "$@" ;;
   magnet-paths) shift; cmd_magnet_paths "$@" ;;
   magnet-snapshot) shift; cmd_magnet_snapshot "$@" ;;
   magnet-inbox) shift; cmd_magnet_inbox "$@" ;;
@@ -2972,5 +3350,5 @@ case ${1:-} in
   magnet-pending-drop) shift; cmd_magnet_pending_drop "$@" ;;
   magnet-install-handler) shift; cmd_magnet_install_handler "$@" ;;
   magnet-uninstall-handler) shift; cmd_magnet_uninstall_handler "$@" ;;
-  *) die "usage: qbt status|probe|add|start|stop|recheck|set-location|delete|reannounce|tracker-add|tracker-edit|tracker-remove|ban-peer|fetch-metadata|files|prio|turtle|limit|sequential|first-last|sharelimit|share-limits|category-add|category-path|category-remove|category-rename|set-category|tag-add|tag-remove|tag-rename|tags|prefs|pref-set|ban-list|search|search-plugin|install|start-daemon|stop-daemon|magnet-paths|magnet-inbox|magnet-drain|magnet-pending-list|magnet-pending-drop|magnet-install-handler|magnet-uninstall-handler" ;;
+  *) die "usage: qbt status|probe|add|start|stop|recheck|set-location|delete|reannounce|tracker-add|tracker-edit|tracker-remove|ban-peer|fetch-metadata|files|prio|turtle|limit|sequential|first-last|sharelimit|share-limits|category-add|category-path|category-remove|category-rename|set-category|tag-add|tag-remove|tag-rename|tags|prefs|pref-set|ban-list|search|search-plugin|rss|install|start-daemon|stop-daemon|magnet-paths|magnet-inbox|magnet-drain|magnet-pending-list|magnet-pending-drop|magnet-install-handler|magnet-uninstall-handler" ;;
 esac

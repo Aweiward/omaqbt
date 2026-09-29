@@ -766,3 +766,95 @@ if failures:
     sys.exit(1)
 print("preferences-contract ok")
 PY
+
+# Slice 5b1: `qbt rss` (tests/fixtures/rss-contract.md) and the fixture's
+# RSS routes as 5.2.3 behaves: the writes are POST only (GET is 405),
+# markAsRead and refreshItem answer 200 on a missing path, values travel
+# on stdin, and a refused value or a usage error sends no request at all.
+python3 - <<'PY'
+import json, subprocess, sys, urllib.error, urllib.request
+from pathlib import Path
+
+sys.path.insert(0, "tests/fixtures")
+import harness  # noqa: E402
+
+CASES = json.loads(Path("tests/fixtures/rss-rules-cases.json").read_text())
+S = CASES["sentences"]
+failures = []
+
+
+def check(label, cond):
+    print(("ok - " if cond else "FAIL - ") + label)
+    if not cond:
+        failures.append(label)
+
+
+with harness.fixture_server(extra_env={"QBT_FIXTURE_PREFS": "tests/fixtures/preferences-5.2.3.json"}) as (port, env):
+    base = f"http://127.0.0.1:{port}"
+    log = Path(env["QBT_FIXTURE_LOG"])
+
+    def count():
+        return len(json.loads(log.read_text() or "[]"))
+
+    def rss(sub, *fields, env_=None, argv=None):
+        return subprocess.run(["./qbt", *(argv or ["rss", sub])], env=env_ or env, capture_output=True,
+                              input="\0".join(fields).encode())
+
+    def post(path, body):
+        req = urllib.request.Request(base + path, data=body.encode(), method="POST")
+        with urllib.request.urlopen(req, timeout=5) as r:
+            return r.status
+
+    for action in ("addFolder", "addFeed", "removeItem", "moveItem", "markAsRead", "refreshItem"):
+        try:
+            urllib.request.urlopen(f"{base}/api/v2/rss/{action}?path=x", timeout=5)
+            code = 200
+        except urllib.error.HTTPError as e:
+            code = e.code
+        check(f"GET rss/{action} is 405", code == 405)
+    check("markAsRead on a missing path answers 200", post("/api/v2/rss/markAsRead", "itemPath=nope") == 200)
+    check("refreshItem on a missing path answers 200", post("/api/v2/rss/refreshItem", "itemPath=nope") == 200)
+
+    refusals = [
+        (("add-feed", "javascript:alert(1)", "F"), S["feedUrlScheme"], 1),
+        (("add-feed", "https://u:p@example.org/", "F"), S["feedUrlUser"], 1),
+        (("add-feed", "https://example.org/a|b", "F"), S["feedUrlBad"], 1),
+        (("add-feed", "https://example.org/", "a\nb"), S["nameControl"], 1),
+        (("add-folder", " padded"), S["rssUsage"], 2),
+        (("rename", "A\\x", "B\\x"), S["rssUsage"], 2),
+        (("add", "javascript:alert(1)", ""), S["badTorrentLink"], 1),
+        (("add", "https://example.org/n", "https://example.org/n"), S["noTorrent"], 1),
+        (("mark-read", "A", "", "-1"), S["rssUsage"], 2),
+        (("add-feed", "https://example.org/"), S["rssUsage"], 2),
+        (("nope",), S["rssUsage"], 2),
+    ]
+    for (sub, *fields), message, code in refusals:
+        before = count()
+        r = rss(sub, *fields)
+        check(f"rss {sub} {fields!r} refused with no request",
+              (r.returncode, r.stderr.decode()) == (code, message + "\n") and count() == before)
+
+    r = rss("items")
+    out = json.loads(r.stdout) if r.returncode == 0 else {}
+    check("rss items: the empty tree and the 5.2.3 preferences",
+          out == {"processing": False, "refreshInterval": 30, "feeds": [], "articles": []})
+    r = rss("add-folder", "Linux")
+    check("rss add-folder", r.returncode == 0 and json.loads(r.stdout) == {"ok": True, "path": "Linux"})
+    r = rss("add-feed", "https://www.debian.org/security/dsa", "Linux\\Debian")
+    check("rss add-feed", r.returncode == 0 and json.loads(r.stdout) == {"ok": True, "path": "Linux\\Debian"})
+    r = rss("add-feed", "https://www.debian.org/security/dsa", "Linux\\Again")
+    check("rss add-feed: a 409 in plain words", (r.returncode, r.stderr.decode()) == (1, S["feedDup"] + "\n"))
+    r = rss("remove", "Linux")
+    check("rss remove", r.returncode == 0 and json.loads(r.stdout) == {"ok": True})
+
+    for bad in ("http://example.invalid:1", "http://127.0.0.1:80@127.0.0.2:1"):
+        before = count()
+        r = rss("items", env_=dict(env, QBT_BASE=bad))
+        check(f"qbt rss refuses QBT_BASE={bad!r} with no request",
+              r.returncode != 0 and count() == before and "example" not in r.stderr.decode())
+
+if failures:
+    print(f"\n{len(failures)} rss-contract check(s) failed", file=sys.stderr)
+    sys.exit(1)
+print("rss-contract ok")
+PY

@@ -38,6 +38,9 @@
 var SCHEMA = Schema.SCHEMA;
 var KEY_ORDER = Schema.KEY_ORDER;
 var SECTIONS = Schema.SECTIONS;
+// Slice 5b1: RSS, live, after Banned IPs and Other (where the dimmed
+// "RSS · slice 5" stood). Its keys sit outside the schema's seven sections.
+var RSS = "RSS";
 
 // --- User-visible strings -----------------------------------------------------
 
@@ -46,7 +49,6 @@ var EMPTY = "empty";
 var CANT_CHANGE = "This setting can't be changed here.";
 var OTHER = "Other";
 var OTHER_HELP = "A setting OmaqBT doesn't know yet, shown by its raw name.";
-var RSS_LABEL = "RSS · slice 5";
 var RESTART_NOTE = " · applies after qBittorrent restarts";
 var TIME_ERROR = "Use a time like 08:00, as HH:MM.";
 var PATH_ERROR = "Use an absolute path, or one starting with ~/.";
@@ -422,8 +424,8 @@ function rowFor(key, prefs) {
 // sections(prefs) -> [{name, label, count, dimmed, list?}]: the seven
 // schema sections, "Banned IPs" (a list section: list is "banned_IPs", its
 // count the bans, its column the list editor; absent when loaded prefs lack
-// the key), then "Other" when it has rows, then a dimmed "RSS · slice 5"
-// with count 0.
+// the key), then "Other" when it has rows, then "RSS" (slice 5b1: its keys
+// live; rss_auto_downloading_enabled stays deferred until 5b2).
 function sections(prefs) {
   var out = SECTIONS.map(function (s) {
     return { name: s, label: s, count: rows(s, prefs).length, dimmed: false };
@@ -433,7 +435,7 @@ function sections(prefs) {
   }
   var other = otherRows(prefs).length;
   if (other > 0) out.push({ name: OTHER, label: OTHER, count: other, dimmed: false });
-  out.push({ name: "RSS", label: RSS_LABEL, count: 0, dimmed: true });
+  out.push({ name: RSS, label: RSS, count: rows(RSS, prefs).length, dimmed: false });
   return out;
 }
 
@@ -453,7 +455,8 @@ function search(query, prefs) {
   if (q === "") return { rows: [], message: "" };
   var terms = q.split(/\s+/);
   var all = [];
-  for (var i = 0; i < SECTIONS.length; i++) all = all.concat(rows(SECTIONS[i], prefs));
+  var swept = SECTIONS.concat([RSS]);
+  for (var i = 0; i < swept.length; i++) all = all.concat(rows(swept[i], prefs));
   all = all.concat(otherRows(prefs));
   var hits = all.filter(function (r) {
     var hay = (r.label + "\n" + r.help + "\n" + r.key).toLowerCase();
@@ -1137,7 +1140,6 @@ if (typeof module !== "undefined") {
     EMPTY: EMPTY,
     CANT_CHANGE: CANT_CHANGE,
     OTHER_HELP: OTHER_HELP,
-    RSS_LABEL: RSS_LABEL,
     RESTART_NOTE: RESTART_NOTE,
     TIME_ERROR: TIME_ERROR,
     PATH_ERROR: PATH_ERROR,

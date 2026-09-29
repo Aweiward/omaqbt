@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Served by tests/live/rss-probe.sh from 127.0.0.1 only: one item with a
+     magnet enclosure, one news item with no enclosure (qBittorrent 5.2.3
+     then sets its torrentURL to its link, rss_parser.cpp:820-822). -->
+<rss version="2.0">
+  <channel>
+    <title>OmaqBT probe</title>
+    <link>https://example.org/</link>
+    <description>A two-item feed for the manual RSS probe.</description>
+    <item>
+      <title>OmaqBT probe magnet</title>
+      <link>https://example.org/news/omaqbt-probe-magnet</link>
+      <guid isPermaLink="false">omaqbt-probe-magnet</guid>
+      <pubDate>Mon, 29 Sep 2025 10:00:00 +0000</pubDate>
+      <enclosure url="magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567&amp;dn=omaqbt-probe" type="application/x-bittorrent" length="0"/>
+      <description>&lt;p&gt;A magnet enclosure.&lt;/p&gt;</description>
+    </item>
+    <item>
+      <title>OmaqBT probe news</title>
+      <link>https://example.org/news/omaqbt-probe-news</link>
+      <guid isPermaLink="false">omaqbt-probe-news</guid>
+      <pubDate>Mon, 29 Sep 2025 11:00:00 +0000</pubDate>
+      <description>&lt;p&gt;A news item with no enclosure.&lt;/p&gt;</description>
+    </item>
+  </channel>
+</rss>
