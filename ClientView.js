@@ -546,6 +546,11 @@ var LIBRARY_ACCEPT = { libraryRemove: "delete", libraryRename: "rename", library
 // Python code as qBittorrent, with access to your downloads.").
 var SEARCH_ACCEPT = { searchAdd: "add", searchOpenPage: "open", pluginInstall: "install", pluginUninstall: "uninstall" };
 
+// RSS's confirms (slice 5b1), raised by the RSS view like Search's: kind ->
+// the word `y` shows. `line` is the case file's confirm text, filled in
+// (tests/fixtures/rss-rules-cases.json window.confirm*), `detail` optional.
+var RSS_ACCEPT = { rssAdd: "add", rssOpenPage: "open", rssRemove: "remove", rssMarkRead: "mark read", rssProcessingOn: "turn on" };
+
 // confirmLine(confirm) -> the CONFIRM status line, from
 // CommandRegistry.dispatch's `confirm` result {commandId, count, withFiles}.
 // {lead, strong, tail, accept}: "Delete 2 torrents" + "and their files" +
@@ -559,9 +564,10 @@ function confirmLine(confirm) {
   if (Object.prototype.hasOwnProperty.call(LIBRARY_ACCEPT, c.kind)) {
     return { lead: String(c.line || ""), strong: "", tail: "", accept: c.accept ? String(c.accept) : LIBRARY_ACCEPT[c.kind] };
   }
-  if (Object.prototype.hasOwnProperty.call(SEARCH_ACCEPT, c.kind)) {
+  if (Object.prototype.hasOwnProperty.call(SEARCH_ACCEPT, c.kind) || Object.prototype.hasOwnProperty.call(RSS_ACCEPT, c.kind)) {
     var detail = String(c.detail || "");
-    return { lead: String(c.line || "") + (detail !== "" ? " " : ""), strong: "", tail: detail, accept: c.accept ? String(c.accept) : SEARCH_ACCEPT[c.kind] };
+    var word = Object.prototype.hasOwnProperty.call(SEARCH_ACCEPT, c.kind) ? SEARCH_ACCEPT[c.kind] : RSS_ACCEPT[c.kind];
+    return { lead: String(c.line || "") + (detail !== "" ? " " : ""), strong: "", tail: detail, accept: c.accept ? String(c.accept) : word };
   }
   if (c.kind === "trackerRemove" || c.kind === "peerBan") {
     var label = String(c.label !== undefined && c.label !== null ? c.label : ((c.target || {}).label || ""));
@@ -787,6 +793,13 @@ function inputPrompt(purpose, shown) {
   // Search (slice 5a): `/`'s query and the plugins overlay's `i`.
   if (purpose === "searchQuery") return { prompt: "Search", placeholder: "what to look for" };
   if (purpose === "pluginInstall") return { prompt: "Install plugin from", placeholder: "https://…/name.py" };
+  // RSS (slice 5b1): a's URL then name, N's folder, n's rename (the case
+  // file's window prompts). `shown` is the feed URL's host for the name and
+  // the current name for a rename; both also prefill the field (OV4).
+  if (purpose === "rssFeedUrl") return { prompt: "Feed URL", placeholder: "https://…" };
+  if (purpose === "rssFeedName") return { prompt: "Feed name", placeholder: String(shown || "") };
+  if (purpose === "rssFolderName") return { prompt: "Folder name", placeholder: "" };
+  if (purpose === "rssRename") return { prompt: "Rename", placeholder: String(shown || "") };
   // A setting's input editor (Task 6); `shown` is its label.
   if (purpose === "settingEdit") return { prompt: String(shown || ""), placeholder: "" };
   return { prompt: "/", placeholder: "filter by name, or paste a magnet" };
@@ -808,6 +821,8 @@ function modeHints(mode, ctx) {
     if (c.purpose === "settingsSearch") return [{ key: "Enter", label: "keep results" }, { key: "Esc", label: "clear" }];
     if (c.purpose === "searchQuery") return [{ key: "Enter", label: "search" }, { key: "Esc", label: "cancel" }];
     if (c.purpose === "pluginInstall") return [{ key: "Enter", label: "install" }, { key: "Esc", label: "cancel" }];
+    if (c.purpose === "rssFeedUrl" || c.purpose === "rssFeedName" || c.purpose === "rssFolderName") return [{ key: "Enter", label: "add" }, { key: "Esc", label: "cancel" }];
+    if (c.purpose === "rssRename") return [{ key: "Enter", label: "rename" }, { key: "Esc", label: "cancel" }];
     if (c.purpose === "settingEdit" || c.purpose === "categoryPath" || Object.prototype.hasOwnProperty.call(LIMIT_PROMPTS, c.purpose)) return [{ key: "Enter", label: "set" }, { key: "Esc", label: "cancel" }];
     return [{ key: "Enter", label: "keep filter" }, { key: "Esc", label: "cancel" }];
   }
@@ -823,6 +838,7 @@ function modeHints(mode, ctx) {
   }
   if (Registry.isSettingsPane(c.pane)) return settingsFooterKeys(c.pane, c.searching === true, c.editor, c).concat([{ key: "?", label: "keys" }]);
   if (Registry.isSearchPane(c.pane)) return searchFooterKeys(c.pane, c.search || {}).concat([{ key: "?", label: "keys" }]);
+  if (Registry.isRssPane(c.pane)) return rssFooterKeys(c.pane, c.rss || {});
   if (c.pane === "filters") {
     return [
       { key: "j/k", label: "move" },
@@ -936,6 +952,56 @@ function searchFooterKeys(pane, flags) {
   if (canSearch) out.push({ key: "/", label: "search" }, { key: "c", label: "category" });
   out.push({ key: f.narrow === true ? "Tab" : "h", label: "plugins column" }, { key: "P", label: "plugins" });
   return out.concat([esc]);
+}
+
+// --- RSS (slice 5b1) -------------------------------------------------------------
+
+// rssFooterKeys(pane, flags) -> [{key, label}] for the focused RSS pane's
+// footer, ending with "? keys". flags is RssPane.flags ({rssItem,
+// rssFeedRow, rssArticle, rssUnread, rssProcessingOff, rssUp, narrow,
+// wide}; null while RSS isn't shown). The Feeds column: move, the
+// articles, add a feed, remove (a feed or folder under the cursor),
+// refresh, mark read (with unread), O (while processing is off), Esc. The
+// Articles column: move, then on an article read (unread), add (a torrent
+// not in the library) and page; narrow, l shows the article full width
+// and Tab opens the feeds overlay (wide, h goes to the feeds); then mark
+// read, O and Esc. The full-width article (narrow, `wide`): h goes back.
+// The feeds overlay: move, choose, close. qBittorrent down: only the ways out.
+function rssFooterKeys(pane, flags) {
+  var f = flags || {};
+  var help = { key: "?", label: "keys" };
+  if (pane === "rssFeedList") {
+    if (f.rssUp !== true) return [{ key: "j/k", label: "move" }, { key: "Esc", label: "close" }, help];
+    return [{ key: "j/k", label: "move" }, { key: "Enter", label: "choose" }, { key: "Esc", label: "close" }, help];
+  }
+  var esc = { key: "Esc", label: "back" };
+  if (f.rssUp !== true) return [esc, help];
+  var unread = typeof f.rssUnread === "number" && f.rssUnread > 0;
+  var tail = [];
+  if (unread) tail.push({ key: "A", label: "mark read" });
+  if (f.rssProcessingOff === true) tail.push({ key: "O", label: "turn on RSS" });
+  tail.push(esc, help);
+  if (pane === "rssFeeds") {
+    var feeds = [{ key: "j/k", label: "move" }, { key: "l", label: "articles" }, { key: "a", label: "add feed" }];
+    if (f.rssItem && typeof f.rssItem === "object") feeds.push({ key: "x", label: "remove" });
+    feeds.push({ key: "r", label: "refresh" });
+    return feeds.concat(tail);
+  }
+  var a = f.rssArticle && typeof f.rssArticle === "object" ? f.rssArticle : null;
+  var out = [{ key: "j/k", label: "move" }];
+  if (a) {
+    if (a.isRead !== true) out.push({ key: "Space", label: "read" });
+    if (a.hasTorrent === true && a.inLibrary !== true) out.push({ key: "Enter", label: "add" });
+    out.push({ key: "d", label: "page" });
+  }
+  if (f.narrow === true && f.wide === true) return out.concat([{ key: "h", label: "back" }, esc, help]);
+  if (f.narrow === true) {
+    if (a) out.push({ key: "l", label: "article" });
+    out.push({ key: "Tab", label: "feeds" });
+  } else {
+    out.push({ key: "h", label: "feeds" });
+  }
+  return out.concat(tail);
 }
 
 // settingQuestion(label, isBool, value, shown) -> {line, accept}: what a
@@ -1177,10 +1243,26 @@ function searchFlagState(search, st) {
   st.searchDown = se.down === true;
 }
 
+function rssFlagState(rss, st) {
+  // Slice 5b1: `rss` is RssPane.flags while RSS is the active view, or
+  // null; written every time, wrong types dropped. narrow comes from
+  // whichever view is showing; `wide` (the narrow article full width) is
+  // st.rssWide (the registry's WHEN.wide means "not narrow").
+  var r = rss || {};
+  if (r.narrow === true) st.narrow = true;
+  st.rssItem = r.rssItem && typeof r.rssItem === "object" ? r.rssItem : null;
+  st.rssFeedRow = r.rssFeedRow === true;
+  st.rssArticle = r.rssArticle && typeof r.rssArticle === "object" ? r.rssArticle : null;
+  st.rssUnread = typeof r.rssUnread === "number" ? r.rssUnread : 0;
+  st.rssProcessingOff = r.rssProcessingOff === true;
+  st.rssUp = r.rssUp === true;
+  st.rssWide = r.wide === true;
+}
+
 // Slice 5b0: each view's dispatch-field mapper, by view name. The settings
-// mapper runs before search's (Registry.VIEWS order): it sets st.narrow,
-// and Search can only raise it.
-var VIEW_FLAG_STATE = { settings: settingsFlagState, search: searchFlagState };
+// mapper runs before search's and rss's (Registry.VIEWS order): it sets
+// st.narrow, and the others can only raise it.
+var VIEW_FLAG_STATE = { settings: settingsFlagState, search: searchFlagState, rss: rssFlagState };
 
 // sameInspectorState(a, b) -> whether two inspectorDispatch results hold
 // the same values (the window keeps its palette copy stable across status
@@ -2005,10 +2087,29 @@ function paletteSearchReason(rows, state) {
   return results ? "focus the results" : "leave the plugins";
 }
 
+// Slice 5b1: an RSS action from elsewhere names the step it needs: RSS
+// open, then the column its rows live in (an Articles-only row: the
+// articles; anything else: the feeds).
+function paletteRssReason(rows, state) {
+  var feeds = false, articles = false, any = false;
+  for (var i = 0; i < rows.length; i++) {
+    var panes = rows[i].panes || [];
+    for (var j = 0; j < panes.length; j++) {
+      if (!Registry.isRssPane(panes[j])) continue;
+      any = true;
+      if (panes[j] === "rssFeeds") feeds = true;
+      if (panes[j] === "rssArticles") articles = true;
+    }
+  }
+  if (!any) return "";
+  if (!(state && state.activeView === "rss")) return "open RSS";
+  return articles && !feeds ? "focus the articles" : "focus the feeds";
+}
+
 // Slice 5b0: each view's "what to do first" reason for its rows from
 // elsewhere, by view name; paletteFocusReason asks them in Registry.VIEWS
 // order and the first non-empty one wins.
-var PALETTE_VIEW_REASON = { settings: paletteSettingsReason, search: paletteSearchReason };
+var PALETTE_VIEW_REASON = { settings: paletteSettingsReason, search: paletteSearchReason, rss: paletteRssReason };
 
 function paletteFocusReason(rows, state) {
   for (var v = 0; v < Registry.VIEWS.length; v++) {
@@ -2284,7 +2385,8 @@ function paletteState(tableState, hasCursorRow, inspector, pane, view, settings,
 // (every view's, in Registry.VIEWS order) are derived from it.
 var VIEW_INPUT_PURPOSES_BY_VIEW = {
   settings: ["settingsSearch", "settingEdit"],
-  search: ["searchQuery", "pluginInstall"]
+  search: ["searchQuery", "pluginInstall"],
+  rss: ["rssFeedUrl", "rssFeedName", "rssFolderName", "rssRename"]
 };
 var SEARCH_INPUT_PURPOSES = VIEW_INPUT_PURPOSES_BY_VIEW.search;
 var VIEW_INPUT_PURPOSES = Registry.VIEWS.reduce(function(all, v) {
@@ -2535,9 +2637,12 @@ if (typeof module !== "undefined" && module.exports) {
     modeHints: modeHints,
     settingsFooterKeys: settingsFooterKeys,
     searchFooterKeys: searchFooterKeys,
+    rssFooterKeys: rssFooterKeys,
     SEARCH_ACCEPT: SEARCH_ACCEPT,
+    RSS_ACCEPT: RSS_ACCEPT,
     paletteRunsFromView: paletteRunsFromView,
     paletteSearchReason: paletteSearchReason,
+    paletteRssReason: paletteRssReason,
     paletteView: paletteView,
     paletteListed: paletteListed,
     helpPaneName: helpPaneName,

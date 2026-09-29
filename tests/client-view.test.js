@@ -2540,7 +2540,7 @@ test("5a: the Search INSERTs' prompts and hints", () => {
   assert.deepEqual(V.modeHints("INSERT", { purpose: "searchQuery" }).map((h) => h.key + " " + h.label), ["Enter search", "Esc cancel"]);
   assert.deepEqual(V.modeHints("INSERT", { purpose: "pluginInstall" }).map((h) => h.key + " " + h.label), ["Enter install", "Esc cancel"]);
   assert.deepEqual(V.SEARCH_INPUT_PURPOSES, ["searchQuery", "pluginInstall"]);
-  assert.deepEqual(V.VIEW_INPUT_PURPOSES, ["settingsSearch", "settingEdit", "searchQuery", "pluginInstall"]);
+  assert.deepEqual(V.VIEW_INPUT_PURPOSES, ["settingsSearch", "settingEdit", "searchQuery", "pluginInstall", "rssFeedUrl", "rssFeedName", "rssFolderName", "rssRename"]);
 });
 
 test("5a: Search's confirms show the window's line, an optional detail and their word", () => {
@@ -2629,7 +2629,7 @@ test("5a: paletteView names the view a palette row runs in (the window leaves th
   assert.equal(V.paletteView(C, "settings.undo", "settingsKeys"), "settings");
   assert.equal(V.paletteView(C, "list.add", "settingsList"), "settings");
   assert.equal(V.paletteView(C, "torrent.toggle", "inspector"), "torrents");
-  assert.deepEqual(V.VIEW_OPENERS, { "settings.open": "settings", "search.open": "search" });
+  assert.deepEqual(V.VIEW_OPENERS, { "settings.open": "settings", "search.open": "search", "rss.open": "rss" });
 });
 
 test("5a: the ? overlay names a view by its view", () => {
@@ -2769,13 +2769,13 @@ test("5b0: a view's dispatch flags are written every time, so nothing carries ov
 
 test("5b0: the view tables: input purposes, openers and the views they name", () => {
   assert.deepEqual(V.SEARCH_INPUT_PURPOSES, ["searchQuery", "pluginInstall"]);
-  assert.deepEqual(V.VIEW_INPUT_PURPOSES, ["settingsSearch", "settingEdit"].concat(V.SEARCH_INPUT_PURPOSES));
-  assert.deepEqual(V.VIEW_OPENERS, { "settings.open": "settings", "search.open": "search" });
+  assert.deepEqual(V.VIEW_INPUT_PURPOSES, ["settingsSearch", "settingEdit"].concat(V.SEARCH_INPUT_PURPOSES, V.VIEW_INPUT_PURPOSES_BY_VIEW.rss));
+  assert.deepEqual(V.VIEW_OPENERS, { "settings.open": "settings", "search.open": "search", "rss.open": "rss" });
   for (const [id, view] of Object.entries(V.VIEW_OPENERS)) {
     assert.ok(Registry.VIEWS.includes(view), view);
     assert.ok(Registry.commands.some((r) => r.id === id), id);
   }
-  assert.deepEqual(Registry.VIEWS, ["torrents", "settings", "search"]);
+  assert.deepEqual(Registry.VIEWS, ["torrents", "settings", "search", "rss"]);
   // A view's INSERT prompts and hints exist for each purpose it owns.
   // (the fallback, "Enter keep filter", is what a purpose no view names gets)
   const fallback = JSON.stringify(V.modeHints("INSERT", { purpose: "noSuchPurpose" }));
@@ -2824,8 +2824,165 @@ test("views map: a mapper runs with null flags when its view is absent", () => {
   assert.equal(st.settingsKey, null);
 });
 
-test("derived constants equal 5a's literals", () => {
+test("derived constants equal 5a's literals, plus 5b1's RSS", () => {
   assert.deepEqual(V.SEARCH_INPUT_PURPOSES, ["searchQuery", "pluginInstall"]);
-  assert.deepEqual(V.VIEW_INPUT_PURPOSES, ["settingsSearch", "settingEdit", "searchQuery", "pluginInstall"]);
-  assert.deepEqual(V.VIEW_OPENERS, { "settings.open": "settings", "search.open": "search" });
+  assert.deepEqual(V.VIEW_INPUT_PURPOSES, ["settingsSearch", "settingEdit", "searchQuery", "pluginInstall", "rssFeedUrl", "rssFeedName", "rssFolderName", "rssRename"]);
+  assert.deepEqual(V.VIEW_OPENERS, { "settings.open": "settings", "search.open": "search", "rss.open": "rss" });
+});
+
+// --- Slice 5b1: RSS (Task 1, the contract) --------------------------------------
+
+const RSS_CASES = JSON.parse(fs.readFileSync(path.join(__dirname, "fixtures", "rss-rules-cases.json"), "utf8"));
+const RSS_WIN = RSS_CASES.window;
+const RSS_ITEM_V = { path: "Linux\\Debian security", name: "Debian security", folder: false, feeds: 0 };
+const RSS_ARTICLE_V = { feedPath: "Linux\\Debian security", guid: "dsa-6000", title: "DSA-6000 openssl", isRead: false, hasTorrent: true, inLibrary: false,
+  link: "https://www.debian.org/security/2026/dsa-6000", torrentURL: "magnet:?xt=urn:btih:" + "ab".repeat(20), host: "www.debian.org" };
+// RssPane.flags, all on.
+const RSS_FLAGS = { rssItem: RSS_ITEM_V, rssFeedRow: true, rssArticle: RSS_ARTICLE_V, rssUnread: 3, rssProcessingOff: true, rssUp: true, narrow: false, wide: false };
+const rssKeys = (pane, flags) => V.rssFooterKeys(pane, flags).map((h) => h.key + " " + h.label);
+
+test("5b1: the RSS tables: flags, input purposes, palette reason, footer and confirms", () => {
+  assert.equal(typeof V.VIEW_FLAG_STATE.rss, "function");
+  assert.deepEqual(V.VIEW_INPUT_PURPOSES_BY_VIEW.rss, ["rssFeedUrl", "rssFeedName", "rssFolderName", "rssRename"]);
+  assert.equal(typeof V.PALETTE_VIEW_REASON.rss, "function");
+  assert.equal(typeof V.rssFooterKeys, "function");
+  assert.deepEqual(V.RSS_ACCEPT, { rssAdd: "add", rssOpenPage: "open", rssRemove: "remove", rssMarkRead: "mark read", rssProcessingOn: "turn on" });
+});
+
+test("5b1: VIEW_FLAG_STATE.rss writes RssPane.flags into the dispatch state, always", () => {
+  const on = V.dispatchState({ mode: "NORMAL" }, "rssFeeds", "rows", false, [], null, null, null, null, { rss: RSS_FLAGS });
+  assert.deepEqual([on.rssItem, on.rssFeedRow, on.rssArticle, on.rssUnread, on.rssProcessingOff, on.rssUp, on.narrow, on.rssWide],
+    [RSS_ITEM_V, true, RSS_ARTICLE_V, 3, true, true, false, false]);
+  const narrow = V.dispatchState({ mode: "NORMAL" }, "rssArticles", "rows", false, [], null, null, null, null, { rss: Object.assign({}, RSS_FLAGS, { narrow: true, wide: true }) });
+  assert.deepEqual([narrow.narrow, narrow.rssWide], [true, true], "narrow comes from whichever view shows; wide is rssWide");
+  // Stale RSS fields in regState never carry over once RSS is gone.
+  const off = V.dispatchState(on, "table", "rows", true, [], null, null, null, null, {});
+  assert.deepEqual([off.rssItem, off.rssFeedRow, off.rssArticle, off.rssUnread, off.rssProcessingOff, off.rssUp, off.rssWide], [null, false, null, 0, false, false, false]);
+  // Wrong types are dropped, not trusted.
+  const bad = V.dispatchState({ mode: "NORMAL" }, "rssFeeds", "rows", false, [], null, null, null, null,
+    { rss: { rssItem: "Linux", rssFeedRow: 1, rssArticle: "x", rssUnread: "3", rssProcessingOff: "yes", rssUp: 1 } });
+  assert.deepEqual([bad.rssItem, bad.rssFeedRow, bad.rssArticle, bad.rssUnread, bad.rssProcessingOff, bad.rssUp], [null, false, null, 0, false, false]);
+  // And the registry reads them: x on a feed, A with unread.
+  const x = Registry.dispatch(on, { text: "x", key: 0x58, modifiers: {}, now: 0 });
+  assert.deepEqual([x.commandId, x.args.item.path], ["rss.remove", "Linux\\Debian security"]);
+});
+
+test("5b1: every RSS row's needs reason is the case file's muted sentence", () => {
+  const up = { rssUp: true };
+  const sentence = (r) => (/^(RSS|qBittorrent)/.test(r) ? r : r.charAt(0).toUpperCase() + r.slice(1)) + ".";
+  assert.equal(sentence(Registry.needsReason("rssItem", up)), RSS_WIN.reasonItem);
+  assert.equal(sentence(Registry.needsReason("rssArticle", up)), RSS_WIN.reasonArticle);
+  assert.equal(sentence(Registry.needsReason("rssUnread", up)), RSS_WIN.reasonUnread);
+  assert.equal(sentence(Registry.needsReason("rssProcessingOff", up)), RSS_WIN.reasonProcessingOn);
+  assert.equal(sentence(Registry.needsReason("rssUp", {})), RSS_WIN.reasonDown);
+  for (const need of ["rssItem", "rssArticle", "rssUnread", "rssProcessingOff", "rssUp"]) assert.equal(sentence(Registry.needsReason(need, {})), RSS_WIN.reasonDown, need);
+  // Every RSS row's need is one of these (or none / rssFeedRow, which is silent).
+  for (const row of Registry.commands.filter((r) => /^rss\./.test(r.id))) {
+    assert.ok(["none", "rssFeedRow", "rssItem", "rssArticle", "rssUnread", "rssProcessingOff", "rssUp"].includes(row.needs), row.id);
+  }
+});
+
+test("5b1: rssFooterKeys for each RSS pane, ending with ?", () => {
+  const f = (patch) => Object.assign({}, RSS_FLAGS, patch);
+  // The Feeds column: the same keys wide and narrow.
+  assert.deepEqual(rssKeys("rssFeeds", f({})), ["j/k move", "l articles", "a add feed", "x remove", "r refresh", "A mark read", "O turn on RSS", "Esc back", "? keys"]);
+  assert.deepEqual(rssKeys("rssFeeds", f({ narrow: true })), rssKeys("rssFeeds", f({})));
+  assert.deepEqual(rssKeys("rssFeeds", f({ rssItem: null, rssUnread: 0, rssProcessingOff: false })), ["j/k move", "l articles", "a add feed", "r refresh", "Esc back", "? keys"],
+    "Unread or All, nothing unread, RSS on");
+  // The Articles column, with and without an article; O only while processing is off.
+  assert.deepEqual(rssKeys("rssArticles", f({})), ["j/k move", "Space read", "Enter add", "d page", "h feeds", "A mark read", "O turn on RSS", "Esc back", "? keys"]);
+  assert.deepEqual(rssKeys("rssArticles", f({ rssProcessingOff: false })), ["j/k move", "Space read", "Enter add", "d page", "h feeds", "A mark read", "Esc back", "? keys"]);
+  assert.deepEqual(rssKeys("rssArticles", f({ rssArticle: null, rssUnread: 0, rssProcessingOff: false })), ["j/k move", "h feeds", "Esc back", "? keys"]);
+  assert.deepEqual(rssKeys("rssArticles", f({ rssArticle: Object.assign({}, RSS_ARTICLE_V, { isRead: true, hasTorrent: false }), rssUnread: 0 })),
+    ["j/k move", "d page", "h feeds", "O turn on RSS", "Esc back", "? keys"], "read, no torrent: no Space, no Enter");
+  assert.deepEqual(rssKeys("rssArticles", f({ rssArticle: Object.assign({}, RSS_ARTICLE_V, { inLibrary: true }) })).slice(0, 3), ["j/k move", "Space read", "d page"], "in library: no Enter");
+  // Narrow: Tab opens the feeds overlay, l shows the article full width; h brings it back.
+  assert.deepEqual(rssKeys("rssArticles", f({ narrow: true })), ["j/k move", "Space read", "Enter add", "d page", "l article", "Tab feeds", "A mark read", "O turn on RSS", "Esc back", "? keys"]);
+  assert.deepEqual(rssKeys("rssArticles", f({ narrow: true, wide: true })), ["j/k move", "Space read", "Enter add", "d page", "h back", "Esc back", "? keys"]);
+  // The feeds overlay.
+  assert.deepEqual(rssKeys("rssFeedList", f({ narrow: true })), ["j/k move", "Enter choose", "Esc close", "? keys"]);
+  // qBittorrent down: only the way out.
+  assert.deepEqual(rssKeys("rssFeeds", f({ rssUp: false })), ["Esc back", "? keys"]);
+  assert.deepEqual(rssKeys("rssArticles", f({ rssUp: false })), ["Esc back", "? keys"]);
+  assert.deepEqual(rssKeys("rssFeedList", f({ rssUp: false })), ["j/k move", "Esc close", "? keys"]);
+  for (const pane of Registry.RSS_PANES) for (const flags of [{}, null, RSS_FLAGS]) assert.deepEqual(V.rssFooterKeys(pane, flags).slice(-1), [{ key: "?", label: "keys" }], pane);
+  // modeHints routes an RSS pane there, with the flags Client passes as `rss`.
+  const copyState = (base, patch) => Object.assign({}, base, patch);
+  assert.deepEqual(V.modeHints("NORMAL", copyState({}, { pane: "rssArticles", rss: RSS_FLAGS, search: null })).map((h) => h.key + " " + h.label), rssKeys("rssArticles", RSS_FLAGS));
+  assert.deepEqual(V.modeHints("NORMAL", copyState({}, { pane: "rssFeeds", rss: null })).map((h) => h.key + " " + h.label), ["Esc back", "? keys"]);
+});
+
+test("5b1: the RSS INSERTs' prompts and hints", () => {
+  assert.deepEqual(V.inputPrompt("rssFeedUrl"), { prompt: RSS_WIN.promptFeedUrl, placeholder: RSS_WIN.placeholderFeedUrl });
+  assert.deepEqual(V.inputPrompt("rssFeedName", "www.debian.org"), { prompt: RSS_WIN.promptFeedName, placeholder: "www.debian.org" }, "the host");
+  assert.deepEqual(V.inputPrompt("rssFeedName"), { prompt: RSS_WIN.promptFeedName, placeholder: "" });
+  assert.deepEqual(V.inputPrompt("rssFolderName"), { prompt: RSS_WIN.promptFolderName, placeholder: "" });
+  assert.deepEqual(V.inputPrompt("rssRename", "Debian security"), { prompt: RSS_WIN.promptRename, placeholder: "Debian security" }, "the current name");
+  const hints = (p) => V.modeHints("INSERT", { purpose: p }).map((h) => h.key + " " + h.label);
+  for (const p of ["rssFeedUrl", "rssFeedName", "rssFolderName"]) assert.deepEqual(hints(p), ["Enter add", "Esc cancel"], p);
+  assert.deepEqual(hints("rssRename"), ["Enter rename", "Esc cancel"]);
+});
+
+test("5b1: RSS's confirms show the window's line and their word", () => {
+  for (const [kind, word] of Object.entries(V.RSS_ACCEPT)) {
+    assert.deepEqual(V.confirmLine({ kind: kind, line: "Remove Debian security? This can't be undone." }),
+      { lead: "Remove Debian security? This can't be undone.", strong: "", tail: "", accept: word }, kind);
+  }
+  assert.deepEqual(V.modeHints("CONFIRM", { accept: V.confirmLine({ kind: "rssMarkRead", line: "x" }).accept }).map((h) => h.key + " " + h.label), ["y mark read", "n/Esc keep"]);
+  assert.equal(V.confirmLine({ kind: "rssAdd", line: "x", accept: "send" }).accept, "send", "a line may carry its own word");
+});
+
+test("5b1: paletteListed hides RSS's rows outside RSS; :RSS is listed everywhere", () => {
+  const rows = (id) => ({ rows: Registry.commands.filter((r) => r.id === id) });
+  const torrents = V.paletteState("rows", true, {}, "table", "torrents");
+  const settings = V.paletteState("rows", true, {}, "table", "settings", {}, "settingsKeys");
+  const search = V.paletteState("rows", true, {}, "table", "search", null, "searchResults");
+  const rss = V.paletteState("rows", true, {}, "table", "rss", null, "rssFeeds", null, { rss: RSS_FLAGS });
+  for (const id of Registry.commands.filter((r) => /^rss\./.test(r.id) && r.id !== "rss.open").map((r) => r.id)) {
+    for (const st of [torrents, settings, search]) assert.equal(V.paletteListed(rows(id), st), false, id + " from " + st.activeView);
+    assert.equal(V.paletteListed(rows(id), rss), true, id + " inside RSS");
+  }
+  for (const st of [torrents, settings, search, rss, null]) assert.equal(V.paletteListed(rows("rss.open"), st), true);
+  // The torrent view's palette gains ":RSS" and nothing else.
+  const titles = (st) => V.paletteRows("", Registry.commands, [], st).filter((r) => r.kind === "command").map((r) => r.id);
+  assert.deepEqual(titles(torrents).filter((id) => /^rss\./.test(id)), ["rss.open"]);
+  assert.deepEqual(titles(rss).filter((id) => /^rss\./.test(id)).sort(),
+    ["rss.add", "rss.addFeed", "rss.addFolder", "rss.markAllRead", "rss.markRead", "rss.open", "rss.openPage", "rss.processingOn", "rss.refresh", "rss.remove", "rss.rename"]);
+  const row = (st, id) => V.paletteRows("", Registry.commands, [], st).find((r) => r.id === id);
+  assert.deepEqual([row(rss, "rss.open").enabled, row(rss, "rss.open").reason], [false, "already open"]);
+  assert.deepEqual([row(rss, "rss.remove").enabled, row(rss, "rss.remove").keys], [true, "x"]);
+  assert.deepEqual([row(rss, "rss.processingOn").title, row(rss, "rss.processingOn").enabled], ["RSS processing on", true]);
+});
+
+test("5b1: PALETTE_VIEW_REASON.rss: open RSS from elsewhere, then the column the row needs", () => {
+  const R = V.PALETTE_VIEW_REASON.rss;
+  const rows = (id) => Registry.commands.filter((r) => r.id === id);
+  const inRss = { activeView: "rss" };
+  for (const st of [{ activeView: "torrents" }, { activeView: "search" }, null]) {
+    assert.equal(R(rows("rss.add"), st), "open RSS");
+    assert.equal(R(rows("rss.remove"), st), "open RSS");
+  }
+  assert.equal(R(rows("rss.add"), inRss), "focus the articles");
+  assert.equal(R(rows("rss.markRead"), inRss), "focus the articles");
+  assert.equal(R(rows("rss.remove"), inRss), "focus the feeds");
+  assert.equal(R(rows("rss.addFolder"), inRss), "focus the feeds");
+  assert.equal(R(rows("search.add"), inRss), "", "not an RSS row");
+  assert.equal(R(rows("rss.open"), { activeView: "torrents" }), "", ":RSS names only torrent panes");
+  // Through the palette: an Articles row from the Feeds column, and the reverse.
+  const fromFeeds = V.paletteState("rows", true, {}, "table", "rss", null, "rssFeeds", null, { rss: RSS_FLAGS });
+  const fromArticles = V.paletteState("rows", true, {}, "table", "rss", null, "rssArticles", null, { rss: RSS_FLAGS });
+  const row = (st, id) => V.paletteRows("", Registry.commands, [], st).find((r) => r.id === id);
+  assert.deepEqual([row(fromFeeds, "rss.add").enabled, row(fromFeeds, "rss.add").reason], [false, "focus the articles"]);
+  assert.deepEqual([row(fromArticles, "rss.remove").enabled, row(fromArticles, "rss.remove").reason], [false, "focus the feeds"]);
+  assert.equal(row(fromArticles, "rss.add").enabled, true);
+  // A need the flags don't meet dims the row with its reason.
+  const none = V.paletteState("rows", true, {}, "table", "rss", null, "rssArticles", null, { rss: Object.assign({}, RSS_FLAGS, { rssArticle: null }) });
+  assert.deepEqual([row(none, "rss.add").enabled, row(none, "rss.add").reason], [false, "no article here"]);
+});
+
+test("5b1: the ? overlay names RSS's panes by the view", () => {
+  for (const p of Registry.RSS_PANES) assert.equal(V.helpPaneName(p), "rss");
+  assert.equal(V.paletteView(Registry.commands, "rss.remove", "rssFeeds"), "rss");
+  assert.equal(V.paletteView(Registry.commands, "rss.open", "searchResults"), "torrents", ":RSS leaves Search");
+  assert.equal(V.paletteView(Registry.commands, "search.open", "rssFeeds"), "torrents", ":Search leaves RSS");
 });

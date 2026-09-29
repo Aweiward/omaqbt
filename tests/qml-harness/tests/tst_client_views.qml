@@ -1249,4 +1249,75 @@ TestCase {
     compare(client.viewHost("torrents"), null)
     compare(client.viewHost("nope"), null)
   }
+
+  // Slice 5b1 (Task 1): RSS joins through the add-a-view checklist; Task 1's
+  // placeholder RssPane satisfies the host contract (Task 3 fills it in).
+  function rssPane(o) { return findName(content(o), "rssView") }
+  function bigN(o) { key(o.c, "N", 0x4e, 0x02000000) }
+
+  function test_5b1_rss_is_a_view_with_a_host() {
+    var o = make()
+    compare(JSON.stringify(o.c.hostNames), JSON.stringify(["settings", "search", "rss"]))
+    var h = o.c.viewHost("rss")
+    verify(h !== null)
+    compare(h, rssPane(o), "the host is the mounted RssPane")
+    compare(h.name, "rss")
+    compare(h.column, "rssFeeds")
+    compare(JSON.stringify(h.inputPurposes), JSON.stringify(["rssFeedUrl", "rssFeedName", "rssFolderName", "rssRename"]))
+    compare(h.pickerOpen, false)
+    compare(h.picker, null)
+    compare(h.togglePicker(), false)
+    compare(h.flagsNow(), null, "no flags while RSS isn't the active view")
+    verify(!h.open)
+    verify(!h.visible)
+    // owns every rss.* command but the opener, which the Client runs.
+    compare(h.owns("rss.open"), false)
+    for (var i = 0; i < Registry.commands.length; i++) {
+      var id = Registry.commands[i].id
+      if (id && id !== "rss.open") compare(h.owns(id), id.indexOf("rss.") === 0, id)
+    }
+  }
+
+  function test_5b1_N_opens_rss_from_the_torrents_and_the_placeholder_holds_the_keys() {
+    var o = make()
+    key(o.c, "j")
+    var cursor = o.c.cursorHash
+    focusTorrentPane(o, "filters")
+    bigN(o)
+    compare(o.c.activeView, "rss")
+    var h = rssPane(o)
+    verify(h.open)
+    verify(h.visible)
+    verify(!torrentsShown(o), "RSS replaces the three panes")
+    compare(o.c.keyPane, "rssFeeds")
+    var f = h.flagsNow()
+    verify(f !== null)
+    compare(JSON.stringify(Object.keys(f).sort()), JSON.stringify(["narrow", "rssArticle", "rssFeedRow", "rssItem", "rssProcessingOff", "rssUnread", "rssUp", "wide"]))
+    // The footer reads RSS's own keys (View.rssFooterKeys through the `rss` field).
+    compare(o.c.mode, "NORMAL")
+    // The torrent keys are dead here: t, z and q never reach the torrents.
+    var calls = o.svc.calls.length
+    key(o.c, "t")
+    key(o.c, "z")
+    compare(o.svc.calls.length, calls, "no torrent action from RSS")
+    key(o.c, "q")
+    compare(o.c.activeView, "rss", "q doesn't close the window from RSS")
+    // : still opens the palette; its :RSS row is "already open".
+    key(o.c, ":", 0x3a)
+    compare(o.c.mode, "COMMAND")
+    esc(o)
+    compare(o.c.mode, "NORMAL")
+    // Leaving through the host's leaveRequested brings the torrents back as they were.
+    h.leaveRequested()
+    compare(o.c.activeView, "torrents")
+    verify(!h.open)
+    compare(o.c.pane, "filters")
+    compare(o.c.cursorHash, cursor)
+    // N again, then close: the window drops RSS too and reopens on the torrents.
+    bigN(o)
+    compare(o.c.activeView, "rss")
+    o.c.close()
+    o.c.open("")
+    compare(o.c.activeView, "torrents")
+  }
 }

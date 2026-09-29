@@ -60,15 +60,16 @@ Item {
 
   // ---- per-view, not persisted --------------------------------------------
   // The view standing in the window (slice 5a, eng C1): "torrents" (the
-  // three panes), "settings" (`,`) or "search" (`F`). Only showView() and
-  // leaveView() change it: they open and close Settings and Search, Esc
-  // leaves through them (each view's leaveRequested), and they decide what
-  // a browser magnet's CONFIRM or a torrent row from the palette closes.
-  // Never saved: a reopened window lands on the torrents.
+  // three panes), "settings" (`,`), "search" (`F`) or "rss" (`N`, slice
+  // 5b1). Only showView() and leaveView() change it: they open and close
+  // the views, Esc leaves through them (each view's leaveRequested), and
+  // they decide what a browser magnet's CONFIRM or a torrent row from the
+  // palette closes. Never saved: a reopened window lands on the torrents.
   // Slice 5b0: every view but the torrents is a host (the view host
-  // contract, docs/plans/slice-5b0.md: SettingsHost, SearchPane), looked up
-  // by name (viewHost); the Client and ClientCommands loop over the hosts
-  // instead of branching on a view's name. Adding a view (the checklist):
+  // contract, docs/plans/slice-5b0.md: SettingsHost, SearchPane, RssPane),
+  // looked up by name (viewHost); the Client and ClientCommands loop over
+  // the hosts instead of branching on a view's name. Adding a view (the
+  // checklist):
   //   CommandRegistry.js: VIEWS, VIEW_OF_PANE, VIEW_META (opener and
   //     listedOutside), and the view's command rows.
   //   ClientView.js: VIEW_FLAG_STATE, VIEW_INPUT_PURPOSES_BY_VIEW,
@@ -257,7 +258,7 @@ Item {
   // ---- view hosts (slice 5b0) -----------------------------------------------
 
   // Every view's host; viewHost finds one by its `name`.
-  readonly property var viewHostList: [settingsHost, searchView]
+  readonly property var viewHostList: [settingsHost, searchView, rssView]
   // Every Registry.VIEWS entry but the torrents, in registry order.
   readonly property var hostNames: Registry.VIEWS.filter(function (v) { return v !== "torrents" })
 
@@ -871,6 +872,19 @@ Item {
         open: root.activeView === searchView.name
         onLeaveRequested: root.leaveView()
       }
+      // Slice 5b1: the RSS view's mount point (RssPane.qml documents what
+      // it gets and what it must provide).
+      RssPane {
+        id: rssView
+        anchors.fill: panes
+        service: root.service
+        client: root
+        commands: commands
+        tableState: root.tableState
+        narrow: View.settingsNarrow(keyRoot.width)
+        open: root.activeView === rssView.name
+        onLeaveRequested: root.leaveView()
+      }
       StatusLine {
         id: statusLine
         anchors.left: parent.left
@@ -896,6 +910,7 @@ Item {
           purpose: root.inputPurpose,
           pane: root.keyPane,
           search: root.searchFlags,
+          rss: root.viewHost("rss") ? root.viewHost("rss").flagsNow() : null,
           searching: settingsView.searching,
           editor: settingsView.editorKind,
           filesTab: root.inspectorTab === "files" && !root.infoTab.noMeta

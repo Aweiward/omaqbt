@@ -1,0 +1,998 @@
+{
+  "_doc": "Slice 5b1 (Task 1, the RSS contract): the rules both lanes enforce and every sentence `qbt rss` prints, so neither lane hand-copies a message. qbt (Task 2: lib/rssrules.py, lib/rssitems.py, tests/test_rss.py) is the enforcing check and the window (Task 3: RssView.js, tests/rss-view.test.js) only pre-checks; both must accept exactly the ok cases and refuse the rest with exactly the message given. See tests/fixtures/rss-contract.md for the stdin framing and JSON shapes. cases: {kind, input, ok, normalised?, message?, why}; message is present exactly when ok is false, and is always one of `sentences`; why labels a failed assertion. Every rule reads the input exactly as given. The URL text rule, BAD, CONTROL and the host rule are 5b0's (link-rules-cases.json, LinkRules.js, lib/linkrules.py): a URL is split by hand, never by a URL library; CONTROL is [\\u0000-\\u001f\\u007f-\\u009f]; a host is lowercased, IDN labels become xn-- punycode, and a %-escape, a trailing dot, an empty label or a bad port is refused. kind feedUrl (a's first INSERT, qbt rss add-feed): checked in this order, the first failure's message wins: empty (feedUrlEmpty); BAD or | anywhere (feedUrlBad); not starting http:// or https://, scheme matched case-insensitively (feedUrlScheme); an @ in the authority (feedUrlUser); a host or port the host rule refuses (feedUrlHost). When ok, normalised is the host as the name prompt prefills it (lower case, IDN as punycode, no port); qbt posts the URL exactly as given. kind name (a feed or folder name: a's second INSERT, N, n; qbt checks every `\\`-separated segment of a path the same way): first trimmed at both ends with Qt's QChar::isSpace set (U+0009-U+000D, U+0020, U+0085, U+00A0, U+1680, U+2000-U+200A, U+2028, U+2029, U+202F, U+205F, U+3000; ruling FE: U+FEFF is not a space and is kept), then in this order: nothing left (nameEmpty); a \\ anywhere (nameBackslash); a CONTROL character anywhere (nameControl). When ok, normalised is the trimmed name. kind hasTorrent (Enter's add rule, D4, OV1 and the D4 exception; qbt rss add and the items' hasTorrent flag): input {torrentURL, link}, checked in this order: torrentURL empty (noTorrent); BAD or | anywhere in torrentURL (badTorrentLink); torrentURL starting magnet:? (case-insensitive) is ok with normalised \"magnet\"; not starting http:// or https:// (badTorrentLink); an @ in the authority, or a host or port the host rule refuses (badTorrentLink); torrentURL not equal to link (exact string comparison) is ok with normalised \"url\"; equal to link and the path (after the authority, before ? or #) ending in .torrent, case-insensitive, is ok with normalised \"url\"; otherwise noTorrent. There is no .torrent test on a URL that differs from link (download.php?id= links are normal). kind errorReason (qbt rss error, D6/OV13): input {log, url}, log being log/main rows ({id, message, timestamp, type}; type is not checked, since qbt asks for warnings only). A row matches when its message starts with exactly \"Failed to download RSS feed at '\" + url + \"'. Reason: \" or \"Failed to parse RSS feed at '\" + url + \"'. Reason: \" (a prefix test, never a pattern, so a ' in the URL is safe); its reason is the rest of the message, as is. The matching row with the highest id wins. Always ok; normalised is that reason, or null when no row matches (another URL, or a translated message). kind articleText (qbt rss article, D11/OV6): input is a description's HTML; always ok; normalised is {text, truncated}. The HTML goes through Python's html.parser.HTMLParser (convert_charrefs=True, so entities are decoded in the text). Everything inside script and style is dropped. Comments, CDATA sections, declarations and processing instructions are dropped. Each start tag and each end tag named p, div, li, tr, h1, h2, h3, h4, h5 or h6 becomes one \\n; a br start tag (<br> or <br/>) becomes one \\n and a </br> nothing; a self-closing block tag (<p/>) counts as its start tag only (one \\n; override handle_startendtag, whose default would also call handle_endtag); every other tag becomes nothing. In the text itself each run of [ \\t\\n\\r\\f\\v] becomes one space (U+00A0 and other characters are kept, bidi controls included: the window strips those). Then the result is split on \\n; in each line runs of spaces become one space and spaces at both ends are removed; the lines are joined with \\n; every run of 4 or more \\n becomes \\n\\n\\n (at most 2 blank lines in a row); and \\n at the start and end are removed. Last, the text is capped at 4096 code points: a longer text keeps its first 4096 code points, with no ellipsis, and truncated is true. sentences: every other line qbt prints (usage, 409s passed through in plain words, read-back failures). window: the window's copy, including the five needs reasons as the status line shows them (CommandRegistry.needsReason returns each without its full stop, starting lower case unless it starts with RSS or qBittorrent) and the INSERT prompts. In every text, <name>, <title>, <host>, <n> and <reason> are filled in by the caller; no other placeholder exists.",
+  "cases": [
+    {
+      "kind": "feedUrl",
+      "input": "https://www.debian.org/security/dsa",
+      "ok": true,
+      "normalised": "www.debian.org",
+      "why": "https"
+    },
+    {
+      "kind": "feedUrl",
+      "input": "http://linuxtracker.org/rss.php",
+      "ok": true,
+      "normalised": "linuxtracker.org",
+      "why": "http is fine for a feed"
+    },
+    {
+      "kind": "feedUrl",
+      "input": "HTTPS://Example.ORG/Feed.xml",
+      "ok": true,
+      "normalised": "example.org",
+      "why": "an uppercase scheme is accepted; the host shows lowercase"
+    },
+    {
+      "kind": "feedUrl",
+      "input": "https://example.org:8443/rss?cat=4&x=1",
+      "ok": true,
+      "normalised": "example.org",
+      "why": "a port and a query; the port isn't shown"
+    },
+    {
+      "kind": "feedUrl",
+      "input": "https://bücher.example/rss",
+      "ok": true,
+      "normalised": "xn--bcher-kva.example",
+      "why": "an IDN host becomes punycode"
+    },
+    {
+      "kind": "feedUrl",
+      "input": "http://127.0.0.1:9117/api/v2.0/indexers/all/results/torznab",
+      "ok": true,
+      "normalised": "127.0.0.1",
+      "why": "a localhost indexer (Jackett)"
+    },
+    {
+      "kind": "feedUrl",
+      "input": "https://example.org/rss|2",
+      "ok": false,
+      "message": "Feed URLs can't contain spaces, control characters, | or \\.",
+      "why": "a | is refused"
+    },
+    {
+      "kind": "feedUrl",
+      "input": "",
+      "ok": false,
+      "message": "Enter a feed URL.",
+      "why": "empty"
+    },
+    {
+      "kind": "feedUrl",
+      "input": "ftp://example.org/feed.xml",
+      "ok": false,
+      "message": "Feed URLs start with http:// or https://.",
+      "why": "ftp is refused"
+    },
+    {
+      "kind": "feedUrl",
+      "input": "file:///etc/passwd",
+      "ok": false,
+      "message": "Feed URLs start with http:// or https://.",
+      "why": "file: is refused"
+    },
+    {
+      "kind": "feedUrl",
+      "input": "javascript:alert(1)",
+      "ok": false,
+      "message": "Feed URLs start with http:// or https://.",
+      "why": "javascript: is refused"
+    },
+    {
+      "kind": "feedUrl",
+      "input": "example.org/feed.xml",
+      "ok": false,
+      "message": "Feed URLs start with http:// or https://.",
+      "why": "no scheme"
+    },
+    {
+      "kind": "feedUrl",
+      "input": "https://user:pw@example.org/feed.xml",
+      "ok": false,
+      "message": "Feed URLs can't contain a user name or password.",
+      "why": "userinfo is refused"
+    },
+    {
+      "kind": "feedUrl",
+      "input": "https://example.org@evil.example/feed.xml",
+      "ok": false,
+      "message": "Feed URLs can't contain a user name or password.",
+      "why": "userinfo spoofing a host"
+    },
+    {
+      "kind": "feedUrl",
+      "input": "https://example.org/a feed.xml",
+      "ok": false,
+      "message": "Feed URLs can't contain spaces, control characters, | or \\.",
+      "why": "a space"
+    },
+    {
+      "kind": "feedUrl",
+      "input": " https://example.org/feed.xml",
+      "ok": false,
+      "message": "Feed URLs can't contain spaces, control characters, | or \\.",
+      "why": "a leading space: nothing is trimmed"
+    },
+    {
+      "kind": "feedUrl",
+      "input": "https://example.org/feed.xml\n",
+      "ok": false,
+      "message": "Feed URLs can't contain spaces, control characters, | or \\.",
+      "why": "a trailing newline"
+    },
+    {
+      "kind": "feedUrl",
+      "input": "https://example.org/‮feed.xml",
+      "ok": false,
+      "message": "Feed URLs can't contain spaces, control characters, | or \\.",
+      "why": "a bidi override"
+    },
+    {
+      "kind": "feedUrl",
+      "input": "https://example.org\\@evil.example/feed.xml",
+      "ok": false,
+      "message": "Feed URLs can't contain spaces, control characters, | or \\.",
+      "why": "a backslash"
+    },
+    {
+      "kind": "feedUrl",
+      "input": "https://example.org。evil/feed.xml",
+      "ok": false,
+      "message": "Feed URLs can't contain spaces, control characters, | or \\.",
+      "why": "an ideographic full stop in the host"
+    },
+    {
+      "kind": "feedUrl",
+      "input": "https:///feed.xml",
+      "ok": false,
+      "message": "That feed URL has no valid host.",
+      "why": "no host"
+    },
+    {
+      "kind": "feedUrl",
+      "input": "https://exa%6dple.org/feed.xml",
+      "ok": false,
+      "message": "That feed URL has no valid host.",
+      "why": "a percent-escape in the host"
+    },
+    {
+      "kind": "feedUrl",
+      "input": "https://example.org./feed.xml",
+      "ok": false,
+      "message": "That feed URL has no valid host.",
+      "why": "a trailing dot"
+    },
+    {
+      "kind": "feedUrl",
+      "input": "https://example.org:0/feed.xml",
+      "ok": false,
+      "message": "That feed URL has no valid host.",
+      "why": "port 0"
+    },
+    {
+      "kind": "feedUrl",
+      "input": "https://example.org:65536/feed.xml",
+      "ok": false,
+      "message": "That feed URL has no valid host.",
+      "why": "a port past 65535"
+    },
+    {
+      "kind": "name",
+      "input": "Debian security",
+      "ok": true,
+      "normalised": "Debian security",
+      "why": "ok"
+    },
+    {
+      "kind": "name",
+      "input": "  Linux  ",
+      "ok": true,
+      "normalised": "Linux",
+      "why": "trimmed"
+    },
+    {
+      "kind": "name",
+      "input": "\t\nLinux\r\n",
+      "ok": true,
+      "normalised": "Linux",
+      "why": "tabs and newlines at the ends are Qt spaces, trimmed before the control check"
+    },
+    {
+      "kind": "name",
+      "input": "　Linux  ",
+      "ok": true,
+      "normalised": "Linux",
+      "why": "Unicode spaces are trimmed"
+    },
+    {
+      "kind": "name",
+      "input": "Linux",
+      "ok": true,
+      "normalised": "Linux",
+      "why": "U+0085 is a Qt space at the ends"
+    },
+    {
+      "kind": "name",
+      "input": "﻿Linux",
+      "ok": true,
+      "normalised": "﻿Linux",
+      "why": "ruling FE: U+FEFF is not a Qt space and is kept"
+    },
+    {
+      "kind": "name",
+      "input": "Linux ﻿",
+      "ok": true,
+      "normalised": "Linux ﻿",
+      "why": "U+FEFF at the end stops the trim"
+    },
+    {
+      "kind": "name",
+      "input": "Distros/ISOs",
+      "ok": true,
+      "normalised": "Distros/ISOs",
+      "why": "a / is fine (the separator is \\)"
+    },
+    {
+      "kind": "name",
+      "input": "",
+      "ok": false,
+      "message": "Enter a name.",
+      "why": "empty"
+    },
+    {
+      "kind": "name",
+      "input": "   ",
+      "ok": false,
+      "message": "Enter a name.",
+      "why": "spaces only"
+    },
+    {
+      "kind": "name",
+      "input": "　 \t",
+      "ok": false,
+      "message": "Enter a name.",
+      "why": "Unicode spaces only"
+    },
+    {
+      "kind": "name",
+      "input": "Linux\\Debian",
+      "ok": false,
+      "message": "Names can't contain \\.",
+      "why": "a backslash would make a path"
+    },
+    {
+      "kind": "name",
+      "input": "\\",
+      "ok": false,
+      "message": "Names can't contain \\.",
+      "why": "a lone backslash"
+    },
+    {
+      "kind": "name",
+      "input": "a\u0007b",
+      "ok": false,
+      "message": "Names can't contain control characters.",
+      "why": "a C0 control"
+    },
+    {
+      "kind": "name",
+      "input": "a\nb",
+      "ok": false,
+      "message": "Names can't contain control characters.",
+      "why": "a newline inside"
+    },
+    {
+      "kind": "name",
+      "input": "ab",
+      "ok": false,
+      "message": "Names can't contain control characters.",
+      "why": "U+0085 inside is a C1 control"
+    },
+    {
+      "kind": "name",
+      "input": "ab",
+      "ok": false,
+      "message": "Names can't contain control characters.",
+      "why": "DEL"
+    },
+    {
+      "kind": "name",
+      "input": "a\\\u0007",
+      "ok": false,
+      "message": "Names can't contain \\.",
+      "why": "a backslash is checked before a control"
+    },
+    {
+      "kind": "hasTorrent",
+      "input": {
+        "torrentURL": "magnet:?xt=urn:btih:c12fe1c06bba254a9dc9f519b335aa7c1367a88a&dn=debian",
+        "link": "https://example.org/news/debian-13-released"
+      },
+      "ok": true,
+      "normalised": "magnet",
+      "why": "a magnet"
+    },
+    {
+      "kind": "hasTorrent",
+      "input": {
+        "torrentURL": "magnet:?xt=urn:btih:c12fe1c06bba254a9dc9f519b335aa7c1367a88a&dn=debian",
+        "link": "magnet:?xt=urn:btih:c12fe1c06bba254a9dc9f519b335aa7c1367a88a&dn=debian"
+      },
+      "ok": true,
+      "normalised": "magnet",
+      "why": "a magnet in <link> (torrentURL fell back to it) is still a magnet"
+    },
+    {
+      "kind": "hasTorrent",
+      "input": {
+        "torrentURL": "MAGNET:?xt=urn:btih:c12fe1c06bba254a9dc9f519b335aa7c1367a88a",
+        "link": "https://example.org/news/debian-13-released"
+      },
+      "ok": true,
+      "normalised": "magnet",
+      "why": "magnet:? in any case"
+    },
+    {
+      "kind": "hasTorrent",
+      "input": {
+        "torrentURL": "https://example.org/dl/debian-13.torrent",
+        "link": "https://example.org/news/debian-13-released"
+      },
+      "ok": true,
+      "normalised": "url",
+      "why": "an enclosure different from the link"
+    },
+    {
+      "kind": "hasTorrent",
+      "input": {
+        "torrentURL": "https://tracker.example/download.php?id=42",
+        "link": "https://tracker.example/details.php?id=42"
+      },
+      "ok": true,
+      "normalised": "url",
+      "why": "OV1: a download.php enclosure; no .torrent test when it differs from the link"
+    },
+    {
+      "kind": "hasTorrent",
+      "input": {
+        "torrentURL": "https://example.org/dl/file",
+        "link": ""
+      },
+      "ok": true,
+      "normalised": "url",
+      "why": "an enclosure with no link at all differs from it"
+    },
+    {
+      "kind": "hasTorrent",
+      "input": {
+        "torrentURL": "https://example.org/news/debian-13-released",
+        "link": "https://example.org/news/debian-13-released"
+      },
+      "ok": false,
+      "message": "This article has no torrent link.",
+      "why": "torrentURL equal to the link, both news: qBittorrent's fallback"
+    },
+    {
+      "kind": "hasTorrent",
+      "input": {
+        "torrentURL": "https://example.org/dl/debian-13.torrent",
+        "link": "https://example.org/dl/debian-13.torrent"
+      },
+      "ok": true,
+      "normalised": "url",
+      "why": "the D4 exception: equal to the link and ending in .torrent"
+    },
+    {
+      "kind": "hasTorrent",
+      "input": {
+        "torrentURL": "https://example.org/dl/debian-13.TORRENT?x=1",
+        "link": "https://example.org/dl/debian-13.TORRENT?x=1"
+      },
+      "ok": true,
+      "normalised": "url",
+      "why": "the D4 exception is case-insensitive and ignores the query"
+    },
+    {
+      "kind": "hasTorrent",
+      "input": {
+        "torrentURL": "https://example.org/get?file=debian-13.torrent",
+        "link": "https://example.org/get?file=debian-13.torrent"
+      },
+      "ok": false,
+      "message": "This article has no torrent link.",
+      "why": ".torrent only in the query doesn't count"
+    },
+    {
+      "kind": "hasTorrent",
+      "input": {
+        "torrentURL": "https://example.org/dl/debian-13.torrent#top",
+        "link": "https://example.org/dl/debian-13.torrent#top"
+      },
+      "ok": true,
+      "normalised": "url",
+      "why": "a fragment is ignored too"
+    },
+    {
+      "kind": "hasTorrent",
+      "input": {
+        "torrentURL": "",
+        "link": "https://example.org/news/debian-13-released"
+      },
+      "ok": false,
+      "message": "This article has no torrent link.",
+      "why": "an empty torrentURL"
+    },
+    {
+      "kind": "hasTorrent",
+      "input": {
+        "torrentURL": "",
+        "link": ""
+      },
+      "ok": false,
+      "message": "This article has no torrent link.",
+      "why": "no torrentURL and no link"
+    },
+    {
+      "kind": "hasTorrent",
+      "input": {
+        "torrentURL": "javascript:alert(1)",
+        "link": "https://example.org/news/debian-13-released"
+      },
+      "ok": false,
+      "message": "That link isn't http, https or magnet.",
+      "why": "javascript: is refused"
+    },
+    {
+      "kind": "hasTorrent",
+      "input": {
+        "torrentURL": "javascript:alert(1)",
+        "link": "javascript:alert(1)"
+      },
+      "ok": false,
+      "message": "That link isn't http, https or magnet.",
+      "why": "refused before the equality test"
+    },
+    {
+      "kind": "hasTorrent",
+      "input": {
+        "torrentURL": "file:///home/user/x.torrent",
+        "link": "https://example.org/news/debian-13-released"
+      },
+      "ok": false,
+      "message": "That link isn't http, https or magnet.",
+      "why": "file: is refused"
+    },
+    {
+      "kind": "hasTorrent",
+      "input": {
+        "torrentURL": "ftp://example.org/x.torrent",
+        "link": "https://example.org/news/debian-13-released"
+      },
+      "ok": false,
+      "message": "That link isn't http, https or magnet.",
+      "why": "ftp is refused"
+    },
+    {
+      "kind": "hasTorrent",
+      "input": {
+        "torrentURL": "https://user:pw@example.org/dl/x.torrent",
+        "link": "https://example.org/news/debian-13-released"
+      },
+      "ok": false,
+      "message": "That link isn't http, https or magnet.",
+      "why": "userinfo is refused"
+    },
+    {
+      "kind": "hasTorrent",
+      "input": {
+        "torrentURL": "https://example.org/dl/a|b.torrent",
+        "link": "https://example.org/news/debian-13-released"
+      },
+      "ok": false,
+      "message": "That link isn't http, https or magnet.",
+      "why": "a | is refused"
+    },
+    {
+      "kind": "hasTorrent",
+      "input": {
+        "torrentURL": "https://example.org/dl/a b.torrent",
+        "link": "https://example.org/news/debian-13-released"
+      },
+      "ok": false,
+      "message": "That link isn't http, https or magnet.",
+      "why": "whitespace is refused"
+    },
+    {
+      "kind": "hasTorrent",
+      "input": {
+        "torrentURL": "magnet:?xt=urn:btih:c12fe1c06bba254a9dc9f519b335aa7c1367a88a&dn=a b",
+        "link": "https://example.org/news/debian-13-released"
+      },
+      "ok": false,
+      "message": "That link isn't http, https or magnet.",
+      "why": "whitespace in a magnet is refused too"
+    },
+    {
+      "kind": "hasTorrent",
+      "input": {
+        "torrentURL": "https://example.org\\dl\\x.torrent",
+        "link": "https://example.org/news/debian-13-released"
+      },
+      "ok": false,
+      "message": "That link isn't http, https or magnet.",
+      "why": "a backslash is refused"
+    },
+    {
+      "kind": "hasTorrent",
+      "input": {
+        "torrentURL": "https://example.org/dl/x.torrent\u0000",
+        "link": "https://example.org/news/debian-13-released"
+      },
+      "ok": false,
+      "message": "That link isn't http, https or magnet.",
+      "why": "a control character is refused"
+    },
+    {
+      "kind": "hasTorrent",
+      "input": {
+        "torrentURL": "https://exa%6dple.org/dl/x.torrent",
+        "link": "https://example.org/news/debian-13-released"
+      },
+      "ok": false,
+      "message": "That link isn't http, https or magnet.",
+      "why": "a host the host rule refuses"
+    },
+    {
+      "kind": "errorReason",
+      "input": {
+        "log": [
+          {
+            "id": 7,
+            "message": "Failed to download RSS feed at 'https://example.org/feed.xml'. Reason: Host example.org not found",
+            "timestamp": 1759132807,
+            "type": 4
+          }
+        ],
+        "url": "https://example.org/feed.xml"
+      },
+      "ok": true,
+      "normalised": "Host example.org not found",
+      "why": "a download failure"
+    },
+    {
+      "kind": "errorReason",
+      "input": {
+        "log": [
+          {
+            "id": 8,
+            "message": "Failed to parse RSS feed at 'https://example.org/feed.xml'. Reason: Unexpected end of file",
+            "timestamp": 1759132808,
+            "type": 4
+          }
+        ],
+        "url": "https://example.org/feed.xml"
+      },
+      "ok": true,
+      "normalised": "Unexpected end of file",
+      "why": "a parse failure"
+    },
+    {
+      "kind": "errorReason",
+      "input": {
+        "log": [
+          {
+            "id": 12,
+            "message": "Failed to parse RSS feed at 'https://example.org/feed.xml'. Reason: Unexpected end of file",
+            "timestamp": 1759132812,
+            "type": 4
+          },
+          {
+            "id": 9,
+            "message": "Failed to download RSS feed at 'https://example.org/feed.xml'. Reason: Connection timed out",
+            "timestamp": 1759132809,
+            "type": 4
+          }
+        ],
+        "url": "https://example.org/feed.xml"
+      },
+      "ok": true,
+      "normalised": "Unexpected end of file",
+      "why": "the highest id wins, whatever the order"
+    },
+    {
+      "kind": "errorReason",
+      "input": {
+        "log": [
+          {
+            "id": 3,
+            "message": "Failed to download RSS feed at 'https://example.org/feed.xml'. Reason: Connection refused",
+            "timestamp": 1759132803,
+            "type": 4
+          },
+          {
+            "id": 4,
+            "message": "Failed to download RSS feed at 'https://example.org/feed.xml'. Reason: Connection timed out",
+            "timestamp": 1759132804,
+            "type": 4
+          }
+        ],
+        "url": "https://example.org/feed.xml"
+      },
+      "ok": true,
+      "normalised": "Connection timed out",
+      "why": "the newest of two"
+    },
+    {
+      "kind": "errorReason",
+      "input": {
+        "log": [
+          {
+            "id": 5,
+            "message": "Failed to download RSS feed at 'https://example.net/feed.xml'. Reason: Host example.net not found",
+            "timestamp": 1759132805,
+            "type": 4
+          }
+        ],
+        "url": "https://example.org/feed.xml"
+      },
+      "ok": true,
+      "normalised": null,
+      "why": "another URL"
+    },
+    {
+      "kind": "errorReason",
+      "input": {
+        "log": [
+          {
+            "id": 6,
+            "message": "Failed to download RSS feed at 'https://example.org/feed.xml/extra'. Reason: Not found",
+            "timestamp": 1759132806,
+            "type": 4
+          }
+        ],
+        "url": "https://example.org/feed.xml"
+      },
+      "ok": true,
+      "normalised": null,
+      "why": "a longer URL is another URL"
+    },
+    {
+      "kind": "errorReason",
+      "input": {
+        "log": [
+          {
+            "id": 7,
+            "message": "Échec du téléchargement du flux RSS à 'https://example.org/feed.xml'. Raison : Hôte introuvable",
+            "timestamp": 1759132807,
+            "type": 4
+          }
+        ],
+        "url": "https://example.org/feed.xml"
+      },
+      "ok": true,
+      "normalised": null,
+      "why": "a translated message gives no reason"
+    },
+    {
+      "kind": "errorReason",
+      "input": {
+        "log": [],
+        "url": "https://example.org/feed.xml"
+      },
+      "ok": true,
+      "normalised": null,
+      "why": "an empty log"
+    },
+    {
+      "kind": "errorReason",
+      "input": {
+        "log": [
+          {
+            "id": 2,
+            "message": "Failed to download RSS feed at 'https://example.org/o'brien.xml'. Reason: Error transferring https://example.org/o'brien.xml - server replied: Not Found",
+            "timestamp": 1759132802,
+            "type": 4
+          }
+        ],
+        "url": "https://example.org/o'brien.xml"
+      },
+      "ok": true,
+      "normalised": "Error transferring https://example.org/o'brien.xml - server replied: Not Found",
+      "why": "a ' in the URL: a prefix test, not a pattern"
+    },
+    {
+      "kind": "errorReason",
+      "input": {
+        "log": [
+          {
+            "id": 2,
+            "message": "Failed to download RSS feed at 'https://example.org/o'. Reason: x'brien.xml'. Reason: Not Found",
+            "timestamp": 1759132802,
+            "type": 4
+          }
+        ],
+        "url": "https://example.org/o'brien.xml"
+      },
+      "ok": true,
+      "normalised": null,
+      "why": "a shorter URL whose reason looks like the rest never matches the longer one"
+    },
+    {
+      "kind": "errorReason",
+      "input": {
+        "log": [
+          {
+            "id": 4,
+            "message": "Failed to download RSS feed at 'https://example.org/feed.xml'. Reason: ",
+            "timestamp": 1759132804,
+            "type": 4
+          }
+        ],
+        "url": "https://example.org/feed.xml"
+      },
+      "ok": true,
+      "normalised": "",
+      "why": "an empty reason is still a match"
+    },
+    {
+      "kind": "articleText",
+      "input": "<p>Hello <b>world</b></p>",
+      "ok": true,
+      "normalised": {
+        "text": "Hello world",
+        "truncated": false
+      },
+      "why": "inline tags vanish, block tags make lines"
+    },
+    {
+      "kind": "articleText",
+      "input": "<p>before</p><script>alert('x')</script><p>after</p>",
+      "ok": true,
+      "normalised": {
+        "text": "before\n\nafter",
+        "truncated": false
+      },
+      "why": "script is dropped with its text"
+    },
+    {
+      "kind": "articleText",
+      "input": "<style>p { color: red }</style>Text",
+      "ok": true,
+      "normalised": {
+        "text": "Text",
+        "truncated": false
+      },
+      "why": "style is dropped with its text"
+    },
+    {
+      "kind": "articleText",
+      "input": "Tom &amp; Jerry &lt;3 &eacute;t&eacute; &#8212; &#x263A; &amp;amp;",
+      "ok": true,
+      "normalised": {
+        "text": "Tom & Jerry <3 été — ☺ &amp;",
+        "truncated": false
+      },
+      "why": "entities are decoded once"
+    },
+    {
+      "kind": "articleText",
+      "input": "one<br>two<br/>three",
+      "ok": true,
+      "normalised": {
+        "text": "one\ntwo\nthree",
+        "truncated": false
+      },
+      "why": "<br> and <br/> are one newline each"
+    },
+    {
+      "kind": "articleText",
+      "input": "a<br><br><br><br><br><br>b",
+      "ok": true,
+      "normalised": {
+        "text": "a\n\n\nb",
+        "truncated": false
+      },
+      "why": "at most 2 blank lines in a row"
+    },
+    {
+      "kind": "articleText",
+      "input": "<ul><li>one</li><li>two<ul><li>two.a</li></ul></li></ul>",
+      "ok": true,
+      "normalised": {
+        "text": "one\n\ntwo\ntwo.a",
+        "truncated": false
+      },
+      "why": "nested lists: each li start and end tag is a newline"
+    },
+    {
+      "kind": "articleText",
+      "input": "  lots   of\n\t spaces  ",
+      "ok": true,
+      "normalised": {
+        "text": "lots of spaces",
+        "truncated": false
+      },
+      "why": "runs of whitespace collapse; ends are trimmed"
+    },
+    {
+      "kind": "articleText",
+      "input": "<h1>Title</h1><div>Body   text</div>",
+      "ok": true,
+      "normalised": {
+        "text": "Title\n\nBody text",
+        "truncated": false
+      },
+      "why": "headings and divs"
+    },
+    {
+      "kind": "articleText",
+      "input": "<table><tr><td>Size:</td> <td>650 MiB</td></tr><tr><td>Seeds:</td> <td>12</td></tr></table>",
+      "ok": true,
+      "normalised": {
+        "text": "Size: 650 MiB\n\nSeeds: 12",
+        "truncated": false
+      },
+      "why": "tr makes lines; td makes nothing"
+    },
+    {
+      "kind": "articleText",
+      "input": "<P>A</P><BR>B",
+      "ok": true,
+      "normalised": {
+        "text": "A\n\nB",
+        "truncated": false
+      },
+      "why": "tag names in any case"
+    },
+    {
+      "kind": "articleText",
+      "input": "a<!-- hidden -->b",
+      "ok": true,
+      "normalised": {
+        "text": "ab",
+        "truncated": false
+      },
+      "why": "a comment is dropped"
+    },
+    {
+      "kind": "articleText",
+      "input": "a&nbsp;&nbsp;b",
+      "ok": true,
+      "normalised": {
+        "text": "a  b",
+        "truncated": false
+      },
+      "why": "U+00A0 is kept, not collapsed"
+    },
+    {
+      "kind": "articleText",
+      "input": "<img src=x onerror=alert(1)>Evil ‮txt.exe",
+      "ok": true,
+      "normalised": {
+        "text": "Evil ‮txt.exe",
+        "truncated": false
+      },
+      "why": "an img is dropped; a bidi override is kept (the window strips it)"
+    },
+    {
+      "kind": "articleText",
+      "input": "Line one⁧ &#8238;two",
+      "ok": true,
+      "normalised": {
+        "text": "Line one⁧ ‮two",
+        "truncated": false
+      },
+      "why": "bidi characters, literal or as entities, are kept"
+    },
+    {
+      "kind": "articleText",
+      "input": "",
+      "ok": true,
+      "normalised": {
+        "text": "",
+        "truncated": false
+      },
+      "why": "an empty description"
+    },
+    {
+      "kind": "articleText",
+      "input": "<p> </p><p>\n</p>",
+      "ok": true,
+      "normalised": {
+        "text": "",
+        "truncated": false
+      },
+      "why": "only whitespace and blocks"
+    },
+    {
+      "kind": "articleText",
+      "input": "<p>abcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghij</p>",
+      "ok": true,
+      "normalised": {
+        "text": "abcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdef",
+        "truncated": true
+      },
+      "why": "a 10 KB description is capped at 4096 code points"
+    },
+    {
+      "kind": "articleText",
+      "input": "<p>éééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé</p>",
+      "ok": true,
+      "normalised": {
+        "text": "éééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé",
+        "truncated": false
+      },
+      "why": "exactly 4096 code points is not truncated"
+    },
+    {
+      "kind": "articleText",
+      "input": "😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀",
+      "ok": true,
+      "normalised": {
+        "text": "😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀",
+        "truncated": true
+      },
+      "why": "the cap counts code points, not UTF-16 units"
+    }
+  ],
+  "sentences": {
+    "rssUsage": "usage: qbt rss items|article|error|add-feed|add-folder|rename|remove|refresh|mark-read|add",
+    "feedDup": "That feed is already added.",
+    "itemExists": "There's already a feed or folder called <name> there.",
+    "feedGone": "That feed is gone.",
+    "folderGone": "That folder is gone.",
+    "articleGone": "That article is gone.",
+    "nameEmpty": "Enter a name.",
+    "nameBackslash": "Names can't contain \\.",
+    "nameControl": "Names can't contain control characters.",
+    "feedUrlEmpty": "Enter a feed URL.",
+    "feedUrlBad": "Feed URLs can't contain spaces, control characters, | or \\.",
+    "feedUrlScheme": "Feed URLs start with http:// or https://.",
+    "feedUrlUser": "Feed URLs can't contain a user name or password.",
+    "feedUrlHost": "That feed URL has no valid host.",
+    "noTorrent": "This article has no torrent link.",
+    "badTorrentLink": "That link isn't http, https or magnet.",
+    "unconfirmedAdd": "Couldn't confirm <name> was added.",
+    "unconfirmedRemove": "Couldn't confirm <name> was removed.",
+    "unconfirmedRename": "Couldn't confirm the rename.",
+    "unconfirmedRead": "Couldn't confirm the articles were marked read."
+  },
+  "window": {
+    "banner": "RSS is off in qBittorrent, so feeds only refresh when you press r. O turns it on (also in Settings → RSS).",
+    "emptyFeeds": "No feeds yet. Press a and paste a feed URL.",
+    "emptyArticles": "No articles in this feed yet.",
+    "emptyUnread": "Nothing unread.",
+    "rowRefreshing": "refreshing…",
+    "rowError": "error",
+    "rowInLibrary": "in library",
+    "stillRefreshing": "Still refreshing; qBittorrent hasn't answered.",
+    "errorReason": "Couldn't refresh: <reason>",
+    "errorNoReason": "qBittorrent reported an error but gave no reason.",
+    "hasTorrentYes": "Torrent link",
+    "hasTorrentNo": "No torrent link",
+    "alreadyInLibrary": "Already in your library.",
+    "sent": "Sent to qBittorrent; Space marks it read.",
+    "added": "Added <name>.",
+    "cantUnread": "qBittorrent can't mark articles unread.",
+    "confirmAdd": "Add <title> from <host>?",
+    "confirmOpen": "Open <host> in your browser? It won't go through the VPN.",
+    "confirmRemoveFeed": "Remove <name>? This can't be undone.",
+    "confirmRemoveFolder": "Remove <name> and its <n> feeds? This can't be undone.",
+    "confirmMarkRead": "Mark <n> articles in <name> read? This can't be undone.",
+    "confirmMarkAll": "Mark all <n> articles in every feed read? This can't be undone.",
+    "moreArrived": "More articles arrived: mark <n> read? This can't be undone.",
+    "confirmOn": "Turn on RSS processing in qBittorrent? Feeds refresh every <n> min.",
+    "unreadRow": "Unread",
+    "allRow": "All articles",
+    "reasonItem": "Pick a feed or folder.",
+    "reasonArticle": "No article here.",
+    "reasonUnread": "Nothing unread.",
+    "reasonProcessingOn": "RSS is already on.",
+    "reasonDown": "qBittorrent isn't reachable.",
+    "promptFeedUrl": "Feed URL",
+    "placeholderFeedUrl": "https://…",
+    "promptFeedName": "Feed name",
+    "promptFolderName": "Folder name",
+    "promptRename": "Rename"
+  }
+}

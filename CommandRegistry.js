@@ -286,6 +286,51 @@ var commands = [
   // copies its URL (SEARCH_PLUGIN_LIST_URL).
   { id: "plugin.copyListUrl", title: "Copy the official plugin list's URL", group: "App", keys: [], paletteOnly: true, modes: ["NORMAL"], panes: ["searchResults", "searchPlugins", "searchPluginList"], needs: "none" },
 
+  // RSS (slice 5b1, eng D3). `N` (or ":RSS") swaps the torrent panes for
+  // the RSS view, as `F` does for Search, from the torrent panes only.
+  // Its panes: rssFeeds (the Feeds column: Unread, All articles, then the
+  // folders and their feeds, indented), rssArticles (the Articles column)
+  // and, narrow, the feeds overlay rssFeedList (a ListOverlay without its
+  // field; the keys stay NORMAL). Inside them the any-pane rows are dead
+  // except : and ? (paneMatches). Every handler is the RSS view's
+  // (RssPane.run, contract at the top of RssPane.qml), except the opener,
+  // which sets Client.activeView. The window raises the CONFIRMs (Enter's
+  // add, d's page, x's remove, A's mark read, O's processing on; kinds
+  // View.RSS_ACCEPT) with raiseConfirm and starts the INSERTs (a, N, n)
+  // itself, so a key never carries confirmed and no row sets the mode.
+  // Rows capture the cursors at key time, frozen: args.item (s.rssItem,
+  // the feed or folder under the Feeds cursor, null on Unread and All),
+  // args.article (s.rssArticle) and args.unread (s.rssUnread, the count
+  // A's confirm names and qbt's mark-read `expect`).
+  { id: "rss.open", title: "RSS", group: "App", keys: ["N"], modes: ["NORMAL"], panes: ["filters", "table", "inspector"], needs: "none" },
+  { id: "rss.down", title: "Down", group: "View", keys: ["j", "Down"], modes: ["NORMAL"], panes: ["rssFeeds", "rssArticles", "rssFeedList"], needs: "none", paletteHidden: true },
+  { id: "rss.up", title: "Up", group: "View", keys: ["k", "Up"], modes: ["NORMAL"], panes: ["rssFeeds", "rssArticles", "rssFeedList"], needs: "none", paletteHidden: true },
+  // l/Enter go to the articles from any Feeds row (Unread and All too).
+  { id: "rss.toArticles", title: "Go to the articles", group: "View", keys: ["l", "Enter"], modes: ["NORMAL"], panes: ["rssFeeds"], needs: "rssFeedRow", paletteHidden: true },
+  { id: "rss.toFeeds", title: "Go to the feeds", group: "View", keys: ["h"], modes: ["NORMAL"], panes: ["rssArticles"], needs: "none", paletteHidden: true },
+  // Tab switches column; narrow, it opens the feeds overlay (the window decides).
+  { id: "rss.switch", title: "Switch column", group: "View", keys: ["Tab"], modes: ["NORMAL"], panes: ["rssFeeds", "rssArticles"], needs: "none", paletteHidden: true },
+  // Narrow only: l shows the Article pane full width (h back, rss.toFeeds).
+  { id: "rss.articleWide", title: "Show the article", group: "View", keys: ["l"], modes: ["NORMAL"], panes: ["rssArticles"], needs: "rssArticle", when: "narrow", paletteHidden: true },
+  { id: "rss.addFeed", title: "Add a feed", group: "App", keys: ["a"], modes: ["NORMAL"], panes: ["rssFeeds", "rssArticles"], needs: "rssUp" },
+  { id: "rss.addFolder", title: "Add a folder", group: "App", keys: ["N"], modes: ["NORMAL"], panes: ["rssFeeds"], needs: "rssUp" },
+  // OV5: n and x need a real feed or folder, not Unread or All.
+  { id: "rss.rename", title: "Rename the feed or folder", group: "App", keys: ["n"], modes: ["NORMAL"], panes: ["rssFeeds"], needs: "rssItem" },
+  { id: "rss.remove", title: "Remove the feed or folder", group: "App", keys: ["x"], modes: ["NORMAL"], panes: ["rssFeeds"], needs: "rssItem" },
+  // r refreshes the feed or folder under the Feeds cursor; on Unread or All, everything.
+  { id: "rss.refresh", title: "Refresh the feeds", group: "App", keys: ["r"], modes: ["NORMAL"], panes: ["rssFeeds", "rssArticles"], needs: "rssUp" },
+  { id: "rss.markAllRead", title: "Mark all read", group: "App", keys: ["A"], modes: ["NORMAL"], panes: ["rssFeeds", "rssArticles"], needs: "rssUnread" },
+  // Space marks one article read (one-way, D5; the window says so on a read one).
+  { id: "rss.markRead", title: "Mark the article read", group: "App", keys: ["Space"], modes: ["NORMAL"], panes: ["rssArticles"], needs: "rssArticle" },
+  { id: "rss.add", title: "Add the article's torrent", group: "App", keys: ["Enter"], modes: ["NORMAL"], panes: ["rssArticles"], needs: "rssArticle" },
+  { id: "rss.openPage", title: "Open the article's page", group: "App", keys: ["d"], modes: ["NORMAL"], panes: ["rssArticles"], needs: "rssArticle" },
+  // OV3: O turns RSS processing on (":RSS processing on").
+  { id: "rss.processingOn", title: "RSS processing on", group: "App", keys: ["O"], modes: ["NORMAL"], panes: ["rssFeeds", "rssArticles"], needs: "rssProcessingOff" },
+  { id: "rss.back", title: "Back to torrents", group: "App", keys: ["Esc"], modes: ["NORMAL"], panes: ["rssFeeds", "rssArticles"], needs: "none", paletteHidden: true },
+  // The feeds overlay (narrow): Enter picks the feed, Esc closes it.
+  { id: "rss.feedsClose", title: "Close the feeds", group: "View", keys: ["Esc"], modes: ["NORMAL"], panes: ["rssFeedList"], needs: "none", paletteHidden: true },
+  { id: "rss.feedsPick", title: "Pick the feed", group: "View", keys: ["Enter"], modes: ["NORMAL"], panes: ["rssFeedList"], needs: "none", paletteHidden: true },
+
   // VISUAL (j/k/Space/x/X/e reuse the NORMAL,table rows above; this is the exit)
   { id: "visual.exit", title: "Exit visual", group: "View", keys: ["Esc", "V"], modes: ["VISUAL"], panes: ["table"], needs: "none" },
 
@@ -423,7 +468,20 @@ function normalizeState(state) {
     searchEnabledPlugins: typeof s.searchEnabledPlugins === "number" ? s.searchEnabledPlugins : 0,
     searchPluginsBusy: s.searchPluginsBusy === true,
     // qBittorrent is down and Search shows the api-down screen.
-    searchDown: s.searchDown === true
+    searchDown: s.searchDown === true,
+    // RSS (slice 5b1, RssPane.flags through ClientView's VIEW_FLAG_STATE.rss),
+    // all default off: the feed or folder under the Feeds cursor ({path,
+    // name, folder, feeds}, null on Unread and All), any Feeds row under it,
+    // the article under the Articles cursor, the unread count in the Feeds
+    // cursor's scope, RSS processing off, qBittorrent reachable, and the
+    // narrow article shown full width.
+    rssItem: s.rssItem && typeof s.rssItem === "object" ? s.rssItem : null,
+    rssFeedRow: s.rssFeedRow === true,
+    rssArticle: s.rssArticle && typeof s.rssArticle === "object" ? s.rssArticle : null,
+    rssUnread: typeof s.rssUnread === "number" ? s.rssUnread : 0,
+    rssProcessingOff: s.rssProcessingOff === true,
+    rssUp: s.rssUp === true,
+    rssWide: s.rssWide === true
   };
 }
 
@@ -466,9 +524,10 @@ function matchLabel(label, ev) {
 // The window's views (slice 5a, eng C1/OV2): each pane belongs to one.
 // "torrents" is the three torrent panes; Settings (slice 4a) is its two
 // columns and the list editor (4b); Search (5a) is its results, its
-// Plugins column and the plugins overlay. Client.activeView is one of
-// these names, and keys dispatch in a pane of that view.
-var VIEWS = ["torrents", "settings", "search"];
+// Plugins column and the plugins overlay; RSS (5b1) is its Feeds and
+// Articles columns and the narrow feeds overlay. Client.activeView is one
+// of these names, and keys dispatch in a pane of that view.
+var VIEWS = ["torrents", "settings", "search", "rss"];
 
 // Slice 5b0: each view but the torrents, described once. opener: the
 // command that shows it (":Settings", ":Search"). listedOutside: whether
@@ -477,7 +536,8 @@ var VIEWS = ["torrents", "settings", "search"];
 // that view is the active one (ClientView.paletteListed).
 var VIEW_META = {
   settings: { opener: "settings.open", listedOutside: true },
-  search: { opener: "search.open", listedOutside: false }
+  search: { opener: "search.open", listedOutside: false },
+  rss: { opener: "rss.open", listedOutside: false }
 };
 var VIEW_OF_PANE = {
   filters: "torrents",
@@ -488,7 +548,10 @@ var VIEW_OF_PANE = {
   settingsList: "settings",
   searchResults: "search",
   searchPlugins: "search",
-  searchPluginList: "search"
+  searchPluginList: "search",
+  rssFeeds: "rss",
+  rssArticles: "rss",
+  rssFeedList: "rss"
 };
 
 // viewOfPane(pane) -> the view a pane belongs to; anything unknown is a
@@ -508,6 +571,7 @@ function panesOfView(view) {
 
 var SETTINGS_PANES = panesOfView("settings");
 var SEARCH_PANES = panesOfView("search");
+var RSS_PANES = panesOfView("rss");
 
 function isSettingsPane(pane) {
   return viewOfPane(pane) === "settings";
@@ -515,6 +579,10 @@ function isSettingsPane(pane) {
 
 function isSearchPane(pane) {
   return viewOfPane(pane) === "search";
+}
+
+function isRssPane(pane) {
+  return viewOfPane(pane) === "rss";
 }
 
 // paneMatches(row, pane) -> whether row's panes cover pane. PANE_ANY means
@@ -635,6 +703,17 @@ var SEARCH_REASONS = {
   down: "qBittorrent isn't reachable"
 };
 
+// RSS's dim reasons (slice 5b1): the palette's dimmed-row text and, as a
+// sentence, the muted note a blocked key leaves (the case file's window
+// reasonItem ... reasonDown, tests/fixtures/rss-rules-cases.json).
+var RSS_REASONS = {
+  item: "pick a feed or folder",
+  article: "no article here",
+  unread: "nothing unread",
+  processingOn: "RSS is already on",
+  down: "qBittorrent isn't reachable"
+};
+
 // The official plugin list (design D4), which plugin.copyListUrl copies.
 var SEARCH_PLUGIN_LIST_URL = "https://github.com/qbittorrent/search-plugins/wiki";
 
@@ -670,6 +749,13 @@ function preconditionMet(needs, s) {
   if (needs === "searchPluginOn") return typeof s.searchEnabledPlugins === "number" && s.searchEnabledPlugins > 0;
   if (needs === "searchPlugin") return !!s.searchPlugin && typeof s.searchPlugin === "object" && s.searchPluginsBusy !== true;
   if (needs === "pluginsIdle") return s.searchPluginsBusy !== true && s.searchDown !== true;
+  // RSS (slice 5b1). Every need but a Feeds row also needs qBittorrent up.
+  if (needs === "rssFeedRow") return s.rssFeedRow === true;
+  if (needs === "rssUp") return s.rssUp === true;
+  if (needs === "rssItem") return s.rssUp === true && !!s.rssItem && typeof s.rssItem === "object";
+  if (needs === "rssArticle") return s.rssUp === true && !!s.rssArticle && typeof s.rssArticle === "object";
+  if (needs === "rssUnread") return s.rssUp === true && typeof s.rssUnread === "number" && s.rssUnread > 0;
+  if (needs === "rssProcessingOff") return s.rssUp === true && s.rssProcessingOff === true;
   if (Object.prototype.hasOwnProperty.call(LIBRARY_NEEDS, needs)) return libraryKind(s, LIBRARY_NEEDS[needs]);
   return true;
 }
@@ -696,6 +782,15 @@ function needsReason(needs, s) {
   if (needs === "searchResult") return SEARCH_REASONS.noResult;
   if (needs === "searchPluginOn") return s.searchPluginCount > 0 ? SEARCH_REASONS.allOff : SEARCH_REASONS.noPlugins;
   if (needs === "searchPlugin" || needs === "pluginsIdle") return s.searchPluginsBusy === true ? SEARCH_REASONS.busy : SEARCH_REASONS.noPlugin;
+  // RSS (slice 5b1): qBittorrent down names that first; a Feeds row is silent.
+  if (needs === "rssFeedRow" || needs === "rssUp" || needs === "rssItem" || needs === "rssArticle" || needs === "rssUnread" || needs === "rssProcessingOff") {
+    if (s.rssUp !== true) return RSS_REASONS.down;
+    if (needs === "rssItem") return RSS_REASONS.item;
+    if (needs === "rssArticle") return RSS_REASONS.article;
+    if (needs === "rssUnread") return RSS_REASONS.unread;
+    if (needs === "rssProcessingOff") return RSS_REASONS.processingOn;
+    return "";
+  }
   if (needs === "noMetadata") {
     if (s.cursorPendingMagnet === true) return "already fetching metadata";
     if (s.hasTorrent === true) return "already has metadata";
@@ -797,6 +892,11 @@ function buildArgs(row, s) {
   // Search (slice 5a): the result or plugin under the cursor at key time.
   if (row.needs === "searchResult") args.result = copyPlain(s.searchResult);
   if (row.needs === "searchPlugin") args.plugin = copyPlain(s.searchPlugin);
+  // RSS (slice 5b1): the Feeds cursor's feed or folder (null on Unread and
+  // All: everything), the article, and A's unread count, at key time.
+  if (row.needs === "rssUp" || row.needs === "rssItem" || row.needs === "rssUnread") args.item = copyPlain(s.rssItem);
+  if (row.needs === "rssArticle") args.article = copyPlain(s.rssArticle);
+  if (row.needs === "rssUnread") args.unread = s.rssUnread;
   // ":" on a VISUAL range: the palette acts on that range (the window keeps it).
   if (row.id === "palette.open" && s.mode === "VISUAL") args.range = true;
   if (EXTEND_IDS[row.id] === true && s.mode === "VISUAL") {
@@ -1066,6 +1166,9 @@ if (typeof module !== "undefined" && module.exports) {
     isSearchPane: isSearchPane,
     SETTINGS_PANES: SETTINGS_PANES,
     SEARCH_PANES: SEARCH_PANES,
+    isRssPane: isRssPane,
+    RSS_PANES: RSS_PANES,
+    RSS_REASONS: RSS_REASONS,
     VIEWS: VIEWS,
     VIEW_META: VIEW_META,
     VIEW_OF_PANE: VIEW_OF_PANE,
