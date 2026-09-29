@@ -207,7 +207,7 @@ Item {
   // The refresh took longer than refreshCapMs: the fast poll stops and
   // "Still refreshing; …" shows until nothing loads.
   property bool capped: false
-  readonly property bool pollsRunning: fastTimer.running || slowTimer.running || capTimer.running
+  readonly property bool pollsRunning: fastTimer.running || slowTimer.running || capTimer.running || retryTimer.running
 
   readonly property bool processingOff: loaded && !!items && items.processing === false
   readonly property bool downShown: ["gui", "notInstalled", "daemon", "api"].indexOf(tableState) !== -1
@@ -237,6 +237,10 @@ Item {
     wide = false
     syncLibrary()
     rssCmds.readItems()
+    // A feed still loading from before (Esc, then N): the cap starts
+    // again, so the fast poll never runs unbounded.
+    armCap()
+    showFeedCursor()
   }
 
   function closeView() {
@@ -350,6 +354,16 @@ Item {
     syncFeed()
     applyArticles()
     rssCmds.itemsApplied()
+    showFeedCursor()
+  }
+
+  // The Feeds column scrolls to its cursor (a read swaps its model, which
+  // drops the ListView's currentIndex, so it is set here, not bound).
+  function showFeedCursor() {
+    if (feedIndex < 0 || feedIndex >= feedRowsList.length) return
+    feedList.forceLayout()
+    feedList.currentIndex = feedIndex
+    feedList.positionViewAtIndex(feedIndex, ListView.Contain)
   }
 
   function syncFeed() {
@@ -371,6 +385,7 @@ Item {
     syncFeed()
     applyArticles()
     rssCmds.checkError()
+    showFeedCursor()
   }
 
   function move(delta) {
@@ -458,20 +473,32 @@ Item {
   // `r`: the cap starts over.
   function refreshStarted() {
     capped = false
-    capTimer.restart()
+    capTimer.stop()
+    armCap()
+  }
+
+  // The 60 s cap on the fast poll runs only while RSS shows and qBittorrent
+  // is up; an items read landing after closeView never starts it.
+  function armCap() {
+    if (open && !downShown && loading && !capped && !capTimer.running) capTimer.start()
   }
 
   onLoadingChanged: {
     if (loading) {
-      if (!capTimer.running && !capped) capTimer.start()
+      armCap()
     } else {
       capped = false
       capTimer.stop()
     }
   }
   onDownShownChanged: {
-    if (downShown) dropConfirm()
-    else if (open) rssCmds.readItems()
+    if (downShown) {
+      dropConfirm()
+      capTimer.stop()
+    } else if (open) {
+      rssCmds.readItems()
+      armCap()
+    }
   }
   onNarrowChanged: {
     if (!narrow) {
@@ -512,7 +539,16 @@ Item {
     id: capTimer
     interval: rss.refreshCapMs
     repeat: false
-    onTriggered: if (rss.loading) rss.capped = true
+    onTriggered: if (rss.open && !rss.downShown && rss.loading) rss.capped = true
+  }
+  // A failed first read: again every fastPollMs until one succeeds (rssUp
+  // stays false until then).
+  Timer {
+    id: retryTimer
+    interval: rss.fastPollMs
+    repeat: true
+    running: rss.open && !rss.downShown && !rss.loaded && rssCmds.itemsFailed
+    onTriggered: rss.cmds.readItems()
   }
   // The Articles cursor settles: its description.
   Timer {
@@ -642,7 +678,10 @@ Item {
       clip: true
       boundsBehavior: Flickable.StopAtBounds
       model: rss.feedRowsList
-      currentIndex: rss.feedIndex
+      // showFeedCursor positions it at once; no animated follow.
+      highlightFollowsCurrentItem: false
+      // The footer re-flows (its keys follow the cursor): keep the row shown.
+      onHeightChanged: if (rss.feedIndex >= 0 && rss.feedIndex < count) positionViewAtIndex(rss.feedIndex, ListView.Contain)
       ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
 
       delegate: Item {

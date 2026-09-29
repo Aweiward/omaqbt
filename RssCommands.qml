@@ -44,6 +44,14 @@ QtObject {
   // An items read is running; another asked for meanwhile runs after it.
   property bool reading: false
   property bool readAgain: false
+  // The last items read failed (RssPane retries while nothing is loaded).
+  property bool itemsFailed: false
+  // The failure last posted: an identical one isn't posted again until a
+  // read succeeds (a poll failing every 2 s or 5 min says it once).
+  property string lastFail: ""
+  // Each `qbt rss error` read's token: an answer for an entry that was
+  // dropped (the error cleared, or `r`) or replaced meanwhile is ignored.
+  property int errorToken: 0
   // The INSERT a, N or n opened: {folder, url} or {item} (frozen then).
   property var input: null
   // O's setPref ticket (Service.actionFinished ends it).
@@ -96,7 +104,10 @@ QtObject {
   }
 
   function fail(text) {
-    if (client) client.messages = View.msgError(client.messages, text, [])
+    var t = String(text || "")
+    if (t === lastFail) return
+    lastFail = t
+    if (client) client.messages = View.msgError(client.messages, t, [])
   }
 
   // Raises one of RSS's CONFIRMs (View.RSS_ACCEPT's kinds): `y` comes back
@@ -124,6 +135,8 @@ QtObject {
   function itemsRead(ok, error, data, same) {
     var v = view
     reading = false
+    itemsFailed = !ok
+    if (ok) lastFail = ""
     if (!ok) {
       if (v.tableState === "rows" || v.tableState === "empty") fail(error)
     } else if (data && typeof data === "object" && Array.isArray(data.feeds) && Array.isArray(data.articles)) {
@@ -162,10 +175,15 @@ QtObject {
     if (!f || f.kind !== "feed" || !f.hasError || f.url === "" || view.downShown) return
     if (errorCache[f.url] !== undefined || !svcHas("rssError")) return
     var url = f.url
-    setError(url, { loading: true })
+    errorToken++
+    var token = errorToken
+    setError(url, { loading: true, token: token })
+    // A failed read is kept as no reason (errorNoReason) until the error
+    // clears or `r`, never re-asked on every applied read.
     var t = service.rssError(url, function(ok, error, data) {
-      if (ok) cmds.setError(url, { reason: data && typeof data === "object" ? data.reason : null })
-      else cmds.setError(url, undefined)
+      var e = cmds.errorCache[url]
+      if (!e || e.token !== token) return
+      cmds.setError(url, { reason: ok && data && typeof data === "object" ? data.reason : null })
     })
     if (!(Number(t) > 0)) setError(url, undefined)
   }
@@ -251,6 +269,13 @@ QtObject {
       if (!u.ok) { stay(u.message); return }
       input = { folder: inp.folder, url: String(text) }
       c.startInput("rssFeedName", u.normalised)
+      return
+    }
+    // Enter on the rename's prefill, qbt's name exactly (an untrimmed
+    // channel title included): nothing changes, no qbt call.
+    if (purpose === "rssRename" && String(text) === inp.item.name) {
+      input = null
+      c.endInput()
       return
     }
     var r = RssView.checkName(text)

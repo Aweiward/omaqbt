@@ -204,6 +204,13 @@ TestCase {
     delete o.svc.cbs[String(c.ticket)]
     cb(ok, err || "", data === undefined ? null : data, same === true)
   }
+  // Answers one given read (not necessarily the last) through its callback.
+  function answerCall(o, c, ok, err, data) {
+    var cb = o.svc.cbs[String(c.ticket)]
+    verify(typeof cb === "function", c.name + " has a callback")
+    delete o.svc.cbs[String(c.ticket)]
+    cb(ok, err || "", data === undefined ? null : data, false)
+  }
   function items(o, data) { answer(o, "rssItems", true, "", data === undefined ? fx() : data) }
   // Every read still waiting is answered with data (a poll's).
   function answerWaiting(o, data) {
@@ -848,5 +855,139 @@ TestCase {
     answer(o, "rssItems", true, "", fx(), true)
     verify(showsIn(o, "rssFeedsPane", "Debian"), "`same`, but this window had nothing")
     compare(rp(o).articleKeys().length, 4)
+  }
+
+  // ---- fix round 1 ------------------------------------------------------------------------------------
+
+  function test_fix1_the_refresh_cap_survives_esc_then_N_and_never_runs_closed() {
+    var o = make()
+    rp(o).fastPollMs = 80
+    rp(o).refreshCapMs = 600
+    var loading = fx({ debian: { isLoading: true } })
+    openRss(o)
+    esc(o)
+    // A read landing after closeView, now loading: nothing starts while closed.
+    rp(o).cmds.readItems()
+    items(o, loading)
+    verify(rp(o).loading)
+    verify(!rp(o).pollsRunning, "no timer runs while RSS is closed")
+    shifted(o, "N")
+    answerWaiting(o, loading)
+    var start = calls(o.svc, "rssItems").length
+    for (var i = 0; i < 8; i++) { wait(50); answerWaiting(o, loading) }
+    verify(calls(o.svc, "rssItems").length >= start + 2, "the fast poll runs while loading")
+    tryVerify(function() { answerWaiting(o, loading); return shows(o, w.stillRefreshing) }, 3000)
+    var capped = calls(o.svc, "rssItems").length
+    wait(300)
+    answerWaiting(o, loading)
+    compare(calls(o.svc, "rssItems").length, capped, "the fast poll stops at the cap after a reopen")
+    // Esc and N again while still loading: a fresh cap, never unbounded.
+    esc(o)
+    shifted(o, "N")
+    answerWaiting(o, loading)
+    tryVerify(function() { answerWaiting(o, loading); return shows(o, w.stillRefreshing) }, 3000)
+    // qBittorrent down: the cap timer stops with the polls.
+    o.svc.api = false
+    wait(50)
+    verify(!rp(o).pollsRunning)
+  }
+
+  function test_fix2_the_feeds_column_scrolls_to_its_cursor_and_keeps_it_after_a_read() {
+    var o = make()
+    winOf(o.c).width = 1200
+    winOf(o.c).height = 700
+    tryVerify(function() { return winOf(o.c).contentItem.height === 700 }, 2000)
+    var data = { processing: true, refreshInterval: 30, feeds: [], articles: [] }
+    for (var i = 0; i < 86; i++) data.feeds.push(feedObj("Feed " + (i < 10 ? "0" : "") + i, "https://f" + i + ".example/rss", 0, 0))
+    openRss(o, data)
+    j(o, 70)
+    compare(rp(o).feedIndex, 70)
+    var list = findName(content(o), "rssFeedList")
+    var h = rp(o).rowHeight
+    function inView() { return 70 * h >= list.contentY - 0.5 && 71 * h <= list.contentY + list.height + 0.5 }
+    verify(list.height < 70 * h, "the list is shorter than its rows")
+    tryVerify(inView, 1000, "row 70 is in the viewport: contentY " + list.contentY + ", height " + list.height)
+    rp(o).cmds.readItems()
+    items(o, data)
+    wait(30)
+    compare(list.currentIndex, 70, "currentIndex kept after the model swap")
+    tryVerify(inView, 1000, "still in view after a re-read: contentY " + list.contentY)
+  }
+
+  function test_fix_enter_on_the_prefill_of_an_untrimmed_name_renames_nothing() {
+    var o = make()
+    var data = fx()
+    data.feeds[3] = feedObj(" News ", "https://news.example/rss", 1, 2)
+    openRss(o, data)
+    j(o, 5)
+    compare(rp(o).currentFeed.path, " News ")
+    key(o.c, "n")
+    compare(line(o).inputValue(), " News ")
+    enter(o)
+    compare(o.c.mode, "NORMAL")
+    compare(calls(o.svc, "rssRename").length, 0, "qbt's own name, untrimmed: skipped")
+  }
+
+  function test_fix_an_error_reason_asked_before_r_is_ignored_after_it() {
+    var o = make()
+    var bad = fx({ arch: { hasError: true } })
+    openRss(o, bad)
+    j(o, 3)
+    var first = last(o.svc, "rssError")
+    key(o.c, "r")
+    finishCall(o, "rssRefresh", true, "", { ok: true })
+    answerWaiting(o, bad)
+    compare(calls(o.svc, "rssError").length, 2, "r reads it again")
+    answerCall(o, first, true, "", { reason: "old" })
+    verify(!showsIn(o, "rssArticlesPane", fill(w.errorReason, { reason: "old" })), "the answer from before r is dropped")
+    answer(o, "rssError", true, "", { reason: "new" })
+    verify(showsIn(o, "rssArticlesPane", fill(w.errorReason, { reason: "new" })))
+  }
+
+  function test_fix_a_failed_error_read_shows_no_reason_and_is_not_retried() {
+    var o = make()
+    var bad = fx({ arch: { hasError: true } })
+    openRss(o, bad)
+    j(o, 3)
+    answer(o, "rssError", false, "Could not run the qbt helper")
+    verify(showsIn(o, "rssArticlesPane", w.errorNoReason))
+    rp(o).cmds.readItems()
+    items(o, bad)
+    compare(calls(o.svc, "rssError").length, 1, "cached until hasError changes or r")
+  }
+
+  function test_fix_a_repeated_failure_is_posted_once_until_a_read_succeeds() {
+    var o = make()
+    openRss(o)
+    var err = "qBittorrent refused it (HTTP 500)"
+    rp(o).cmds.readItems()
+    answer(o, "rssItems", false, err)
+    compare(statusText(o), err)
+    key(o.c, "j")
+    verify(statusText(o) !== err, "a key clears it")
+    rp(o).cmds.readItems()
+    answer(o, "rssItems", false, err)
+    verify(statusText(o) !== err, "the same failure again isn't posted")
+    rp(o).cmds.readItems()
+    items(o)
+    rp(o).cmds.readItems()
+    answer(o, "rssItems", false, err)
+    compare(statusText(o), err, "posted again after a read succeeded")
+  }
+
+  function test_fix_a_failed_first_read_is_retried_until_one_succeeds() {
+    var o = make()
+    rp(o).fastPollMs = 80
+    shifted(o, "N")
+    answer(o, "rssItems", false, "qBittorrent refused it (HTTP 500)")
+    compare(rp(o).flagsNow().rssUp, false)
+    tryVerify(function() { return calls(o.svc, "rssItems").length >= 2 }, 2000, "read again")
+    answer(o, "rssItems", false, "qBittorrent refused it (HTTP 500)")
+    tryVerify(function() { return calls(o.svc, "rssItems").length >= 3 }, 2000, "and again")
+    items(o)
+    compare(rp(o).flagsNow().rssUp, true)
+    var n = calls(o.svc, "rssItems").length
+    wait(300)
+    compare(calls(o.svc, "rssItems").length, n, "no retry once a read succeeded")
   }
 }
