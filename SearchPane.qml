@@ -243,7 +243,7 @@ Item {
   function windowClosed() {
     dropConfirm()
     cmds.closeJob()
-    cmds.awaiting = []
+    cmds.awaiter.clear()
   }
 
   function dropConfirm() {
@@ -542,7 +542,7 @@ Item {
 
   function syncLibrary() {
     libSet = SearchView.librarySet(service ? service.torrents : [])
-    cmds.checkAwaiting()
+    cmds.awaiter.check()
   }
 
   onColumnRowsChanged: {
