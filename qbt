@@ -2597,7 +2597,8 @@ cmd_ban_list() {
 # ---------------------------------------------------------------------------
 # Slice 5a: `qbt search` and `qbt search-plugin`, exactly per
 # tests/fixtures/search-contract.md. Every rule and message comes from
-# tests/fixtures/search-rules-cases.json, enforced by lib/searchrules.py
+# tests/fixtures/search-rules-cases.json (the pageLink and magnetHash rules
+# also in tests/fixtures/link-rules-cases.json), enforced by lib/searchrules.py
 # (URLs split by the contract's text rule, never a URL library; Ruling FB).
 # Arguments are checked before any request; every value reaches curl on
 # stdin; failures report codes only (api_error_detail=code); response

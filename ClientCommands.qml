@@ -972,6 +972,12 @@ QtObject {
     var hashes, rows, starts, ticket
     targets = targets || []
 
+    // Slice 5b0: a view's opener (View.VIEW_OPENERS) shows that view.
+    if (View.VIEW_OPENERS[commandId] !== undefined) {
+      c.showView(View.VIEW_OPENERS[commandId])
+      return
+    }
+
     switch (commandId) {
     case "cursor.down":
     case "cursor.up":
@@ -1373,15 +1379,7 @@ QtObject {
       magnet.act(commandId)
       return
 
-    case "settings.open":
-      c.showView("settings")
-      return
-
     // Slice 5a: every other Search row is SearchPane's (Client.run).
-    case "search.open":
-      c.showView("search")
-      return
-
     case "settings.back":
       settingsView.back()
       return

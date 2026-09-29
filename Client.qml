@@ -68,8 +68,17 @@ Item {
   // Slice 5b0: every view but the torrents is a host (the view host
   // contract, docs/plans/slice-5b0.md: SettingsHost, SearchPane), looked up
   // by name (viewHost); the Client and ClientCommands loop over the hosts
-  // instead of branching on a view's name. A new view is a Registry.VIEWS
-  // entry plus its host in viewHostList.
+  // instead of branching on a view's name. Adding a view (the checklist):
+  //   CommandRegistry.js: VIEWS, VIEW_OF_PANE, VIEW_META (opener and
+  //     listedOutside), and the view's command rows.
+  //   ClientView.js: VIEW_FLAG_STATE, VIEW_INPUT_PURPOSES_BY_VIEW,
+  //     PALETTE_VIEW_REASON, the INSERT hints in modeHints, and the NORMAL
+  //     footer branch in modeHints (next to isSettingsPane/isSearchPane, ~:824).
+  //   Client.qml: the host's mount, its entry in viewHostList, and the
+  //     footer context (the hints: View.copyState(...) below).
+  //   Tests (client-view.test.js): the literal pins in "the view tables" and
+  //     "derived constants equal 5a's literals"; the completeness test fails
+  //     until every table above has the new view.
   property string activeView: "torrents"
   property string textQuery: ""
   property var regState: ({ mode: "NORMAL", pane: "table", prefix: null, prefixAt: 0, hasTorrent: false, selectionCount: 0, pending: null })

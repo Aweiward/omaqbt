@@ -27,7 +27,7 @@
 // The sentences below are the case file's; the node test checks each one
 // against it, so none can drift.
 
-var EMPTY = "—";
+var EMPTY = Links.EMPTY;
 
 var WINDOW = {
   added: "Added <name>.",

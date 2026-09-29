@@ -2,6 +2,7 @@
 """Slice 5a (Search): the rules `qbt search` and `qbt search-plugin` enforce.
 
 Every rule and message comes from tests/fixtures/search-rules-cases.json
+(the pageLink and magnetHash rules also from tests/fixtures/link-rules-cases.json)
 (the contract, eng OV9); the window only pre-checks the same cases in
 SearchView.js. URLs are split by the contract's own text rule, never by a
 URL library (Ruling FB), and an IDN label becomes RFC 3492 punycode with no

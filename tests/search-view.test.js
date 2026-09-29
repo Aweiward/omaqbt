@@ -1,5 +1,6 @@
 // Slice 5a (Task 3): SearchView.js, the Search view's pure rules, against
-// every row of tests/fixtures/search-rules-cases.json and the window's copy.
+// every row of tests/fixtures/search-rules-cases.json (and the pageLink and
+// magnetHash rows of tests/fixtures/link-rules-cases.json) and the window's copy.
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");

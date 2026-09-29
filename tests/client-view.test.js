@@ -2777,8 +2777,21 @@ test("5b0: the view tables: input purposes, openers and the views they name", ()
   }
   assert.deepEqual(Registry.VIEWS, ["torrents", "settings", "search"]);
   // A view's INSERT prompts and hints exist for each purpose it owns.
-  for (const p of V.VIEW_INPUT_PURPOSES) assert.ok(V.modeHints("INSERT", { purpose: p }).length > 0, p);
+  // (the fallback, "Enter keep filter", is what a purpose no view names gets)
+  const fallback = JSON.stringify(V.modeHints("INSERT", { purpose: "noSuchPurpose" }));
+  for (const p of V.VIEW_INPUT_PURPOSES) assert.notEqual(JSON.stringify(V.modeHints("INSERT", { purpose: p })), fallback, p);
   for (const p of V.SEARCH_INPUT_PURPOSES) assert.notEqual(V.inputPrompt(p).prompt, "", p);
+});
+
+test("5b0: every view but the torrents is in every per-view table", () => {
+  for (const v of Registry.VIEWS) {
+    if (v === "torrents") continue;
+    assert.equal(typeof V.VIEW_FLAG_STATE[v], "function", "VIEW_FLAG_STATE." + v);
+    assert.ok(Array.isArray(V.VIEW_INPUT_PURPOSES_BY_VIEW[v]) && V.VIEW_INPUT_PURPOSES_BY_VIEW[v].length > 0, "VIEW_INPUT_PURPOSES_BY_VIEW." + v);
+    assert.equal(typeof V.PALETTE_VIEW_REASON[v], "function", "PALETTE_VIEW_REASON." + v);
+    assert.ok(Registry.VIEW_META[v], "VIEW_META." + v);
+    assert.equal(V.VIEW_OPENERS[Registry.VIEW_META[v].opener], v, "VIEW_OPENERS " + v);
+  }
 });
 
 test("5b0: the footer takes the view's flags the way Client passes them", () => {
