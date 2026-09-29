@@ -264,11 +264,16 @@ test("entries use only the documented fields and types", () => {
   }
 });
 
-test("sections follow the design, and only rss_* is deferred", () => {
+// Slice 5b1 (OV9): six RSS keys are live in their own RSS section (after
+// Banned IPs and Other, outside the schema's seven); only
+// rss_auto_downloading_enabled stays deferred, until 5b2.
+test("sections follow the design, and only rss_auto_downloading_enabled is deferred", () => {
   assert.deepEqual(SCHEMA.sections, ["Downloads", "Connection", "Speed", "BitTorrent", "Behaviour", "Web UI", "Advanced"]);
+  const deferred = Object.keys(KEYS).filter((k) => KEYS[k].deferred);
+  assert.deepEqual(deferred, ["rss_auto_downloading_enabled"]);
+  assert.equal(KEYS.rss_smart_episode_filters.listKind, "pattern");
   for (const [k, e] of Object.entries(KEYS)) {
     if (k.startsWith("rss_")) {
-      assert.equal(e.deferred, true, k);
       assert.equal(e.section, "RSS", k);
     } else {
       assert.ok(!e.deferred, k);
@@ -618,7 +623,8 @@ test("the committed dump carries no real home directory", () => {
 // --- Slice 4b contract (Task 1) ------------------------------------------------------
 
 const LIST_RULES_FILE = path.join(__dirname, "fixtures", "list-rules-cases.json");
-const LIST_KINDS = { banned_IPs: "ip", add_trackers: "trackerUrl", excluded_file_names: "pattern" };
+// Slice 5b1: rss_smart_episode_filters is a pattern list too.
+const LIST_KINDS = { banned_IPs: "ip", add_trackers: "trackerUrl", excluded_file_names: "pattern", rss_smart_episode_filters: "pattern" };
 const SECRET_WRITABLE = ["proxy_password", "dyndns_password", "mail_notification_password"];
 const HEADER_LOCKS = ["web_ui_use_custom_http_headers_enabled", "web_ui_custom_http_headers"];
 
@@ -631,7 +637,7 @@ const LIST_MESSAGES = {
     "Use at most 1024 characters."]
 };
 
-test("4b: listKind is exactly banned_IPs ip, add_trackers trackerUrl and excluded_file_names pattern", () => {
+test("4b: listKind is exactly banned_IPs ip, add_trackers trackerUrl, excluded_file_names and rss_smart_episode_filters pattern", () => {
   const got = {};
   for (const [k, e] of Object.entries(KEYS)) if ("listKind" in e) got[k] = e.listKind;
   assert.deepEqual(got, LIST_KINDS);

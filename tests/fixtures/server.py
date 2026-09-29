@@ -914,6 +914,278 @@ def _search_post(path, body, jobs):
     return 404, b""
 
 
+# Slice 5b1: qBittorrent 5.2.3's RSS API (rsscontroller.cpp, rss_session.cpp,
+# rss_feed.cpp, rss_folder.cpp) and its log (logcontroller.cpp), backed by
+# state the write routes really change. RSS state is global: no SID keying.
+#
+# RSS_TREE is the rss/items?withData=true shape itself: a folder is
+# {name: child}, a feed {uid, url, title, lastBuildDate, isLoading,
+# hasError, articles}. Unread articles carry no isRead key (only
+# markAsRead adds it). /fixture/rss-reset (test-only, unrecorded) sets the
+# tree and the log from its JSON body ({"tree": {...}, "log": [{"message",
+# "type"}], "logStart": first id}); an empty body empties both.
+#
+# A refresh makes a feed load for the control file's "rss_load_ticks"
+# rss/items reads (default 1: the next read shows isLoading true, the one
+# after that the result; 0 loads at once). A load applies the control
+# file's "rss_sources" {url: {"title", "lastBuildDate", "articles": [...]}}
+# (an article without torrentURL gets its link, as rss_parser.cpp does), or
+# "rss_feed_errors" {url: reason}: hasError, and the WARNING log line
+# rss_feed.cpp:247 writes. addFeed refreshes only while
+# rss_processing_enabled is true (rss_session.cpp:166); refreshItem always
+# does. "rss_ignore_move": true answers moveItem 200 and changes nothing.
+# Each write route also takes _write_fault's key "rss_<action>".
+_RSS_LOCK = threading.Lock()
+RSS_TREE = {}
+RSS_LOADING = {}
+RSS_LOG = []
+_RSS_IDS = {"uid": 0, "log": 0}
+RSS_WRITES = ("addFolder", "addFeed", "removeItem", "moveItem", "markAsRead", "refreshItem")
+_RSS_PATH = re.compile(r"\A[^\\]+(\\[^\\]+)*\Z")
+LOG_TYPES = {"normal": 1, "info": 2, "warning": 4, "critical": 8}
+
+
+def _rss_is_feed(node):
+    return isinstance(node, dict) and isinstance(node.get("uid"), str) and isinstance(node.get("url"), str)
+
+
+def _rss_item(path):
+    """The node at path ("" is the root folder), or None."""
+    node = RSS_TREE
+    if path == "":
+        return node
+    for part in path.split("\\"):
+        if _rss_is_feed(node) or not isinstance(node, dict) or part not in node:
+            return None
+        node = node[part]
+    return node
+
+
+def _rss_parent(path):
+    return path.rpartition("\\")[0]
+
+
+def _rss_name(path):
+    return path.rpartition("\\")[2]
+
+
+def _rss_feeds(node):
+    if _rss_is_feed(node):
+        yield node
+    elif isinstance(node, dict):
+        for child in node.values():
+            yield from _rss_feeds(child)
+
+
+def _rss_urls():
+    return {f["url"] for f in _rss_feeds(RSS_TREE)}
+
+
+def _rss_processing():
+    return (PREFS_STATE or {}).get("rss_processing_enabled") is True
+
+
+def _log_append(message, kind):
+    RSS_LOG.append({"id": _RSS_IDS["log"], "message": message, "timestamp": int(time.time()),
+                    "type": LOG_TYPES[kind]})
+    _RSS_IDS["log"] += 1
+
+
+def _rss_finish(feed):
+    feed["isLoading"] = False
+    url = feed["url"]
+    errors = _control().get("rss_feed_errors")
+    if isinstance(errors, dict) and isinstance(errors.get(url), str):
+        feed["hasError"] = True
+        _log_append(f"Failed to download RSS feed at '{url}'. Reason: {errors[url]}", "warning")
+        return
+    feed["hasError"] = False
+    sources = _control().get("rss_sources")
+    source = sources.get(url) if isinstance(sources, dict) else None
+    if not isinstance(source, dict):
+        return
+    for key in ("title", "lastBuildDate"):
+        if isinstance(source.get(key), str):
+            feed[key] = source[key]
+    known = {a.get("id") for a in feed["articles"]}
+    added = 0
+    for art in source.get("articles") or []:
+        art = dict(art)
+        if art.get("id") in known:
+            continue
+        art.pop("isRead", None)
+        if not art.get("torrentURL"):
+            art["torrentURL"] = art.get("link", "")
+        feed["articles"].append(art)
+        added += 1
+    _log_append(f"RSS feed at '{url}' updated. Added {added} new articles.", "normal")
+
+
+def _rss_refresh(node):
+    ticks = _control().get("rss_load_ticks", 1)
+    ticks = ticks if isinstance(ticks, int) and not isinstance(ticks, bool) and ticks >= 0 else 1
+    for feed in _rss_feeds(node):
+        if ticks == 0:
+            _rss_finish(feed)
+        else:
+            feed["isLoading"] = True
+            RSS_LOADING[feed["uid"]] = ticks
+
+
+def _rss_tick():
+    for feed in list(_rss_feeds(RSS_TREE)):
+        left = RSS_LOADING.get(feed["uid"])
+        if left is None:
+            continue
+        if left <= 1:
+            del RSS_LOADING[feed["uid"]]
+            _rss_finish(feed)
+        else:
+            RSS_LOADING[feed["uid"]] = left - 1
+
+
+def _rss_items(query):
+    """GET rss/items: withData shows titles, states and articles
+    (rss_feed.cpp:483). The fixture clock ticks after the read."""
+    with_data = (parse_qs(query).get("withData") or ["false"])[0].lower() in ("true", "1")
+
+    def view(node):
+        if _rss_is_feed(node):
+            if with_data:
+                return copy.deepcopy(node)
+            return {"uid": node["uid"], "url": node["url"]}
+        return {k: view(v) for k, v in node.items()}
+
+    with _RSS_LOCK:
+        # QJsonObject keeps its keys sorted.
+        body = json.dumps(view(RSS_TREE), sort_keys=True).encode()
+        _rss_tick()
+    return 200, body
+
+
+def _rss_dest(path):
+    """prepareItemDest (rss_session.cpp:428): (parent folder, None) or
+    (None, 409 text)."""
+    if not _RSS_PATH.match(path):
+        return None, f"Incorrect RSS Item path: {path}."
+    if _rss_item(path) is not None:
+        return None, f"RSS item with given path already exists: {path}."
+    parent = _rss_item(_rss_parent(path))
+    if parent is None or _rss_is_feed(parent):
+        return None, f"Parent folder doesn't exist: {_rss_parent(path)}."
+    return parent, None
+
+
+def _rss_post(action, body):
+    form = parse_qs(body, keep_blank_values=True)
+
+    def arg(name):
+        return (form.get(name) or [None])[0]
+
+    required = {"addFolder": ("path",), "addFeed": ("url", "path"), "removeItem": ("path",),
+                "moveItem": ("itemPath", "destPath"), "markAsRead": ("itemPath",), "refreshItem": ("itemPath",)}
+    missing = [p for p in required[action] if arg(p) is None]
+    if missing:
+        return 400, ("Missing required parameters: " + ", ".join(missing)).encode()
+    with _RSS_LOCK:
+        if action == "addFolder":
+            path = arg("path")
+            parent, err = _rss_dest(path)
+            if err:
+                return 409, err.encode()
+            parent[_rss_name(path)] = {}
+        elif action == "addFeed":
+            url, path = arg("url"), arg("path")
+            path = path or url
+            if url in _rss_urls():
+                return 409, f"RSS feed with given URL already exists: {url}.".encode()
+            parent, err = _rss_dest(path)
+            if err:
+                return 409, err.encode()
+            _RSS_IDS["uid"] += 1
+            feed = {"uid": "{%08x-0000-4000-8000-000000000000}" % _RSS_IDS["uid"], "url": url, "title": "",
+                    "lastBuildDate": "", "isLoading": False, "hasError": False, "articles": []}
+            parent[_rss_name(path)] = feed
+            if _rss_processing():
+                _rss_refresh(RSS_TREE)
+        elif action == "removeItem":
+            path = arg("path")
+            if path == "":
+                return 409, b"Cannot delete root folder."
+            if _rss_item(path) is None:
+                return 409, f"Item doesn't exist: {path}.".encode()
+            for feed in _rss_feeds(_rss_item(path)):
+                RSS_LOADING.pop(feed["uid"], None)
+            del _rss_item(_rss_parent(path))[_rss_name(path)]
+        elif action == "moveItem":
+            src, dest = arg("itemPath"), arg("destPath")
+            if src == "":
+                return 409, b"Cannot move root folder."
+            item = _rss_item(src)
+            if item is None:
+                return 409, f"Item doesn't exist: {src}.".encode()
+            if src == dest or _control().get("rss_ignore_move") is True:
+                return 200, b""
+            if not _rss_is_feed(item) and dest.startswith(src + "\\"):
+                return 409, b"Can't move a folder into itself or its subfolders."
+            parent, err = _rss_dest(dest)
+            if err:
+                return 409, err.encode()
+            del _rss_item(_rss_parent(src))[_rss_name(src)]
+            parent[_rss_name(dest)] = item
+        elif action == "markAsRead":
+            item = _rss_item(arg("itemPath"))
+            if item is None:
+                return 200, b""
+            article_id = arg("articleId")
+            if article_id is not None:
+                # rsscontroller.cpp:143: an articleId, even an empty one,
+                # names one article of a feed.
+                if _rss_is_feed(item):
+                    for art in item["articles"]:
+                        if art.get("id") == article_id:
+                            art["isRead"] = True
+            else:
+                for feed in _rss_feeds(item):
+                    for art in feed["articles"]:
+                        art["isRead"] = True
+        elif action == "refreshItem":
+            item = _rss_item(arg("itemPath"))
+            if item is not None:
+                _rss_refresh(item)
+    return 200, b""
+
+
+def _rss_reset(body):
+    spec = json.loads(body) if body else {}
+    with _RSS_LOCK:
+        RSS_TREE.clear()
+        RSS_TREE.update(copy.deepcopy(spec.get("tree") or {}))
+        RSS_LOADING.clear()
+        RSS_LOG[:] = []
+        _RSS_IDS["log"] = int(spec.get("logStart") or 0)
+        for row in spec.get("log") or []:
+            _log_append(row["message"], row.get("type", "warning"))
+
+
+def _log_main(query):
+    """GET log/main (logcontroller.cpp): the rows of the asked types with
+    an id above last_known_id (default -1)."""
+    qs = parse_qs(query)
+
+    def flag(name):
+        return (qs.get(name) or ["true"])[0].lower() in ("true", "1")
+
+    try:
+        last = int((qs.get("last_known_id") or ["-1"])[0])
+    except ValueError:
+        last = -1
+    wanted = sum(bit for name, bit in LOG_TYPES.items() if flag(name))
+    with _RSS_LOCK:
+        rows = [dict(r) for r in RSS_LOG if r["id"] > last and r["type"] & wanted]
+    return 200, json.dumps(rows).encode()
+
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
         return
@@ -962,8 +1234,61 @@ class Handler(BaseHTTPRequestHandler):
         else:
             self._send(int(fault), b"boom", sid=sid)
 
+    def _rss_route(self, method, parsed, body):
+        """Slice 5b1: rss/* and log/main. The writes are POST only (a GET
+        answers 405); items and log/main take either."""
+        action = parsed.path.rsplit("/", 1)[1]
+        if parsed.path == "/api/v2/log/main":
+            fault = _write_fault("log_main")
+            if fault and fault not in ("noop", "unreadable", "sleep7"):
+                self._fault_reply(fault)
+                return
+            if fault == "unreadable":
+                self._send(200, b"<html>not json</html>")
+                return
+            code, payload = _log_main(parsed.query)
+            self._send(code, payload)
+            return
+        if action == "items":
+            fault = _write_fault("rss_items")
+            if fault == "unreadable":
+                self._send(200, b"<html>not json</html>")
+                return
+            if fault == "sleep7":
+                time.sleep(7)
+            elif fault and fault != "noop":
+                self._fault_reply(fault)
+                return
+            code, payload = _rss_items(parsed.query)
+            self._send(code, payload)
+            return
+        if action not in RSS_WRITES:
+            self._send(404, b"Not Found", content_type="text/plain")
+            return
+        if method != "POST":
+            self._send(405, b"Method Not Allowed", content_type="text/plain")
+            return
+        fault = _write_fault("rss_" + action)
+        if fault in ("sleep7", "unreadable"):
+            fault = None
+        if fault == "noop":
+            self._send(200, b"")
+            return
+        if fault:
+            self._fault_reply(fault)
+            return
+        code, payload = _rss_post(action, body)
+        self._send(code, payload, content_type="text/plain")
+
     def do_GET(self):
         parsed = urlparse(self.path)
+        if parsed.path == "/fixture/rss-state":
+            # Test-only and unrecorded: the tree as it is, without ticking
+            # the RSS clock.
+            with _RSS_LOCK:
+                payload = json.dumps({"tree": RSS_TREE, "log": RSS_LOG, "loading": RSS_LOADING})
+            self._send(200, payload.encode())
+            return
         if parsed.path == "/fixture/state":
             # Test-only and unrecorded: the end state after a write.
             self._send(200, json.dumps({
@@ -977,6 +1302,9 @@ class Handler(BaseHTTPRequestHandler):
             }).encode())
             return
         record("GET", parsed.path, "", parse_qs(parsed.query), self.headers.get("Cookie") or "")
+        if parsed.path.startswith("/api/v2/rss/") or parsed.path == "/api/v2/log/main":
+            self._rss_route("GET", parsed, "")
+            return
         if parsed.path.startswith("/api/v2/search/"):
             sid, jobs = self._search_session()
             fault = _write_fault("search_" + parsed.path.rsplit("/", 1)[1])
@@ -1138,7 +1466,18 @@ class Handler(BaseHTTPRequestHandler):
                     del _CALLS[key]
             self._send(200, b"")
             return
+        if parsed.path == "/fixture/rss-reset":
+            # Test-only and unrecorded (see _rss_reset).
+            _rss_reset(body)
+            with _LOG_LOCK:
+                for key in [k for k in _CALLS if k.startswith("rss_")]:
+                    del _CALLS[key]
+            self._send(200, b"")
+            return
         record("POST", parsed.path, body, parse_qs(parsed.query))
+        if parsed.path.startswith("/api/v2/rss/") or parsed.path == "/api/v2/log/main":
+            self._rss_route("POST", parsed, body)
+            return
         if parsed.path.startswith("/api/v2/search/"):
             sid, jobs = self._search_session()
             fault = _write_fault("search_" + parsed.path.rsplit("/", 1)[1])

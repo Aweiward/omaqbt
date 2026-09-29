@@ -36,7 +36,7 @@ function prefs(overrides) {
 }
 
 const rowOf = (key, p) => {
-  for (const s of Schema.SECTIONS.concat(["Other"])) {
+  for (const s of Schema.SECTIONS.concat(["RSS", "Other"])) {
     const r = V.rows(s, p || prefs()).find((x) => x.key === key);
     if (r) return r;
   }
@@ -46,23 +46,24 @@ const rowOf = (key, p) => {
 // --- sections ----------------------------------------------------------------
 
 // Slice 4b: Banned IPs (a list section, its count the bans) after Advanced.
-test("sections: the seven in order with T1's counts, Banned IPs, then a dimmed RSS; no Other when every key is mapped", () => {
+// Slice 5b1: RSS is live, with its six un-deferred keys.
+test("sections: the seven in order with T1's counts, Banned IPs, then RSS; no Other when every key is mapped", () => {
   const s = V.sections(prefs());
   assert.deepEqual(s.map((x) => [x.name, x.count]), [
     ["Downloads", 33], ["Connection", 27], ["Speed", 11], ["BitTorrent", 23],
-    ["Behaviour", 12], ["Web UI", 30], ["Advanced", 72], ["Banned IPs", 0], ["RSS", 0]
+    ["Behaviour", 12], ["Web UI", 30], ["Advanced", 72], ["Banned IPs", 0], ["RSS", 6]
   ]);
   assert.equal(s[7].list, "banned_IPs");
   assert.equal(s[7].dimmed, false);
-  assert.equal(s[8].label, "RSS · slice 5");
-  assert.equal(s[8].dimmed, true);
+  assert.equal(s[8].label, "RSS");
+  assert.equal(s[8].dimmed, false);
   assert.equal(s[0].label, "Downloads");
   assert.equal(s[0].dimmed, false);
 });
 
 test("sections: Other appears before RSS when prefs hold an unknown key", () => {
   const s = V.sections(prefs({ brand_new_toggle: true, other_number: 5 }));
-  assert.deepEqual(s.slice(7).map((x) => [x.name, x.count]), [["Banned IPs", 0], ["Other", 2], ["RSS", 0]]);
+  assert.deepEqual(s.slice(7).map((x) => [x.name, x.count]), [["Banned IPs", 0], ["Other", 2], ["RSS", 6]]);
 });
 
 test("sections: while loading (no prefs) the counts come from the schema", () => {
@@ -272,11 +273,16 @@ test("search: label, help and raw key, with each result's section", () => {
   assert.ok(!V.search("incoming nowhere", prefs()).rows.length);
 });
 
-test("search: composites show, their hidden members, rss and banned IPs never do", () => {
+// Slice 5b1: the six live RSS keys are found (in their RSS section); the
+// deferred auto-download key never is.
+test("search: composites show, their hidden members, deferred rss and banned IPs never do", () => {
   const r = V.search("schedule", prefs()).rows.map((x) => x.key);
   assert.ok(r.includes("schedule_from") && r.includes("schedule_to"));
   assert.ok(!r.some((k) => /_(hour|min)$/.test(k)));
-  assert.deepEqual(V.search("rss", prefs()).rows.filter((x) => /^rss_/.test(x.key)), []);
+  const rss = V.search("rss", prefs()).rows.filter((x) => /^rss_/.test(x.key));
+  assert.deepEqual(rss.map((x) => x.key).sort(), ["rss_download_repack_proper_episodes", "rss_fetch_delay",
+    "rss_max_articles_per_feed", "rss_processing_enabled", "rss_refresh_interval", "rss_smart_episode_filters"]);
+  assert.ok(rss.every((x) => x.section === "RSS"));
   assert.ok(!V.search("banned", prefs()).rows.some((x) => x.key === "banned_IPs"));
   assert.ok(!V.search("banned_IPs", prefs()).rows.length);
 });
@@ -333,7 +339,8 @@ test("editorFor: none for locked, read-only, secret, dimmed, loading and unknown
   assert.deepEqual(why("dht", null), { kind: "none", why: "loading" });
   assert.deepEqual(why("schedule_from_hour"), { kind: "none", why: "hidden" });
   assert.deepEqual(why("banned_IPs"), { kind: "none", why: "hidden" });
-  assert.deepEqual(why("rss_processing_enabled"), { kind: "none", why: "hidden" });
+  assert.deepEqual(why("rss_auto_downloading_enabled"), { kind: "none", why: "hidden" });
+  assert.deepEqual(why("rss_processing_enabled"), { kind: "toggle", key: "Space", next: true });
   assert.deepEqual(why("no_such_key"), { kind: "none", why: "unknown" });
   assert.deepEqual(why("web_ui_new", prefs({ web_ui_new: 1 })), { kind: "none", why: "unknown" });
   const p = prefs();
@@ -460,9 +467,10 @@ test("parseInput: bools, Other keys by JSON type, and refused keys", () => {
   assert.equal(V.parseInput("new_ratio", "3x", f).error, "Use a number.");
   assert.deepEqual(V.parseInput("new_text", "b c", p), { value: "b c" });
   assert.equal(V.parseInput("new_text", "b\nc", p).error, "Use one line.");
-  for (const k of ["web_ui_port", "current_network_interface", "add_trackers_url_list", "proxy_password", "schedule_from_hour", "banned_IPs", "rss_refresh_interval", "nope"]) {
+  for (const k of ["web_ui_port", "current_network_interface", "add_trackers_url_list", "proxy_password", "schedule_from_hour", "banned_IPs", "rss_auto_downloading_enabled", "nope"]) {
     assert.equal(V.parseInput(k, "1", p).error, V.CANT_CHANGE, k);
   }
+  assert.deepEqual(V.parseInput("rss_refresh_interval", "5", p), { value: 5 });
   assert.equal(V.parseInput("web_ui_new", "1", prefs({ web_ui_new: 1 })).error, V.CANT_CHANGE);
   // Ruling DL: refused patterns match case-insensitively
   for (const k of ["Web_UI_New", "PROXY_x", "My_Interface", "smtp_Password", "use_HTTPS2", "AutoRun_x"]) {
@@ -636,7 +644,8 @@ test("rowFor: one schema or Other row; null for hidden, missing or unknown keys"
   assert.deepEqual(V.rowFor("listen_port", prefs()), rowOf("listen_port"));
   assert.equal(V.rowFor("new_k", prefs({ new_k: 1 })).section, "Other");
   assert.equal(V.rowFor("schedule_from_hour", prefs()), null);
-  assert.equal(V.rowFor("rss_refresh_interval", prefs()), null);
+  assert.equal(V.rowFor("rss_auto_downloading_enabled", prefs()), null);
+  assert.equal(V.rowFor("rss_refresh_interval", prefs()).section, "RSS");
   assert.equal(V.rowFor("nope", prefs()), null);
   assert.equal(V.rowFor("dht", null).value, "—");
 });
@@ -661,7 +670,8 @@ test("rows: a locked row is never dimmed; the lock is its reason", () => {
 // Slice 4b Task 1: the custom headers are locked (eng 4b D8) and the
 // login-bypass whitelist is read-only (D9), so two keys wait for 4b's list
 // editor (Task 3).
-const MULTI = ["excluded_file_names", "add_trackers"];
+// Slice 5b1: rss_smart_episode_filters joins them (a pattern list).
+const MULTI = ["excluded_file_names", "add_trackers", "rss_smart_episode_filters"];
 
 test("multiline: exactly the two editable-in-4b keys are the schema's multiline, non-hidden, non-deferred, writable keys", () => {
   const found = Schema.KEY_ORDER.filter((k) => {
@@ -683,8 +693,8 @@ test("multiline: the list keys say list, are writable, keep the schema help and 
     assert.equal(r.readOnly, false, k);
     assert.equal(r.help, Schema.SCHEMA[k].help, k);
     assert.deepEqual(V.editorFor(k, on), { kind: "list", key: "Enter" }, k);
-    // a dimmed list doesn't open (4a's dim rule)
-    assert.deepEqual(V.editorFor(k, prefs()), { kind: "none", why: "dimmed" }, k);
+    // a dimmed list doesn't open (4a's dim rule); rss_smart_episode_filters depends on nothing
+    if (Schema.SCHEMA[k].dependsOn) assert.deepEqual(V.editorFor(k, prefs()), { kind: "none", why: "dimmed" }, k);
     // a list is never written as one typed value
     assert.deepEqual(V.parseInput(k, "x", on), { error: V.CANT_CHANGE }, k);
   }
