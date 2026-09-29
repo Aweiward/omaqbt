@@ -37,6 +37,23 @@ QtObject {
   // pluginInstall) are forwarded there; its commands go there from Client.run.
   property var searchView: null
 
+  // ---- view hosts (slice 5b0) ---------------------------------------------
+
+  // Every view's host (Client.viewHost), in Registry.VIEWS order: the
+  // pickers and the status-line INSERT loop over these instead of naming
+  // Settings and Search.
+  function viewHosts() {
+    var c = client
+    return c.hostNames.map(function (n) { return c.viewHost(n) }).filter(function (h) { return !!h })
+  }
+
+  // inputHost(purpose) -> the host whose inputPurposes hold `purpose`, or null.
+  function inputHost(purpose) {
+    var hosts = viewHosts()
+    for (var i = 0; i < hosts.length; i++) if ((hosts[i].inputPurposes || []).indexOf(purpose) !== -1) return hosts[i]
+    return null
+  }
+
   // ---- trackers and peers (inspector tabs 2, 3) ---------------------------
 
   // The tracker url / peer ip:port under each tab's cursor, so a refresh
@@ -571,9 +588,10 @@ QtObject {
   property var pickerTargets: []
 
   function openPicker() {
-    if (settingsCommands && settingsCommands.pickerOpen) return settingsCommands.picker
-    // Slice 5a: Search's category picker (SearchPane's hook).
-    if (searchView && searchView.pickerOpen) return searchView.picker
+    // A view's own picker first (Settings' choice picker, Search's category
+    // picker: slice 5b0's hosts, in Registry.VIEWS order), then C's and T's.
+    var hosts = viewHosts()
+    for (var i = 0; i < hosts.length; i++) if (hosts[i].pickerOpen) return hosts[i].picker
     return pickerKind === "category" ? categoryPicker : (pickerKind === "tag" ? tagPicker : null)
   }
 
@@ -605,8 +623,8 @@ QtObject {
 
   // Esc, a scrim click, or an accept: nothing is left open.
   function closePicker() {
-    if (settingsCommands) settingsCommands.dropPicker()
-    if (searchView) searchView.dropPicker()
+    var hosts = viewHosts()
+    for (var i = 0; i < hosts.length; i++) hosts[i].dropPicker()
     pickerKind = ""
     pickerTargets = []
     setMode("NORMAL")
@@ -625,8 +643,8 @@ QtObject {
   // files (G8; `y` comes back as torrent.category with args.confirmed).
   // T: send what the toggles changed, nothing when unchanged.
   function acceptPicker() {
-    if (settingsCommands && settingsCommands.pickerOpen) { settingsCommands.acceptPicker(); return }
-    if (searchView && searchView.pickerOpen) { searchView.acceptPicker(); return }
+    var hosts = viewHosts()
+    for (var i = 0; i < hosts.length; i++) if (hosts[i].pickerOpen) { hosts[i].acceptPicker(); return }
     var c = client
     var svc = c.service
     var targets = pickerTargets
@@ -652,7 +670,11 @@ QtObject {
   }
 
   // Space/Tab on T: toggle the cursor row (a refused "+ New tag" says why).
+  // A view's own multi-select picker toggles first (its host says whether
+  // it did; Settings' and Search's are single choice).
   function togglePicker() {
+    var hosts = viewHosts()
+    for (var i = 0; i < hosts.length; i++) if (hosts[i].pickerOpen && hosts[i].togglePicker()) return
     if (pickerKind !== "tag") return
     var row = tagPicker.currentRow()
     if (!row) return
@@ -827,21 +849,12 @@ QtObject {
 
   function commitInput() {
     var c = client
-    // Search's query and plugin URL (slice 5a): SearchPane ends or keeps
-    // the INSERT itself (endInput / stayInInsert).
-    if (View.SEARCH_INPUT_PURPOSES.indexOf(c.inputPurpose) !== -1) {
-      if (searchView) searchView.commitInput(c.inputPurpose, inputLine.inputValue())
-      else endInput()
-      return
-    }
-    // The Settings search: never an add target or a torrent filter.
-    if (c.inputPurpose === "settingsSearch") {
-      settingsView.commitSearch(inputLine.inputValue())
-      endInput()
-      return
-    }
-    if (c.inputPurpose === "settingEdit") {
-      settingsCommands.commitInput(inputLine.inputValue())
+    // A view's own INSERT (the Settings search and a setting's edit;
+    // Search's query and plugin URL): its host ends or keeps the INSERT
+    // itself (endInput / stayInInsert).
+    var host = inputHost(c.inputPurpose)
+    if (host) {
+      host.commitInput(c.inputPurpose, inputLine.inputValue())
       return
     }
     if (isLimitPurpose(c.inputPurpose)) {
@@ -883,8 +896,8 @@ QtObject {
   // Client.leaveInsert (a click during INSERT) ends INSERT through here too.
   function cancelInput() {
     var c = client
-    if (c.inputPurpose === "settingsSearch") settingsView.clearSearch()
-    if (searchView && View.SEARCH_INPUT_PURPOSES.indexOf(c.inputPurpose) !== -1) searchView.cancelInput(c.inputPurpose)
+    var host = inputHost(c.inputPurpose)
+    if (host) host.cancelInput(c.inputPurpose)
     if (c.inputPurpose === "filter") {
       c.textQuery = c.queryBeforeEdit
       c.rebuildRows(true)
@@ -893,6 +906,8 @@ QtObject {
     trackerInput = null
     libraryInput = null
     limitInput = null
+    // Whatever the purpose (Review Focus 2): a setting's edit never
+    // outlives the INSERT that ended.
     if (settingsCommands) settingsCommands.input = null
     endInput()
   }
