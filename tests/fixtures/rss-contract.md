@@ -19,15 +19,20 @@ qBittorrent 5.2.3 facts (the eng review's list, from `rsscontroller.cpp`, `rss_s
 
 ## `qbt rss`
 
-It follows `qbt`'s existing conventions:
-- **Every value arrives on stdin**, NUL-separated, never in argv (argv holds only the subcommand). Untrusted values reach curl on stdin too.
-- A refusal or failure prints one sentence on stderr and exits 1.
-- Success prints one JSON line on stdout and exits 0.
+It follows `qbt`'s existing conventions, plus a stdin framing that is new in 5b1:
+- **Every value arrives on stdin**, NUL-separated, never in argv (argv holds only the subcommand). Untrusted values reach curl on stdin too. The framing is new in 5b1 (`qbt pref-set --stdin` reads one raw value, not fields):
+  - stdin is UTF-8; qbt reads it to EOF and splits it on NUL;
+  - each command takes exactly K fields: `items` reads no stdin; `error`, `add-folder`, `remove` and `refresh` take 1; `article`, `add-feed`, `rename` and `add` take 2; `mark-read` takes 3;
+  - there is no trailing NUL (`a\0b` is two fields, `a\0b\0` is three, the last empty);
+  - an empty stdin is ONE empty field (so `refresh` with empty stdin means everything);
+  - a wrong field count exits 2 with the usage line below.
+- A refusal or failure prints one sentence on stderr and exits 1. The usage line exits 2.
+- Success prints one JSON line on stdout and exits 0. That includes `mark-read`'s `{"ok": false, "unread": M}`, which is an answer, not a failure.
 - Every request is localhost-only (`assert_local_base`); errors report codes only, never a response body; response bodies never touch disk.
-- Every write is a POST, and every write reads `rss/items` back before it answers.
-- Values are checked before any request. A path is checked segment by segment with the `name` rule: a segment the rule refuses gets that rule's message, and a segment the rule would change (one with a Qt space at either end) prints the usage line, since the window always sends trimmed names. qbt posts every path and URL exactly as it received it, never a trimmed variant, and reads back that same path.
+- Every write is a POST. Every write except `qbt rss add` reads `rss/items` back before it answers (`add` goes to `torrents/add`; the window confirms a magnet through AddAwaiter).
+- Values are checked before any request. The `name` rule applies **only to the segment being created**: the last segment of `add-feed`'s and `add-folder`'s path, and the last segment of `rename`'s `to`. A segment the rule refuses gets that rule's message; a segment the rule would change (a Qt space at either end) prints the usage line, since the window always sends trimmed names. **Existing paths** (`rename`'s `from`, the parent folder of a new item, and the targets of `remove`, `refresh`, `mark-read` and `article`) are taken exactly as `rss/items` gave them, guarded by the existence check in the read before the write, and never through the `name` rule: qBittorrent itself names a feed after its channel title, untrimmed (rss_session.cpp:591-598), so a feed called ` Debian ` (spaces kept) must stay manageable. qbt posts every path and URL exactly as it received it, never a trimmed variant, and reads back that same path.
 - A bare `qbt rss`, an unknown subcommand, or stdin with the wrong number of values prints "usage: qbt rss items|article|error|add-feed|add-folder|rename|remove|refresh|mark-read|add".
-- A 409 is passed through in plain words: "RSS feed with given URL already exists" prints "That feed is already added.", "RSS item with given path already exists" prints "There's already a feed or folder called <name> there." (`<name>` is the last segment of the path), and "Parent folder doesn't exist" prints "That folder is gone.". Any other API failure prints qbt's existing failure line (`qBittorrent refused it (…)` with `API_FAIL`).
+- A 409 is passed through in plain words. qBittorrent's 409 bodies end in `: <path>.` (rss_session.cpp:156/434/439), so qbt matches each on its prefix: "RSS feed with given URL already exists" prints "That feed is already added.", "RSS item with given path already exists" prints "There's already a feed or folder called <name> there." (`<name>` is the last segment of the path), and "Parent folder doesn't exist" prints "That folder is gone.". Any other API failure prints qbt's existing failure line (`qBittorrent refused it (…)` with `API_FAIL`).
 - A path that doesn't exist (checked in the read before a write) prints "That feed is gone." for `rename`, `remove`, `refresh` and `mark-read` (qbt can't tell a feed from a folder that has gone); a folder that doesn't exist in `add-feed`, `add-folder` or `rename`'s target prints "That folder is gone.".
 
 ### `qbt rss items`
@@ -35,15 +40,17 @@ It follows `qbt`'s existing conventions:
 No stdin. It reads `rss/items?withData=true` and `app/preferences` in the same call and prints:
 
 ```json
-{"processing": true, "feeds": [...], "articles": [...]}
+{"processing": true, "refreshInterval": 30, "feeds": [...], "articles": [...]}
 ```
 
 - `processing` is `rss_processing_enabled`.
+- `refreshInterval` is `rss_refresh_interval` from the same `app/preferences` read: whole minutes, an integer. The window fills `<n>` in the processing-on confirm from it.
 - `feeds`, in tree order: a folder comes before its children; siblings are sorted by name, case-insensitively (Python's `str.lower()`), then by the exact name. Folders and feeds sort together.
   - A feed: `{"path", "name", "depth", "folder": false, "url", "title", "isLoading", "hasError", "unread", "total"}`.
   - A folder: `{"path", "name", "depth", "folder": true, "unread", "total", "feeds"}`. `feeds` is the number of feeds anywhere under it (the remove confirm names it). `unread` and `total` sum every feed under it.
   - `path` is the full `\`-joined path, `name` its last segment, and `depth` the number of `\` in the path (0 at the root). `title` is the feed's own title as qBittorrent gives it (`""` when it has none). `unread` counts articles with `isRead` false.
 - `articles`, the feeds' order, each feed's articles in qBittorrent's order: `{"feedPath", "guid", "title", "date", "isRead", "torrentURL", "link", "hasTorrent", "host"}`.
+  - `isRead`: qBittorrent 5.2.3 leaves `isRead` out of an unread article (only markAsRead adds it). Absent means false; qbt always outputs `isRead` as a bool. The fixture omits it on unread articles.
   - `guid` is qBittorrent's article `id`. `title`, `torrentURL` and `link` are the raw strings (`""` when missing); the window cleans them.
   - `date` is epoch seconds (an integer) from `email.utils.parsedate_to_datetime`, or `null` when it's missing or unparsable. A date with no zone (`-0000`) is read as UTC.
   - `hasTorrent` is the `hasTorrent` rule (a refused link is `false`).
@@ -57,8 +64,8 @@ stdin `path\0guid`. It reads `rss/items?withData=true` and prints `{"text": "...
 ### `qbt rss error`
 
 stdin `url`. It reads `log/main?normal=false&info=false&warning=true&critical=false&last_known_id=<id>` and prints `{"reason": "..."}` or `{"reason": null}`.
-- `$STATE_DIR/rss-errors.json` (mode 0600) holds `{"lastId": N, "reasons": {url: text}}`. Each call also reads `rss/items` (no data) for every feed's URL, reads the log rows after `lastId`, and for each feed URL applies the `errorReason` rule to those rows; a match replaces that URL's stored reason. qbt never extracts a URL from a message (a `'` in a URL makes that ambiguous), so the rule stays the case file's prefix test. It then saves the highest id it saw as `lastId`. It keeps at most 200 URLs, dropping the least recently stored first.
-- The reply is the stored reason for that exact URL, or `null`. The window shows "Couldn't refresh: <reason>", or "qBittorrent reported an error but gave no reason." for `null`.
+- `$STATE_DIR/rss-errors.json` (mode 0600) holds `{"lastId": N, "reasons": {url: text}}`. Each call also reads `rss/items` (no data) for every feed's URL and `hasError`, reads the log rows after `lastId`, and for each feed URL applies the `errorReason` rule to those rows; a match replaces that URL's stored reason. A feed whose `hasError` is false has its stored reason dropped (OV13: the reason lasts until the error clears). If log/main's highest id is below the stored `lastId` (qBittorrent restarted and its log ids began again), qbt resets `lastId` to 0 and rescans the whole log. qbt never extracts a URL from a message (a `'` in a URL makes that ambiguous), so the rule stays the case file's prefix test. It then saves the highest id it saw as `lastId`. It keeps at most 200 URLs, dropping the least recently stored first.
+- The reply is the stored reason for that exact URL, or `null`. The window shows "Couldn't refresh: <reason>", or "qBittorrent reported an error but gave no reason." for `null` and for an empty reason (`""`).
 
 ### `qbt rss add-feed`
 
@@ -70,7 +77,7 @@ stdin `path`. It POSTs `rss/addFolder` and reads back that `path` exists: `{"ok"
 
 ### `qbt rss rename`
 
-stdin `from\0to`. `to` must be in the same folder as `from` (moveItem is used for renames only); otherwise the usage line. It POSTs `rss/moveItem` (`itemPath=from`, `destPath=to`) and reads back that `to` exists and `from` doesn't: `{"ok": true, "path": "..."}` (the window's cursor follows `path`), else "Couldn't confirm the rename.".
+stdin `from\0to`. The window skips an unchanged rename (the same name) without calling qbt. `to` must be in the same folder as `from` (moveItem is used for renames only); otherwise the usage line. It POSTs `rss/moveItem` (`itemPath=from`, `destPath=to`) and reads back that `to` exists and `from` doesn't: `{"ok": true, "path": "..."}` (the window's cursor follows `path`), else "Couldn't confirm the rename.".
 
 ### `qbt rss remove`
 
@@ -83,8 +90,8 @@ stdin `path`, or `""` for everything. It checks the path exists first ("That fee
 ### `qbt rss mark-read`
 
 stdin `path\0guid\0expect`. `guid` is `""` for a whole feed or folder, and `path` is `""` for everything (Unread and All). `expect` is the unread count the window's confirm named (a whole number; `0` with a `guid`).
-- With a `guid`: a missing article prints "That article is gone."; otherwise it POSTs `rss/markAsRead` (`itemPath`, `articleId`) and reads back `isRead`: `{"ok": true}`.
-- Without a `guid`: it first re-reads the unread count in that scope. If it's greater than `expect`, it doesn't post and prints `{"ok": false, "unread": M}` (OV11), and the window asks again: "More articles arrived: mark <n> read? This can't be undone.". Otherwise it POSTs `rss/markAsRead` (`itemPath`) and reads back unread 0: `{"ok": true}`.
+- With a `guid`: the feed check comes first, so a missing feed prints "That feed is gone."; a missing article in an existing feed prints "That article is gone.". Otherwise it POSTs `rss/markAsRead` (`itemPath`, `articleId`) and reads back `isRead`: `{"ok": true}`.
+- Without a `guid`: it first re-reads the unread count in that scope. If it's greater than `expect`, it doesn't post and prints `{"ok": false, "unread": M}` (OV11; exit 0), and the window asks again: "More articles arrived: mark <n> read? This can't be undone.". Otherwise it POSTs `rss/markAsRead` with `itemPath` only and reads back unread 0: `{"ok": true}`. The POST must **omit** `articleId` entirely (rsscontroller.cpp:143 branches on it being null; an empty `articleId=` is not the same).
 - A read-back that doesn't hold prints "Couldn't confirm the articles were marked read.".
 
 ### `qbt rss add`
@@ -95,11 +102,11 @@ stdin `torrentURL\0link`. It applies the `hasTorrent` rule ("This article has no
 
 ### Processing on
 
-`O` is the existing `qbt pref-set rss_processing_enabled -- true` (Service `setPref`), after the confirm "Turn on RSS processing in qBittorrent? Feeds refresh every <n> min.". Task 2 un-defers the key.
+`O` is the existing `qbt pref-set rss_processing_enabled -- true` (Service `setPref`), after the confirm "Turn on RSS processing in qBittorrent? Feeds refresh every <n> min.", `<n>` being `qbt rss items`' `refreshInterval`. Task 2 un-defers the key.
 
 ### Paths
 
-The window builds every path: `folderPath === "" ? name : folderPath + "\\" + name`, with the name through the `name` rule first. `a` puts the feed in the folder under the Feeds cursor, or the folder of the feed under it, else the root (OV4). `qbt` validates every segment again.
+The window builds every path: `folderPath === "" ? name : folderPath + "\\" + name`, with the name through the `name` rule first. `a` puts the feed in the folder under the Feeds cursor, or the folder of the feed under it, else the root (OV4). `qbt` validates the new segment again (see the segment rule above).
 
 ## The window's copy
 
@@ -118,7 +125,7 @@ Every line the RSS view shows comes from the case file's `window`:
   - `rssMarkRead` (y mark read): "Mark <n> articles in <name> read? This can't be undone.", or on Unread and All "Mark all <n> articles in every feed read? This can't be undone.".
   - `rssProcessingOn` (y turn on): the confirm under Processing on.
 - The blocked keys' muted notes (the registry's needs): "Pick a feed or folder." (`x` and `n` on Unread and All, OV5), "No article here.", "Nothing unread.", "RSS is already on." and "qBittorrent isn't reachable.".
-- The INSERT prompts: `rssFeedUrl` "Feed URL" (placeholder "https://…"), `rssFeedName` "Feed name" (prefilled with the feed URL's host), `rssFolderName` "Folder name", `rssRename` "Rename" (prefilled with the current name).
+- The INSERT prompts: `rssFeedUrl` "Feed URL" (placeholder "https://…"), `rssFeedName` "Feed name" (prefilled with the feed URL's host), `rssFolderName` "Folder name", `rssRename` "Rename" (prefilled with the current name). The name and rename placeholders never show: `ClientCommands.inputShown` has no view-host route, so `View.inputPrompt` gets no `shown` for them, and the prefill carries the host or the current name instead.
 
 ## The sentences
 

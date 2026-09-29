@@ -15,7 +15,9 @@ import "ClientView.js" as View
 // Three columns: Feeds (Unread, All articles, then the folders and their
 // feeds, indented, with unread counts), Articles, and the Article pane (the
 // article under the cursor: title, date, host, "Torrent link" or "No torrent
-// link", and the description as PlainText, first 12 lines). Narrow, one
+// link", and the description as PlainText, first 12 lines; the description
+// comes from `qbt rss article` once the cursor settles for 150 ms, cached per
+// (feed url, guid)). Narrow, one
 // column at a time: a feed chip, Tab opens the feeds overlay (pane
 // rssFeedList, a ListOverlay without its field: the keys stay NORMAL), and
 // `l` shows the Article pane full width (`h` back). Every string from a feed
@@ -48,7 +50,10 @@ import "ClientView.js" as View
 //                OV4), "rssFolderName" (N) and "rssRename" (n, prefilled
 //                with the current name). ClientCommands hands their commit
 //                and cancel here, and Client the field's edits. Prompts and
-//                hints: View.inputPrompt / View.modeHints.
+//                hints: View.inputPrompt / View.modeHints. The name and
+//                rename placeholders never show (ClientCommands.inputShown
+//                has no host route); the prefill carries the host or name.
+//                An unchanged rename ends the INSERT with no qbt call.
 //   column       the pane keys dispatch in while RSS shows (Client.keyPane):
 //                "rssFeeds", "rssArticles" or "rssFeedList" (narrow overlay).
 //   flags        the dispatch flags (View.VIEW_FLAG_STATE.rss writes them into

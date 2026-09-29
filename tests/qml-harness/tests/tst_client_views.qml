@@ -1278,6 +1278,29 @@ TestCase {
     }
   }
 
+  // Fix round 1: ClientCommands.handleBlocked keeps "qBittorrent"'s lower-case q
+  // (Search's down reason read "QBittorrent isn't reachable." since 5a).
+  function test_5b1_the_down_reason_reads_qBittorrent_in_search_and_rss() {
+    var o = make()
+    openSearch(o)
+    o.svc.api = false
+    wait(50)
+    slash(o)
+    compare(o.c.mode, "NORMAL")
+    compare(o.c.statusMessage.text, "qBittorrent isn't reachable.", "Search's down reason")
+    esc(o)
+    o.svc.api = true
+    wait(50)
+    compare(o.c.activeView, "torrents")
+    bigN(o)
+    compare(o.c.activeView, "rss")
+    // Task 1's placeholder reports qBittorrent unread (rssUp false): a names it.
+    key(o.c, "a")
+    compare(o.c.statusMessage.text, "qBittorrent isn't reachable.", "RSS's down reason")
+    key(o.c, "x")
+    compare(o.c.statusMessage.text, "qBittorrent isn't reachable.", "x over a down RSS names the client too")
+  }
+
   function test_5b1_N_opens_rss_from_the_torrents_and_the_placeholder_holds_the_keys() {
     var o = make()
     key(o.c, "j")

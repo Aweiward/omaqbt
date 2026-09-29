@@ -241,8 +241,27 @@ test("rss contract: the qbt shapes the lanes build against are written down", ()
     "qbt never extracts a URL from a message",
     "qbt posts every path and URL exactly as it received it, never a trimmed variant",
     "stdin `path\\0guid\\0expect`",
-    "prints `{\"ok\": false, \"unread\": M}` (OV11)",
+    "prints `{\"ok\": false, \"unread\": M}` (OV11; exit 0)",
     "`folderPath === \"\" ? name : folderPath + \"\\\\\" + name`",
-    "`qbt pref-set rss_processing_enabled -- true`"
+    "`qbt pref-set rss_processing_enabled -- true`",
+    // Fix round 1 (the controller's rulings).
+    "The framing is new in 5b1 (`qbt pref-set --stdin` reads one raw value, not fields)",
+    "each command takes exactly K fields: `items` reads no stdin; `error`, `add-folder`, `remove` and `refresh` take 1; `article`, `add-feed`, `rename` and `add` take 2; `mark-read` takes 3;",
+    "an empty stdin is ONE empty field",
+    "a wrong field count exits 2 with the usage line below.",
+    "That includes `mark-read`'s `{\"ok\": false, \"unread\": M}`, which is an answer, not a failure.",
+    "The `name` rule applies **only to the segment being created**",
+    "are taken exactly as `rss/items` gave them",
+    "qbt matches each on its prefix",
+    "Every write except `qbt rss add` reads `rss/items` back",
+    "`refreshInterval` is `rss_refresh_interval`",
+    "Absent means false; qbt always outputs `isRead` as a bool. The fixture omits it on unread articles.",
+    "A feed whose `hasError` is false has its stored reason dropped",
+    "qbt resets `lastId` to 0 and rescans the whole log",
+    "for `null` and for an empty reason (`\"\"`)",
+    "the feed check comes first, so a missing feed prints \"That feed is gone.\"",
+    "The POST must **omit** `articleId` entirely",
+    "The window skips an unchanged rename (the same name) without calling qbt.",
+    "The name and rename placeholders never show"
   ]) assert.ok(contract.includes(s), s);
 });

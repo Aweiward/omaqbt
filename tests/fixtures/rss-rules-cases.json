@@ -316,11 +316,21 @@
       "kind": "hasTorrent",
       "input": {
         "torrentURL": "magnet:?xt=urn:btih:c12fe1c06bba254a9dc9f519b335aa7c1367a88a&dn=debian",
+        "link": ""
+      },
+      "ok": true,
+      "normalised": "magnet",
+      "why": "a magnet in <link>: qBittorrent makes it torrentURL and leaves link unset (rss_parser.cpp:633-635)"
+    },
+    {
+      "kind": "hasTorrent",
+      "input": {
+        "torrentURL": "magnet:?xt=urn:btih:c12fe1c06bba254a9dc9f519b335aa7c1367a88a&dn=debian",
         "link": "magnet:?xt=urn:btih:c12fe1c06bba254a9dc9f519b335aa7c1367a88a&dn=debian"
       },
       "ok": true,
       "normalised": "magnet",
-      "why": "a magnet in <link> (torrentURL fell back to it) is still a magnet"
+      "why": "a magnet torrentURL equal to link is still a magnet (the equality test is for http(s) only)"
     },
     {
       "kind": "hasTorrent",
