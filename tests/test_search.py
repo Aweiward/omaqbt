@@ -29,6 +29,9 @@ import searchrules  # noqa: E402
 QBT = os.environ.get("QBT_UNDER_TEST", str(ROOT / "qbt"))
 DATA = json.loads((ROOT / "tests" / "fixtures" / "search-rules-cases.json").read_text())
 CASES = DATA["cases"]
+# The pageLink rows moved to link-rules-cases.json (slice 5b0); the rule loops still run them.
+LINK_CASES = json.loads((ROOT / "tests" / "fixtures" / "link-rules-cases.json").read_text())["cases"]
+RULE_CASES = CASES + [c for c in LINK_CASES if c["kind"] == "pageLink"]
 S = DATA["sentences"]
 UTF8_ENV = {"LANG": "en_US.UTF-8", "LC_ALL": "en_US.UTF-8"}
 S_BAD_URL = next(c["message"] for c in CASES if c["kind"] == "pluginUrl" and c["why"] == "a space")
@@ -75,7 +78,7 @@ class LibRulesTest(unittest.TestCase):
     def test_every_rule_case(self):
         kinds = ("pluginUrl", "pageLink", "addLink", "pluginName", "pattern", "category", "searchId")
         n = 0
-        for c in CASES:
+        for c in RULE_CASES:
             if c["kind"] in kinds:
                 with self.subTest(kind=c["kind"], why=c["why"]):
                     self.check_case(c)
@@ -90,7 +93,7 @@ class LibRulesTest(unittest.TestCase):
                 self.assertEqual(got, None if c["ok"] else c["message"])
 
     def test_the_cli_reads_stdin_and_matches_every_case(self):
-        for c in CASES:
+        for c in RULE_CASES:
             if c["kind"] not in ("pluginUrl", "pageLink", "addLink", "pluginName", "pattern", "category", "searchId"):
                 continue
             value = "\0".join(c["input"]) if c["kind"] == "addLink" else c["input"]
