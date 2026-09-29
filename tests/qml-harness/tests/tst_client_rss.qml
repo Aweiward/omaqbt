@@ -990,4 +990,22 @@ TestCase {
     wait(300)
     compare(calls(o.svc, "rssItems").length, n, "no retry once a read succeeded")
   }
+
+  function test_fix2_every_write_failure_speaks_even_the_same_one_twice() {
+    var o = make()
+    openRss(o)
+    toAll(o)
+    var err = "qBittorrent refused it (HTTP 500)"
+    enter(o)
+    key(o.c, "y")
+    finishCall(o, "rssAdd", false, err)
+    compare(statusText(o), err)
+    key(o.c, "j")
+    key(o.c, "k")
+    verify(statusText(o) !== err, "a key clears it")
+    enter(o)
+    key(o.c, "y")
+    finishCall(o, "rssAdd", false, err)
+    compare(statusText(o), err, "the same write failure again still speaks")
+  }
 }

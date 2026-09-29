@@ -46,8 +46,8 @@ QtObject {
   property bool readAgain: false
   // The last items read failed (RssPane retries while nothing is loaded).
   property bool itemsFailed: false
-  // The failure last posted: an identical one isn't posted again until a
-  // read succeeds (a poll failing every 2 s or 5 min says it once).
+  // The items-read failure last posted (pollFail): an identical one isn't
+  // posted again until a read succeeds. Write failures never check it.
   property string lastFail: ""
   // Each `qbt rss error` read's token: an answer for an entry that was
   // dropped (the error cleared, or `r`) or replaced meanwhile is ignored.
@@ -103,11 +103,18 @@ QtObject {
     if (client) client.note(text, tone || "muted")
   }
 
+  // Every write failure speaks.
   function fail(text) {
+    if (client) client.messages = View.msgError(client.messages, String(text || ""), [])
+  }
+
+  // An items read (the polls) failing: an identical failure is posted once
+  // until a read succeeds, so a poll failing every 2 s or 5 min says it once.
+  function pollFail(text) {
     var t = String(text || "")
     if (t === lastFail) return
     lastFail = t
-    if (client) client.messages = View.msgError(client.messages, t, [])
+    fail(t)
   }
 
   // Raises one of RSS's CONFIRMs (View.RSS_ACCEPT's kinds): `y` comes back
@@ -138,7 +145,7 @@ QtObject {
     itemsFailed = !ok
     if (ok) lastFail = ""
     if (!ok) {
-      if (v.tableState === "rows" || v.tableState === "empty") fail(error)
+      if (v.tableState === "rows" || v.tableState === "empty") pollFail(error)
     } else if (data && typeof data === "object" && Array.isArray(data.feeds) && Array.isArray(data.articles)) {
       // Service's `same`: the stdout didn't change, so nothing is applied,
       // unless this window has nothing yet (it was rebuilt).
