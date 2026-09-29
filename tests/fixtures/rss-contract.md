@@ -91,7 +91,7 @@ stdin `path`, or `""` for everything. It checks the path exists first ("That fee
 
 stdin `path\0guid\0expect`. `guid` is `""` for a whole feed or folder, and `path` is `""` for everything (Unread and All). `expect` is the unread count the window's confirm named (a whole number; `0` with a `guid`).
 - With a `guid`: the feed check comes first, so a missing feed prints "That feed is gone."; a missing article in an existing feed prints "That article is gone.". Otherwise it POSTs `rss/markAsRead` (`itemPath`, `articleId`) and reads back `isRead`: `{"ok": true}`.
-- Without a `guid`: it first re-reads the unread count in that scope. If it's greater than `expect`, it doesn't post and prints `{"ok": false, "unread": M}` (OV11; exit 0), and the window asks again: "More articles arrived: mark <n> read? This can't be undone.". Otherwise it POSTs `rss/markAsRead` with `itemPath` only and reads back unread 0: `{"ok": true}`. The POST must **omit** `articleId` entirely (rsscontroller.cpp:143 branches on it being null; an empty `articleId=` is not the same).
+- Without a `guid`: it first re-reads the unread count in that scope. If it's greater than `expect`, it doesn't post and prints `{"ok": false, "unread": M}` (OV11; exit 0), and the window asks again: "More articles arrived: mark <n> read? This can't be undone.". If the user is in another mode by then (an INSERT, another CONFIRM), it doesn't ask; it notes "More articles arrived, so nothing was marked read; <n> are unread." and reads the items again. Otherwise it POSTs `rss/markAsRead` with `itemPath` only and reads back unread 0: `{"ok": true}`. The POST must **omit** `articleId` entirely (rsscontroller.cpp:143 branches on it being null; an empty `articleId=` is not the same).
 - A read-back that doesn't hold prints "Couldn't confirm the articles were marked read.".
 
 ### `qbt rss add`
@@ -116,7 +116,7 @@ Every line the RSS view shows comes from the case file's `window`:
 - Empty states: "No feeds yet. Press a and paste a feed URL.", "No articles in this feed yet." and "Nothing unread.".
 - Feed rows: "Unread" and "All articles" first; a feed's state "refreshing…" or "error". An article row: "in library" (a magnet whose hash is in the library, D7).
 - A refresh that doesn't end within 60 s: "Still refreshing; qBittorrent hasn't answered."
-- The Article pane: "Torrent link" or "No torrent link"; a failing feed's reason as above.
+- The Article pane: the article's feed title (the feed's `title`, else its name, OV4), "unread" or "read", and "Torrent link" or "No torrent link"; with no article under the cursor, a failing feed's reason as above. An unread article row starts with a ●.
 - Notes: "Already in your library.", "qBittorrent can't mark articles unread." and the add notes above.
 - The confirms (CONFIRM kinds in `View.RSS_ACCEPT`):
   - `rssAdd` (y add): "Add <title> from <host>?"

@@ -37,6 +37,8 @@ var WINDOW = {
   errorNoReason: "qBittorrent reported an error but gave no reason.",
   hasTorrentYes: "Torrent link",
   hasTorrentNo: "No torrent link",
+  articleUnread: "unread",
+  articleRead: "read",
   alreadyInLibrary: "Already in your library.",
   sent: "Sent to qBittorrent; Space marks it read.",
   added: "Added <name>.",
@@ -48,6 +50,7 @@ var WINDOW = {
   confirmMarkRead: "Mark <n> articles in <name> read? This can't be undone.",
   confirmMarkAll: "Mark all <n> articles in every feed read? This can't be undone.",
   moreArrived: "More articles arrived: mark <n> read? This can't be undone.",
+  moreArrivedNote: "More articles arrived, so nothing was marked read; <n> are unread.",
   confirmOn: "Turn on RSS processing in qBittorrent? Feeds refresh every <n> min.",
   unreadRow: "Unread",
   allRow: "All articles",
@@ -210,8 +213,9 @@ function articlesOf(items) {
 // feedRows(items) -> the Feeds column's rows: Unread and All articles
 // first, then qbt's tree (in its order, with its depth). Each row:
 // {key, kind ("unread" | "all" | "folder" | "feed"), label (sanitised),
-// depth, unread, total, feeds, path, url, isLoading, hasError, state
-// (rowRefreshing, rowError or ""), rssItem ({path, name, folder, feeds}
+// depth, unread, total, feeds, path, url, title (a feed's own title,
+// sanitised, else its label: the Article pane's feed line, OV4), isLoading,
+// hasError, state (rowRefreshing, rowError or ""), rssItem ({path, name, folder, feeds}
 // for a real feed or folder, null on Unread and All)}. `path`, `name` and
 // `url` stay raw: every write sends them exactly as qbt gave them.
 function feedRows(items) {
@@ -229,10 +233,13 @@ function feedRows(items) {
     var name = typeof f.name === "string" ? f.name : "";
     var loading = !folder && f.isLoading === true;
     var err = !folder && f.hasError === true;
+    var label = cleanName(name);
+    var title = !folder && typeof f.title === "string" ? cleanName(f.title) : EMPTY;
     out.push({
       key: "p:" + f.path,
       kind: folder ? "folder" : "feed",
-      label: cleanName(name),
+      label: label,
+      title: title !== EMPTY ? title : label,
       depth: num(f.depth),
       unread: num(f.unread),
       total: num(f.total),
@@ -246,9 +253,9 @@ function feedRows(items) {
     });
   }
   var head = [
-    { key: "unread", kind: "unread", label: WINDOW.unreadRow, depth: 0, unread: unread, total: unread, feeds: 0, path: "", url: "",
+    { key: "unread", kind: "unread", label: WINDOW.unreadRow, title: WINDOW.unreadRow, depth: 0, unread: unread, total: unread, feeds: 0, path: "", url: "",
       isLoading: false, hasError: false, state: "", rssItem: null },
-    { key: "all", kind: "all", label: WINDOW.allRow, depth: 0, unread: unread, total: total, feeds: 0, path: "", url: "",
+    { key: "all", kind: "all", label: WINDOW.allRow, title: WINDOW.allRow, depth: 0, unread: unread, total: total, feeds: 0, path: "", url: "",
       isLoading: false, hasError: false, state: "", rssItem: null }
   ];
   return head.concat(out);
@@ -333,15 +340,26 @@ function articleRows(items, scope, libSet) {
   return picked;
 }
 
-// articleMeta(row) -> the Article pane's lines: {title, host, torrent
-// ("Torrent link" / "No torrent link"), date (epoch seconds or null)}.
-function articleMeta(row) {
+// articleMeta(row, feeds) -> the Article pane's lines: {title, host,
+// torrent ("Torrent link" / "No torrent link"), date (epoch seconds or
+// null), state ("unread" / "read": state as text, not only the row's ●),
+// feed (the article's feed title, looked up by feedPath in feeds, the
+// feedRows list; "—" when the feed isn't there, OV4)}.
+function articleMeta(row, feeds) {
   if (!row) return null;
+  var feed = EMPTY;
+  var list = Array.isArray(feeds) ? feeds : [];
+  for (var i = 0; i < list.length; i++) {
+    var f = list[i];
+    if (f && f.kind === "feed" && f.path === row.feedPath) { feed = typeof f.title === "string" && f.title !== "" ? f.title : EMPTY; break; }
+  }
   return {
     title: typeof row.title === "string" ? row.title : EMPTY,
     host: typeof row.host === "string" && row.host !== "" ? row.host : EMPTY,
     torrent: row.hasTorrent === true ? WINDOW.hasTorrentYes : WINDOW.hasTorrentNo,
-    date: typeof row.date === "number" ? row.date : null
+    date: typeof row.date === "number" ? row.date : null,
+    state: row.isRead === true ? WINDOW.articleRead : WINDOW.articleUnread,
+    feed: feed
   };
 }
 
