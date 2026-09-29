@@ -10,8 +10,8 @@ import "ClientView.js" as View
 // The Settings view (slice 4a): `,` or ":Settings" swaps it in for the
 // three torrent panes, and Esc swaps them back. The status line stays.
 //
-// Two columns, as in the mockup: the sections (220 px, with counts and a
-// dimmed "RSS · slice 5") and the settings of the cursor section (group
+// Two columns, as in the mockup: the sections (220 px, with counts; RSS
+// last, live since slice 5b1) and the settings of the cursor section (group
 // headers, 28 px rows of label, value and a muted type tag), with a help
 // line for the cursor row above a footer of the keys that apply. `/`
 // searches every section (SettingsView.search); a result names its section.
