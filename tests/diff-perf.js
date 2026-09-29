@@ -9,7 +9,13 @@
 //      must blow the op-count threshold and come back as {reset:true}
 //      quickly rather than walking a doomed diff.
 //
-// Prints one JSON object to stdout: { tick: {...}, reset: {...} }.
+//   3. rss    -- slice 5b1's Articles column (Review Focus 4): 10,000 article
+//      rows (200 feeds x 50), keyed like RssView.keyOf ("<feedPath>\n<guid>"),
+//      newest first; one feed's 50 rows are replaced (a feed re-read while it
+//      refreshes). It must stay a keyed diff of 50 removes and 50 inserts,
+//      never a reset (the cursor stays on its article, no flicker).
+//
+// Prints one JSON object to stdout: { tick: {...}, reset: {...}, rss: {...} }.
 
 var Model = require("../Model.js");
 
@@ -141,7 +147,30 @@ function main() {
   resetSummary.rows = ROW_COUNT;
   resetSummary.ms = Number(diffResetTiming.ms.toFixed(3));
 
-  var output = { tick: tickSummary, reset: resetSummary };
+  // Case 3: RSS, 200 feeds x 50 articles; feed 117's 50 articles replaced.
+  var RSS_FEEDS = 200, RSS_PER_FEED = 50, RSS_FIELDS = ["title", "dateText", "isRead", "inLibrary", "hasTorrent"];
+  function rssRow(feed, guid, date) {
+    return { hash: "Feeds\\feed " + feed + "\n" + guid, title: "article " + guid, dateText: String(date), isRead: false, inLibrary: false, hasTorrent: true, date: date };
+  }
+  var rssOld = [];
+  for (var f = 0; f < RSS_FEEDS; f++) for (var a = 0; a < RSS_PER_FEED; a++) rssOld.push(rssRow(f, "g" + a, 1700000000 + a * RSS_FEEDS + f));
+  rssOld.sort(function(x, y) { return y.date - x.date; });
+  var rssNew = rssOld.map(function(row) {
+    if (row.hash.indexOf("Feeds\\feed 117\n") !== 0) return row;
+    return rssRow(117, "new-" + row.hash.split("\n")[1], row.date);
+  });
+  var rssTiming = timeMs(function() { return Model.diffRows(rssOld, rssNew, RSS_FIELDS); });
+  var rssSummary = describeDiffResult(rssTiming.result);
+  if (rssSummary.reset || rssSummary.byType.remove !== RSS_PER_FEED || rssSummary.byType.insert !== RSS_PER_FEED || rssSummary.ops !== 2 * RSS_PER_FEED) {
+    throw new Error("diff-perf: the RSS re-read must be 50 removes and 50 inserts, got " + JSON.stringify(rssSummary));
+  }
+  if (Model.applyOps(rssOld, rssTiming.result).map(function(r) { return r.hash; }).join("|") !== rssNew.map(function(r) { return r.hash; }).join("|")) {
+    throw new Error("diff-perf: the RSS ops don't rebuild the new rows");
+  }
+  rssSummary.rows = rssOld.length;
+  rssSummary.ms = Number(rssTiming.ms.toFixed(3));
+
+  var output = { tick: tickSummary, reset: resetSummary, rss: rssSummary };
   console.log(JSON.stringify(output));
 }
 
