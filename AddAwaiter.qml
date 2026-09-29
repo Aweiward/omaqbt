@@ -1,7 +1,5 @@
 import QtQuick
-// The controller switches this to LinkRules.js at merge time; SearchView.js
-// keeps inLibrary and librarySet as aliases until then.
-import "SearchView.js" as Links
+import "LinkRules.js" as Links
 
 // Magnets added from a view whose hash isn't in the library yet (slice
 // 5a's `awaiting`, shared in 5b0 so RSS reuses it). The owner formats the

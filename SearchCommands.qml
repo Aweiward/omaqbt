@@ -344,9 +344,6 @@ QtObject {
     awaiter.add(e.v1, e.v2, e.name)
   }
 
-  // SearchPane.syncLibrary calls this on every library refresh.
-  function checkAwaiting() { awaiter.check() }
-
   function copyLink(result) {
     if (!result) return
     var link = String(result.fileUrl || "")

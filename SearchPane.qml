@@ -542,7 +542,7 @@ Item {
 
   function syncLibrary() {
     libSet = SearchView.librarySet(service ? service.torrents : [])
-    cmds.checkAwaiting()
+    cmds.awaiter.check()
   }
 
   onColumnRowsChanged: {

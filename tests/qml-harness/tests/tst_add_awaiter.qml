@@ -1,8 +1,7 @@
 import QtQuick
 import QtTest
 import "../../.."
-// The controller switches this to LinkRules.js at merge time.
-import "../../../SearchView.js" as Links
+import "../../../LinkRules.js" as Links
 
 TestCase {
   name: "AddAwaiter"
