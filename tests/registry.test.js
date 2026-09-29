@@ -2533,3 +2533,13 @@ test("search: c opens the category picker (Ruling FB) from the results and the P
     assert.equal(dispatch(state({ pane: pane, mode: "PICKER", pickerQueryEmpty: true, pickerMulti: false }), evFor("Space")).commandId, null, pane + ": single choice");
   }
 });
+
+// --- Slice 5b0: per-view tables ---------------------------------------------
+
+test("every view but the torrents has VIEW_META with a real opener", () => {
+  for (const v of Registry.VIEWS.filter((v) => v !== "torrents")) {
+    assert.ok(Registry.VIEW_META[v], v);
+    assert.ok(Registry.commands.some((c) => c.id === Registry.VIEW_META[v].opener), v);
+    assert.equal(typeof Registry.VIEW_META[v].listedOutside, "boolean", v);
+  }
+});

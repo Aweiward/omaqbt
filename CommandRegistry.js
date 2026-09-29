@@ -469,6 +469,16 @@ function matchLabel(label, ev) {
 // Plugins column and the plugins overlay. Client.activeView is one of
 // these names, and keys dispatch in a pane of that view.
 var VIEWS = ["torrents", "settings", "search"];
+
+// Slice 5b0: each view but the torrents, described once. opener: the
+// command that shows it (":Settings", ":Search"). listedOutside: whether
+// the view's own rows (every pane of the command in that view) are listed
+// in the palette while another view shows; false lists them only while
+// that view is the active one (ClientView.paletteListed).
+var VIEW_META = {
+  settings: { opener: "settings.open", listedOutside: true },
+  search: { opener: "search.open", listedOutside: false }
+};
 var VIEW_OF_PANE = {
   filters: "torrents",
   table: "torrents",
@@ -1057,6 +1067,7 @@ if (typeof module !== "undefined" && module.exports) {
     SETTINGS_PANES: SETTINGS_PANES,
     SEARCH_PANES: SEARCH_PANES,
     VIEWS: VIEWS,
+    VIEW_META: VIEW_META,
     VIEW_OF_PANE: VIEW_OF_PANE,
     viewOfPane: viewOfPane,
     panesOfView: panesOfView,
