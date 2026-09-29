@@ -46,9 +46,14 @@ QtObject {
   // ticket -> {kind, ...}: this window's qbt search runs still going.
   property var tickets: ({})
   // Magnets added (via "add") whose hash isn't in the library yet:
-  // [{v1, v2, name, until}]; "Added <name>." shows once it is, and
-  // "Couldn't confirm <name> was added." once `until` (ms) passes (FD).
-  property var awaiting: []
+  // "Added <name>." shows once it is, and "Couldn't confirm <name> was
+  // added." once view.addConfirmMs passes (FD).
+  property AddAwaiter awaiter: AddAwaiter {
+    libSet: cmds.view.libSet
+    confirmMs: cmds.view.addConfirmMs
+    onConfirmed: (name) => cmds.note(SearchView.addedText(name), "muted")
+    onUnconfirmed: (name) => cmds.note(SearchView.fill(SearchView.WINDOW.addUnconfirmed, { name: name }), "urgent")
+  }
 
   readonly property var client: view.client
   readonly property var service: view.service
@@ -336,23 +341,11 @@ QtObject {
     var via = data && typeof data === "object" && (data.via === "add" || data.via === "plugin") ? data.via : e.via
     var text = SearchView.addedNote(via, e.link, e.name)
     if (text !== null) { note(text, "muted"); return }
-    awaiting = awaiting.concat([{ v1: e.v1, v2: e.v2, name: e.name, until: Date.now() + view.addConfirmMs }])
-    checkAwaiting()
+    awaiter.add(e.v1, e.v2, e.name)
   }
 
-  // A magnet's "Added <name>." once its hash is in the library.
-  function checkAwaiting() {
-    if (awaiting.length === 0) return
-    var keep = []
-    var now = Date.now()
-    for (var i = 0; i < awaiting.length; i++) {
-      var a = awaiting[i]
-      if (SearchView.inLibrary(a.v1, a.v2, view.libSet)) note(SearchView.addedText(a.name), "muted")
-      else if (now >= a.until) note(SearchView.fill(SearchView.WINDOW.addUnconfirmed, { name: a.name }), "urgent")
-      else keep.push(a)
-    }
-    awaiting = keep
-  }
+  // SearchPane.syncLibrary calls this on every library refresh.
+  function checkAwaiting() { awaiter.check() }
 
   function copyLink(result) {
     if (!result) return
@@ -408,14 +401,6 @@ QtObject {
       if (!ok) fail(error)
       v.localBusy = ""
     }
-  }
-
-  // The magnets still waiting for the library, checked each second.
-  property Timer awaitTimer: Timer {
-    interval: 1000
-    repeat: true
-    running: cmds.awaiting.length > 0
-    onTriggered: cmds.checkAwaiting()
   }
 
   property Connections serviceLink: Connections {

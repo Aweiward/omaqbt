@@ -243,7 +243,7 @@ Item {
   function windowClosed() {
     dropConfirm()
     cmds.closeJob()
-    cmds.awaiting = []
+    cmds.awaiter.clear()
   }
 
   function dropConfirm() {
