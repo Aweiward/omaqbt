@@ -2,6 +2,7 @@ import QtQuick
 import QtTest
 import "../../.."
 import "../../../CommandRegistry.js" as Registry
+import "../../../SettingsView.js" as SettingsView
 
 // Slice 5a (Task 1): the regression pins for the one-active-view refactor.
 // Written against 5aa9adc before Client.activeView existed, so they pass
@@ -649,5 +650,582 @@ TestCase {
     compare(o.c.regState.pending, null)
     o.c.open("")
     backFromSearch(o, "table", "reopened")
+  }
+  // ---- slice 5b0 (Task 1): pins for the view-host refactor ---------------------------------
+  // What Client, ClientCommands and ClientView do today at every site the
+  // refactor rewrites, through keys and what the window shows.
+
+  function cmdsOf(o) {
+    for (var i = 0; i < o.c.data.length; i++) if (o.c.data[i] && typeof o.c.data[i].runPaletteRow === "function") return o.c.data[i]
+    return null
+  }
+  function statusLineOf(o) { return findWith(content(o), "focusInput") }
+  function hintsOf(o) { return statusLineOf(o).hints.map(function(h) { return h.key + " " + h.label }).join(" | ") }
+  function paletteRowOf(o, id) {
+    var rows = palette(o).rows.filter(function(r) { return r.id === id })
+    return rows.length === 0 ? null : rows[0]
+  }
+  function torrentsState(o) {
+    return JSON.stringify({ vs: o.svc.viewState, pane: o.c.pane, cursor: o.c.cursorHash, filter: o.c.filter, tab: o.c.inspectorTab,
+      sort: o.c.sortMode, desc: o.c.sortDesc, query: o.c.textQuery, calls: o.svc.calls.length })
+  }
+  function focusSettingKey(o, k) {
+    var v = view(o)
+    var row = SettingsView.rowFor(k, v.prefs)
+    verify(row !== null, k + " shows")
+    for (var i = 0; i < v.sectionList.length; i++) if (v.sectionList[i].name === row.section) v.sectionIndex = i
+    compare(v.sectionName, row.section)
+    var rows = v.shownRows
+    var at = -1
+    for (var j = 0; j < rows.length; j++) if (rows[j].key === k) at = j
+    verify(at >= 0, k + " in its section")
+    var cur = {}
+    for (var s in v.cursors) cur[s] = v.cursors[s]
+    cur[row.section] = at
+    v.cursors = cur
+    v.column = "settingsKeys"
+    compare(v.cursorRow.key, k)
+  }
+  function choiceItem(picker, value) {
+    return (function find(obj) {
+      if (!obj) return null
+      if (obj.isRow === true && obj.modelData && String(obj.modelData.value) === String(value)) return obj
+      var kids = obj.children || []
+      for (var i = 0; i < kids.length; i++) { var r = find(kids[i]); if (r) return r }
+      return null
+    })(picker)
+  }
+
+  // Review Focus 1: a key never reaches the hidden torrents from a view.
+  function test_5b0_torrent_keys_change_nothing_from_settings() {
+    var o = make()
+    openSettings(o)
+    var before = torrentsState(o)
+    var keys = ["t", "s", "z", "r", "q", "1", "2", "3", "4", "5"]
+    for (var i = 0; i < keys.length; i++) key(o.c, keys[i])
+    key(o.c, " ", 0x20)
+    compare(torrentsState(o), before)
+    compare(o.c.mode, "NORMAL")
+    compare(o.c.activeView, "settings")
+    verify(o.c.opened, "q doesn't close the window")
+    compare(o.c.keyPane, "settingsSections")
+  }
+
+  function test_5b0_torrent_keys_change_nothing_from_search() {
+    var o = make()
+    openSearch(o)
+    var before = torrentsState(o)
+    var keys = ["t", "s", "z", "r", "q", "1", "2", "3", "4", "5"]
+    for (var i = 0; i < keys.length; i++) key(o.c, keys[i])
+    key(o.c, " ", 0x20)
+    compare(torrentsState(o), before)
+    compare(o.c.mode, "NORMAL")
+    compare(o.c.activeView, "search")
+    verify(o.c.opened, "q doesn't close the window")
+    compare(o.c.keyPane, "searchResults")
+  }
+
+  // The keyPane and the search flags follow the active view.
+  function test_5b0_keyPane_and_searchFlags_follow_the_active_view() {
+    var o = make()
+    compare(o.c.keyPane, "table")
+    compare(o.c.searchFlags, null)
+    openSearch(o)
+    compare(o.c.keyPane, "searchResults")
+    verify(o.c.searchFlags !== null)
+    compare(o.c.searchFlags.plugins, 0)
+    compare(o.c.searchFlags.down, false)
+    searchPane(o).setPlugins([{ name: "a", enabled: true }, { name: "b", enabled: false }])
+    compare(o.c.searchFlags.plugins, 2)
+    compare(o.c.searchFlags.enabledPlugins, 1)
+    key(o.c, "h")
+    compare(o.c.keyPane, "searchPlugins")
+    esc(o)
+    compare(o.c.activeView, "torrents")
+    compare(o.c.searchFlags, null, "null again once Search stands down")
+    openSettings(o)
+    compare(o.c.keyPane, "settingsSections")
+    compare(o.c.searchFlags, null, "Settings has none")
+    key(o.c, "l")
+    compare(o.c.keyPane, "settingsKeys")
+  }
+
+  // Review Focus 2: Settings' INSERT cleanup runs for every purpose.
+  function test_5b0_esc_on_a_move_insert_drops_a_settings_edit_input_object() {
+    var o = make()
+    var cc = cmdsOf(o)
+    key(o.c, "m")
+    compare(o.c.mode, "INSERT")
+    compare(o.c.inputPurpose, "move")
+    cc.settingsCommands.input = { kind: "value", key: "listen_port", label: "Port", prompt: "Port", from: "1", prefs: {}, after: null }
+    esc(o)
+    compare(o.c.mode, "NORMAL")
+    compare(o.c.inputPurpose, "")
+    compare(cc.settingsCommands.input, null)
+    compare(o.c.moveHashes.length, 0)
+  }
+
+  function test_5b0_esc_on_a_filter_insert_drops_a_settings_edit_input_object_and_restores_the_query() {
+    var o = make()
+    var cc = cmdsOf(o)
+    slash(o)
+    compare(o.c.inputPurpose, "filter")
+    line(o).setInput("alp")
+    compare(o.c.textQuery, "alp")
+    cc.settingsCommands.input = { kind: "value", key: "listen_port", label: "Port", prompt: "Port", from: "1", prefs: {}, after: null }
+    esc(o)
+    compare(o.c.mode, "NORMAL")
+    compare(o.c.textQuery, "", "the query goes back to what it was before /")
+    compare(cc.settingsCommands.input, null)
+  }
+
+  function test_5b0_leaveInsert_on_a_click_drops_a_settings_edit_input_object() {
+    var o = make()
+    var cc = cmdsOf(o)
+    key(o.c, "m")
+    compare(o.c.inputPurpose, "move")
+    cc.settingsCommands.input = { kind: "value", key: "listen_port", label: "Port", prompt: "Port", from: "1", prefs: {}, after: null }
+    o.c.leaveInsert()
+    compare(o.c.mode, "NORMAL")
+    compare(cc.settingsCommands.input, null)
+  }
+
+  function test_5b0_esc_on_the_settings_search_clears_it_and_on_a_search_query_changes_nothing_of_settings() {
+    var o = make()
+    openSettings(o)
+    slash(o)
+    compare(o.c.inputPurpose, "settingsSearch")
+    line(o).setInput("port")
+    esc(o)
+    compare(o.c.mode, "NORMAL")
+    compare(view(o).query, "")
+    compare(view(o).searching, false)
+    verify(view(o).open)
+    esc(o)
+    openSearch(o)
+    var cc = cmdsOf(o)
+    cc.startInput("searchQuery", "")
+    line(o).setInput("debian")
+    esc(o)
+    compare(o.c.mode, "NORMAL")
+    compare(o.c.inputPurpose, "")
+    compare(o.c.textQuery, "")
+    compare(o.c.activeView, "search", "Esc in the field only cancels it")
+  }
+
+  // Review Focus 3: picker precedence, Settings, then Search, then C/T.
+  function test_5b0_a_search_picker_wins_over_a_stale_torrent_picker_kind_and_closePicker_drops_it() {
+    var o = make()
+    var cc = cmdsOf(o)
+    openSearch(o)
+    var sp = searchPane(o)
+    sp.setPlugins([{ name: "a", enabled: true }])
+    key(o.c, "c")
+    compare(o.c.mode, "PICKER")
+    verify(cc.openPicker() === sp.picker, "Search's picker")
+    cc.pickerKind = "category"
+    verify(cc.openPicker() === sp.picker, "still Search's, whatever the C/T kind says")
+    cc.pickerTargets = [hh("a")]
+    cc.closePicker()
+    compare(cc.pickerKind, "")
+    compare(cc.pickerTargets.length, 0)
+    compare(sp.pickerOpen, false)
+    compare(o.c.mode, "NORMAL")
+    compare(o.c.activeView, "search")
+  }
+
+  function test_5b0_a_settings_picker_wins_over_a_stale_torrent_picker_kind_and_closePicker_drops_it() {
+    var o = make()
+    var cc = cmdsOf(o)
+    openSettings(o)
+    focusSettingKey(o, "disk_io_type")
+    enter(o)
+    compare(o.c.mode, "PICKER")
+    var p = view(o).picker
+    verify(p !== null && p !== undefined)
+    verify(cc.openPicker() === p, "Settings' picker")
+    cc.pickerKind = "tag"
+    verify(cc.openPicker() === p, "still Settings', whatever the C/T kind says")
+    cc.closePicker()
+    compare(cc.pickerKind, "")
+    compare(view(o).pickerOpen, false)
+    compare(o.c.mode, "NORMAL")
+    verify(view(o).open)
+    compare(calls(o.svc, "setPref").length, 0)
+  }
+
+  function test_5b0_the_settings_picker_opens_and_enter_accepts_and_esc_closes() {
+    var o = make()
+    openSettings(o)
+    focusSettingKey(o, "disk_io_type")
+    enter(o)
+    compare(o.c.mode, "PICKER")
+    wait(30)
+    compare(o.c.typingField(), view(o).picker.inputField, "the picker's field has the keys")
+    esc(o)
+    compare(o.c.mode, "NORMAL")
+    compare(view(o).pickerOpen, false)
+    compare(calls(o.svc, "setPref").length, 0)
+    enter(o)
+    compare(o.c.mode, "PICKER")
+    wait(30)
+    var p = view(o).picker
+    p.cursor = 1
+    enter(o)
+    compare(o.c.mode, "NORMAL")
+    compare(view(o).pickerOpen, false)
+    compare(calls(o.svc, "setPref").length, 1)
+    compare(calls(o.svc, "setPref")[0].args[0], "disk_io_type")
+    wait(30)
+  }
+
+  function test_5b0_a_click_on_the_scrim_closes_the_search_category_picker_and_a_row_click_chooses() {
+    var o = make()
+    openSearch(o)
+    var sp = searchPane(o)
+    sp.setPlugins([{ name: "a", enabled: true, supportedCategories: [{ id: "movies", name: "Movies" }] }])
+    key(o.c, "c")
+    compare(o.c.mode, "PICKER")
+    wait(30)
+    mouseClick(sp.picker, 4, 4)
+    compare(o.c.mode, "NORMAL")
+    compare(sp.pickerOpen, false)
+    compare(sp.category, "all", "nothing chosen")
+    compare(o.c.activeView, "search")
+    key(o.c, "c")
+    compare(o.c.mode, "PICKER")
+    wait(30)
+    var item = choiceItem(sp.picker, "movies")
+    verify(item !== null, "Movies is on screen")
+    mouseClick(item)
+    compare(o.c.mode, "NORMAL")
+    compare(sp.pickerOpen, false)
+    compare(sp.category, "movies")
+  }
+
+  // handleBlocked: a view's blocked key says why, muted, with a full stop.
+  function test_5b0_a_blocked_key_in_settings_says_why_muted_and_never_reads_the_clipboard() {
+    var o = make()
+    o.svc.torrents = []
+    wait(60)
+    compare(o.c.tableState, "empty")
+    openSettings(o)
+    key(o.c, "l")
+    compare(o.c.keyPane, "settingsKeys")
+    key(o.c, "u")
+    compare(o.c.statusMessage.text, "Nothing to undo.")
+    compare(o.c.statusMessage.tone, "muted")
+    key(o.c, "y")
+    compare(calls(o.svc, "readClipboard").length, 0)
+  }
+
+  function test_5b0_a_blocked_key_in_search_says_why_muted_and_never_reads_the_clipboard() {
+    var o = make()
+    o.svc.torrents = []
+    wait(60)
+    compare(o.c.tableState, "empty")
+    openSearch(o)
+    key(o.c, "y")
+    compare(o.c.statusMessage.text, "Needs a result.")
+    compare(o.c.statusMessage.tone, "muted")
+    key(o.c, "c")
+    compare(o.c.statusMessage.text, "No search plugins yet (P).")
+    compare(o.c.statusMessage.tone, "muted")
+    compare(calls(o.svc, "readClipboard").length, 0)
+  }
+
+  function test_5b0_y_on_the_empty_library_reads_the_clipboard_on_the_torrents_only() {
+    var o = make()
+    o.svc.torrents = []
+    wait(60)
+    compare(o.c.tableState, "empty")
+    key(o.c, "y")
+    compare(calls(o.svc, "readClipboard").length, 1)
+  }
+
+  // The status line's INSERT routing: a view's field reaches its own view.
+  function test_5b0_typing_in_the_settings_search_reaches_setSearch_live() {
+    var o = make()
+    openSettings(o)
+    slash(o)
+    compare(o.c.mode, "INSERT")
+    compare(o.c.inputPurpose, "settingsSearch")
+    line(o).setInput("port")
+    compare(view(o).query, "port", "before Enter")
+    compare(o.c.textQuery, "", "never a torrent filter")
+    line(o).setInput("por")
+    compare(view(o).query, "por")
+    enter(o)
+    compare(o.c.mode, "NORMAL")
+    compare(view(o).query, "por", "Enter keeps the results")
+    compare(o.c.textQuery, "")
+  }
+
+  function test_5b0_typing_in_the_search_query_touches_neither_settings_nor_the_torrent_filter() {
+    var o = make()
+    openSearch(o)
+    var cc = cmdsOf(o)
+    cc.startInput("searchQuery", "")
+    compare(o.c.mode, "INSERT")
+    line(o).setInput("debian")
+    compare(view(o).query, "", "Settings' search")
+    compare(o.c.textQuery, "", "the torrent filter")
+    compare(o.c.mode, "INSERT")
+    cc.cancelInput()
+    cc.startInput("pluginInstall", "")
+    line(o).setInput("https://example.org/x.py")
+    compare(view(o).query, "")
+    compare(o.c.textQuery, "")
+    esc(o)
+    compare(o.c.mode, "NORMAL")
+  }
+
+  function test_5b0_typing_in_the_torrent_filter_narrows_the_table_and_touches_no_view() {
+    var o = make()
+    slash(o)
+    compare(o.c.inputPurpose, "filter")
+    line(o).setInput("alp")
+    compare(o.c.textQuery, "alp")
+    compare(view(o).query, "")
+    esc(o)
+    compare(o.c.textQuery, "")
+  }
+
+  // Footer hints: the flags each view feeds the status line.
+  function test_5b0_the_footer_hints_follow_the_view_and_its_flags() {
+    var o = make()
+    compare(hintsOf(o), "j/k move | Space start/stop | V visual | / filter | s sort | ? keys | q close")
+    openSettings(o)
+    compare(hintsOf(o), "j/k section | l keys | / search all | Esc back | ? keys")
+    key(o.c, "l")
+    compare(hintsOf(o), "j/k move | Space toggle | h sections | / search | Esc back | ? keys")
+    slash(o)
+    compare(hintsOf(o), "Enter keep results | Esc clear")
+    line(o).setInput("port")
+    enter(o)
+    compare(hintsOf(o), "j/k move | Enter edit | h sections | / search | Esc clear search | ? keys")
+    esc(o)
+    esc(o)
+    compare(o.c.activeView, "torrents")
+    openSearch(o)
+    compare(hintsOf(o), "j/k move | h plugins column | P plugins | Esc back | ? keys")
+    searchPane(o).setPlugins([{ name: "a", enabled: true }])
+    compare(hintsOf(o), "j/k move | / search | c category | h plugins column | P plugins | Esc back | ? keys")
+    slash(o)
+    compare(o.c.inputPurpose, "searchQuery")
+    compare(hintsOf(o), "Enter search | Esc cancel")
+    esc(o)
+    compare(hintsOf(o), "j/k move | / search | c category | h plugins column | P plugins | Esc back | ? keys")
+  }
+
+  function test_5b0_a_search_confirm_shows_its_accept_word_in_the_footer() {
+    var o = make()
+    openSearch(o)
+    var r = Registry.raiseConfirm(o.c.regState, "search.add", "searchAdd", { result: { fileName: "debian.iso" } })
+    o.c.regState = r.state
+    o.c.confirmHashes = []
+    o.c.confirm = { commandId: "search.add", kind: "searchAdd", line: "Add debian.iso (650 MiB) from example.org?" }
+    compare(o.c.mode, "CONFIRM")
+    compare(hintsOf(o), "y add | n/Esc keep")
+    o.c.close()
+  }
+
+  // The palette's evaluation state: which view it opened from.
+  function test_5b0_the_palette_judges_its_rows_from_the_torrents_settings_and_search() {
+    var o = make()
+    key(o.c, ":", 0x3a)
+    var r = paletteRowOf(o, "search.open")
+    compare(r.enabled, true)
+    compare(r.reason, "")
+    r = paletteRowOf(o, "settings.open")
+    compare(r.enabled, true)
+    compare(r.reason, "")
+    r = paletteRowOf(o, "settings.undo")
+    compare(r.enabled, false)
+    compare(r.reason, "open Settings")
+    compare(paletteRowOf(o, "search.add"), null, "a Search row isn't listed outside Search")
+    esc(o)
+    openSettings(o)
+    key(o.c, ":", 0x3a)
+    r = paletteRowOf(o, "search.open")
+    compare(r.enabled, true, ":Search from Settings")
+    compare(r.reason, "")
+    r = paletteRowOf(o, "settings.open")
+    compare(r.enabled, false)
+    compare(r.reason, "already open")
+    r = paletteRowOf(o, "settings.undo")
+    compare(r.enabled, false)
+    compare(r.reason, "focus the settings", "judged from the sections column")
+    compare(paletteRowOf(o, "search.add"), null)
+    esc(o)
+    compare(o.c.activeView, "settings")
+    key(o.c, "l")
+    key(o.c, ":", 0x3a)
+    r = paletteRowOf(o, "settings.undo")
+    compare(r.enabled, false)
+    compare(r.reason, "nothing to undo", "judged in the settings column with Settings' flags")
+    esc(o)
+    compare(o.c.activeView, "settings")
+    esc(o)
+    openSearch(o)
+    searchPane(o).setPlugins([{ name: "a", enabled: true }])
+    key(o.c, ":", 0x3a)
+    r = paletteRowOf(o, "search.open")
+    compare(r.enabled, false)
+    compare(r.reason, "already open")
+    r = paletteRowOf(o, "settings.open")
+    compare(r.enabled, true, ":Settings from Search")
+    r = paletteRowOf(o, "settings.undo")
+    compare(r.reason, "open Settings")
+    r = paletteRowOf(o, "search.add")
+    compare(r.enabled, false)
+    compare(r.reason, "needs a result", "judged with Search's flags")
+    compare(paletteRowOf(o, "search.new").enabled, true)
+    esc(o)
+    compare(o.c.activeView, "search")
+  }
+
+  // Client.run's routing.
+  function test_5b0_run_hands_a_command_to_the_view_that_owns_it() {
+    var o = make()
+    var sp = null
+    o.c.run("search.sort", {}, null, [])
+    compare(o.c.activeView, "torrents")
+    compare(o.c.sortMode, "added", "a Search command isn't a torrent one")
+    openSearch(o)
+    sp = searchPane(o)
+    var sort = sp.sortMode
+    o.c.run("search.sort", {}, null, [])
+    verify(sp.sortMode !== sort, "Search's row ran in Search")
+    compare(o.c.sortMode, "added")
+    o.c.run("search.focusPlugins", {}, null, [])
+    compare(o.c.keyPane, "searchPlugins")
+    esc(o)
+    esc(o)
+    compare(o.c.activeView, "torrents")
+    o.c.run("sort.next", {}, null, [])
+    verify(o.c.sortMode !== "added", "anything else goes to the torrents' commands")
+    o.c.run("search.open", {}, null, [])
+    compare(o.c.activeView, "search", "the opener isn't Search's")
+  }
+
+  function test_5b0_run_hands_a_settings_command_to_settings() {
+    var o = make()
+    openSettings(o)
+    o.c.run("settings.sectionsClose", {}, null, [])
+    compare(o.c.activeView, "settings")
+    o.c.run("settings.undo", {}, null, [])
+    compare(o.c.statusMessage.text, "Nothing to undo.")
+    var sort = o.c.sortMode
+    o.c.run("settings.sections", {}, null, [])
+    compare(o.c.sortMode, sort)
+  }
+
+  // showView: the one standing in leaves, then the new one opens.
+  function test_5b0_showView_closes_settings_before_opening_search() {
+    var o = make()
+    openSettings(o)
+    goToSection(o, "Speed")
+    key(o.c, "l")
+    slash(o)
+    line(o).setInput("port")
+    enter(o)
+    compare(view(o).query, "port")
+    var seq = view(o).readSeq
+    var reads = calls(o.svc, "readPrefs").length
+    o.c.showView("search")
+    compare(o.c.activeView, "search")
+    verify(!view(o).open)
+    verify(searchPane(o).open)
+    compare(view(o).query, "", "Settings' closeView ran")
+    compare(view(o).column, "settingsSections")
+    verify(view(o).readSeq > seq)
+    compare(calls(o.svc, "readPrefs").length, reads, "Settings' openView didn't run")
+    compare(searchPane(o).column, "searchResults")
+    compare(o.c.keyPane, "searchResults")
+  }
+
+  function test_5b0_showView_closes_search_before_opening_settings() {
+    var o = make()
+    openSearch(o)
+    var sp = searchPane(o)
+    sp.column = "searchPlugins"
+    o.c.showView("settings")
+    compare(o.c.activeView, "settings")
+    verify(!sp.open)
+    verify(view(o).open)
+    compare(sp.column, "searchResults", "Search's closeView ran")
+    compare(calls(o.svc, "readPrefs").length, 1, "Settings' openView ran")
+    compare(view(o).prefs, null)
+    o.svc.answer({ ok: true, prefs: prefs() })
+    compare(o.c.keyPane, "settingsSections")
+  }
+
+  function test_5b0_showView_to_the_active_view_is_a_no_op_and_an_unknown_name_means_the_torrents() {
+    var o = make()
+    openSearch(o)
+    var sp = searchPane(o)
+    sp.column = "searchPlugins"
+    o.c.showView("search")
+    compare(sp.column, "searchPlugins", "openView didn't run again")
+    o.c.showView("nowhere")
+    compare(o.c.activeView, "torrents")
+    verify(!sp.open)
+    compare(sp.column, "searchResults", "closeView ran")
+    o.c.showView("torrents")
+    compare(o.c.activeView, "torrents")
+    o.c.showView("")
+    compare(o.c.activeView, "torrents")
+  }
+
+  // close(): the window drops what the views hold.
+  function test_5b0_close_from_the_palette_in_a_view_ends_the_palette_and_reopens_on_the_torrents() {
+    var o = make()
+    openSearch(o)
+    key(o.c, ":", 0x3a)
+    compare(o.c.mode, "COMMAND")
+    o.c.close()
+    compare(o.c.mode, "NORMAL")
+    o.c.open("")
+    backFromSearch(o, "table", "reopened")
+    openSettings(o)
+    key(o.c, ":", 0x3a)
+    compare(o.c.mode, "COMMAND")
+    o.c.close()
+    compare(o.c.mode, "NORMAL")
+    o.c.open("")
+    backOnTorrents(o, "table", "reopened")
+  }
+
+  function test_5b0_close_ends_a_settings_edit_input_and_search_insert_purposes() {
+    var o = make()
+    openSettings(o)
+    key(o.c, "l")
+    slash(o)
+    compare(o.c.inputPurpose, "settingsSearch")
+    o.c.close()
+    compare(o.c.mode, "NORMAL")
+    compare(o.c.inputPurpose, "")
+    compare(view(o).query, "")
+    compare(cmdsOf(o).settingsCommands.input, null)
+    o.c.open("")
+    compare(o.c.activeView, "torrents")
+  }
+
+  // ClientCommands.runPaletteRow: a row that runs on the torrents leaves the view first.
+  function test_5b0_a_palette_row_from_a_view_runs_in_that_view_and_a_torrent_row_leaves_it() {
+    var o = make()
+    focusTorrentPane(o, "filters")
+    openSearch(o)
+    searchPane(o).setPlugins([{ name: "a", enabled: true }])
+    var mru = o.c.paletteMru.slice()
+    runPalette(o, "Sort results")
+    compare(o.c.activeView, "search", "a Search row runs in Search")
+    compare(o.c.pane, "filters", "the torrent pane underneath stays")
+    verify(o.c.paletteMru.length === mru.length + 1, "and goes to the top of the MRU")
+    compare(o.c.paletteMru[0], "search.sort")
+    runPalette(o, "Settings")
+    compare(o.c.activeView, "settings")
+    compare(o.c.pane, "filters")
   }
 }

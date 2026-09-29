@@ -2637,3 +2637,161 @@ test("5a: the ? overlay names a view by its view", () => {
   for (const p of Registry.SEARCH_PANES) assert.equal(V.helpPaneName(p), "search");
   for (const p of ["table", "filters", "inspector"]) assert.equal(V.helpPaneName(p), p);
 });
+
+// --- 5b0 (Task 1): pins for the view-host refactor -----------------------------------
+// What ClientView.js says today at every site the refactor rewrites, so a
+// table-driven rewrite has to give the same answers.
+
+// paletteSettingsReason and paletteFocusReason aren't exported, so their
+// answers are read off a palette row for a made-up command with these panes.
+function reasonFor(panes, state) {
+  const cmd = { id: "x.probe", title: "Probe", group: "App", keys: ["k"], modes: ["NORMAL"], panes: panes, needs: "none" };
+  const rows = V.paletteRows("", [cmd], [], state);
+  assert.equal(rows.length, 1, panes.join(",") + " is listed");
+  return rows[0].enabled ? "" : rows[0].reason;
+}
+
+test("5b0: a Settings row from elsewhere names the Settings step it needs (paletteSettingsReason)", () => {
+  const torrents = V.paletteState("rows", true, {}, "table", "torrents");
+  const settingsSections = V.paletteState("rows", true, {}, "table", "settings", {}, "settingsSections");
+  assert.equal(reasonFor(["settingsKeys"], torrents), "open Settings");
+  assert.equal(reasonFor(["settingsKeys"], V.paletteState("rows", true, {}, "table", "search", null, "searchResults")), "open Settings");
+  assert.equal(reasonFor(["settingsKeys"], settingsSections), "focus the settings");
+  assert.equal(reasonFor(["settingsKeys", "settingsList"], settingsSections), "focus the settings", "a keys row wins over a list row");
+  assert.equal(reasonFor(["settingsList"], settingsSections), "open a list");
+  assert.equal(reasonFor(["settingsList"], torrents), "open a list", "a list row never says to open Settings");
+  assert.equal(reasonFor(["settingsKeys"], V.paletteState("rows", true, {}, "table", "settings", {}, "settingsKeys")), "", "runs from its own column");
+});
+
+test("5b0: paletteFocusReason asks Settings first, then Search, then the torrent panes", () => {
+  const torrents = V.paletteState("rows", true, {}, "table", "torrents");
+  const search = V.paletteState("rows", true, {}, "table", "search", null, "searchResults");
+  const settings = V.paletteState("rows", true, {}, "table", "settings", {}, "settingsSections");
+  assert.equal(reasonFor(["settingsKeys", "searchResults"], settings), "focus the settings", "Settings' answer comes first");
+  assert.equal(reasonFor(["searchPlugins", "settingsList"], torrents), "open a list");
+  assert.equal(reasonFor(["searchPluginList", "filters"], search), "open the plugins (P)", "a Search reason beats the torrent panes'");
+  assert.equal(reasonFor(["filters"], torrents), "focus the filters");
+  assert.equal(reasonFor(["filters"], V.paletteState("rows", true, {}, "filters", "torrents", null, "filters")), "", "runs from its own pane");
+  assert.equal(reasonFor(["inspector"], torrents), "focus the inspector");
+  assert.equal(reasonFor(["inspector", "filters"], torrents), "focus the inspector", "the first pane with a reason");
+  assert.equal(reasonFor(["filters"], settings), "focus the filters");
+});
+
+test("5b0: paletteSearchReason names the Search step a row needs", () => {
+  const rows = (...panes) => panes.map((p) => ({ panes: [p] }));
+  const inSearch = { activeView: "search" };
+  assert.equal(V.paletteSearchReason(rows("table", "settingsKeys"), inSearch), "", "no Search pane, no reason");
+  assert.equal(V.paletteSearchReason([{}], inSearch), "");
+  assert.equal(V.paletteSearchReason(rows("searchResults"), null), "open Search");
+  assert.equal(V.paletteSearchReason(rows("searchResults"), { activeView: "settings" }), "open Search");
+  assert.equal(V.paletteSearchReason(rows("searchPluginList"), { activeView: "torrents" }), "open Search", "opening comes before anything else");
+  assert.equal(V.paletteSearchReason(rows("searchPluginList"), inSearch), "open the plugins (P)");
+  assert.equal(V.paletteSearchReason(rows("searchResults"), inSearch), "focus the results");
+  assert.equal(V.paletteSearchReason(rows("searchResults", "searchPlugins"), inSearch), "focus the results");
+  assert.equal(V.paletteSearchReason(rows("searchResults", "searchPluginList"), inSearch), "focus the results", "results win over the list");
+  assert.equal(V.paletteSearchReason(rows("searchPlugins"), inSearch), "leave the plugins");
+  assert.equal(V.paletteSearchReason(rows("searchPlugins", "searchPluginList"), inSearch), "open the plugins (P)", "a list row without a results row");
+});
+
+test("5b0: the palette from each view: :Search and :Settings, their reasons and which rows are listed", () => {
+  const from = (view, pane) => V.paletteRows("", Registry.commands, [], V.paletteState("rows", true, {}, "table", view, view === "settings" ? {} : null, pane));
+  const torrents = from("torrents", "table");
+  const settings = from("settings", "settingsKeys");
+  const search = from("search", "searchResults");
+  const pair = (rows, id) => [rowOf(rows, id).enabled, rowOf(rows, id).reason];
+  assert.deepEqual(pair(torrents, "search.open"), [true, ""]);
+  assert.deepEqual(pair(torrents, "settings.open"), [true, ""]);
+  assert.deepEqual(pair(settings, "search.open"), [true, ""], ":Search from Settings");
+  assert.deepEqual(pair(settings, "settings.open"), [false, "already open"]);
+  assert.deepEqual(pair(search, "settings.open"), [true, ""], ":Settings from Search");
+  assert.deepEqual(pair(search, "search.open"), [false, "already open"]);
+  // A Settings row is listed from every view and says to open Settings from the other two.
+  assert.deepEqual(pair(torrents, "settings.undo"), [false, "open Settings"]);
+  assert.deepEqual(pair(search, "settings.undo"), [false, "open Settings"]);
+  assert.deepEqual(pair(settings, "settings.undo"), [false, "nothing to undo"]);
+  assert.deepEqual(pair(torrents, "list.add"), [false, "open a list"]);
+  // A Search row is listed only in Search.
+  for (const rows of [torrents, settings]) {
+    assert.deepEqual(rows.filter((r) => /^(search|plugin)\./.test(String(r.id))).map((r) => r.id), ["search.open"]);
+  }
+  assert.ok(rowOf(search, "search.add"));
+  assert.equal(V.paletteListed({ rows: Registry.commands.filter((r) => r.id === "settings.undo") }, V.paletteState("rows", true, {}, "table", "torrents")), true);
+  assert.equal(V.paletteListed({ rows: Registry.commands.filter((r) => r.id === "search.add") }, V.paletteState("rows", true, {}, "table", "settings", {}, "settingsKeys")), false);
+  assert.equal(V.paletteListed({ rows: Registry.commands.filter((r) => r.id === "search.add") }, V.paletteState("rows", true, {}, "table", "search", null, "searchResults")), true);
+  assert.equal(V.paletteListed({ rows: Registry.commands.filter((r) => r.id === "search.add") }, undefined), false);
+  assert.equal(V.paletteListed({ rows: Registry.commands.filter((r) => r.id === "torrent.toggle") }, V.paletteState("rows", true)), true);
+});
+
+test("5b0: only a view's opener says 'already open', and only while that view shows", () => {
+  const states = { torrents: V.paletteState("rows", true, {}, "table", "torrents"),
+    settings: V.paletteState("rows", true, {}, "table", "settings", {}, "settingsKeys"),
+    search: V.paletteState("rows", true, {}, "table", "search", null, "searchResults") };
+  for (const [view, st] of Object.entries(states)) {
+    const dimmed = V.paletteRows("", Registry.commands, [], st).filter((r) => r.reason === "already open").map((r) => r.id);
+    assert.deepEqual(dimmed, view === "settings" ? ["settings.open"] : (view === "search" ? ["search.open"] : []), view);
+  }
+});
+
+test("5b0: paletteState carries the view, its pane, and each view's flags", () => {
+  const t = V.paletteState("rows", true, {}, "table", "torrents", null, "searchResults");
+  assert.deepEqual([t.activeView, t.viewPane, t.settingsPane, t.settingsOpen], ["torrents", "", "", false], "no view pane for the torrents");
+  assert.equal(V.paletteState("rows", true, {}, "table", "", null, "x").activeView, "torrents", "an empty name is the torrents");
+  assert.equal(V.paletteState("rows", true, {}, "table", "search", null, "").viewPane, "", "no pane given");
+  const se = V.paletteState("rows", true, {}, "table", "settings", { key: "dht", toggle: true, editable: true, undoCount: 3 }, "settingsKeys");
+  assert.deepEqual([se.settingsKey, se.settingsToggle, se.settingsEditable, se.settingsUndoCount, se.settingsPane, se.activeView],
+    ["dht", true, true, 3, "settingsKeys", "settings"]);
+  const sr = V.paletteState("rows", true, {}, "table", "search", null, "searchPluginList", { down: true, narrow: true, plugins: 2, enabledPlugins: 1, pluginsBusy: true });
+  assert.deepEqual([sr.searchDown, sr.narrow, sr.searchPluginCount, sr.searchEnabledPlugins, sr.searchPluginsBusy, sr.settingsPane, sr.mode],
+    [true, true, 2, 1, true, "", "NORMAL"]);
+  assert.equal(V.paletteState("rows", true, {}, "table", "search", null, "searchResults", null).searchDown, false);
+});
+
+test("5b0: dispatchState writes Search's down flag every time", () => {
+  const down = V.dispatchState({ mode: "NORMAL" }, "searchResults", "rows", true, [], {}, null, null, { down: true });
+  assert.equal(down.searchDown, true);
+  assert.equal(V.dispatchState(down, "searchResults", "rows", true, [], {}, null, null, {}).searchDown, false);
+  assert.equal(V.dispatchState(down, "table", "rows", true, [], {}, null, null, null).searchDown, false);
+  assert.equal(V.dispatchState({}, "searchResults", "rows", true, [], {}, null, null, { down: "yes" }).searchDown, false, "only true counts");
+});
+
+test("5b0: a view's dispatch flags are written every time, so nothing carries over from another view", () => {
+  const set = V.dispatchState({ mode: "NORMAL" }, "settingsKeys", "rows", false, [], {}, null,
+    { key: "dht", toggle: true, editable: true, listRow: true, secretSet: true, listEditable: true, listItem: { index: 0 }, narrow: true, undoCount: 2 });
+  assert.deepEqual([set.settingsKey, set.settingsToggle, set.settingsEditable, set.settingsListRow, set.settingsSecretSet, set.listEditable, set.narrow, set.settingsUndoCount],
+    ["dht", true, true, true, true, true, true, 2]);
+  const off = V.dispatchState(set, "searchResults", "rows", false, [], {}, null, null, { result: { fileName: "x" } });
+  assert.deepEqual([off.settingsKey, off.settingsToggle, off.settingsEditable, off.settingsListRow, off.settingsSecretSet, off.listEditable, off.listItem, off.narrow, off.settingsUndoCount],
+    [null, false, false, false, false, false, null, false, 0]);
+  assert.deepEqual(off.searchResult, { fileName: "x" });
+  const back = V.dispatchState(off, "table", "rows", true, [], {}, null, null, null);
+  assert.deepEqual([back.searchResult, back.searchPlugin, back.searchPluginCount], [null, null, 0]);
+});
+
+test("5b0: the view tables: input purposes, openers and the views they name", () => {
+  assert.deepEqual(V.SEARCH_INPUT_PURPOSES, ["searchQuery", "pluginInstall"]);
+  assert.deepEqual(V.VIEW_INPUT_PURPOSES, ["settingsSearch", "settingEdit"].concat(V.SEARCH_INPUT_PURPOSES));
+  assert.deepEqual(V.VIEW_OPENERS, { "settings.open": "settings", "search.open": "search" });
+  for (const [id, view] of Object.entries(V.VIEW_OPENERS)) {
+    assert.ok(Registry.VIEWS.includes(view), view);
+    assert.ok(Registry.commands.some((r) => r.id === id), id);
+  }
+  assert.deepEqual(Registry.VIEWS, ["torrents", "settings", "search"]);
+  // A view's INSERT prompts and hints exist for each purpose it owns.
+  for (const p of V.VIEW_INPUT_PURPOSES) assert.ok(V.modeHints("INSERT", { purpose: p }).length > 0, p);
+  for (const p of V.SEARCH_INPUT_PURPOSES) assert.notEqual(V.inputPrompt(p).prompt, "", p);
+});
+
+test("5b0: the footer takes the view's flags the way Client passes them", () => {
+  // Client: View.copyState(settingsCmds.flags() || {}, { accept, purpose, pane: keyPane, search, searching, editor, filesTab }).
+  const copyState = (base, patch) => Object.assign({}, base, patch);
+  const hints = (settings, patch) => V.modeHints("NORMAL", copyState(settings || {}, patch)).map((h) => h.key + " " + h.label);
+  assert.deepEqual(hints(null, { pane: "searchResults", search: null }), ["j/k move", "h plugins column", "P plugins", "Esc back", "? keys"]);
+  assert.deepEqual(hints(null, { pane: "searchResults", search: { enabledPlugins: 1 } }),
+    ["j/k move", "/ search", "c category", "h plugins column", "P plugins", "Esc back", "? keys"]);
+  assert.deepEqual(hints({ key: "dht", toggle: true }, { pane: "settingsKeys", searching: false, editor: "toggle", search: null }),
+    ["j/k move", "Space toggle", "h sections", "/ search", "Esc back", "? keys"]);
+  assert.deepEqual(hints({ key: "dht" }, { pane: "settingsKeys", searching: true, editor: "toggle", search: null }),
+    ["j/k move", "Space toggle", "h sections", "/ search", "Esc clear search", "? keys"], "a search in progress changes only Esc");
+  assert.deepEqual(V.modeHints("CONFIRM", copyState({}, { accept: V.confirmLine({ kind: "searchAdd", line: "x" }).accept })).map((h) => h.key + " " + h.label), ["y add", "n/Esc keep"]);
+  assert.deepEqual(V.modeHints("INSERT", copyState({}, { purpose: "settingsSearch" })).map((h) => h.key + " " + h.label), ["Enter keep results", "Esc clear"]);
+});
