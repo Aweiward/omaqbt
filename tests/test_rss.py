@@ -207,6 +207,27 @@ class FlattenTest(unittest.TestCase):
         self.assertEqual(out["feeds"][6], {"path": "Zeta", "name": "Zeta", "depth": 0, "folder": True,
                                            "unread": 0, "total": 0, "feeds": 2})
 
+    def test_a_date_without_a_weekday(self):
+        # Qt's RFC2822Date output drops the weekday.
+        t = {"f": feed(1, ALPHA_URL, "", [
+            article("w1", "t", "https://x.example/1", date="29 Sep 2025 10:00:00 +0000")])}
+        arts = rssitems.flatten(t, False, None)["articles"]
+        self.assertEqual(arts[0]["date"], EPOCH)
+
+    def test_isread_reads_like_qvariant_tobool(self):
+        rows = [(True, True), (False, False), ("", False), ("0", False), ("false", False),
+                ("FALSE", False), ("False", False), ("true", True), ("1", True), ("no", True),
+                (0, False), (0.0, False), (1, True), (-2, True), (None, False), ([], False)]
+        for value, want in rows:
+            with self.subTest(value=value):
+                a = article("x", "t", "https://x.example/1")
+                a["isRead"] = value
+                arts = rssitems.flatten({"f": feed(1, ALPHA_URL, "", [a])}, False, None)["articles"]
+                self.assertIs(arts[0]["isRead"], want)
+        a = article("x", "t", "https://x.example/1")
+        arts = rssitems.flatten({"f": feed(1, ALPHA_URL, "", [a])}, False, None)["articles"]
+        self.assertIs(arts[0]["isRead"], False, "absent")
+
     def test_articles(self):
         out = rssitems.flatten(tree(), True, 5)
         arts = {a["guid"]: a for a in out["articles"]}
@@ -758,6 +779,17 @@ class ErrorTest(RssCase):
         self.ok(self.rss("refresh", "Linux\\Distros\\ubuntu"), {"ok": True})
         self.ok(self.rss("error", UBUNTU_URL), {"reason": "newer"})
         self.assertEqual(json.loads(self.state_path().read_text())["lastId"], 1)
+
+    def test_a_removed_feeds_url_is_forgotten(self):
+        secret = "https://tracker.example/rss?passkey=SECRET"
+        t = {"gone": feed(200, secret, has_error=True), "kept": feed(201, UBUNTU_URL, has_error=True)}
+        self.reset(t, [self.row(secret, "down"), self.row(UBUNTU_URL, "also down")])
+        self.ok(self.rss("error", UBUNTU_URL), {"reason": "also down"})
+        self.assertIn(secret, json.loads(self.state_path().read_text())["reasons"])
+        self.reset({"kept": feed(201, UBUNTU_URL, has_error=True)}, [self.row(UBUNTU_URL, "also down")])
+        self.ok(self.rss("error", UBUNTU_URL), {"reason": "also down"})
+        self.assertNotIn("SECRET", self.state_path().read_text())
+        self.assertEqual(json.loads(self.state_path().read_text())["reasons"], {UBUNTU_URL: "also down"})
 
     def test_at_most_200_urls_least_recently_stored_dropped(self):
         t = {f"f{i:03d}": feed(100 + i, f"https://f{i:03d}.example/", has_error=True) for i in range(250)}

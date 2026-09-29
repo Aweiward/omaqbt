@@ -253,7 +253,7 @@ test("rss contract: the qbt shapes the lanes build against are written down", ()
     "The `name` rule applies **only to the segment being created**",
     "are taken exactly as `rss/items` gave them",
     "qbt matches each on its prefix",
-    "Every write except `qbt rss add` reads `rss/items` back",
+    "Every write except `qbt rss add` and `qbt rss refresh` reads `rss/items` back",
     "`refreshInterval` is `rss_refresh_interval`",
     "Absent means false; qbt always outputs `isRead` as a bool. The fixture omits it on unread articles.",
     "A feed whose `hasError` is false has its stored reason dropped",

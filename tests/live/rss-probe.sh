@@ -6,6 +6,8 @@
 #
 # What it does, and undoes:
 #   - checks `qbt probe` names a localhost base and qBittorrent answers;
+#   - stops (exit 1) when rss_processing_enabled is on, since a real addFeed
+#     then refreshes every feed the user has (rss_session.cpp:166-167);
 #   - reads proxy_rss and proxy_type: when a proxy applies to RSS, the fetch
 #     checks are skipped with the reason (OV12), since qBittorrent would
 #     fetch the local feed through the proxy;
@@ -85,6 +87,9 @@ fi
 prefs=$("$QBT" prefs) || stop "qbt prefs failed"
 proxy_rss=$(printf '%s' "$prefs" | jq -r '.proxy_rss')
 proxy_type=$(printf '%s' "$prefs" | jq -r '.proxy_type')
+if [[ $(printf '%s' "$prefs" | jq -r '.rss_processing_enabled') == true ]]; then
+  stop "RSS processing is on; turn it off (Settings → RSS) before running the probe, or it refreshes every feed."
+fi
 skip_fetch=""
 if [[ $proxy_rss == true && $proxy_type != None ]]; then
   skip_fetch="RSS goes through the $proxy_type proxy (proxy_rss), which can't reach 127.0.0.1 (OV12)"
@@ -132,6 +137,9 @@ else
       || fail "news item hasTorrent: $news"
     [[ $(printf '%s' "$magnet" | jq '.hasTorrent and (.torrentURL | startswith("magnet:?"))') == true ]] \
       && pass "hasTorrent is true for the magnet" || fail "magnet item: $magnet"
+    [[ $(printf '%s' "$news" | jq '.date != null') == true && $(printf '%s' "$magnet" | jq '.date != null') == true ]] \
+      && pass "both articles have a date (qBittorrent's dates carry no weekday)" \
+      || fail "an article has no date: $news $magnet"
   else
     fail "the articles didn't arrive within ${WAIT} s (got $got)"
   fi

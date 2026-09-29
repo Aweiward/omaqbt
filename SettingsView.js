@@ -78,12 +78,14 @@ var EMPTY_LINE_TEXT = "(empty line)";
 var LIST_EMPTY = {
   banned_IPs: "No banned IPs. Ban a peer with b on the Peers tab, or a to add one here.",
   add_trackers: "No trackers to add. Press a to add a tracker URL.",
-  excluded_file_names: "No excluded file names. Press a to add a pattern such as *.exe."
+  excluded_file_names: "No excluded file names. Press a to add a pattern such as *.exe.",
+  rss_smart_episode_filters: "No smart filters."
 };
 var LIST_PROMPTS = {
   banned_IPs: "Ban an IP address",
   add_trackers: "Add a tracker URL (empty: next tier)",
-  excluded_file_names: "Add a file name pattern"
+  excluded_file_names: "Add a file name pattern",
+  rss_smart_episode_filters: "Smart filter (regular expression)"
 };
 // What a secret is called in its confirm and done note (the schema's
 // labels are short: dyndns_password's is "Password").

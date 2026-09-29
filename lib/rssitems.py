@@ -124,7 +124,16 @@ def _articles(feed):
 
 def _is_read(article):
     # 5.2.3 leaves isRead out of an unread article (only markAsRead adds it).
-    return article.get("isRead") is True
+    # A non-bool value reads as QVariant::toBool does: a string is true
+    # unless it is empty, "0" or "false" (any case); a number when non-zero.
+    value = article.get("isRead")
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value != "" and value != "0" and value.lower() != "false"
+    if isinstance(value, (int, float)):
+        return value != 0
+    return False
 
 
 def _root(items):
@@ -310,7 +319,12 @@ def error_update(state_path, url, items, log, full):
         last = -1
     else:
         rows = [r for r in rows if r["id"] > last]
-    for feed in _feeds_under(_root(items)):
+    feeds = list(_feeds_under(_root(items)))
+    # A removed feed's URL can carry a private-tracker passkey: forget it.
+    live = {feed["url"] for feed in feeds}
+    for gone in [u for u in reasons if u not in live]:
+        del reasons[gone]
+    for feed in feeds:
         feed_url = feed["url"]
         if feed.get("hasError") is not True:
             reasons.pop(feed_url, None)
