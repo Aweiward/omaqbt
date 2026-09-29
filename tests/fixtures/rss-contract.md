@@ -69,7 +69,7 @@ stdin `url`. It reads `log/main?normal=false&info=false&warning=true&critical=fa
 
 ### `qbt rss add-feed`
 
-stdin `url\0path`, where `path` is the new feed's full path. It checks `url` with the `feedUrl` rule and `path` segment by segment, POSTs `rss/addFeed` (`url`, `path`), reads back that `path` exists, then POSTs `rss/refreshItem` with `itemPath=path` (D8: a new feed fills at once even while processing is off). It prints `{"ok": true, "path": "..."}`. A read-back without the path prints "Couldn't confirm <name> was added.".
+stdin `url\0path`, where `path` is the new feed's full path. It checks `url` with the `feedUrl` rule and the new (last) segment of `path` with the `name` rule (the parent folder is taken as `rss/items` gave it), POSTs `rss/addFeed` (`url`, `path`), reads back that `path` exists, then POSTs `rss/refreshItem` with `itemPath=path` (D8: a new feed fills at once even while processing is off). It prints `{"ok": true, "path": "..."}`. A read-back without the path prints "Couldn't confirm <name> was added.".
 
 ### `qbt rss add-folder`
 

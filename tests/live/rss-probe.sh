@@ -16,7 +16,8 @@
 #   - waits up to 20 s for both articles, then checks that the news item's
 #     torrentURL equals its link, that hasTorrent is false for it and true
 #     for the magnet, that markAsRead on a missing path answers 200 through
-#     the raw API, and that a GET on rss/addFolder answers 405;
+#     the raw API, and that a GET on rss/addFolder answers 405 (its path is
+#     inside omaqbt-probe, so if it ever made a folder, cleanup removes it);
 #   - removes omaqbt-probe and stops the http server, on every exit (trap).
 # It refuses to start when a feed or folder called omaqbt-probe exists.
 #
@@ -54,8 +55,11 @@ rss() {
 cleanup() {
   local rc=$?
   if (( added )); then
+    # added is set before add-folder, so the folder may never have landed.
     if rss remove "$FOLDER" >/dev/null 2>&1; then
       printf 'cleanup: removed %s\n' "$FOLDER"
+    elif rss items 2>/dev/null | jq -e --arg f "$FOLDER" 'all(.feeds[]; .path != $f)' >/dev/null 2>&1; then
+      printf 'cleanup: %s is already gone\n' "$FOLDER"
     else
       printf 'cleanup: could not remove %s; remove it in qBittorrent by hand\n' "$FOLDER" >&2
     fi
@@ -97,8 +101,11 @@ done
 curl -sf --noproxy '*' -o /dev/null "$feed_url" || stop "the local feed server didn't start"
 pass "serving $feed_url"
 
-out=$(rss add-folder "$FOLDER") || stop "add-folder failed"
+# Set before the call: the pre-check above proved omaqbt-probe didn't exist,
+# so whatever add-folder leaves behind (a POST that landed before a timeout
+# or a read-back miss) is ours to remove.
 added=1
+out=$(rss add-folder "$FOLDER") || stop "add-folder failed"
 [[ $(printf '%s' "$out" | jq -c .) == "{\"ok\":true,\"path\":\"$FOLDER\"}" ]] && pass "add-folder $FOLDER" \
   || fail "add-folder answered $out"
 out=$(rss add-feed "$feed_url" "$FEED") || stop "add-feed failed"
@@ -133,7 +140,7 @@ fi
 code=$(curl -s --noproxy '*' --max-time 5 -o /dev/null -w '%{http_code}' -X POST \
   --data-urlencode "itemPath=$FOLDER\\no-such-feed" "$base/api/v2/rss/markAsRead" || true)
 [[ $code == 200 ]] && pass "markAsRead on a missing path answers 200" || fail "markAsRead on a missing path: $code"
-code=$(curl -s --noproxy '*' --max-time 5 -o /dev/null -w '%{http_code}' "$base/api/v2/rss/addFolder?path=omaqbt-probe-get" || true)
+code=$(curl -s --noproxy '*' --max-time 5 -o /dev/null -w '%{http_code}' "$base/api/v2/rss/addFolder?path=omaqbt-probe%5Cget" || true)
 [[ $code == 405 ]] && pass "GET rss/addFolder answers 405" || fail "GET rss/addFolder: $code"
 
 out=$(rss remove "$FOLDER") && added=0

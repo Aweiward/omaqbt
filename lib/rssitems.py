@@ -290,7 +290,9 @@ def _log_rows(log):
 
 def restarted(state_path, log):
     """True when the log reply (asked with error_since) doesn't reach the
-    stored lastId: qBittorrent restarted, so the whole log is read again."""
+    stored lastId: qBittorrent restarted, so the whole log is read again.
+    With lastId 0 the reply is already the whole log (error_since gives
+    -1) and error_update rescans it, so there is nothing to ask again."""
     last, _ = _load_state(state_path)
     return last > 0 and not any(r["id"] >= last for r in _log_rows(log))
 
@@ -301,7 +303,10 @@ def error_update(state_path, url, items, log, full):
     returns the stored reason for `url` or None."""
     last, reasons = _load_state(state_path)
     rows = _log_rows(log)
-    if full:
+    # lastId 0 can't tell the row it names from a restarted log's new row
+    # 0, so it rescans the whole reply (error_since asked with -1); a row
+    # read again only restores the reason it already gave.
+    if full or last == 0:
         last = -1
     else:
         rows = [r for r in rows if r["id"] > last]

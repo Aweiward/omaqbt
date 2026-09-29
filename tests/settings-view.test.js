@@ -673,7 +673,7 @@ test("rows: a locked row is never dimmed; the lock is its reason", () => {
 // Slice 5b1: rss_smart_episode_filters joins them (a pattern list).
 const MULTI = ["excluded_file_names", "add_trackers", "rss_smart_episode_filters"];
 
-test("multiline: exactly the two editable-in-4b keys are the schema's multiline, non-hidden, non-deferred, writable keys", () => {
+test("multiline: exactly the three list keys (4b's two and 5b1's smart episode filters) are the schema's multiline, non-hidden, non-deferred, writable keys", () => {
   const found = Schema.KEY_ORDER.filter((k) => {
     const e = Schema.SCHEMA[k];
     return e.multiline && !e.hidden && !e.deferred && !e.readOnly && !e.locked;

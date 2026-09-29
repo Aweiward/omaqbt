@@ -741,6 +741,24 @@ class ErrorTest(RssCase):
         self.assertEqual(queries, [["4"], ["-1"]])
         self.assertEqual(json.loads(self.state_path().read_text())["lastId"], 0)
 
+    def test_a_restart_is_seen_when_last_id_is_0(self):
+        # lastId 0 names a row a restarted log also has; the whole log is
+        # read again, so the new row 0 counts, with one log/main request.
+        self.reset(tree(), [self.row(UBUNTU_URL, "before")])
+        self.ok(self.rss("error", UBUNTU_URL), {"reason": "before"})
+        self.assertEqual(json.loads(self.state_path().read_text())["lastId"], 0)
+        self.reset(tree(), [self.row(UBUNTU_URL, "after")])
+        before = len(self.log())
+        self.ok(self.rss("error", UBUNTU_URL), {"reason": "after"})
+        queries = [e["query"]["last_known_id"] for e in self.since(before) if e["path"] == "/api/v2/log/main"]
+        self.assertEqual(queries, [["-1"]])
+        self.assertEqual(json.loads(self.state_path().read_text())["lastId"], 0)
+        # Not restarted: a newer row still wins over row 0.
+        self.control({"rss_load_ticks": 0, "rss_feed_errors": {UBUNTU_URL: "newer"}})
+        self.ok(self.rss("refresh", "Linux\\Distros\\ubuntu"), {"ok": True})
+        self.ok(self.rss("error", UBUNTU_URL), {"reason": "newer"})
+        self.assertEqual(json.loads(self.state_path().read_text())["lastId"], 1)
+
     def test_at_most_200_urls_least_recently_stored_dropped(self):
         t = {f"f{i:03d}": feed(100 + i, f"https://f{i:03d}.example/", has_error=True) for i in range(250)}
         self.reset(t, [self.row(f"https://f{i:03d}.example/", f"r{i}") for i in range(250)])
