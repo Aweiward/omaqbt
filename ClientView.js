@@ -1106,8 +1106,10 @@ function targetHashes(mode, rows, cursorHash, anchorHash) {
 // Settings view is open ({key, toggle, editable}: the setting under its
 // cursor and whether Space/Enter edit it), or null; written every time.
 // `search` is SearchPane.flags while Search is the active view, or null.
-// Slice 5b0: `views` is an optional {name: flags} map for views added
-// after 5a; an entry overrides the positional settings/search by name.
+// Slice 5b0: `views` is an optional {name: flags} map; an entry overrides
+// the positional settings/search by name. The Client passes every view's
+// flags in `views` (Client.viewFlags); the positional settings and search
+// are kept for the existing callers (the node tests).
 // Every view's VIEW_FLAG_STATE mapper runs every time, in Registry.VIEWS
 // order, with null flags for a view that isn't given.
 function dispatchState(regState, pane, state, hasCursorRow, targets, inspector, picker, settings, search, views) {
@@ -1957,10 +1959,6 @@ function paletteRunsFromView(rows, view) {
     for (var j = 0; j < panes.length; j++) if (panes[j] !== "*" && Registry.viewOfPane(panes[j]) === view) return true;
   }
   return false;
-}
-
-function paletteRunsFromSettings(rows) {
-  return paletteRunsFromView(rows, "settings");
 }
 
 function paletteRunsFromTable(rows) {

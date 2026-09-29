@@ -565,6 +565,8 @@ Item {
   }
 
   // The state a key or palette command resolves against, as it stands now.
+  // Every view's flags go in `views` (viewFlags); the positional settings
+  // and search flags are kept for dispatchState's existing callers.
   function registryState(targets) {
     return View.dispatchState(regState, keyPane, tableState, cursorIndex >= 0, targets, inspectorNow, commands.pickerFlags(),
       settingsHost.flagsNow(), searchFlags, viewFlags())
@@ -644,7 +646,6 @@ Item {
     palette: cmdPalette
     settingsView: settingsView
     settingsCommands: settingsCmds
-    searchView: searchView
     magnet: magnetRow
     categoryPicker: catPicker
     tagPicker: tagPicker

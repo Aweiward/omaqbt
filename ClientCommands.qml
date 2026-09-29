@@ -33,9 +33,6 @@ QtObject {
   // Its editors (Task 6, SettingsCommands): settings.toggle/edit/write, the
   // settingEdit INSERT and the choice picker are forwarded there.
   property var settingsCommands: null
-  // The Search view (slice 5a, SearchPane): its INSERTs (searchQuery,
-  // pluginInstall) are forwarded there; its commands go there from Client.run.
-  property var searchView: null
 
   // ---- view hosts (slice 5b0) ---------------------------------------------
 
