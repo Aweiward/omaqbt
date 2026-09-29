@@ -1228,4 +1228,25 @@ TestCase {
     compare(o.c.activeView, "settings")
     compare(o.c.pane, "filters")
   }
+
+  // Slice 5b0 (Task 3): every view but the torrents has a host with the
+  // whole contract (docs/plans/slice-5b0.md), looked up by name.
+  function test_every_view_has_a_complete_host() {
+    var o = make()
+    var client = o.c
+    var names = Registry.VIEWS.filter(function (v) { return v !== "torrents" })
+    compare(JSON.stringify(client.hostNames), JSON.stringify(names))
+    var fns = ["flagsNow", "openView", "closeView", "windowClosed", "owns", "run", "commitInput",
+               "cancelInput", "inputEdited", "acceptPicker", "dropPicker", "togglePicker"]
+    for (var i = 0; i < names.length; i++) {
+      var h = client.viewHost(names[i])
+      verify(h !== null, names[i])
+      compare(h.name, names[i])
+      verify(typeof h.column === "string")
+      verify(Array.isArray(h.inputPurposes))
+      for (var j = 0; j < fns.length; j++) compare(typeof h[fns[j]], "function", names[i] + "." + fns[j])
+    }
+    compare(client.viewHost("torrents"), null)
+    compare(client.viewHost("nope"), null)
+  }
 }

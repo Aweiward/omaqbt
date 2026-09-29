@@ -65,6 +65,11 @@ Item {
   // leaves through them (each view's leaveRequested), and they decide what
   // a browser magnet's CONFIRM or a torrent row from the palette closes.
   // Never saved: a reopened window lands on the torrents.
+  // Slice 5b0: every view but the torrents is a host (the view host
+  // contract, docs/plans/slice-5b0.md: SettingsHost, SearchPane), looked up
+  // by name (viewHost); the Client and ClientCommands loop over the hosts
+  // instead of branching on a view's name. A new view is a Registry.VIEWS
+  // entry plus its host in viewHostList.
   property string activeView: "torrents"
   property string textQuery: ""
   property var regState: ({ mode: "NORMAL", pane: "table", prefix: null, prefixAt: 0, hasTorrent: false, selectionCount: 0, pending: null })
@@ -232,12 +237,40 @@ Item {
   readonly property var stateCopy: View.stateCopy(tableState, { query: textQuery, filter: filter, matchesInAll: matchesInAll })
   readonly property string mode: regState.mode
   // The registry pane keys go to: the active view's pane (a Settings column,
-  // a Search pane) while one stands in, else the torrent pane.
-  readonly property string keyPane: activeView === "settings" ? settingsView.column
-    : (activeView === "search" ? searchView.column : View.dispatchPane(pane, tableState))
+  // a Search pane) while one stands in, else the torrent pane (also for a
+  // view name with no host, so a key never reaches a pane nobody shows).
+  readonly property string keyPane: activeView === "torrents" || !viewHost(activeView) ? View.dispatchPane(pane, tableState)
+    : viewHost(activeView).column
   // Search's dispatch flags while it shows (null otherwise), as
-  // SettingsCommands.flags() is Settings'.
-  readonly property var searchFlags: activeView === "search" ? searchView.flags : null
+  // SettingsCommands.flags() is Settings'. The footer reads it.
+  readonly property var searchFlags: viewHost("search") ? viewHost("search").flagsNow() : null
+
+  // ---- view hosts (slice 5b0) -----------------------------------------------
+
+  // Every view's host; viewHost finds one by its `name`.
+  readonly property var viewHostList: [settingsHost, searchView]
+  // Every Registry.VIEWS entry but the torrents, in registry order.
+  readonly property var hostNames: Registry.VIEWS.filter(function (v) { return v !== "torrents" })
+
+  // viewHost(name) -> that view's host, or null (the torrents, or a name
+  // no host has).
+  function viewHost(name) {
+    if (name === "torrents") return null
+    var list = viewHostList
+    for (var i = 0; i < list.length; i++) if (list[i] && list[i].name === name) return list[i]
+    return null
+  }
+
+  // {name: flagsNow()} for every host: View.dispatchState's `views` map.
+  function viewFlags() {
+    var out = ({})
+    var names = hostNames
+    for (var i = 0; i < names.length; i++) {
+      var h = viewHost(names[i])
+      if (h) out[names[i]] = h.flagsNow()
+    }
+    return out
+  }
 
   // ---- lifecycle functions ------------------------------------------------
 
@@ -258,9 +291,13 @@ Item {
     // An open palette/picker would lose its field focus; reopening lands on the torrents.
     if (mode === "COMMAND") commands.closePalette(); else if (mode === "PICKER") commands.closePicker()
     if (mode === "INSERT" && View.VIEW_INPUT_PURPOSES.indexOf(inputPurpose) !== -1) leaveInsert()
-    settingsCmds.dropConfirm()
-    // D7/OV14: leaving Search keeps its job; closing the window doesn't.
-    searchView.windowClosed()
+    // Every view drops what it holds (Settings its CONFIRM; D7/OV14:
+    // leaving Search keeps its job, closing the window doesn't), in
+    // Registry.VIEWS order.
+    for (var i = 0; i < hostNames.length; i++) {
+      var h = viewHost(hostNames[i])
+      if (h) h.windowClosed()
+    }
     leaveView()
     helpOpen = false
     opened = false
@@ -287,12 +324,11 @@ Item {
   function showView(name) {
     var next = Registry.VIEWS.indexOf(name) !== -1 ? name : "torrents"
     if (next === activeView) return
-    var from = activeView
+    var from = viewHost(activeView)
     activeView = next
-    if (from === "settings") settingsView.closeView()
-    else if (from === "search") searchView.closeView()
-    if (next === "settings") settingsView.openView()
-    else if (next === "search") searchView.openView()
+    if (from) from.closeView()
+    var to = viewHost(next)
+    if (to) to.openView()
   }
 
   // Back to the torrents, with their pane, cursor and filter as they were.
@@ -529,8 +565,11 @@ Item {
   }
 
   // The state a key or palette command resolves against, as it stands now.
+  // Every view's flags go in `views` (viewFlags); the positional settings
+  // and search flags are kept for dispatchState's existing callers.
   function registryState(targets) {
-    return View.dispatchState(regState, keyPane, tableState, cursorIndex >= 0, targets, inspectorNow, commands.pickerFlags(), settingsCmds.flags(), searchFlags)
+    return View.dispatchState(regState, keyPane, tableState, cursorIndex >= 0, targets, inspectorNow, commands.pickerFlags(),
+      settingsHost.flagsNow(), searchFlags, viewFlags())
   }
 
   // Ends INSERT the way Esc does (insert.cancel: the filter query goes
@@ -546,9 +585,12 @@ Item {
   function run(commandId, args, ev, targets) {
     // Slice 4b: the list editor, secrets and narrow rows are SettingsCommands'.
     // Slice 5a: Search's rows (all but its opener) are SearchPane's.
-    if (settingsCmds.owns(commandId)) settingsCmds.run(commandId, args)
-    else if (searchView.owns(commandId)) searchView.run(commandId, args, ev)
-    else commands.run(commandId, args, ev, targets)
+    // Slice 5b0: the first host (Registry.VIEWS order) that owns it runs it.
+    for (var i = 0; i < hostNames.length; i++) {
+      var h = viewHost(hostNames[i])
+      if (h && h.owns(commandId)) { h.run(commandId, args, ev); return }
+    }
+    commands.run(commandId, args, ev, targets)
   }
 
   // ---- wiring ----------------------------------------------------------------
@@ -604,7 +646,6 @@ Item {
     palette: cmdPalette
     settingsView: settingsView
     settingsCommands: settingsCmds
-    searchView: searchView
     magnet: magnetRow
     categoryPicker: catPicker
     tagPicker: tagPicker
@@ -616,6 +657,9 @@ Item {
     commands: commands
     settingsView: settingsView
   }
+
+  // Slice 5b0: Settings' view host (SearchPane is its own).
+  SettingsHost { id: settingsHost; pane: settingsView; cmds: settingsCmds }
 
   WmFocus {
     id: wmFocus
@@ -802,7 +846,7 @@ Item {
         service: root.service
         tableState: root.tableState
         narrow: View.settingsNarrow(keyRoot.width)
-        open: root.activeView === "settings"
+        open: root.activeView === settingsHost.name
         onLeaveRequested: root.leaveView()
       }
       // Slice 5a: the Search view's mount point (SearchPane.qml documents
@@ -815,7 +859,7 @@ Item {
         commands: commands
         tableState: root.tableState
         narrow: View.settingsNarrow(keyRoot.width)
-        open: root.activeView === "search"
+        open: root.activeView === searchView.name
         onLeaveRequested: root.leaveView()
       }
       StatusLine {
@@ -849,8 +893,9 @@ Item {
         }))
 
         onInputEdited: function(text) {
-          if (root.mode === "INSERT" && root.inputPurpose === "settingsSearch") settingsView.setSearch(text)
-          if (root.mode === "INSERT" && View.SEARCH_INPUT_PURPOSES.indexOf(root.inputPurpose) !== -1) searchView.inputEdited(root.inputPurpose, text)
+          // A view's own INSERT goes to the host that owns its purpose.
+          var viewInput = root.mode === "INSERT" ? commands.inputHost(root.inputPurpose) : null
+          if (viewInput) viewInput.inputEdited(root.inputPurpose, text)
           if (root.mode !== "INSERT" || root.inputPurpose !== "filter") return
           // "Matches update as you type"; a pasted magnet/URL/path is an
           // add target, not a query, so it doesn't filter the table empty.
@@ -877,7 +922,7 @@ Item {
         visible: root.mode === "COMMAND"
         mru: root.paletteMru
         evalState: View.paletteState(root.tableState, root.cursorIndex >= 0, root.inspectorState, root.pane, root.activeView,
-          settingsCmds.flags(), root.keyPane, root.searchFlags)
+          settingsHost.flagsNow(), root.keyPane, root.searchFlags, root.viewFlags())
         onKeyForwarded: function(event) { root.handleKey(event) }
         onActivated: function(row) { commands.runPaletteRow(row) }
         onDismissed: commands.closePalette()

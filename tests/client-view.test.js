@@ -2795,3 +2795,24 @@ test("5b0: the footer takes the view's flags the way Client passes them", () => 
   assert.deepEqual(V.modeHints("CONFIRM", copyState({}, { accept: V.confirmLine({ kind: "searchAdd", line: "x" }).accept })).map((h) => h.key + " " + h.label), ["y add", "n/Esc keep"]);
   assert.deepEqual(V.modeHints("INSERT", copyState({}, { purpose: "settingsSearch" })).map((h) => h.key + " " + h.label), ["Enter keep results", "Esc clear"]);
 });
+
+// --- Slice 5b0: per-view tables ---------------------------------------------
+
+test("views map: a flags entry for a new view reaches its mapper", () => {
+  V.VIEW_FLAG_STATE.demo = (f, st) => { st.demoSeen = !!(f && f.x === 1); };
+  const st = V.dispatchState({ mode: "NORMAL" }, "table", "rows", true, [], null, null, null, null, { demo: { x: 1 } });
+  assert.equal(st.demoSeen, true);
+  delete V.VIEW_FLAG_STATE.demo;
+});
+
+test("views map: a mapper runs with null flags when its view is absent", () => {
+  const st = V.dispatchState({ mode: "NORMAL" }, "table", "rows", true, [], null, null, null, null);
+  assert.equal(st.searchResult, null);
+  assert.equal(st.settingsKey, null);
+});
+
+test("derived constants equal 5a's literals", () => {
+  assert.deepEqual(V.SEARCH_INPUT_PURPOSES, ["searchQuery", "pluginInstall"]);
+  assert.deepEqual(V.VIEW_INPUT_PURPOSES, ["settingsSearch", "settingEdit", "searchQuery", "pluginInstall"]);
+  assert.deepEqual(V.VIEW_OPENERS, { "settings.open": "settings", "search.open": "search" });
+});

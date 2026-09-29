@@ -1105,7 +1105,14 @@ function targetHashes(mode, rows, cursorHash, anchorHash) {
 // always written too. `settings` is SettingsCommands.flags() while the
 // Settings view is open ({key, toggle, editable}: the setting under its
 // cursor and whether Space/Enter edit it), or null; written every time.
-function dispatchState(regState, pane, state, hasCursorRow, targets, inspector, picker, settings, search) {
+// `search` is SearchPane.flags while Search is the active view, or null.
+// Slice 5b0: `views` is an optional {name: flags} map; an entry overrides
+// the positional settings/search by name. The Client passes every view's
+// flags in `views` (Client.viewFlags); the positional settings and search
+// are kept for the existing callers (the node tests).
+// Every view's VIEW_FLAG_STATE mapper runs every time, in Registry.VIEWS
+// order, with null flags for a view that isn't given.
+function dispatchState(regState, pane, state, hasCursorRow, targets, inspector, picker, settings, search, views) {
   var st = {};
   var r = regState || {};
   for (var k in r) {
@@ -1128,6 +1135,20 @@ function dispatchState(regState, pane, state, hasCursorRow, targets, inspector, 
   var p = picker || {};
   st.pickerQueryEmpty = p.queryEmpty === true;
   st.pickerMulti = p.multi === true;
+  var byView = { settings: settings || null, search: search || null };
+  var extra = views || {};
+  for (var n in extra) if (Object.prototype.hasOwnProperty.call(extra, n)) byView[n] = extra[n] || null;
+  for (var vi = 0; vi < Registry.VIEWS.length; vi++) {
+    var name = Registry.VIEWS[vi];
+    if (VIEW_FLAG_STATE[name]) VIEW_FLAG_STATE[name](byView[name], st);
+  }
+  for (var m in VIEW_FLAG_STATE) if (Registry.VIEWS.indexOf(m) === -1 && Object.prototype.hasOwnProperty.call(VIEW_FLAG_STATE, m)) VIEW_FLAG_STATE[m](byView[m] || null, st);
+  return st;
+}
+
+// The Settings view's dispatch fields (SettingsCommands.flags()): the
+// setting under its cursor and whether Space/Enter edit it; always written.
+function settingsFlagState(settings, st) {
   var sv = settings || {};
   st.settingsKey = sv.key ? String(sv.key) : null;
   st.settingsToggle = sv.toggle === true;
@@ -1140,6 +1161,9 @@ function dispatchState(regState, pane, state, hasCursorRow, targets, inspector, 
   st.listItem = sv.listItem && typeof sv.listItem === "object" ? sv.listItem : null;
   st.narrow = sv.narrow === true;
   st.settingsUndoCount = typeof sv.undoCount === "number" ? sv.undoCount : 0;
+}
+
+function searchFlagState(search, st) {
   // Slice 5a: `search` is the Search view's flags (SearchPane.flags) while
   // it's the active view, or null; written every time. narrow comes from
   // whichever view is showing.
@@ -1151,8 +1175,12 @@ function dispatchState(regState, pane, state, hasCursorRow, targets, inspector, 
   st.searchEnabledPlugins = typeof se.enabledPlugins === "number" ? se.enabledPlugins : 0;
   st.searchPluginsBusy = se.pluginsBusy === true;
   st.searchDown = se.down === true;
-  return st;
 }
+
+// Slice 5b0: each view's dispatch-field mapper, by view name. The settings
+// mapper runs before search's (Registry.VIEWS order): it sets st.narrow,
+// and Search can only raise it.
+var VIEW_FLAG_STATE = { settings: settingsFlagState, search: searchFlagState };
 
 // sameInspectorState(a, b) -> whether two inspectorDispatch results hold
 // the same values (the window keeps its palette copy stable across status
@@ -1933,10 +1961,6 @@ function paletteRunsFromView(rows, view) {
   return false;
 }
 
-function paletteRunsFromSettings(rows) {
-  return paletteRunsFromView(rows, "settings");
-}
-
 function paletteRunsFromTable(rows) {
   return paletteRunsFrom(rows, "table");
 }
@@ -1981,11 +2005,17 @@ function paletteSearchReason(rows, state) {
   return results ? "focus the results" : "leave the plugins";
 }
 
+// Slice 5b0: each view's "what to do first" reason for its rows from
+// elsewhere, by view name; paletteFocusReason asks them in Registry.VIEWS
+// order and the first non-empty one wins.
+var PALETTE_VIEW_REASON = { settings: paletteSettingsReason, search: paletteSearchReason };
+
 function paletteFocusReason(rows, state) {
-  var settings = paletteSettingsReason(rows, state);
-  if (settings !== "") return settings;
-  var search = paletteSearchReason(rows, state);
-  if (search !== "") return search;
+  for (var v = 0; v < Registry.VIEWS.length; v++) {
+    var viewReason = PALETTE_VIEW_REASON[Registry.VIEWS[v]];
+    var r = viewReason ? viewReason(rows, state) : "";
+    if (r !== "") return r;
+  }
   for (var i = 0; i < rows.length; i++) {
     var panes = rows[i].panes || [];
     for (var j = 0; j < panes.length; j++) {
@@ -2084,8 +2114,13 @@ function paletteRowFrom(entry, state, indices) {
   // palette opened from (state.settingsPane); every other row from the
   // torrent pane, as before.
   // Slice 5a: likewise a Search row from Search's pane (state.viewPane).
-  if (state && state.settingsPane && paletteRunsFromSettings(entry.rows)) pane = String(state.settingsPane);
-  if (state && state.activeView === "search" && state.viewPane && paletteRunsFromView(entry.rows, "search")) pane = String(state.viewPane);
+  // Slice 5b0: one loop over the views, in Registry.VIEWS order.
+  for (var vi = 0; vi < Registry.VIEWS.length; vi++) {
+    var vn = Registry.VIEWS[vi];
+    if (vn === "torrents") continue;
+    var vp = vn === "settings" ? (state && state.settingsPane) : (state && state.activeView === vn && state.viewPane);
+    if (vp && paletteRunsFromView(entry.rows, vn)) pane = String(vp);
+  }
   if (!paletteRunsFromTable(entry.rows) && !paletteRunsFrom(entry.rows, pane)) {
     enabled = false;
     reason = paletteFocusReason(entry.rows, state);
@@ -2146,14 +2181,24 @@ function paletteTitleAsc(a, b) {
 // that helpFor/dispatch read.
 // Slice 5a: Search's own rows (every row of the command names a Search
 // pane) are listed only while Search shows, so the torrent view's palette
-// is unchanged but for ":Search" itself.
+// is unchanged but for ":Search" itself. Slice 5b0: generalised through
+// Registry.VIEW_META: a command is hidden only when every pane of every
+// row belongs to one view whose listedOutside is false, and that view
+// isn't the active one.
 function paletteListed(entry, state) {
   var rows = entry.rows || [];
+  var only = null;
   for (var i = 0; i < rows.length; i++) {
     var panes = rows[i].panes || [];
-    for (var j = 0; j < panes.length; j++) if (!Registry.isSearchPane(panes[j])) return true;
+    for (var j = 0; j < panes.length; j++) {
+      var v = Registry.viewOfPane(panes[j]);
+      if (only !== null && v !== only) return true;
+      only = v;
+    }
   }
-  return !!state && state.activeView === "search";
+  var meta = only !== null && Object.prototype.hasOwnProperty.call(Registry.VIEW_META, only) ? Registry.VIEW_META[only] : null;
+  if (!meta || meta.listedOutside !== false) return true;
+  return !!state && state.activeView === only;
 }
 
 function paletteRows(query, commands, mru, state) {
@@ -2221,10 +2266,11 @@ function paletteRows(query, commands, mru, state) {
 // Slice 5a: `view` is Client.activeView ("torrents", "settings" or
 // "search"; the 4b callers' `true` still means "settings" and false
 // "torrents"), viewPane the pane keys go to in that view (Client.keyPane),
-// and search the Search view's flags while it shows.
-function paletteState(tableState, hasCursorRow, inspector, pane, view, settings, viewPane, search) {
+// and search the Search view's flags while it shows. Slice 5b0: `views`
+// is dispatchState's {name: flags} map for views added after 5a.
+function paletteState(tableState, hasCursorRow, inspector, pane, view, settings, viewPane, search, views) {
   var v = view === true ? "settings" : (typeof view === "string" && view !== "" ? view : "torrents");
-  var st = dispatchState({ mode: "NORMAL" }, pane || "table", tableState, hasCursorRow, [], inspector, null, settings, search);
+  var st = dispatchState({ mode: "NORMAL" }, pane || "table", tableState, hasCursorRow, [], inspector, null, settings, search, views);
   st.activeView = v;
   st.viewPane = v !== "torrents" && viewPane ? String(viewPane) : "";
   st.settingsOpen = v === "settings";
@@ -2232,13 +2278,24 @@ function paletteState(tableState, hasCursorRow, inspector, pane, view, settings,
   return st;
 }
 
-// The INSERT purposes a view owns (slice 5a): closing the window ends
-// them (Client.close), and ClientCommands hands Search's to SearchPane.
-var SEARCH_INPUT_PURPOSES = ["searchQuery", "pluginInstall"];
-var VIEW_INPUT_PURPOSES = ["settingsSearch", "settingEdit"].concat(SEARCH_INPUT_PURPOSES);
+// The INSERT purposes each view owns (slice 5a; by view since 5b0):
+// closing the window ends them (Client.close), and ClientCommands hands
+// each to its view's host. SEARCH_INPUT_PURPOSES and VIEW_INPUT_PURPOSES
+// (every view's, in Registry.VIEWS order) are derived from it.
+var VIEW_INPUT_PURPOSES_BY_VIEW = {
+  settings: ["settingsSearch", "settingEdit"],
+  search: ["searchQuery", "pluginInstall"]
+};
+var SEARCH_INPUT_PURPOSES = VIEW_INPUT_PURPOSES_BY_VIEW.search;
+var VIEW_INPUT_PURPOSES = Registry.VIEWS.reduce(function(all, v) {
+  return all.concat(VIEW_INPUT_PURPOSES_BY_VIEW[v] || []);
+}, []);
 
-// The opener of each view (":Settings", ":Search").
-var VIEW_OPENERS = { "settings.open": "settings", "search.open": "search" };
+// The opener of each view (":Settings", ":Search"), from Registry.VIEW_META.
+var VIEW_OPENERS = Registry.VIEWS.reduce(function(all, v) {
+  if (Registry.VIEW_META[v]) all[Registry.VIEW_META[v].opener] = v;
+  return all;
+}, {});
 
 // paletteView(commandsTable, id, keyPane) -> the view a palette row runs
 // in when the palette was opened on keyPane: that pane's view when one of
@@ -2485,6 +2542,9 @@ if (typeof module !== "undefined" && module.exports) {
     paletteListed: paletteListed,
     helpPaneName: helpPaneName,
     VIEW_OPENERS: VIEW_OPENERS,
+    VIEW_FLAG_STATE: VIEW_FLAG_STATE,
+    VIEW_INPUT_PURPOSES_BY_VIEW: VIEW_INPUT_PURPOSES_BY_VIEW,
+    PALETTE_VIEW_REASON: PALETTE_VIEW_REASON,
     SEARCH_INPUT_PURPOSES: SEARCH_INPUT_PURPOSES,
     VIEW_INPUT_PURPOSES: VIEW_INPUT_PURPOSES,
     settingQuestion: settingQuestion,
