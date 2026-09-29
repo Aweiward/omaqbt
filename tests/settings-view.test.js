@@ -925,6 +925,8 @@ test("4b list copy: the empty states, prompts, titles and done notes", () => {
   assert.equal(V.listEmptyText("banned_IPs"), "No banned IPs. Ban a peer with b on the Peers tab, or a to add one here.");
   assert.equal(V.listEmptyText("add_trackers"), "No trackers to add. Press a to add a tracker URL.");
   assert.equal(V.listEmptyText("excluded_file_names"), "No excluded file names. Press a to add a pattern such as *.exe.");
+  assert.equal(V.listEmptyText("rss_smart_episode_filters"), "No smart filters.");
+  assert.equal(V.listPrompt("rss_smart_episode_filters"), "Smart filter (regular expression)");
   assert.equal(V.listPrompt("banned_IPs"), "Ban an IP address");
   assert.equal(V.listPrompt("add_trackers"), "Add a tracker URL (empty: next tier)");
   assert.equal(V.listPrompt("excluded_file_names"), "Add a file name pattern");
