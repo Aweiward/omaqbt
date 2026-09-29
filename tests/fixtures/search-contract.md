@@ -2,7 +2,7 @@
 
 Written by Task 1 (wave 0, eng OV9) before the two lanes start. Task 2 (the backend lane: `qbt`, `qbt-serve`, `lib/`, `tests/fixtures/server.py`, python tests) and Task 3 (the window lane: `SearchView.js`, `SearchPane.qml`, `SearchCommands.qml`, `Service.qml`, `Sidecar.qml`, node and harness tests) both build against this file. A lane that needs something this file doesn't say stops and asks; it doesn't invent a shape.
 
-- **Rules and exact sentences** live in [`search-rules-cases.json`](search-rules-cases.json). Its `cases` hold the rules, its `sentences` hold every other line `qbt` prints, and its `window` holds the window's copy. Both lanes read that file in their tests and never retype a message. Every sentence quoted below is copied from it, and a node test checks that it matches.
+- **Rules and exact sentences** live in [`search-rules-cases.json`](search-rules-cases.json) (the pageLink and magnetHash rules also in [`link-rules-cases.json`](link-rules-cases.json)). Its `cases` hold the rules, its `sentences` hold every other line `qbt` prints, and its `window` holds the window's copy. Both lanes read that file in their tests and never retype a message. Every sentence quoted below is copied from it, and a node test checks that it matches.
 - **URLs are parsed by the case file's text rule, never by a URL library** (Ruling FB). Both lanes split every URL (plugin URL, page link, add link) the same way:
   1. The scheme, matched case-insensitively.
   2. `://`.

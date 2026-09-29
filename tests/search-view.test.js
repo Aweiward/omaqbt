@@ -1,24 +1,29 @@
 // Slice 5a (Task 3): SearchView.js, the Search view's pure rules, against
-// every row of tests/fixtures/search-rules-cases.json and the window's copy.
+// every row of tests/fixtures/search-rules-cases.json (and the pageLink and
+// magnetHash rows of tests/fixtures/link-rules-cases.json) and the window's copy.
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
 
-function loadSearchView() {
-  const file = path.join(__dirname, "..", "SearchView.js");
+// SearchView.js imports LinkRules.js as Links; the loader injects it as a parameter
+// (tests/settings-view.test.js's loader).
+function load(name, params, args) {
+  const file = path.join(__dirname, "..", name);
   const src = fs.readFileSync(file, "utf8")
     .split("\n")
     .map((line) => (/^\s*\.(import|pragma)\b/.test(line) ? "" : line))
     .join("\n");
   const mod = { exports: {} };
-  vm.compileFunction(src, ["module"], { filename: file })(mod);
+  vm.compileFunction(src, ["module"].concat(params), { filename: file })(mod, ...args);
   return mod.exports;
 }
 
-const S = loadSearchView();
+const Links = load("LinkRules.js", [], []);
+const S = load("SearchView.js", ["Links"], [Links]);
 const DATA = JSON.parse(fs.readFileSync(path.join(__dirname, "fixtures", "search-rules-cases.json"), "utf8"));
+const LINK = JSON.parse(fs.readFileSync(path.join(__dirname, "fixtures", "link-rules-cases.json"), "utf8"));
 const MAGNET = "magnet:?xt=urn:btih:c12fe1c06bba254a9dc9f519b335aa7c1367a88a&dn=debian";
 const V1 = "c12fe1c06bba254a9dc9f519b335aa7c1367a88a";
 
@@ -26,7 +31,7 @@ const V1 = "c12fe1c06bba254a9dc9f519b335aa7c1367a88a";
 
 for (const kind of ["pluginUrl", "pageLink", "addLink", "magnetHash", "row", "pluginName", "pattern", "category", "searchId", "installReadback"]) {
   test("case file: every " + kind + " row", () => {
-    const rows = DATA.cases.filter((c) => c.kind === kind);
+    const rows = DATA.cases.concat(LINK.cases).filter((c) => c.kind === kind);
     assert.ok(rows.length > 0);
     for (const c of rows) {
       const label = c.why + " " + JSON.stringify(c.input).slice(0, 120);
@@ -42,7 +47,7 @@ for (const kind of ["pluginUrl", "pageLink", "addLink", "magnetHash", "row", "pl
 test("the window's copy and qbt's sentences are the case file's", () => {
   assert.deepEqual(S.WINDOW, DATA.window);
   for (const k of Object.keys(S.SENTENCES)) assert.equal(S.SENTENCES[k], DATA.sentences[k], k);
-  const messages = new Set(DATA.cases.filter((c) => c.message).map((c) => c.message));
+  const messages = new Set(DATA.cases.concat(LINK.cases).filter((c) => c.message).map((c) => c.message));
   for (const [k, m] of Object.entries(S.MSG)) assert.ok(messages.has(m), "MSG." + k + " is a case-file message: " + m);
 });
 

@@ -48,7 +48,17 @@ import "CommandRegistry.js" as Registry
 //                overlay (pane searchPlugins while it shows).
 //   open         bound to Client.activeView === "search".
 //
+// Slice 5b0: this is Search's view host (the view host contract,
+// docs/plans/slice-5b0.md; SettingsHost.qml is Settings'): the Client and
+// ClientCommands find it by `name` (Client.viewHost) and loop over the
+// hosts, so every member below is part of that contract.
+//
 // Read by the Client:
+//   name         "search", the view's name in Registry.VIEWS.
+//   inputPurposes  the INSERT purposes this view owns
+//                (View.VIEW_INPUT_PURPOSES_BY_VIEW.search: "searchQuery",
+//                "pluginInstall"); ClientCommands hands their commit and
+//                cancel here, and Client the field's edits.
 //   column       the pane keys dispatch in while Search shows (Client.keyPane):
 //                "searchResults", "searchPlugins" or "searchPluginList".
 //   flags        the dispatch flags (View.dispatchState's `search`, and the
@@ -105,6 +115,11 @@ import "CommandRegistry.js" as Registry
 //                (client.note + commands.stayInInsert).
 //   cancelInput(purpose)  Esc (or a click) ended that INSERT.
 //   inputEdited(purpose, text)  the field changed while it's open.
+//   flagsNow()   -> `flags` while Search is the active view (open), else
+//                null: View.dispatchState's `search` (Client.searchFlags).
+//   togglePicker() -> false: the category picker is single choice, so
+//                Space/Tab never toggle in it (ClientCommands.togglePicker
+//                goes on to C/T's).
 Item {
   id: search
   objectName: "searchView"
@@ -118,6 +133,9 @@ Item {
 
   property string column: "searchResults"
   property string category: "all"
+  // Slice 5b0: the view host contract (the header).
+  readonly property string name: "search"
+  readonly property var inputPurposes: View.VIEW_INPUT_PURPOSES_BY_VIEW.search
   property bool pickerOpen: false
   readonly property var picker: pickerLoader.item
   // The column `P` was pressed in, which the overlay's Esc returns to.
@@ -243,7 +261,7 @@ Item {
   function windowClosed() {
     dropConfirm()
     cmds.closeJob()
-    cmds.awaiting = []
+    cmds.awaiter.clear()
   }
 
   function dropConfirm() {
@@ -329,6 +347,14 @@ Item {
   }
 
   function inputEdited(purpose, text) {
+  }
+
+  function flagsNow() {
+    return open ? flags : null
+  }
+
+  function togglePicker() {
+    return false
   }
 
   // ---- the category picker (Ruling FB) -------------------------------------------------
@@ -542,7 +568,7 @@ Item {
 
   function syncLibrary() {
     libSet = SearchView.librarySet(service ? service.torrents : [])
-    cmds.checkAwaiting()
+    cmds.awaiter.check()
   }
 
   onColumnRowsChanged: {

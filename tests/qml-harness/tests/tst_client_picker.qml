@@ -663,4 +663,108 @@ TestCase {
     verify(tagPicker(o).visible)
     compare(tagPicker(o).counterText, "1 torrent")
   }
+  // ---- slice 5b0 (Task 1): pins for the view-host refactor ----------------------------------
+  // Picker precedence (Settings, then Search, then C/T) and how a click on
+  // the scrim or a row ends each of the torrents' pickers.
+
+  function cmdsOf(o) {
+    for (var i = 0; i < o.c.data.length; i++) if (o.c.data[i] && typeof o.c.data[i].runPaletteRow === "function") return o.c.data[i]
+    return null
+  }
+  function choiceItem(picker, title) {
+    return (function find(obj) {
+      if (!obj) return null
+      if (obj.isRow === true && obj.modelData && String(obj.modelData.title) === title) return obj
+      var kids = obj.children || []
+      for (var i = 0; i < kids.length; i++) { var r = find(kids[i]); if (r) return r }
+      return null
+    })(picker)
+  }
+
+  function test_5b0_openPicker_names_the_C_or_T_picker_by_its_kind_and_closePicker_clears_it() {
+    var o = make()
+    var cc = cmdsOf(o)
+    compare(cc.openPicker(), null, "nothing open")
+    onRow(o, hh("a"))
+    key(o.c, "C")
+    compare(cc.pickerKind, "category")
+    compare(cc.pickerTargets, [hh("a")])
+    verify(cc.openPicker() === cc.categoryPicker)
+    compare(cc.pickerFlags().multi, false)
+    cc.closePicker()
+    compare(cc.pickerKind, "")
+    compare(cc.pickerTargets.length, 0)
+    compare(cc.openPicker(), null)
+    compare(o.c.mode, "NORMAL")
+    verify(!catPicker(o).visible)
+    key(o.c, "T")
+    compare(cc.pickerKind, "tag")
+    verify(cc.openPicker() === cc.tagPicker)
+    compare(cc.pickerFlags().multi, true)
+    compare(cc.pickerFlags().queryEmpty, true)
+    esc(o)
+    compare(cc.openPicker(), null)
+    compare(cc.pickerFlags(), null, "flags only in PICKER")
+  }
+
+  function test_5b0_a_click_on_the_scrim_closes_the_category_picker_and_writes_nothing() {
+    var o = make()
+    onRow(o, hh("d"))
+    key(o.c, "C")
+    compare(o.c.mode, "PICKER")
+    wait(30)
+    mouseClick(catPicker(o), 4, 4)
+    compare(o.c.mode, "NORMAL")
+    verify(!catPicker(o).visible)
+    compare(cmdsOf(o).pickerKind, "")
+    compare(writes(o.svc).length, 0)
+    compare(o.c.confirm, null)
+  }
+
+  function test_5b0_a_click_on_the_scrim_closes_the_tag_picker_and_writes_nothing() {
+    var o = make()
+    onRow(o, hh("a"))
+    key(o.c, "T")
+    space(o)
+    wait(30)
+    mouseClick(tagPicker(o), 4, 4)
+    compare(o.c.mode, "NORMAL")
+    verify(!tagPicker(o).visible)
+    compare(cmdsOf(o).pickerKind, "")
+    compare(writes(o.svc).length, 0)
+  }
+
+  function test_5b0_a_click_on_a_category_row_picks_it() {
+    var o = make()
+    onRow(o, hh("d"))
+    key(o.c, "C")
+    wait(30)
+    var item = choiceItem(catPicker(o), "anime/2026")
+    verify(item !== null, "the row is on screen")
+    mouseClick(item)
+    compare(o.c.mode, "NORMAL")
+    verify(!catPicker(o).visible)
+    var call = lastCall(o.svc, "setCategory")
+    compare(call.args[0], hh("d"))
+    compare(call.args[1], "anime/2026")
+  }
+
+  function test_5b0_a_click_on_a_tag_row_toggles_it_and_the_picker_stays_open() {
+    var o = make()
+    onRow(o, hh("a"))
+    key(o.c, "T")
+    wait(30)
+    var p = tagPicker(o)
+    compare(marks(p), ["[x] seedbox"])
+    var item = choiceItem(p, "seedbox")
+    verify(item !== null, "the row is on screen")
+    mouseClick(item)
+    compare(o.c.mode, "PICKER")
+    compare(marks(p), ["[ ] seedbox"])
+    compare(writes(o.svc).length, 0)
+    enter(o)
+    compare(o.c.mode, "NORMAL")
+    var call = lastCall(o.svc, "editTags")
+    compare(call.args[1].remove, ["seedbox"])
+  }
 }

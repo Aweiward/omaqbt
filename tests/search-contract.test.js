@@ -9,6 +9,8 @@ const path = require("node:path");
 
 const FIX = path.join(__dirname, "fixtures");
 const data = JSON.parse(fs.readFileSync(path.join(FIX, "search-rules-cases.json"), "utf8"));
+// The pageLink and magnetHash rows moved to link-rules-cases.json (slice 5b0).
+data.cases = data.cases.concat(JSON.parse(fs.readFileSync(path.join(FIX, "link-rules-cases.json"), "utf8")).cases);
 const contract = fs.readFileSync(path.join(FIX, "search-contract.md"), "utf8");
 
 const KINDS = ["pluginUrl", "pageLink", "addLink", "magnetHash", "row", "pluginName", "pattern", "category", "searchId", "installReadback"];

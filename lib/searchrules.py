@@ -2,6 +2,7 @@
 """Slice 5a (Search): the rules `qbt search` and `qbt search-plugin` enforce.
 
 Every rule and message comes from tests/fixtures/search-rules-cases.json
+(the pageLink and magnetHash rules also from tests/fixtures/link-rules-cases.json)
 (the contract, eng OV9); the window only pre-checks the same cases in
 SearchView.js. URLs are split by the contract's own text rule, never by a
 URL library (Ruling FB), and an IDN label becomes RFC 3492 punycode with no
@@ -15,29 +16,18 @@ carry no NUL, so a NUL-separated stdin can't be confused.
 """
 import re
 import sys
-import unicodedata
 
-# The case file's BAD class, plus U+DC80-DCFF: invalid UTF-8 from argv,
-# decoded with surrogateescape, is refused like a control character.
-# U+00AD (soft hyphen) and the IDNA dot variants U+3002, U+FF0E, U+FF61
-# are in it too (Ruling FG): a dot variant inside a host would otherwise
-# punycode into one label and pass the host rule.
-_BAD = re.compile(
-    "[\u0000-\u0020\u007f-\u00a0\u00ad\u1680\u2000-\u200f\u2028-\u202f"
-    "\u205f-\u206f\u3000\u3002\ufeff\uff0e\uff61\\\\\udc80-\udcff]"
-)
-_CONTROL = re.compile("[\u0000-\u001f\u007f-\u009f\udc80-\udcff]")
+from linkrules import (  # noqa: F401
+    BAD, CONTROL, MSG_LINK, Refused, host_of, is_space, last_segment, page_link, split_url)
+
 _PLUGIN_NAME = re.compile("[A-Za-z0-9_]+")
 _SEARCH_ID = re.compile("[1-9][0-9]{0,9}")
-_PORT = re.compile("[0-9]{1,5}")
-_IPV6 = re.compile(r"\[([0-9A-Fa-f:.]+)\](?::(.*))?")
-_LABEL = re.compile("[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?")
-_SCHEME = re.compile("([A-Za-z][A-Za-z0-9+.-]*)://")
 
 # qBittorrent 5.2.3's category ids (searchpluginmanager.cpp categoryFullName).
 CATEGORIES = ("all", "anime", "books", "games", "movies", "music", "pictures", "software", "tv")
 
 MSG = {
+    **MSG_LINK,
     "pluginUrlEmpty": "Paste an https:// link to a plugin's .py file.",
     "pluginUrlLong": "Use a URL of at most 2048 characters.",
     "pluginUrlBad": "Use a URL without spaces, control characters, | or \\.",
@@ -46,11 +36,6 @@ MSG = {
     "pluginUrlHost": "That URL has no valid host.",
     "pluginUrlPy": "The URL must point to a .py file.",
     "pluginName": "Plugin names use only letters, digits and _.",
-    "pageEmpty": "That result has no page link.",
-    "pageBad": "That page link has spaces, control characters or \\ in it.",
-    "pageScheme": "That page link isn't http or https.",
-    "pageUser": "That page link has a user name or password in it.",
-    "pageHost": "That page link has no valid host.",
     "noLink": "That result has no usable link.",
     "patternControl": "Use a search without control characters.",
     "patternEmpty": "Type something to search for.",
@@ -61,82 +46,12 @@ MSG = {
 }
 
 
-class Refused(Exception):
-    def __init__(self, message):
-        super().__init__(message)
-        self.message = message
-
-
-def split_url(text):
-    """The contract's text rule: (scheme, authority, path) or None when
-    there's no "<scheme>://". The authority runs to the first /, ? or #
-    (or the end); the path from that / to the first ? or #."""
-    m = _SCHEME.match(text)
-    if not m:
-        return None
-    rest = text[m.end():]
-    end = len(rest)
-    for ch in "/?#":
-        i = rest.find(ch)
-        if i != -1 and i < end:
-            end = i
-    authority, after = rest[:end], rest[end:]
-    path = ""
-    if after.startswith("/"):
-        stop = len(after)
-        for ch in "?#":
-            i = after.find(ch)
-            if i != -1 and i < stop:
-                stop = i
-        path = after[:stop]
-    return m.group(1).lower(), authority, path
-
-
-def last_segment(path):
-    return path[path.rfind("/") + 1:] if "/" in path else ""
-
-
-def _port_ok(port):
-    return bool(_PORT.fullmatch(port)) and 1 <= int(port) <= 65535
-
-
-def _label(label):
-    if any(ord(c) > 0x7F for c in label):
-        try:
-            label = "xn--" + label.encode("punycode").decode("ascii")
-        except (UnicodeError, ValueError):
-            return None
-    return label
-
-
-def host_of(authority):
-    """host[:port] (no userinfo) -> the host as the confirm shows it (lower
-    case, IDN labels as punycode, no port), or None when refused."""
-    if authority.startswith("["):
-        m = _IPV6.fullmatch(authority)
-        if not m or ":" not in m.group(1):
-            return None
-        if m.group(2) is not None and not _port_ok(m.group(2)):
-            return None
-        return "[" + m.group(1).lower() + "]"
-    if authority.count(":") > 1:
-        return None
-    name, colon, port = authority.partition(":")
-    if colon and not _port_ok(port):
-        return None
-    labels = [_label(part) for part in name.lower().split(".")]
-    if any(label is None or not _LABEL.fullmatch(label) for label in labels):
-        return None
-    host = ".".join(labels)
-    return host if 1 <= len(host) <= 253 else None
-
-
 def plugin_url(text):
     if text == "":
         raise Refused(MSG["pluginUrlEmpty"])
     if len(text) > 2048:
         raise Refused(MSG["pluginUrlLong"])
-    if _BAD.search(text) or "|" in text:
+    if BAD.search(text) or "|" in text:
         raise Refused(MSG["pluginUrlBad"])
     parts = split_url(text)
     if not parts or parts[0] != "https":
@@ -156,22 +71,6 @@ def plugin_url(text):
     return name, host
 
 
-def page_link(text):
-    if text == "":
-        raise Refused(MSG["pageEmpty"])
-    if _BAD.search(text):
-        raise Refused(MSG["pageBad"])
-    parts = split_url(text)
-    if not parts or parts[0] not in ("http", "https"):
-        raise Refused(MSG["pageScheme"])
-    if "@" in parts[1]:
-        raise Refused(MSG["pageUser"])
-    host = host_of(parts[1])
-    if host is None:
-        raise Refused(MSG["pageHost"])
-    return "", host
-
-
 def plugin_name(text):
     if not _PLUGIN_NAME.fullmatch(text):
         raise Refused(MSG["pluginName"])
@@ -182,7 +81,7 @@ def add_link(link, plugin=""):
     """-> ("add" | "plugin", host). A magnet has no host."""
     if plugin != "":
         plugin_name(plugin)
-    if link == "" or _BAD.search(link):
+    if link == "" or BAD.search(link):
         raise Refused(MSG["noLink"])
     if link[:8].lower() == "magnet:?":
         return "add", ""
@@ -200,19 +99,13 @@ def add_link(link, plugin=""):
     raise Refused(MSG["noLink"])
 
 
-def _is_space(ch):
-    # QString::trimmed's QChar::isSpace: \t-\r, space, U+0085, U+00A0 and
-    # the Unicode separators (Zs, Zl, Zp).
-    return ch in "\t\n\v\f\r \x85\xa0" or unicodedata.category(ch) in ("Zs", "Zl", "Zp")
-
-
 def pattern(text):
-    if _CONTROL.search(text):
+    if CONTROL.search(text):
         raise Refused(MSG["patternControl"])
     start, end = 0, len(text)
-    while start < end and _is_space(text[start]):
+    while start < end and is_space(text[start]):
         start += 1
-    while end > start and _is_space(text[end - 1]):
+    while end > start and is_space(text[end - 1]):
         end -= 1
     if start == end:
         raise Refused(MSG["patternEmpty"])

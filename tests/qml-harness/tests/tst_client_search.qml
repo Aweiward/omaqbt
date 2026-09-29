@@ -108,6 +108,7 @@ TestCase {
       function searchPluginUpdate() { return change("update", "searchPluginUpdate", []) }
       function searchWatch(id, off) { rec("searchWatch", [id, off]); return true }
       function searchUnwatch() { rec("searchUnwatch", []) }
+      function readPrefs(cb) { rec("readPrefs", []) }
     }
   }
 
@@ -984,5 +985,130 @@ TestCase {
     line(o).setInput("\u3000debian\u00a0")
     enter(o)
     compare(last(o.svc, "searchStart").args, ["debian", "all"])
+  }
+  // ---- slice 5b0 (Task 1): pins for the view-host refactor ----------------------------------
+
+  function settingsPane(o) { return findName(content(o), "settingsView") }
+  function paletteOf(o) { return findWith(content(o), "complete") }
+  function paletteRow(o, id) {
+    var rows = paletteOf(o).rows.filter(function(r) { return r.id === id })
+    return rows.length === 0 ? null : rows[0]
+  }
+
+  function test_5b0_closing_the_window_with_a_search_confirm_drops_it_and_deletes_the_job() {
+    var o = make()
+    streaming(o)
+    key(o.c, "j")
+    enter(o)
+    compare(o.c.mode, "CONFIRM")
+    verify(o.c.confirm !== null)
+    compare(calls(o.svc, "searchDelete").length, 0)
+    o.c.close()
+    compare(o.c.mode, "NORMAL")
+    compare(o.c.confirm, null)
+    compare(o.c.regState.pending, null)
+    compare(calls(o.svc, "searchAdd").length, 0, "the question was never answered")
+    compare(calls(o.svc, "searchDelete").length, 1)
+    compare(last(o.svc, "searchDelete").args, [7])
+    verify(calls(o.svc, "searchUnwatch").length > 0)
+    compare(o.c.activeView, "torrents")
+  }
+
+  function test_5b0_showView_leaves_settings_before_search_opens() {
+    var o = make()
+    key(o.c, ",", 0x2c)
+    compare(o.c.activeView, "settings")
+    var st = settingsPane(o)
+    var seq = st.readSeq
+    var log = []
+    st.readSeqChanged.connect(function() { log.push("settings left after " + calls(o.svc, "searchPluginList").length + " plugin list reads") })
+    o.c.showView("search")
+    compare(o.c.activeView, "search")
+    compare(log, ["settings left after 0 plugin list reads"], "Settings' closeView runs first")
+    compare(calls(o.svc, "searchPluginList").length, 1, "then Search's openView loads the plugins")
+    compare(calls(o.svc, "readPrefs").length, 1, "Settings isn't opened again")
+    verify(st.readSeq > seq)
+    verify(!st.open)
+    verify(sp(o).open)
+  }
+
+  function test_5b0_showView_leaves_search_before_settings_opens() {
+    var o = make()
+    openSearch(o)
+    var pane = sp(o)
+    pane.column = "searchPlugins"
+    var log = []
+    pane.columnChanged.connect(function() { log.push("search left after " + calls(o.svc, "readPrefs").length + " preference reads") })
+    var lists = calls(o.svc, "searchPluginList").length
+    o.c.showView("settings")
+    compare(o.c.activeView, "settings")
+    compare(log, ["search left after 0 preference reads"], "Search's closeView runs first")
+    compare(calls(o.svc, "readPrefs").length, 1, "then Settings' openView reads the preferences")
+    compare(calls(o.svc, "searchPluginList").length, lists, "Search isn't opened again")
+    compare(pane.column, "searchResults")
+    verify(!pane.open)
+  }
+
+  function test_5b0_the_palette_in_search_judges_search_rows_with_its_flags() {
+    var o = make()
+    openSearch(o)
+    key(o.c, ":", 0x3a)
+    compare(paletteRow(o, "search.add").reason, "needs a result")
+    compare(paletteRow(o, "search.copyLink").enabled, false)
+    esc(o)
+    compare(o.c.mode, "NORMAL")
+    esc(o)
+    streaming(o)
+    key(o.c, ":", 0x3a)
+    compare(paletteRow(o, "search.add").enabled, true)
+    compare(paletteRow(o, "search.add").reason, "")
+    compare(paletteRow(o, "search.copyLink").enabled, true)
+    compare(paletteRow(o, "search.sort").enabled, true)
+    compare(paletteRow(o, "plugin.toggle").reason, "open the plugins (P)")
+    compare(paletteRow(o, "search.open").reason, "already open")
+    compare(paletteRow(o, "settings.undo").reason, "open Settings")
+    esc(o)
+    key(o.c, "h")
+    key(o.c, ":", 0x3a)
+    compare(paletteRow(o, "search.add").reason, "focus the results", "judged from the Plugins column")
+    esc(o)
+    shifted(o, "P")
+    compare(o.c.keyPane, "searchPluginList")
+    key(o.c, ":", 0x3a)
+    wait(30)
+    compare(paletteRow(o, "plugin.toggle").enabled, true, "judged from the plugins overlay")
+    esc(o)
+  }
+
+  function test_5b0_a_magnet_still_awaited_when_the_window_closes_is_never_reported() {
+    var o = make()
+    streaming(o)
+    sp(o).addConfirmMs = 300
+    enter(o)
+    key(o.c, "y")
+    finishCall(o, "searchAdd", true, "", { ok: true, via: "add" })
+    o.c.close()
+    o.c.open("")
+    wait(1500)
+    o.svc.torrents = o.svc.torrents.concat([tt(hh("c"), "late")])
+    wait(1200)
+    verify(statusText(o).indexOf("Added") === -1, statusText(o))
+    verify(statusText(o).indexOf("Couldn't confirm") === -1, statusText(o))
+  }
+
+  function test_5b0_two_magnets_are_tracked_together_and_each_is_reported_once() {
+    var o = make()
+    streaming(o)
+    sp(o).addConfirmMs = 400
+    enter(o)
+    key(o.c, "y")
+    finishCall(o, "searchAdd", true, "", { ok: true, via: "add" })
+    key(o.c, "j")
+    enter(o)
+    key(o.c, "y")
+    finishCall(o, "searchAdd", true, "", { ok: true, via: "add" })
+    o.svc.torrents = o.svc.torrents.concat([tt(hh("d"), "debian.iso")])
+    compare(statusText(o), "Added debian.iso.")
+    tryVerify(function() { return statusText(o) === "Couldn't confirm result c was added." }, 3000, statusText(o))
   }
 }
