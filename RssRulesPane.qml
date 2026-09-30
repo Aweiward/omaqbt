@@ -240,7 +240,7 @@ Item {
   property bool pickerOpen: false
   readonly property var picker: pickerLoader.item
 
-  readonly property var cmds: ruleCmds
+  readonly property var cmds: rules.ruleCmds
   readonly property var ruleList: rulesData && Array.isArray(rulesData.rules) ? rulesData.rules : []
   readonly property string pane: view ? String(view.column) : ""
   readonly property bool inFields: draft !== null && (pane === "rssRuleFields" || pane === "rssRulePreview" || pane === "rssRuleList")
@@ -290,17 +290,17 @@ Item {
   // ---- RssPane's calls ------------------------------------------------------------------
 
   function openRules(item) {
-    ruleCmds.reset(false)
+    rules.ruleCmds.reset(false)
     pendingEnter = ""
     pendingFollow = ""
     // A draft kept across a forced leave is there again, still dirty.
     if (draft !== null) setColumn("rssRuleFields")
-    ruleCmds.readRules("open")
+    rules.ruleCmds.readRules("open")
   }
 
   function closeRules() {
-    if (pickerOpen) ruleCmds.dropPicker()
-    ruleCmds.reset(false)
+    if (pickerOpen) rules.ruleCmds.dropPicker()
+    rules.ruleCmds.reset(false)
     // A read landing after this moves nothing (the draft itself is kept).
     pendingEnter = ""
     pendingFollow = ""
@@ -308,8 +308,8 @@ Item {
   }
 
   function windowClosed() {
-    if (pickerOpen) ruleCmds.dropPicker()
-    ruleCmds.reset(true)
+    if (pickerOpen) rules.ruleCmds.dropPicker()
+    rules.ruleCmds.reset(true)
     draft = null
     writes = ({})
     busyPreview = ""
@@ -334,13 +334,13 @@ Item {
     c.confirm = null
   }
 
-  function run(commandId, args, ev) { ruleCmds.run(commandId, args) }
-  function commitInput(purpose, text) { ruleCmds.commitInput(purpose, text) }
-  function cancelInput(purpose) { ruleCmds.cancelInput(purpose) }
+  function run(commandId, args, ev) { rules.ruleCmds.run(commandId, args) }
+  function commitInput(purpose, text) { rules.ruleCmds.commitInput(purpose, text) }
+  function cancelInput(purpose) { rules.ruleCmds.cancelInput(purpose) }
   function inputEdited(purpose, text) {}
-  function acceptPicker() { ruleCmds.acceptPicker() }
-  function dropPicker() { ruleCmds.dropPicker() }
-  function togglePicker() { return ruleCmds.togglePicker() }
+  function acceptPicker() { rules.ruleCmds.acceptPicker() }
+  function dropPicker() { rules.ruleCmds.dropPicker() }
+  function togglePicker() { return rules.ruleCmds.togglePicker() }
 
   // ---- state -------------------------------------------------------------------------------
 
@@ -406,8 +406,8 @@ Item {
   function checkDraft(resnap) {
     var r = ruleByName(draft.name)
     if (!r || r.enabled === true) {
-      if (!r) ruleCmds.note(Rules.SENTENCES.ruleGone, "urgent")
-      else ruleCmds.note(Rules.sentence("ruleChanged", { name: Rules.displayName(draft.name) }), "muted")
+      if (!r) rules.ruleCmds.note(Rules.SENTENCES.ruleGone, "urgent")
+      else rules.ruleCmds.note(Rules.sentence("ruleChanged", { name: Rules.displayName(draft.name) }), "muted")
       draft = null
       if (inFieldsPane()) setColumn("rssRules")
       return
@@ -573,10 +573,10 @@ Item {
     }
   }
 
-  RssRuleCommands {
-    id: ruleCmds
-    area: rules
-  }
+  // A property, not a bare child: under Qt 6.11's incremental GC a bare
+  // child sometimes came out empty (no properties, no functions). See
+  // tests/qml-harness and the README's Dev section.
+  readonly property RssRuleCommands ruleCmds: RssRuleCommands { area: rules }
 
   // ---- drawing -------------------------------------------------------------------------------
 
@@ -1004,13 +1004,13 @@ Item {
       ListOverlay {
         objectName: "rssRulePicker"
         keyMode: "PICKER"
-        multi: !!ruleCmds.pickerCap && ruleCmds.pickerCap.kind === "feeds"
+        multi: !!rules.ruleCmds.pickerCap && rules.ruleCmds.pickerCap.kind === "feeds"
         placeholder: " type to find"
         footerHint: multi ? "↑↓ move · Space tick · Enter apply · Esc cancel" : "↑↓ / Ctrl-n Ctrl-p move · Enter choose · Esc cancel"
         onKeyForwarded: function(event) { if (rules.client) rules.client.handleKey(event) }
-        onActivated: function(row) { ruleCmds.pickerClicked(row) }
+        onActivated: function(row) { rules.ruleCmds.pickerClicked(row) }
         onDismissed: if (rules.commands) rules.commands.closePicker()
-        onQueryChanged: ruleCmds.refreshPicker(false)
+        onQueryChanged: rules.ruleCmds.refreshPicker(false)
       }
     }
   }
