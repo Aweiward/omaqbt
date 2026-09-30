@@ -306,19 +306,22 @@ cmd_probe() {
   local installed=false daemon=false
   if is_installed; then installed=true; fi
   if is_daemon; then daemon=true; fi
-  local lock vpn_if
+  local lock vpn_if pcre=false
   lock=$(lock_holder)
   vpn_if=$(vpn_iface)
+  # Slice 5b2: rule regexes are checked by pcre2grep (lib/rssautorules.py).
+  if command -v pcre2grep >/dev/null 2>&1; then pcre=true; fi
   jq -n \
     --argjson installed "$installed" \
     --argjson daemon "$daemon" \
+    --argjson pcre2grep "$pcre" \
     --arg lock "$lock" \
     --arg vpnIface "$vpn_if" \
     --arg base "$(base_url)" \
     --arg stateDir "$(dirname "$RID_FILE")" \
     --arg ridFile "$RID_FILE" \
     --arg cookieFile "$COOKIE_FILE" \
-    '{installed:$installed, daemon:$daemon, lockHolder:$lock, vpnIface:$vpnIface, base:$base, stateDir:$stateDir, ridFile:$ridFile, cookieFile:$cookieFile}'
+    '{installed:$installed, daemon:$daemon, lockHolder:$lock, vpnIface:$vpnIface, base:$base, stateDir:$stateDir, ridFile:$ridFile, cookieFile:$cookieFile, pcre2grep:$pcre2grep}'
 }
 
 # The lib/ directory next to this script (the python modules).
@@ -3283,6 +3286,281 @@ rss_add() {
   printf '{"ok":true,"via":"%s"}\n' "$via"
 }
 
+# ---------------------------------------------------------------------------
+# Slice 5b2: `qbt rss rules|rules-preview-enabled|rule-*`, exactly per
+# tests/fixtures/rss-rules-contract.md. Every rule and sentence comes from
+# tests/fixtures/rss-autorules-cases.json, enforced by lib/rssautorules.py
+# (which also runs pcre2grep, the pattern on a pipe). 5b1's framing holds:
+# values on stdin, NUL-separated, reaching python, jq and curl on stdin;
+# every write a POST (rss_post) read back from rss/rules; the one GET with
+# a value (matchingArticles' ruleName) sends it with curl -G from stdin.
+# Response bodies stay in shell variables; JSON lines come from python.
+# ---------------------------------------------------------------------------
+
+RULE_USAGE="usage: qbt rss rules|rules-preview-enabled|rule-check|rule-create|rule-set|rule-preview|rule-rename|rule-remove"
+RULE_GONE="That rule is gone."
+RULE_UNCONFIRMED_SAVE="Couldn't confirm the save."
+
+rule_usage() {
+  printf '%s\n' "$RULE_USAGE" >&2
+  exit 2
+}
+
+# rss_fields for the rule commands: a wrong count is the rules' usage line.
+rule_fields() {
+  local want=$1 f=""
+  RSS_FIELDS=()
+  while IFS= read -r -d '' f; do
+    RSS_FIELDS+=("$f")
+  done
+  RSS_FIELDS+=("$f")
+  (( ${#RSS_FIELDS[@]} == want )) || rule_usage
+}
+
+# lib/rssautorules.py <mode> with the NUL-joined values $2... on stdin.
+# RULE_RC is its exit status and RULE_OUT its output; 2 is the usage line
+# and 4 an unreadable body, both ending the command here.
+rule_py() {
+  local mode=$1 out rc=0
+  shift
+  local IFS=
+  out=$( { printf '%s' "$1"; shift; (( $# == 0 )) || printf '\0%s' "$@"; } \
+    | python3 "$(qbt_lib_dir)/rssautorules.py" "$mode" 2>/dev/null) || rc=$?
+  (( rc == 2 )) && rule_usage
+  (( rc == 4 )) && die "qBittorrent sent something unreadable"
+  (( rc <= 3 )) || die "Couldn't check the value."
+  RULE_RC=$rc
+  RULE_OUT=$out
+}
+
+# rule_py, where exit 1 is a refusal sentence to print.
+rule_py_or_die() {
+  rule_py "$@"
+  if (( RULE_RC == 1 )); then
+    [[ -n $RULE_OUT ]] && die "$RULE_OUT"
+    die "Couldn't check the value."
+  fi
+}
+
+# GET rss/rules into RSS_RULES, else dies.
+rss_read_rules() {
+  api_try GET "/api/v2/rss/rules" || die "qBittorrent refused it (${API_FAIL})"
+  RSS_RULES=$API_BODY
+}
+
+# RULE_HAS: "yes" when rss/rules (RSS_RULES) holds the name $1 exactly.
+rule_has() {
+  rule_py has "$1" "$RSS_RULES"
+  RULE_HAS=$RULE_OUT
+}
+
+# rss_post's twin for a GET whose query arrives on stdin (curl -G turns the
+# --data-binary body into the query), so the value is never on argv. The
+# body lands in API_BODY; a failure sets API_FAIL (codes only).
+rss_get() {
+  local path=$1 out code
+  assert_local_base
+  ensure_state_dir "$(dirname "$COOKIE_FILE")"
+  out=$(umask 077; curl -sS -g --noproxy '*' --max-time 5 -w '\n%{http_code}' -G \
+    -b "$COOKIE_FILE" -c "$COOKIE_FILE" --data-binary @- "$(base_url)$path" 2>/dev/null) || true
+  API_BODY="" API_FAIL=""
+  if [[ $out == *$'\n'* ]]; then
+    code=${out##*$'\n'}
+    API_BODY=${out%$'\n'*}
+  else
+    code=$out
+  fi
+  [[ $code =~ ^[[:digit:]]{3}$ ]] || code=000
+  case $code in
+    200) return 0 ;;
+    403) API_FAIL="localhost auth is required" ;;
+    000) API_FAIL="couldn't reach qBittorrent" ;;
+    *) API_FAIL="HTTP $code" ;;
+  esac
+  API_BODY=""
+  return 1
+}
+
+# rss/matchingArticles for the rule $1 into RULE_MATCHING, else dies.
+rule_matching() {
+  local enc
+  enc=$(uri_stdin "$1") || die "Couldn't check the value."
+  rss_get "/api/v2/rss/matchingArticles" < <(printf 'ruleName=%s' "$enc") || die "qBittorrent refused it (${API_FAIL})"
+  RULE_MATCHING=$API_BODY
+}
+
+# POST rss/setRule with the name $1 and the ruleDef JSON $2, else dies.
+rule_post_set() {
+  local enc_name enc_def
+  enc_name=$(uri_stdin "$1") || die "Couldn't check the value."
+  enc_def=$(uri_stdin "$2") || die "Couldn't check the value."
+  rss_post "/api/v2/rss/setRule" < <(printf 'ruleName=%s&ruleDef=%s' "$enc_name" "$enc_def") \
+    || die "qBittorrent refused it (${API_FAIL})"
+}
+
+rss_rules() {
+  local rules
+  assert_local_base
+  rss_read_rules
+  rules=$RSS_RULES
+  api_try GET "/api/v2/app/preferences" || die "qBittorrent refused it (${API_FAIL})"
+  rule_py list "$rules" "$API_BODY"
+  printf '%s\n' "$RULE_OUT"
+}
+
+# key NUL value NUL useRegex: one field's kind, no request.
+rss_rule_check() {
+  rule_fields 3
+  rule_py_or_die check "${RSS_FIELDS[0]}" "${RSS_FIELDS[1]}" "${RSS_FIELDS[2]}"
+  printf '%s\n' "$RULE_OUT"
+}
+
+# name NUL feedUrl: a new rule, always disabled (OV7).
+rss_rule_create() {
+  rule_fields 2
+  local name feed=${RSS_FIELDS[1]} def
+  rule_py_or_die name "${RSS_FIELDS[0]}"
+  name=$RULE_OUT
+  assert_local_base
+  rss_read_rules
+  rule_has "$name"
+  [[ $RULE_HAS == no ]] || die "There's already a rule called ${name}."
+  rule_py create-def "$feed"
+  def=$RULE_OUT
+  rule_post_set "$name" "$def"
+  rss_read_rules
+  rule_py created "$name" "$feed" "$RSS_RULES"
+  (( RULE_RC == 0 )) || die "Couldn't confirm ${name} was added."
+  printf '%s' "$name" | jq -Rsc '{ok: true, name: .}'
+}
+
+# The saved rule $1's preview groups into RULE_PREVIEW (RSS_RULES read).
+rule_preview_of() {
+  local name=$1 matching
+  rule_matching "$name"
+  matching=$RULE_MATCHING
+  rss_read_tree
+  rule_py preview "$name" "$RSS_RULES" "$matching" "$RSS_TREE"
+  (( RULE_RC == 0 )) || die "$RULE_GONE"
+  RULE_PREVIEW=$RULE_OUT
+}
+
+# name NUL changesJson NUL snapshotJson NUL enable: the contract's nine
+# steps. The shape is checked before any request.
+rss_rule_set() {
+  rule_fields 4
+  local name=${RSS_FIELDS[0]} changes=${RSS_FIELDS[1]} snapshot=${RSS_FIELDS[2]} enable=${RSS_FIELDS[3]}
+  local def merged m
+  rule_py shape "$changes" "$snapshot" "$enable"
+  assert_local_base
+  rss_read_rules
+  rule_has "$name"
+  [[ $RULE_HAS == yes ]] || die "$RULE_GONE"
+  # D6, OV13, D5/OV10 and the enable word.
+  rule_py apply "$name" "$changes" "$snapshot" "$enable" "$RSS_RULES"
+  (( RULE_RC == 3 )) && die "$RULE_GONE"
+  if (( RULE_RC == 1 )); then
+    [[ -n $RULE_OUT ]] && die "$RULE_OUT"
+    die "Couldn't check the value."
+  fi
+  def=$RULE_OUT
+  if [[ $enable == on ]]; then
+    # Never on without the preview check, before any write.
+    rule_preview_of "$name"
+    m=$(printf '%s' "$RULE_PREVIEW" | jq -r '.noTorrent | length') || die "qBittorrent sent something unreadable"
+    [[ $m =~ ^[[:digit:]]+$ ]] || die "qBittorrent sent something unreadable"
+    (( m == 0 )) \
+      || die "${m} matching articles have no torrent link, and qBittorrent would retry them forever. Tighten the rule first."
+  fi
+  rule_post_set "$name" "$def"
+  rss_read_rules
+  rule_py readback "$name" "$def" "$RSS_RULES"
+  (( RULE_RC == 0 )) || die "$RULE_UNCONFIRMED_SAVE"
+  # OV9: the episode memory unioned, once.
+  rule_py union "$name" "$def" "$RSS_RULES"
+  (( RULE_RC == 0 )) || die "$RULE_UNCONFIRMED_SAVE"
+  merged=$RULE_OUT
+  if [[ -n $merged ]]; then
+    rule_post_set "$name" "$merged"
+    rss_read_rules
+    rule_py readback-merged "$name" "$merged" "$RSS_RULES"
+    (( RULE_RC == 0 )) || die "$RULE_UNCONFIRMED_SAVE"
+  fi
+  printf '%s\n' '{"ok":true}'
+}
+
+rss_rule_preview() {
+  rule_fields 1
+  local name=${RSS_FIELDS[0]}
+  assert_local_base
+  rss_read_rules
+  rule_has "$name"
+  [[ $RULE_HAS == yes ]] || die "$RULE_GONE"
+  rule_preview_of "$name"
+  printf '%s\n' "$RULE_PREVIEW"
+}
+
+# Every enabled rule's join, deduped (D8's count).
+rss_rules_preview_enabled() {
+  local rules names=() n args=()
+  assert_local_base
+  rss_read_rules
+  rules=$RSS_RULES
+  rule_py enabled "$rules"
+  while IFS= read -r -d '' n; do
+    names+=("$n")
+  done < <(printf '%s' "$RULE_OUT" | jq -j '.[] | (., "\u0000")')
+  rss_read_tree
+  for n in "${names[@]}"; do
+    rule_matching "$n"
+    args+=("$n" "$RULE_MATCHING")
+  done
+  rule_py preview-enabled "$rules" "$RSS_TREE" "${args[@]}"
+  printf '%s\n' "$RULE_OUT"
+}
+
+# from NUL to: renameRule is a silent no-op on a clash, so pre-check and
+# read back.
+rss_rule_rename() {
+  rule_fields 2
+  local from=${RSS_FIELDS[0]} to enc_from enc_to
+  rule_py_or_die name "${RSS_FIELDS[1]}"
+  to=$RULE_OUT
+  if [[ $to == "$from" ]]; then
+    printf '%s' "$to" | jq -Rsc '{ok: true, name: .}'
+    return 0
+  fi
+  assert_local_base
+  rss_read_rules
+  rule_has "$from"
+  [[ $RULE_HAS == yes ]] || die "$RULE_GONE"
+  rule_has "$to"
+  [[ $RULE_HAS == no ]] || die "There's already a rule called ${to}."
+  enc_from=$(uri_stdin "$from") || die "Couldn't check the value."
+  enc_to=$(uri_stdin "$to") || die "Couldn't check the value."
+  rss_post "/api/v2/rss/renameRule" < <(printf 'ruleName=%s&newRuleName=%s' "$enc_from" "$enc_to") \
+    || die "qBittorrent refused it (${API_FAIL})"
+  rss_read_rules
+  rule_py renamed "$from" "$to" "$RSS_RULES"
+  (( RULE_RC == 0 )) || die "Couldn't confirm the rename."
+  printf '%s' "$to" | jq -Rsc '{ok: true, name: .}'
+}
+
+rss_rule_remove() {
+  rule_fields 1
+  local name=${RSS_FIELDS[0]} enc
+  assert_local_base
+  rss_read_rules
+  rule_has "$name"
+  [[ $RULE_HAS == yes ]] || die "$RULE_GONE"
+  enc=$(uri_stdin "$name") || die "Couldn't check the value."
+  rss_post "/api/v2/rss/removeRule" < <(printf 'ruleName=%s' "$enc") || die "qBittorrent refused it (${API_FAIL})"
+  rss_read_rules
+  rule_has "$name"
+  [[ $RULE_HAS == no ]] || die "Couldn't confirm ${name} was removed."
+  printf '%s\n' '{"ok":true}'
+}
+
 cmd_rss() {
   local api_error_detail=code
   case "${1:-}:$#" in
@@ -3296,6 +3574,14 @@ cmd_rss() {
     refresh:1) rss_refresh ;;
     mark-read:1) rss_mark_read ;;
     add:1) rss_add ;;
+    rules:1) rss_rules ;;
+    rules-preview-enabled:1) rss_rules_preview_enabled ;;
+    rule-check:1) rss_rule_check ;;
+    rule-create:1) rss_rule_create ;;
+    rule-set:1) rss_rule_set ;;
+    rule-preview:1) rss_rule_preview ;;
+    rule-rename:1) rss_rule_rename ;;
+    rule-remove:1) rss_rule_remove ;;
     *) rss_usage ;;
   esac
 }

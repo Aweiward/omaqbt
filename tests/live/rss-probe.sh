@@ -20,8 +20,20 @@
 #     for the magnet, that markAsRead on a missing path answers 200 or 204 through
 #     the raw API, and that a GET on rss/addFolder answers 405 (its path is
 #     inside omaqbt-probe, so if it ever made a folder, cleanup removes it);
-#   - removes omaqbt-probe and stops the http server, on every exit (trap).
-# It refuses to start when a feed or folder called omaqbt-probe exists.
+#   - slice 5b2's rules pass, on the same throwaway feed (auto-download must
+#     be off; the probe stops otherwise, and never turns a rule on):
+#     `rule-create omaqbt-probe-rule` (disabled, on the probe feed);
+#     `rule-set` mustContain to the magnet item's title; `rule-preview` has
+#     the magnet in will and nothing in noTorrent (matchingArticles through
+#     qbt); a torrentParams round trip (tags set through the raw setRule
+#     survive a qbt save, and every other key reads back as it was);
+#     `rule-rename` onto a second rule's name is refused with ruleExists;
+#     the raw renameRule onto it answers 200 and changes nothing;
+#     `rule-remove` both;
+#   - removes omaqbt-probe and both rules and stops the http server, on
+#     every exit (trap).
+# It refuses to start when a feed or folder called omaqbt-probe, or a rule
+# called omaqbt-probe-rule or omaqbt-probe-rule-2, exists.
 #
 # Env: QBT (default: the repo's qbt), RSS_PROBE_PORT (default: a free port),
 # RSS_PROBE_WAIT (seconds, default 20). QBT_BASE and the other qbt
@@ -32,10 +44,13 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 QBT=${QBT:-$HERE/../../qbt}
 FOLDER=omaqbt-probe
 FEED="$FOLDER\\feed"
+RULE=omaqbt-probe-rule
+RULE2=omaqbt-probe-rule-2
 WAIT=${RSS_PROBE_WAIT:-20}
 fails=0
 server_pid=""
 added=0
+rules_added=0
 
 pass() { printf 'ok - %s\n' "$1"; }
 fail() { printf 'FAIL - %s\n' "$1"; fails=$((fails + 1)); }
@@ -56,6 +71,18 @@ rss() {
 
 cleanup() {
   local rc=$?
+  if (( rules_added )); then
+    local r
+    for r in "$RULE" "$RULE2"; do
+      if rss rule-remove "$r" >/dev/null 2>&1; then
+        printf 'cleanup: removed rule %s\n' "$r"
+      elif rss rules 2>/dev/null | jq -e --arg r "$r" 'all(.rules[]; .name != $r)' >/dev/null 2>&1; then
+        :
+      else
+        printf 'cleanup: could not remove rule %s; remove it in qBittorrent by hand\n' "$r" >&2
+      fi
+    done
+  fi
   if (( added )); then
     # added is set before add-folder, so the folder may never have landed.
     if rss remove "$FOLDER" >/dev/null 2>&1; then
@@ -89,6 +116,13 @@ proxy_rss=$(printf '%s' "$prefs" | jq -r '.proxy_rss')
 proxy_type=$(printf '%s' "$prefs" | jq -r '.proxy_type')
 if [[ $(printf '%s' "$prefs" | jq -r '.rss_processing_enabled') == true ]]; then
   stop "RSS processing is on; turn it off (Settings → RSS) before running the probe, or it refreshes every feed."
+fi
+if [[ $(printf '%s' "$prefs" | jq -r '.rss_auto_downloading_enabled') != false ]]; then
+  stop "RSS auto-downloading is on; turn it off (Settings → RSS) before running the probe, or its rules pass could download."
+fi
+rules=$(rss rules) || stop "qbt rss rules failed"
+if printf '%s' "$rules" | jq -e --arg a "$RULE" --arg b "$RULE2" 'any(.rules[]; .name == $a or .name == $b)' >/dev/null; then
+  stop "a rule called $RULE or $RULE2 already exists; remove it first"
 fi
 skip_fetch=""
 if [[ $proxy_rss == true && $proxy_type != None ]]; then
@@ -150,6 +184,57 @@ code=$(curl -s --noproxy '*' --max-time 5 -o /dev/null -w '%{http_code}' -X POST
 [[ $code == 200 || $code == 204 ]] && pass "markAsRead on a missing path answers $code (200 or 204)" || fail "markAsRead on a missing path: $code"
 code=$(curl -s --noproxy '*' --max-time 5 -o /dev/null -w '%{http_code}' "$base/api/v2/rss/addFolder?path=omaqbt-probe%5Cget" || true)
 [[ $code == 405 ]] && pass "GET rss/addFolder answers 405" || fail "GET rss/addFolder: $code"
+
+# ---- slice 5b2: the rules pass --------------------------------------------------
+rule_of() { rss rules | jq -c --arg r "$1" '.rules[] | select(.name == $r)'; }
+rules_added=1
+out=$(rss rule-create "$RULE" "$feed_url") || stop "rule-create failed"
+[[ $(printf '%s' "$out" | jq -c .) == "{\"ok\":true,\"name\":\"$RULE\"}" ]] && pass "rule-create $RULE" \
+  || fail "rule-create answered $out"
+rule=$(rule_of "$RULE")
+[[ $(printf '%s' "$rule" | jq --arg u "$feed_url" '.enabled == false and .fields.affectedFeeds == [$u]') == true ]] \
+  && pass "the new rule is disabled, on the probe feed" || fail "new rule: $rule"
+out=$(rss rule-set "$RULE" '{"mustContain":"OmaqBT probe magnet"}' '{"mustContain":"","enabled":false}' keep) \
+  && [[ $out == '{"ok":true}' ]] && pass "rule-set mustContain" || fail "rule-set answered ${out:-nothing}"
+if [[ -n $skip_fetch ]]; then
+  skip "the rule preview: $skip_fetch"
+else
+  preview=$(rss rule-preview "$RULE") || preview=""
+  if [[ $(printf '%s' "$preview" | jq '[.will[].guid] == ["omaqbt-probe-magnet"]') == true ]] \
+    && [[ $(printf '%s' "$preview" | jq '.noTorrent == [] or [.noTorrent[].guid] == ["omaqbt-probe-news"]') == true ]]; then
+    pass "rule-preview: the magnet would download, and nothing without a torrent link does"
+  else
+    fail "rule-preview answered ${preview:-nothing}"
+  fi
+fi
+# A torrentParams round trip: tags set through the raw setRule (qbt never
+# edits them) survive a qbt save, and every other key reads back as it was.
+before=$(rule_of "$RULE" | jq -c '.raw | .torrentParams.tags = ["omaqbt-probe"]')
+code=$(printf '%s' "$before" | curl -s --noproxy '*' --max-time 5 -o /dev/null -w '%{http_code}' -X POST \
+  --data-urlencode "ruleName=$RULE" --data-urlencode "ruleDef@-" "$base/api/v2/rss/setRule" || true)
+[[ $code == 200 ]] || fail "raw setRule with tags: $code"
+before=$(rule_of "$RULE" | jq -c '.raw')
+out=$(rss rule-set "$RULE" '{"ignoreDays":1}' '{"ignoreDays":0,"enabled":false}' keep) || out=""
+after=$(rule_of "$RULE" | jq -c '.raw')
+if [[ $out == '{"ok":true}' ]] && [[ $(printf '%s' "$after" | jq '.torrentParams.tags == ["omaqbt-probe"] and .ignoreDays == 1') == true ]] \
+  && [[ $(printf '%s\n%s' "$before" "$after" | jq -s '(.[0] | del(.ignoreDays)) == (.[1] | del(.ignoreDays))') == true ]]; then
+  pass "a torrentParams round trip: the tags and every other key survive a save"
+else
+  fail "torrentParams round trip: before $before after $after (${out:-no answer})"
+fi
+out=$(rss rule-create "$RULE2" "") || fail "rule-create $RULE2 failed"
+err=$(rss rule-rename "$RULE" "$RULE2" 2>&1 >/dev/null) && fail "rule-rename onto $RULE2 was taken" \
+  || { [[ $err == "There's already a rule called $RULE2." ]] && pass "rule-rename onto an existing name is refused" \
+    || fail "rule-rename onto $RULE2: $err"; }
+code=$(curl -s --noproxy '*' --max-time 5 -o /dev/null -w '%{http_code}' -X POST \
+  --data-urlencode "ruleName=$RULE" --data-urlencode "newRuleName=$RULE2" "$base/api/v2/rss/renameRule" || true)
+names=$(rss rules | jq -c --arg a "$RULE" --arg b "$RULE2" '[.rules[].name | select(. == $a or . == $b)]')
+[[ $code == 200 && $names == "[\"$RULE\",\"$RULE2\"]" ]] \
+  && pass "the raw renameRule onto an existing name answers 200 and changes nothing" \
+  || fail "raw renameRule clash: $code, rules $names"
+out=$(rss rule-remove "$RULE") && out2=$(rss rule-remove "$RULE2") \
+  && [[ $out == '{"ok":true}' && $out2 == '{"ok":true}' ]] && rules_added=0
+(( rules_added == 0 )) && pass "rule-remove both rules" || fail "rule-remove answered ${out:-nothing} ${out2:-}"
 
 out=$(rss remove "$FOLDER") && added=0
 [[ $added == 0 && $out == '{"ok":true}' ]] && pass "remove $FOLDER" || fail "remove answered ${out:-nothing}"

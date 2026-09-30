@@ -1379,6 +1379,9 @@ Scope {
   // the count the window's confirm named (0 with a guid).
   function rssMarkRead(path, guid, expect) { return rssRun("mark-read", [String(path), String(guid), String(Number(expect) || 0)], null) }
   function rssAdd(torrentURL, link) { return rssRun("add", [String(torrentURL), String(link)], null) }
+  // 5b2 T2: Settings' auto-download count (D8), `qbt rss rules-preview-enabled`
+  // (no stdin): cb(ok, err, {rules, will, noTorrent}).
+  function rssAutoPreview(cb) { return rssRead("rules-preview-enabled", null, cb) }
 
   // opts: {origin: "window"} returns a ticket that covers the install and
   // the daemon start that follows it, reported through actionFinished; the
