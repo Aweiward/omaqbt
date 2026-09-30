@@ -184,7 +184,7 @@ Item {
   readonly property var rulesPurposes: ["rssRuleName", "rssRuleRename", "rssRuleField"]
 
   // The behaviour behind each key (RssCommands.qml).
-  readonly property var cmds: rssCmds
+  readonly property var cmds: rss.rssCmds
 
   // ---- the items -------------------------------------------------------------------------
   // `qbt rss items`' last applied answer ({processing, refreshInterval,
@@ -268,7 +268,7 @@ Item {
     column = "rssFeeds"
     wide = false
     syncLibrary()
-    rssCmds.readItems()
+    rss.rssCmds.readItems()
     // A feed still loading from before (Esc, then N): the cap starts
     // again, so the fast poll never runs unbounded.
     armCap()
@@ -287,8 +287,8 @@ Item {
   function windowClosed() {
     rulesArea.windowClosed()
     dropConfirm()
-    rssCmds.awaiter.clear()
-    rssCmds.input = null
+    rss.rssCmds.awaiter.clear()
+    rss.rssCmds.input = null
   }
 
   // An RSS CONFIRM still up goes: mode back to NORMAL, no pending.
@@ -345,16 +345,16 @@ Item {
     case "rss.feedsPick": selectFeed(overlayIndex); column = "rssArticles"; return
     case "rss.feedsClose": column = "rssArticles"; return
     case "rss.back": leaveRequested(); return
-    case "rss.addFeed": rssCmds.addFeed(a.item); return
-    case "rss.addFolder": rssCmds.addFolder(a.item); return
-    case "rss.rename": rssCmds.rename(a.item); return
-    case "rss.remove": rssCmds.remove(a.item, a.confirmed === true); return
-    case "rss.refresh": rssCmds.refresh(a.item); return
-    case "rss.markAllRead": rssCmds.markAllRead(a.item, a.unread, a.confirmed === true); return
-    case "rss.markRead": rssCmds.markRead(a.article); return
-    case "rss.add": rssCmds.add(a.article, a.confirmed === true); return
-    case "rss.openPage": rssCmds.openPage(a.article, a.confirmed === true); return
-    case "rss.processingOn": rssCmds.processingOn(a.confirmed === true); return
+    case "rss.addFeed": rss.rssCmds.addFeed(a.item); return
+    case "rss.addFolder": rss.rssCmds.addFolder(a.item); return
+    case "rss.rename": rss.rssCmds.rename(a.item); return
+    case "rss.remove": rss.rssCmds.remove(a.item, a.confirmed === true); return
+    case "rss.refresh": rss.rssCmds.refresh(a.item); return
+    case "rss.markAllRead": rss.rssCmds.markAllRead(a.item, a.unread, a.confirmed === true); return
+    case "rss.markRead": rss.rssCmds.markRead(a.article); return
+    case "rss.add": rss.rssCmds.add(a.article, a.confirmed === true); return
+    case "rss.openPage": rss.rssCmds.openPage(a.article, a.confirmed === true); return
+    case "rss.processingOn": rss.rssCmds.processingOn(a.confirmed === true); return
     default: return
     }
   }
@@ -368,12 +368,12 @@ Item {
 
   function commitInput(purpose, text) {
     if (rulesPurposes.indexOf(purpose) !== -1) { rulesArea.commitInput(purpose, text); return }
-    rssCmds.commitInput(purpose, text)
+    rss.rssCmds.commitInput(purpose, text)
   }
 
   function cancelInput(purpose) {
     if (rulesPurposes.indexOf(purpose) !== -1) { rulesArea.cancelInput(purpose); return }
-    rssCmds.cancelInput()
+    rss.rssCmds.cancelInput()
   }
 
   function inputEdited(purpose, text) {
@@ -419,7 +419,7 @@ Item {
     // A write's new path or a feed gone elsewhere moves the Feeds cursor:
     // that's a scope change, not a re-read.
     applyArticles(was.kind !== now.kind || was.path !== now.path)
-    rssCmds.itemsApplied()
+    rss.rssCmds.itemsApplied()
     showFeedCursor()
   }
 
@@ -450,7 +450,7 @@ Item {
     feedIndex = at
     syncFeed()
     applyArticles(true)
-    rssCmds.checkError()
+    rss.rssCmds.checkError()
     showFeedCursor()
   }
 
@@ -542,7 +542,7 @@ Item {
 
   function syncLibrary() {
     libSet = Links.librarySet(service ? service.torrents : [])
-    rssCmds.awaiter.check()
+    rss.rssCmds.awaiter.check()
     if (open && loaded) applyArticles()
   }
 
@@ -572,7 +572,7 @@ Item {
       dropConfirm()
       capTimer.stop()
     } else if (open) {
-      rssCmds.readItems()
+      rss.rssCmds.readItems()
       armCap()
     }
   }
@@ -584,10 +584,10 @@ Item {
   }
   onServiceChanged: syncLibrary()
 
-  RssCommands {
-    id: rssCmds
-    view: rss
-  }
+  // A property, not a bare child: under Qt 6.11's incremental GC a bare
+  // non-visual child sometimes came out empty (no properties, no functions).
+  // See RssRulesPane.qml's ruleCmds.
+  readonly property RssCommands rssCmds: RssCommands { view: rss }
 
   // ---- the rules area (slice 5b2; RssRulesPane.qml's header) ----------------------------------
   // Over the feeds and articles while `column` is a rules pane; the feeds
@@ -638,7 +638,7 @@ Item {
     id: retryTimer
     interval: rss.fastPollMs
     repeat: true
-    running: rss.open && !rss.downShown && !rss.loaded && rssCmds.itemsFailed
+    running: rss.open && !rss.downShown && !rss.loaded && rss.rssCmds.itemsFailed
     onTriggered: rss.cmds.readItems()
   }
   // The Articles cursor settles: its description.

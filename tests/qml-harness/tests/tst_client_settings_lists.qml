@@ -198,9 +198,7 @@ TestCase {
   function tab(o) { key(o.c, "", 0x01000001) }
   function backtab(o) { key(o.c, "", 0x01000002) }
   function cmds(o) {
-    var d = o.c.data
-    for (var i = 0; i < d.length; i++) if (d[i] && typeof d[i].commitSecret === "function") return d[i]
-    return null
+    return o.c.settingsCmds
   }
   function field(o) { return line(o).inputField }
   function listTexts(o) {
@@ -475,9 +473,7 @@ TestCase {
     return hits
   }
   function clientCommands(o) {
-    var d = o.c.data
-    for (var i = 0; i < d.length; i++) if (d[i] && typeof d[i].runPaletteRow === "function") return d[i]
-    return null
+    return o.c.commands
   }
   function sweepAll(o, s) {
     var hits = []
@@ -663,7 +659,7 @@ TestCase {
     o.svc.answer({ ok: true, prefs: secrets({ proxy_password: { set: true } }) })
     focusKey(o, "proxy_password")
     var cc = null
-    for (var i = 0; i < o.c.data.length; i++) if (o.c.data[i] && typeof o.c.data[i].runPaletteRow === "function") cc = o.c.data[i]
+    cc = o.c.commands
     key(o.c, ":", 0x3a)
     compare(o.c.mode, "COMMAND")
     var st = View.paletteState(o.c.tableState, false, o.c.inspectorState, o.c.pane, true, cmds(o).flags(), o.c.keyPane)

@@ -108,7 +108,7 @@ Item {
   // The rows painted with Style.selectionFill: the live range in VISUAL,
   // and the fixed range a CONFIRM, a C/T picker or the palette will act on.
   readonly property var rangeHashes: View.hashSet(mode === "VISUAL" ? visualHashes
-    : (mode === "CONFIRM" && confirmHashes.length > 1 ? confirmHashes : (mode === "PICKER" ? commands.pickerTargets : commands.heldRange)))
+    : (mode === "CONFIRM" && confirmHashes.length > 1 ? confirmHashes : (mode === "PICKER" ? root.commands.pickerTargets : root.commands.heldRange)))
   readonly property var errorHashes: View.hashSet(messages.errorHashes)
 
   // ---- filter pane -------------------------------------------------------------
@@ -155,11 +155,11 @@ Item {
   // never paints; one older than inspectSince (ms, when this key became
   // current) counts as none (A->B->A). inspectNow: tabState's clock.
   readonly property string watchHash: opened && hasCursorRow ? cursorHash : ""
-  onWatchHashChanged: commands.syncInspect(true)
+  onWatchHashChanged: root.commands.syncInspect(true)
   property double inspectSince: 0
   property double inspectNow: 0
   readonly property var inspectEntry: service && watchHash !== "" ? (service.inspectByKey || {})[watchHash + "|" + inspectorTab] : undefined
-  onInspectEntryChanged: commands.checkInspectError()
+  onInspectEntryChanged: root.commands.checkInspectError()
   readonly property bool sidecarUp: !!service && !service.sidecarDown
   readonly property var trackersView: InspectorView.listTab("trackers", inspectorTab === "trackers" ? inspectEntry : undefined, inspectSince, inspectNow, sidecarUp, cursorRow)
   readonly property var peersView: InspectorView.listTab("peers", inspectorTab === "peers" ? inspectEntry : undefined, inspectSince, inspectNow, sidecarUp, cursorRow)
@@ -178,8 +178,8 @@ Item {
   // Each list's cursor, kept on its url / ip:port (ClientCommands.stickRow).
   property int trackerIndex: 0
   property int peerIndex: 0
-  onTrackersViewChanged: trackerIndex = commands.stickRow("trackers", trackersView.rows, trackerIndex)
-  onPeersViewChanged: peerIndex = commands.stickRow("peers", peersView.rows, peerIndex)
+  onTrackersViewChanged: trackerIndex = root.commands.stickRow("trackers", trackersView.rows, trackerIndex)
+  onPeersViewChanged: peerIndex = root.commands.stickRow("peers", peersView.rows, peerIndex)
   // What x/c/b/f act on (View.inspectorDispatch, with the filters pane's
   // a/c/p/x row), fed to every dispatch.
   // inspectorState is its copy that only changes with its values, so a
@@ -187,7 +187,7 @@ Item {
   readonly property var inspectorNow: View.inspectorDispatch({ pane: pane, state: tableState, tab: inspectorTab,
     trackers: trackersView.rows, trackerIndex: trackerIndex, peers: peersView.rows, peerIndex: peerIndex, row: cursorRow,
     cursorHash: cursorHash, noMeta: infoTab.noMeta, pending: service ? service.magnetPendingHashes : [],
-    filterCursor: filterCursor, filterEntries: filterEntries, libraryReady: commands.libraryReady, limitRow: commands.limitCursorRow })
+    filterCursor: filterCursor, filterEntries: filterEntries, libraryReady: root.commands.libraryReady, limitRow: root.commands.limitCursorRow })
   property var inspectorState: View.inspectorDispatch({})
   onInspectorNowChanged: if (!View.sameInspectorState(inspectorState, inspectorNow)) inspectorState = inspectorNow
 
@@ -258,7 +258,7 @@ Item {
   // ---- view hosts (slice 5b0) -----------------------------------------------
 
   // Every view's host; viewHost finds one by its `name`.
-  readonly property var viewHostList: [settingsHost, searchView, rssView]
+  readonly property var viewHostList: [root.settingsHost, searchView, rssView]
   // Every Registry.VIEWS entry but the torrents, in registry order.
   readonly property var hostNames: Registry.VIEWS.filter(function (v) { return v !== "torrents" })
 
@@ -299,7 +299,7 @@ Item {
     if (closing) return
     closing = true
     // An open palette/picker would lose its field focus; reopening lands on the torrents.
-    if (mode === "COMMAND") commands.closePalette(); else if (mode === "PICKER") commands.closePicker()
+    if (mode === "COMMAND") root.commands.closePalette(); else if (mode === "PICKER") root.commands.closePicker()
     if (mode === "INSERT" && View.VIEW_INPUT_PURPOSES.indexOf(inputPurpose) !== -1) leaveInsert()
     // Every view drops what it holds (Settings its CONFIRM; D7/OV14:
     // leaving Search keeps its job, closing the window doesn't), in
@@ -321,10 +321,10 @@ Item {
   // window. Kept here for open(), the window handlers and the harness.
   // target: a text field to give the keys back to (default keyRoot).
   function requestWmFocus(target) {
-    wmFocus.requestWmFocus(target)
+    root.wmFocus.requestWmFocus(target)
   }
 
-  function windowActive() { return wmFocus.windowActive() }
+  function windowActive() { return root.wmFocus.windowActive() }
 
   // ---- views (slice 5a, eng C1) ----------------------------------------------
 
@@ -343,7 +343,7 @@ Item {
 
   // Back to the torrents, with their pane, cursor and filter as they were.
   function leaveView() { showView("torrents") }
-  function typingField() { return commands.typingField() }
+  function typingField() { return root.commands.typingField() }
 
   // ---- view state ----------------------------------------------------------
 
@@ -413,9 +413,9 @@ Item {
     // no longer exists) isn't saved; only user moves are.
     // A fetch-metadata swap keeps it on its hash while that drops out, and
     // shows the row once it's back (the re-add can land anywhere).
-    var held = commands.holdsCursor(cursorHash)
+    var held = root.commands.holdsCursor(cursorHash)
     if (!held) cursorHash = View.resolveCursor(v.rows, cursorHash, prevIndex)
-    commands.checkFetches()
+    root.commands.checkFetches()
     if ((reveal === true || (held && prevIndex < 0)) && View.indexOfHash(v.rows, cursorHash) >= 0) revealCursor()
   }
 
@@ -561,14 +561,14 @@ Item {
     regState = res.state
     anchorHash = View.nextAnchor(res.state.mode, res.commandId, anchorHash, cursorHash)
     if (res.confirm) {
-      confirm = commands.describeConfirm(res.confirm)
+      confirm = root.commands.describeConfirm(res.confirm)
       confirmHashes = targets
       return
     }
     if (res.state.mode !== "CONFIRM") confirm = null
     // An unmatched key goes there too (the empty library's filters pane).
     if (res.blocked || !res.commandId) {
-      commands.handleBlocked(ev, res.blocked || "")
+      root.commands.handleBlocked(ev, res.blocked || "")
       return
     }
     run(res.commandId, res.args || ({}), ev, targets)
@@ -578,16 +578,16 @@ Item {
   // Every view's flags go in `views` (viewFlags); the positional settings
   // and search flags are kept for dispatchState's existing callers.
   function registryState(targets) {
-    return View.dispatchState(regState, keyPane, tableState, cursorIndex >= 0, targets, inspectorNow, commands.pickerFlags(),
-      settingsHost.flagsNow(), searchFlags, viewFlags())
+    return View.dispatchState(regState, keyPane, tableState, cursorIndex >= 0, targets, inspectorNow, root.commands.pickerFlags(),
+      root.settingsHost.flagsNow(), searchFlags, viewFlags())
   }
 
   // Ends INSERT the way Esc does (insert.cancel: the filter query goes
   // back to what it was before `/`, a move is dropped), e.g. on a click.
   function leaveInsert() {
     if (regState.mode !== "INSERT") return
-    commands.setMode("NORMAL")
-    commands.cancelInput()
+    root.commands.setMode("NORMAL")
+    root.commands.cancelInput()
   }
 
   // Maps a command id from CommandRegistry to Service calls and view
@@ -600,14 +600,14 @@ Item {
       var h = viewHost(hostNames[i])
       if (h && h.owns(commandId)) { h.run(commandId, args, ev); return }
     }
-    commands.run(commandId, args, ev, targets)
+    root.commands.run(commandId, args, ev, targets)
   }
 
   // ---- wiring ----------------------------------------------------------------
 
   onServiceChanged: adoptService()
   onCursorHashChanged: syncFiles(false)
-  onInspectorTabChanged: { syncFiles(false); commands.syncInspect(false) }
+  onInspectorTabChanged: { syncFiles(false); root.commands.syncInspect(false) }
   onTableStateChanged: syncFiles(false)
 
   Component.onCompleted: {
@@ -629,12 +629,12 @@ Item {
       if (!root.viewTouched) root.applyViewState(root.service.viewState)
     }
     function onActionFinished(ticket, ok, error, origin, hashes) {
-      settingsCmds.finished(ticket, ok, error)
-      commands.libraryFinished(ticket, ok, error)
+      root.settingsCmds.finished(ticket, ok, error)
+      root.commands.libraryFinished(ticket, ok, error)
       // Strictly this window's own tickets (msgFinish ignores the rest): a
       // pending-magnet drop can emit extra window-origin signals that
       // carry our hashes.
-      if (!commands.fetchFinished(ticket, ok)) root.messages = View.msgFinish(root.messages, ticket, ok, error)
+      if (!root.commands.fetchFinished(ticket, ok)) root.messages = View.msgFinish(root.messages, ticket, ok, error)
     }
     function onClipboardRead(text) {
       var outcome = View.clipboardOutcome(text, root.clipboardAskedAt, Date.now())
@@ -647,32 +647,32 @@ Item {
     function onFilesStatusByHashChanged() { root.checkFilesStatus() }
   }
 
-  ClientCommands {
-    id: commands
+  // Properties, not bare children: under Qt 6.11's incremental GC a bare
+  // non-visual child sometimes came out empty (no properties, no functions).
+  // See RssRulesPane.qml's ruleCmds.
+  readonly property ClientCommands commands: ClientCommands {
     client: root
     inspectorPane: inspector
     inputLine: statusLine
     keyItem: keyRoot
     palette: cmdPalette
     settingsView: settingsView
-    settingsCommands: settingsCmds
+    settingsCommands: root.settingsCmds
     magnet: magnetRow
     categoryPicker: catPicker
     tagPicker: tagPicker
   }
 
-  SettingsCommands {
-    id: settingsCmds
+  readonly property SettingsCommands settingsCmds: SettingsCommands {
     client: root
-    commands: commands
+    commands: root.commands
     settingsView: settingsView
   }
 
   // Slice 5b0: Settings' view host (SearchPane is its own).
-  SettingsHost { id: settingsHost; pane: settingsView; cmds: settingsCmds }
+  readonly property SettingsHost settingsHost: SettingsHost { pane: settingsView; cmds: root.settingsCmds }
 
-  WmFocus {
-    id: wmFocus
+  readonly property WmFocus wmFocus: WmFocus {
     targetWindow: window
     keyItem: keyRoot
   }
@@ -746,7 +746,7 @@ Item {
             activeFilter: root.filter
             cursorFilter: root.filterCursor
             focusedPane: root.pane === "filters"
-            footerKeys: commands.footerKeys
+            footerKeys: root.commands.footerKeys
             onItemClicked: function(group, value) {
               root.leaveInsert()
               root.setPane("filters")
@@ -818,8 +818,8 @@ Item {
             piecesLegend: root.infoTab.legend
             noMeta: root.infoTab.noMeta
             infoErrored: root.infoTab.errored
-            groups: commands.infoGroups
-            limitKeys: commands.limitFooterKeys
+            groups: root.commands.infoGroups
+            limitKeys: root.commands.limitFooterKeys
             files: root.filesState
             fileIndex: root.fileIndex
             trackers: root.trackersView
@@ -836,7 +836,7 @@ Item {
             onListRowClicked: function(tab, index) {
               root.leaveInsert()
               root.setPane("inspector")
-              commands.setRow(tab, index)
+              root.commands.setRow(tab, index)
               keyRoot.forceActiveFocus()
             }
             onFileClicked: function(index) {
@@ -856,7 +856,7 @@ Item {
         service: root.service
         tableState: root.tableState
         narrow: View.settingsNarrow(keyRoot.width)
-        open: root.activeView === settingsHost.name
+        open: root.activeView === root.settingsHost.name
         onLeaveRequested: root.leaveView()
       }
       // Slice 5a: the Search view's mount point (SearchPane.qml documents
@@ -866,7 +866,7 @@ Item {
         anchors.fill: panes
         service: root.service
         client: root
-        commands: commands
+        commands: root.commands
         tableState: root.tableState
         narrow: View.settingsNarrow(keyRoot.width)
         open: root.activeView === searchView.name
@@ -879,7 +879,7 @@ Item {
         anchors.fill: panes
         service: root.service
         client: root
-        commands: commands
+        commands: root.commands
         tableState: root.tableState
         narrow: View.settingsNarrow(keyRoot.width)
         open: root.activeView === rssView.name
@@ -903,9 +903,9 @@ Item {
         message: root.statusMessage.text
         messageTone: root.statusMessage.tone
         inputPurpose: root.inputPurpose
-        inputShown: commands.inputShown
+        inputShown: root.commands.inputShown
         filterChip: View.filterChip(root.layout, root.filter)
-        hints: View.modeHints(root.mode, View.copyState(settingsCmds.flags() || ({}), {
+        hints: View.modeHints(root.mode, View.copyState(root.settingsCmds.flags() || ({}), {
           accept: root.confirm ? View.confirmLine(root.confirm).accept : "",
           purpose: root.inputPurpose,
           pane: root.keyPane,
@@ -918,7 +918,7 @@ Item {
 
         onInputEdited: function(text) {
           // A view's own INSERT goes to the host that owns its purpose.
-          var viewInput = root.mode === "INSERT" ? commands.inputHost(root.inputPurpose) : null
+          var viewInput = root.mode === "INSERT" ? root.commands.inputHost(root.inputPurpose) : null
           if (viewInput) viewInput.inputEdited(root.inputPurpose, text)
           if (root.mode !== "INSERT" || root.inputPurpose !== "filter") return
           // "Matches update as you type"; a pasted magnet/URL/path is an
@@ -946,14 +946,14 @@ Item {
         visible: root.mode === "COMMAND"
         mru: root.paletteMru
         evalState: View.paletteState(root.tableState, root.cursorIndex >= 0, root.inspectorState, root.pane, root.activeView,
-          settingsHost.flagsNow(), root.keyPane, root.searchFlags, root.viewFlags())
+          root.settingsHost.flagsNow(), root.keyPane, root.searchFlags, root.viewFlags())
         onKeyForwarded: function(event) { root.handleKey(event) }
-        onActivated: function(row) { commands.runPaletteRow(row) }
-        onDismissed: commands.closePalette()
+        onActivated: function(row) { root.commands.runPaletteRow(row) }
+        onDismissed: root.commands.closePalette()
       }
 
-      CategoryPicker { id: catPicker; anchors.fill: parent; commands: commands }
-      TagPicker { id: tagPicker; anchors.fill: parent; commands: commands }
+      CategoryPicker { id: catPicker; anchors.fill: parent; commands: root.commands }
+      TagPicker { id: tagPicker; anchors.fill: parent; commands: root.commands }
     }
   }
 }

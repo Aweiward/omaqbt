@@ -5,6 +5,7 @@ import Quickshell.Io
 import qs.Commons
 import qs.Ui
 import "Model.js" as Model
+import "PopupKeys.js" as PopupKeys
 
 Panel {
   id: root
@@ -26,6 +27,13 @@ Panel {
   property string movePathField: ""
   property bool confirmOpen: false
   property string pendingDeleteHash: ""
+  // The last key press inside the popup, read by keySpy before the catcher
+  // sees it: the catcher's deleteRequested() carries no key, so this tells x from X.
+  property string lastKeyText: ""
+  property string windowNote: ""
+  // Set by the catcher's returnRequested, which fires just before
+  // activateRequested for Enter only: activate without it is Space.
+  property bool enterPending: false
 
   readonly property color foreground: bar ? bar.foreground : Color.foreground
   readonly property color urgent: bar ? bar.urgent : Color.urgent
@@ -123,7 +131,7 @@ Panel {
       return
     }
     if (root.fieldFocused) return
-    keyCatcher.forceActiveFocus()
+    keySpy.forceActiveFocus()
   }
 
   function openDetail(row) {
@@ -258,18 +266,23 @@ Panel {
       return
     }
     if (focusSection === "header") {
+      if (dy > 0) focusSection = "window"
+      return
+    }
+    if (focusSection === "window") {
+      if (dy < 0) { focusSection = "header"; return }
       if (dy > 0 && showClipboard) { focusSection = "clipboard"; return }
       if (dy > 0 && visibleTorrents.length > 0) { focusSection = "rows"; rowIndex = 0 }
       return
     }
     if (focusSection === "clipboard") {
-      if (dy < 0) { focusSection = "header"; return }
+      if (dy < 0) { focusSection = "window"; return }
       if (dy > 0 && visibleTorrents.length > 0) { focusSection = "rows"; rowIndex = 0 }
       return
     }
     if (focusSection === "rows") {
       if (dy < 0 && rowIndex === 0) {
-        focusSection = showClipboard ? "clipboard" : "header"
+        focusSection = showClipboard ? "clipboard" : "window"
         return
       }
       rowIndex = Math.max(0, Math.min(visibleTorrents.length - 1, rowIndex + dy))
@@ -284,6 +297,7 @@ Panel {
       if (magnetCanStart) startMagnetConfirm()
     }
     else if (focusSection === "header") qbt.toggleAll()
+    else if (focusSection === "window") openWindowFromPopup()
     else if (focusSection === "clipboard") qbt.addUrl(qbt.clipboardText)
     else if (focusSection === "rows") openDetail(selectedTorrent)
     else if (focusSection === "files") cycleSelectedFile()
@@ -293,6 +307,55 @@ Panel {
     else if (focusSection === "openFolder") openFolder(detailTorrent)
     else if (focusSection === "remove") removeKeepFiles(detailHash)
     else if (focusSection === "deleteFiles") askDeleteFiles(detailHash)
+  }
+
+  // Closes the popup, then summons the window. With no shell summon (an old
+  // or replacement bar) the popup stays open and shows how to open it.
+  function openWindowFromPopup() {
+    var shell = root.bar ? root.bar.shell : null
+    var result = PopupKeys.openWindow(shell, function() { root.close() })
+    windowNote = result.ok ? "" : result.note
+  }
+
+  function keyState() {
+    return {
+      view: view,
+      section: focusSection,
+      blocked: keyCatcher.blocked,
+      magnetConfirmOpen: magnetConfirmOpen && !fieldFocused,
+      cursorActive: cursorActive
+    }
+  }
+
+  // Every catcher signal goes through PopupKeys.route; this runs the action.
+  function routeKey(signal, arg) {
+    var r = PopupKeys.route(signal, arg, keyState())
+    var a = r.action
+    if (a === "openWindow") openWindowFromPopup()
+    else if (a === "back") closeDetail()
+    else if (a === "remove") {
+      if (view === "detail") removeKeepFiles(detailHash)
+      else if (selectedTorrent) qbt.deleteHash(selectedTorrent.hash, false)
+    }
+    else if (a === "deleteFiles") {
+      var hash = view === "detail" ? detailHash : (selectedTorrent ? selectedTorrent.hash : "")
+      if (hash) askDeleteFiles(hash)
+    }
+    else if (a === "skipFile") skipSelectedFile()
+    else if (a === "toggle") {
+      if (!qbt.ready) return
+      if (view === "detail") { if (detailHash) qbt.toggleHash(detailHash) }
+      else if (selectedTorrent) qbt.toggleHash(selectedTorrent.hash)
+    }
+    else if (a === "moveCursor") {
+      if (!cursorActive) { cursorActive = true; return }
+      moveCursor(r.args[0], r.args[1])
+    }
+    else if (a === "activateCursor") activateCursor()
+    else if (a === "text") handleTextKey(r.args[0])
+    else if (a === "close") root.close()
+    else if (a === "cancelMagnet") cancelMagnetConfirm()
+    else if (a === "startMagnet") startMagnetConfirm()
   }
 
   function cycleSelectedFile() {
@@ -358,13 +421,9 @@ Panel {
       if (view === "list") setFilter("completed")
     } else if (t === "*") {
       if (view === "list") setFilter("all")
-    } else if (t === "x") {
-      if (view === "detail") skipSelectedFile()
-      else if (selectedTorrent) qbt.deleteHash(selectedTorrent.hash, false)
-    } else if (t === "X") {
-      var hash = view === "detail" ? detailHash : (selectedTorrent ? selectedTorrent.hash : "")
-      if (hash) askDeleteFiles(hash)
-    } else if (t === "h" || t === "H") {
+    } else if (t === "H") {
+      // The catcher sends h as a move and x/X as delete (PopupKeys.route);
+      // only a shifted H arrives here as text.
       if (view === "detail") closeDetail()
     } else if (t === "s" || t === "S") {
       if (view === "list") sortMode = Model.cycleSort(sortMode)
@@ -399,6 +458,9 @@ Panel {
     filterMode = "active"
     magnetField = ""
     confirmOpen = false
+    windowNote = ""
+    lastKeyText = ""
+    enterPending = false
     if (panelFlick) panelFlick.contentY = 0
     qbt.refresh()
     qbt.loadMagnetSnapshot()
@@ -486,7 +548,7 @@ Panel {
     owner: root
     bar: root.bar
     open: root.opened
-    focusTarget: keyCatcher
+    focusTarget: keySpy
     contentWidth: panel.fittedContentWidth(Style.space(380))
     contentHeight: panel.fittedContentHeight(column.implicitHeight, Style.space(560))
 
@@ -494,26 +556,35 @@ Panel {
       id: keyCatcher
       anchors.fill: parent
       blocked: root.fieldFocused || root.confirmOpen
-      onMoveRequested: function(dx, dy) {
-        if (!root.cursorActive) { root.cursorActive = true; return }
-        root.moveCursor(dx, dy)
-      }
+      // Focus lands on keySpy, never the catcher itself, so the spy sees
+      // every key before it bubbles up here.
+      onActiveFocusChanged: if (activeFocus) keySpy.forceActiveFocus()
+      onMoveRequested: function(dx, dy) { root.routeKey("move", { dx: dx, dy: dy }) }
+      onReturnRequested: root.enterPending = true
       onActivateRequested: {
-        if (root.magnetConfirmOpen && !root.fieldFocused) {
-          root.startMagnetConfirm()
-          return
-        }
-        root.activateCursor()
+        var key = root.enterPending ? "enter" : "space"
+        root.enterPending = false
+        root.routeKey("activate", key)
       }
-      onCloseRequested: {
-        if (root.magnetConfirmOpen && !root.fieldFocused) {
-          root.cancelMagnetConfirm()
-          return
-        }
-        root.close()
+      onCloseRequested: root.routeKey("close", null)
+      onDeleteRequested: {
+        var key = root.lastKeyText
+        root.lastKeyText = ""
+        root.routeKey("delete", key)
       }
       onTabRequested: function(direction) { root.switchPanel(direction) }
-      onTextKey: function(t) { root.handleTextKey(t) }
+      onTextKey: function(t) { root.routeKey("text", t) }
+
+      // A focused child of the catcher: key presses reach it first, then
+      // bubble (unaccepted) to the catcher's handler.
+      Item {
+        id: keySpy
+        Keys.onPressed: function(event) {
+          var shift = (event.modifiers & Qt.ShiftModifier) !== 0
+          var del = PopupKeys.deleteKey(event.text, shift)
+          root.lastKeyText = del !== "" ? del : event.text
+        }
+      }
 
       DropArea {
         anchors.fill: parent
@@ -610,6 +681,56 @@ Panel {
                 }
               }
             }
+          }
+
+          // Always shown in the list view, even with qBittorrent missing or
+          // the daemon stopped: Enter, a click or `w` opens the window.
+          CursorSurface {
+            id: windowRow
+            visible: root.view === "list"
+            width: parent.width
+            implicitHeight: Style.space(36)
+            hasCursor: root.cursorActive && root.focusSection === "window"
+            foreground: root.foreground
+            fill: root.hoverFill
+            MouseArea {
+              anchors.fill: parent
+              hoverEnabled: true
+              cursorShape: Qt.PointingHandCursor
+              onEntered: { root.cursorActive = true; root.focusSection = "window" }
+              onClicked: root.openWindowFromPopup()
+            }
+            Text {
+              anchors.verticalCenter: parent.verticalCenter
+              anchors.left: parent.left
+              anchors.leftMargin: Style.space(10)
+              text: PopupKeys.ROW_LABEL
+              textFormat: Text.PlainText
+              color: root.foreground
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.body
+            }
+            Text {
+              anchors.verticalCenter: parent.verticalCenter
+              anchors.right: parent.right
+              anchors.rightMargin: Style.space(10)
+              text: PopupKeys.ROW_KEY
+              textFormat: Text.PlainText
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.bodySmall
+            }
+          }
+
+          Text {
+            visible: root.view === "list" && root.windowNote !== ""
+            width: parent.width
+            text: root.windowNote
+            textFormat: Text.PlainText
+            color: root.dim
+            wrapMode: Text.WrapAnywhere
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.bodySmall
           }
 
           Column {

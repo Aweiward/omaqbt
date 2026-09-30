@@ -558,7 +558,7 @@ TestCase {
     var o = make()
     openSearch(o)
     var cc = null
-    for (var i = 0; i < o.c.data.length; i++) if (o.c.data[i] && typeof o.c.data[i].runPaletteRow === "function") cc = o.c.data[i]
+    cc = o.c.commands
     cc.startInput("searchQuery", "")
     compare(o.c.mode, "INSERT")
     compare(findName(content(o), "insertPrompt").text, "Search")
@@ -656,8 +656,7 @@ TestCase {
   // refactor rewrites, through keys and what the window shows.
 
   function cmdsOf(o) {
-    for (var i = 0; i < o.c.data.length; i++) if (o.c.data[i] && typeof o.c.data[i].runPaletteRow === "function") return o.c.data[i]
-    return null
+    return o.c.commands
   }
   function statusLineOf(o) { return findWith(content(o), "focusInput") }
   function hintsOf(o) { return statusLineOf(o).hints.map(function(h) { return h.key + " " + h.label }).join(" | ") }
