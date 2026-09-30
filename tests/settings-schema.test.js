@@ -197,7 +197,7 @@ const TYPES = ["bool", "int", "float", "speed", "choice-int", "choice-string", "
 const NUMERIC = ["int", "float", "speed"];
 const FIELDS = ["section", "group", "label", "help", "type", "unit", "min", "max", "step", "sentinels",
   "choices", "locked", "readOnly", "hidden", "deferred", "multiline", "secret", "restart", "confirm",
-  "dependsOn", "composite", "listKind", "tierBreaks", "secretWritable"];
+  "dependsOn", "composite", "listKind", "tierBreaks", "secretWritable", "confirmVia"];
 
 function glob(key, pattern) {
   const re = new RegExp("^" + pattern.split("*").map((s) => s.replace(/[.+?^${}()|[\]\\]/g, "\\$&")).join(".*") + "$");
@@ -265,12 +265,17 @@ test("entries use only the documented fields and types", () => {
 });
 
 // Slice 5b1 (OV9): six RSS keys are live in their own RSS section (after
-// Banned IPs and Other, outside the schema's seven); only
-// rss_auto_downloading_enabled stays deferred, until 5b2.
-test("sections follow the design, and only rss_auto_downloading_enabled is deferred", () => {
+// Banned IPs and Other, outside the schema's seven); slice 5b2 un-defers
+// rss_auto_downloading_enabled, the one key with confirmVia (D8).
+test("sections follow the design; nothing is deferred, and only auto-download confirms via rssAutoDl", () => {
   assert.deepEqual(SCHEMA.sections, ["Downloads", "Connection", "Speed", "BitTorrent", "Behaviour", "Web UI", "Advanced"]);
   const deferred = Object.keys(KEYS).filter((k) => KEYS[k].deferred);
-  assert.deepEqual(deferred, ["rss_auto_downloading_enabled"]);
+  assert.deepEqual(deferred, []);
+  const via = Object.keys(KEYS).filter((k) => "confirmVia" in KEYS[k]);
+  assert.deepEqual(via, ["rss_auto_downloading_enabled"]);
+  assert.equal(KEYS.rss_auto_downloading_enabled.confirmVia, "rssAutoDl");
+  assert.equal(KEYS.rss_auto_downloading_enabled.type, "bool");
+  assert.ok(!("confirm" in KEYS.rss_auto_downloading_enabled));
   assert.equal(KEYS.rss_smart_episode_filters.listKind, "pattern");
   for (const [k, e] of Object.entries(KEYS)) {
     if (k.startsWith("rss_")) {

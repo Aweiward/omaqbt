@@ -46,12 +46,12 @@ const rowOf = (key, p) => {
 // --- sections ----------------------------------------------------------------
 
 // Slice 4b: Banned IPs (a list section, its count the bans) after Advanced.
-// Slice 5b1: RSS is live, with its six un-deferred keys.
+// Slice 5b1: RSS is live, with its six un-deferred keys; 5b2 adds auto-download.
 test("sections: the seven in order with T1's counts, Banned IPs, then RSS; no Other when every key is mapped", () => {
   const s = V.sections(prefs());
   assert.deepEqual(s.map((x) => [x.name, x.count]), [
     ["Downloads", 33], ["Connection", 27], ["Speed", 11], ["BitTorrent", 23],
-    ["Behaviour", 12], ["Web UI", 30], ["Advanced", 72], ["Banned IPs", 0], ["RSS", 6]
+    ["Behaviour", 12], ["Web UI", 30], ["Advanced", 72], ["Banned IPs", 0], ["RSS", 7]
   ]);
   assert.equal(s[7].list, "banned_IPs");
   assert.equal(s[7].dimmed, false);
@@ -63,7 +63,7 @@ test("sections: the seven in order with T1's counts, Banned IPs, then RSS; no Ot
 
 test("sections: Other appears before RSS when prefs hold an unknown key", () => {
   const s = V.sections(prefs({ brand_new_toggle: true, other_number: 5 }));
-  assert.deepEqual(s.slice(7).map((x) => [x.name, x.count]), [["Banned IPs", 0], ["Other", 2], ["RSS", 6]]);
+  assert.deepEqual(s.slice(7).map((x) => [x.name, x.count]), [["Banned IPs", 0], ["Other", 2], ["RSS", 7]]);
 });
 
 test("sections: while loading (no prefs) the counts come from the schema", () => {
@@ -273,14 +273,14 @@ test("search: label, help and raw key, with each result's section", () => {
   assert.ok(!V.search("incoming nowhere", prefs()).rows.length);
 });
 
-// Slice 5b1: the six live RSS keys are found (in their RSS section); the
-// deferred auto-download key never is.
-test("search: composites show, their hidden members, deferred rss and banned IPs never do", () => {
+// Slice 5b1: the six live RSS keys are found (in their RSS section); 5b2
+// un-defers the auto-download key, so it's found too.
+test("search: composites show, their hidden members and banned IPs never do; every rss key does", () => {
   const r = V.search("schedule", prefs()).rows.map((x) => x.key);
   assert.ok(r.includes("schedule_from") && r.includes("schedule_to"));
   assert.ok(!r.some((k) => /_(hour|min)$/.test(k)));
   const rss = V.search("rss", prefs()).rows.filter((x) => /^rss_/.test(x.key));
-  assert.deepEqual(rss.map((x) => x.key).sort(), ["rss_download_repack_proper_episodes", "rss_fetch_delay",
+  assert.deepEqual(rss.map((x) => x.key).sort(), ["rss_auto_downloading_enabled", "rss_download_repack_proper_episodes", "rss_fetch_delay",
     "rss_max_articles_per_feed", "rss_processing_enabled", "rss_refresh_interval", "rss_smart_episode_filters"]);
   assert.ok(rss.every((x) => x.section === "RSS"));
   assert.ok(!V.search("banned", prefs()).rows.some((x) => x.key === "banned_IPs"));
@@ -339,7 +339,7 @@ test("editorFor: none for locked, read-only, secret, dimmed, loading and unknown
   assert.deepEqual(why("dht", null), { kind: "none", why: "loading" });
   assert.deepEqual(why("schedule_from_hour"), { kind: "none", why: "hidden" });
   assert.deepEqual(why("banned_IPs"), { kind: "none", why: "hidden" });
-  assert.deepEqual(why("rss_auto_downloading_enabled"), { kind: "none", why: "hidden" });
+  assert.deepEqual(why("rss_auto_downloading_enabled"), { kind: "toggle", key: "Space", next: true });
   assert.deepEqual(why("rss_processing_enabled"), { kind: "toggle", key: "Space", next: true });
   assert.deepEqual(why("no_such_key"), { kind: "none", why: "unknown" });
   assert.deepEqual(why("web_ui_new", prefs({ web_ui_new: 1 })), { kind: "none", why: "unknown" });
@@ -467,7 +467,7 @@ test("parseInput: bools, Other keys by JSON type, and refused keys", () => {
   assert.equal(V.parseInput("new_ratio", "3x", f).error, "Use a number.");
   assert.deepEqual(V.parseInput("new_text", "b c", p), { value: "b c" });
   assert.equal(V.parseInput("new_text", "b\nc", p).error, "Use one line.");
-  for (const k of ["web_ui_port", "current_network_interface", "add_trackers_url_list", "proxy_password", "schedule_from_hour", "banned_IPs", "rss_auto_downloading_enabled", "nope"]) {
+  for (const k of ["web_ui_port", "current_network_interface", "add_trackers_url_list", "proxy_password", "schedule_from_hour", "banned_IPs", "nope"]) {
     assert.equal(V.parseInput(k, "1", p).error, V.CANT_CHANGE, k);
   }
   assert.deepEqual(V.parseInput("rss_refresh_interval", "5", p), { value: 5 });
@@ -644,7 +644,7 @@ test("rowFor: one schema or Other row; null for hidden, missing or unknown keys"
   assert.deepEqual(V.rowFor("listen_port", prefs()), rowOf("listen_port"));
   assert.equal(V.rowFor("new_k", prefs({ new_k: 1 })).section, "Other");
   assert.equal(V.rowFor("schedule_from_hour", prefs()), null);
-  assert.equal(V.rowFor("rss_auto_downloading_enabled", prefs()), null);
+  assert.equal(V.rowFor("rss_auto_downloading_enabled", prefs()).section, "RSS");
   assert.equal(V.rowFor("rss_refresh_interval", prefs()).section, "RSS");
   assert.equal(V.rowFor("nope", prefs()), null);
   assert.equal(V.rowFor("dht", null).value, "—");
@@ -1097,4 +1097,48 @@ test("4b final: the undo and secret notes the window adds", () => {
   assert.equal(V.SECRET_BUSY, "Another password is still saving; try again.");
   // Ruling EJ: the design state table's "Port set to 51414 · u undoes".
   assert.equal(V.doneNote("dl_limit", 2048) + V.UNDO_HINT, "Download limit set to 2 KiB/s · u undoes");
+});
+
+// --- Slice 5b2 (Task 2): auto-download on (D8) ------------------------------------------------
+
+const RULES_WINDOW = JSON.parse(fs.readFileSync(path.join(__dirname, "fixtures", "rss-autorules-cases.json"), "utf8")).window;
+
+test("5b2 D8: the auto-download lines are the rules case file's window copy", () => {
+  assert.deepEqual(V.AUTO_DL, {
+    confirmAutoDl: RULES_WINDOW.confirmAutoDl,
+    confirmAutoDlNone: RULES_WINDOW.confirmAutoDlNone,
+    confirmAutoDlUncounted: RULES_WINDOW.confirmAutoDlUncounted,
+    autoDlNoTorrent: RULES_WINDOW.autoDlNoTorrent
+  });
+});
+
+test("5b2 final fix: autoDlRefusal refuses a readable count with noTorrent > 0, and only that", () => {
+  assert.equal(V.autoDlRefusal(true, { rules: 2, will: 5, noTorrent: 3 }), RULES_WINDOW.autoDlNoTorrent.replace("<m>", "3"));
+  assert.equal(V.autoDlRefusal(true, { rules: 1, will: 0, noTorrent: 1 }), RULES_WINDOW.autoDlNoTorrent.replace("<m>", "1"));
+  for (const [ok, data] of [[true, { rules: 2, will: 5, noTorrent: 0 }], [true, { rules: 0, will: 0, noTorrent: 0 }], [false, { rules: 2, will: 5, noTorrent: 3 }],
+    [false, null], [true, null], [true, {}], [true, { rules: 1, will: 1, noTorrent: "2" }], [true, { rules: 1, will: 1, noTorrent: -1 }], [true, { rules: 1, will: 1, noTorrent: 1.5 }]]) {
+    assert.equal(V.autoDlRefusal(ok, data), "", JSON.stringify([ok, data]));
+  }
+});
+
+test("5b2 D8: rss_auto_downloading_enabled is a live toggle that confirms via rssAutoDl", () => {
+  assert.equal(V.confirmVia("rss_auto_downloading_enabled"), "rssAutoDl");
+  assert.equal(V.confirmVia("rss_processing_enabled"), "");
+  assert.equal(V.confirmVia("nope"), "");
+  assert.deepEqual(V.editorFor("rss_auto_downloading_enabled", prefs({ rss_auto_downloading_enabled: true })),
+    { kind: "toggle", key: "Space", next: false });
+  // The count goes through its own question, never confirmFor's.
+  assert.equal(V.confirmFor("rss_auto_downloading_enabled", false, true), "");
+  assert.equal(V.doneNote("rss_auto_downloading_enabled", true), "RSS auto-downloading on");
+});
+
+test("5b2 D8: autoDlQuestion fills r and n, says none, or couldn't count", () => {
+  const fill = (r, n) => RULES_WINDOW.confirmAutoDl.replace("<r>", r).replace("<n>", n);
+  assert.equal(V.autoDlQuestion(true, { rules: 2, will: 5, noTorrent: 1 }), fill("2", "5"));
+  assert.equal(V.autoDlQuestion(true, { rules: 1, will: 0, noTorrent: 0 }), fill("1", "0"));
+  assert.equal(V.autoDlQuestion(true, { rules: 0, will: 0, noTorrent: 0 }), RULES_WINDOW.confirmAutoDlNone);
+  for (const [ok, data] of [[false, null], [false, { rules: 2, will: 5 }], [true, null], [true, {}],
+    [true, { rules: "2", will: 5 }], [true, { rules: 2, will: -1 }], [true, { rules: 1.5, will: 1 }]]) {
+    assert.equal(V.autoDlQuestion(ok, data), RULES_WINDOW.confirmAutoDlUncounted, JSON.stringify([ok, data]));
+  }
 });

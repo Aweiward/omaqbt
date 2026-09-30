@@ -92,6 +92,12 @@ TestCase {
       function clearSecret(k, o) { return rec("clearSecret", [k, o]) }
       function banList(op, ip, o) { return rec("banList", [op, ip, o]) }
       function answer(result) { var cb = prefsCbs.shift(); cb(result) }
+      // Slice 5b2 (D8): the auto-download count.
+      property var autoCbs: []
+      // autoRefused: the Service refuses the count with 0 (never answers).
+      property bool autoRefused: false
+      function rssAutoPreview(cb) { var t = rec("rssAutoPreview", []); if (autoRefused) return 0; autoCbs.push(cb); return t }
+      function answerAuto(ok, err, data) { var cb = autoCbs.shift(); cb(ok, err, data) }
     }
   }
 
@@ -840,5 +846,57 @@ TestCase {
     leaveSettings(o)
     finish(o, true)
     compare(status(o), "Upload limit set to 10 MiB/s")
+  }
+
+  // ---- slice 5b2 (D8): undo never turns auto-download on unasked ----------------------
+
+  function test_u_turning_auto_download_back_on_counts_and_asks_first() {
+    var k = "rss_auto_downloading_enabled"
+    var o = make(prefs({ rss_auto_downloading_enabled: true }))
+    focusKey(o, k)
+    space(o)
+    compare(writes(o), [[k, "false"]], "turning it off asks nothing")
+    saved(o, prefs({ rss_auto_downloading_enabled: false }))
+    compare(stack(o).length, 1)
+    undo(o, prefs({ rss_auto_downloading_enabled: false }))
+    compare(calls(o.svc, "rssAutoPreview").length, 1, "the undo counts first")
+    compare(writes(o).length, 1, "and writes nothing yet")
+    o.svc.answerAuto(true, "", { rules: 1, will: 2, noTorrent: 0 })
+    compare(o.c.mode, "CONFIRM")
+    compare(o.c.confirm.kind, "rssAutoDlOn")
+    compare(o.c.confirm.line, SettingsView.AUTO_DL.confirmAutoDl.replace("<r>", "1").replace("<n>", "2"))
+    key(o.c, "y")
+    compare(writes(o)[1], [k, "true"])
+    saved(o, prefs({ rss_auto_downloading_enabled: true }))
+    compare(stack(o).length, 0, "undo's own write records nothing")
+    compare(status(o), SettingsView.undoDoneNote(k, "RSS auto-downloading", true, 0))
+  }
+
+  function test_u_turning_auto_download_on_refuses_on_no_torrent_links() {
+    var k = "rss_auto_downloading_enabled"
+    var o = make(prefs({ rss_auto_downloading_enabled: true }))
+    focusKey(o, k)
+    space(o)
+    saved(o, prefs({ rss_auto_downloading_enabled: false }))
+    undo(o, prefs({ rss_auto_downloading_enabled: false }))
+    o.svc.answerAuto(true, "", { rules: 1, will: 2, noTorrent: 4 })
+    compare(o.c.mode, "NORMAL", "no confirm")
+    compare(writes(o).length, 1, "nothing more is written")
+    compare(status(o), SettingsView.AUTO_DL.autoDlNoTorrent.replace("<m>", "4"))
+    compare(stack(o).length, 1, "the entry is back for a later u")
+  }
+
+  function test_n_on_the_undo_auto_download_question_writes_nothing() {
+    var k = "rss_auto_downloading_enabled"
+    var o = make(prefs({ rss_auto_downloading_enabled: true }))
+    focusKey(o, k)
+    space(o)
+    saved(o, prefs({ rss_auto_downloading_enabled: false }))
+    undo(o, prefs({ rss_auto_downloading_enabled: false }))
+    o.svc.answerAuto(false, "down", null)
+    compare(o.c.confirm.line, SettingsView.AUTO_DL.confirmAutoDlUncounted)
+    key(o.c, "n")
+    compare(writes(o).length, 1)
+    compare(stack(o).length, 0, "n is a decision, as for any undo question")
   }
 }

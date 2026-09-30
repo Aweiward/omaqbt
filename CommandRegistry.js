@@ -331,6 +331,54 @@ var commands = [
   { id: "rss.feedsClose", title: "Close the feeds", group: "View", keys: ["Esc"], modes: ["NORMAL"], panes: ["rssFeedList"], needs: "none", paletteHidden: true },
   { id: "rss.feedsPick", title: "Pick the feed", group: "View", keys: ["Enter"], modes: ["NORMAL"], panes: ["rssFeedList"], needs: "none", paletteHidden: true },
 
+  // RSS rules (slice 5b2, eng review "Slice 5b2 RSS Rules" and its Outside
+  // voice: edit while off, no shadow rules). `R` opens the rules area from
+  // the feeds or the articles. Its panes: rssRules (the rule list),
+  // rssRuleFields (the rule's RULE_FIELDS), and, narrow only, rssRulePreview
+  // (the preview full width) and rssRuleList (the rule-list overlay, a
+  // ListOverlay without its field). Every handler is the rules area's
+  // (RssPane.run hands rss.rule*, rss.field*, rss.rules* and rss.preview*
+  // to RssRulesPane; contract at the top of RssRulesPane.qml and in
+  // tests/fixtures/rss-rules-contract.md). The window raises the CONFIRMs
+  // (kinds View.RSS_ACCEPT: rssRuleRemove, rssRuleOn, rssRuleEditOff,
+  // rssRuleLeave, rssRuleDiscard) and starts the INSERTs (rssRuleName,
+  // rssRuleRename, rssRuleField) itself. Rows capture at key time, frozen:
+  // args.rule (s.rssRule, {name, enabled}) for the rssRule*, rssField* and
+  // rssRuleDirty needs, args.field (s.rssField's plain values: key, kind
+  // and a non-list value) for the two field rows, and args.item (the Feeds
+  // cursor's feed, rssUp rows as in 5b1) so `a`'s new rule can take it.
+  { id: "rss.rules", title: "RSS rules", group: "App", keys: ["R"], modes: ["NORMAL"], panes: ["rssFeeds", "rssArticles"], needs: "rssUp" },
+  { id: "rss.ruleDown", title: "Down", group: "View", keys: ["j", "Down"], modes: ["NORMAL"], panes: ["rssRules", "rssRuleFields", "rssRuleList"], needs: "none", paletteHidden: true },
+  { id: "rss.ruleUp", title: "Up", group: "View", keys: ["k", "Up"], modes: ["NORMAL"], panes: ["rssRules", "rssRuleFields", "rssRuleList"], needs: "none", paletteHidden: true },
+  // Enter/l go into the fields; an enabled rule is turned off first, after
+  // the rssRuleEditOff confirm (OV15: edit while off).
+  { id: "rss.ruleEdit", title: "Edit the rule", group: "App", keys: ["Enter", "l"], modes: ["NORMAL"], panes: ["rssRules"], needs: "rssRule" },
+  // a asks for the name (rssRuleName); qbt rss rule-create writes it disabled (OV7).
+  { id: "rss.ruleNew", title: "New rule", group: "App", keys: ["a"], modes: ["NORMAL"], panes: ["rssRules"], needs: "rssUp" },
+  { id: "rss.ruleRename", title: "Rename the rule", group: "App", keys: ["n"], modes: ["NORMAL"], panes: ["rssRules"], needs: "rssRule" },
+  { id: "rss.ruleRemove", title: "Remove the rule", group: "App", keys: ["x"], modes: ["NORMAL"], panes: ["rssRules"], needs: "rssRule" },
+  // e: on only through the rssRuleOn confirm, refused when the preview's
+  // noTorrent > 0 (OV1/OV3/OV6); off at once, no confirm.
+  { id: "rss.ruleToggle", title: "Turn the rule on or off", group: "App", keys: ["e"], modes: ["NORMAL"], panes: ["rssRules", "rssRuleFields"], needs: "rssRule" },
+  // r re-reads the rules; a dirty draft goes only after rssRuleDiscard.
+  { id: "rss.ruleReload", title: "Reload the rules", group: "App", keys: ["r"], modes: ["NORMAL"], panes: ["rssRules", "rssRuleFields"], needs: "rssUp" },
+  // Enter edits the field by its kind (an INSERT or a ListOverlay picker);
+  // Space toggles a toggle field (Enabled routes to rss.ruleToggle).
+  { id: "rss.fieldEdit", title: "Edit the field", group: "App", keys: ["Enter"], modes: ["NORMAL"], panes: ["rssRuleFields"], needs: "rssFieldEditable", paletteHidden: true },
+  { id: "rss.fieldToggle", title: "Toggle the field", group: "App", keys: ["Space"], modes: ["NORMAL"], panes: ["rssRuleFields"], needs: "rssFieldToggle", paletteHidden: true },
+  // p saves a dirty draft (auto-download on, OV2) and previews; narrow, the
+  // preview shows full width (rssRulePreview).
+  { id: "rss.rulePreview", title: "Preview the rule", group: "App", keys: ["p"], modes: ["NORMAL"], panes: ["rssRuleFields"], needs: "rssRule" },
+  { id: "rss.ruleDiscard", title: "Discard the rule's changes", group: "App", keys: ["D"], modes: ["NORMAL"], panes: ["rssRuleFields"], needs: "rssRuleDirty" },
+  // h/Esc back to the rule list (a dirty draft asks rssRuleLeave first).
+  { id: "rss.fieldsBack", title: "Back to the rules", group: "View", keys: ["h", "Esc"], modes: ["NORMAL"], panes: ["rssRuleFields"], needs: "none", paletteHidden: true },
+  { id: "rss.rulesBack", title: "Back to the feeds", group: "View", keys: ["Esc"], modes: ["NORMAL"], panes: ["rssRules"], needs: "none", paletteHidden: true },
+  // Tab switches column; narrow, from the fields it opens the rule list.
+  { id: "rss.rulesSwitch", title: "Switch column", group: "View", keys: ["Tab"], modes: ["NORMAL"], panes: ["rssRules", "rssRuleFields"], needs: "none", paletteHidden: true },
+  { id: "rss.ruleListPick", title: "Pick the rule", group: "View", keys: ["Enter"], modes: ["NORMAL"], panes: ["rssRuleList"], needs: "none", paletteHidden: true },
+  { id: "rss.ruleListClose", title: "Close the rule list", group: "View", keys: ["Esc"], modes: ["NORMAL"], panes: ["rssRuleList"], needs: "none", paletteHidden: true },
+  { id: "rss.previewClose", title: "Close the preview", group: "View", keys: ["Esc"], modes: ["NORMAL"], panes: ["rssRulePreview"], needs: "none", paletteHidden: true },
+
   // VISUAL (j/k/Space/x/X/e reuse the NORMAL,table rows above; this is the exit)
   { id: "visual.exit", title: "Exit visual", group: "View", keys: ["Esc", "V"], modes: ["VISUAL"], panes: ["table"], needs: "none" },
 
@@ -481,7 +529,19 @@ function normalizeState(state) {
     rssUnread: typeof s.rssUnread === "number" ? s.rssUnread : 0,
     rssProcessingOff: s.rssProcessingOff === true,
     rssUp: s.rssUp === true,
-    rssWide: s.rssWide === true
+    rssWide: s.rssWide === true,
+    // RSS rules (slice 5b2, the same flags), all default off: the rules
+    // area shows; the rule under the list cursor or being edited ({name,
+    // enabled}); the field under the fields cursor ({key, kind, value});
+    // whether it edits (Enter) or toggles (Space); the draft is dirty;
+    // auto-download is on in qBittorrent.
+    rssRulesOpen: s.rssRulesOpen === true,
+    rssRule: s.rssRule && typeof s.rssRule === "object" ? s.rssRule : null,
+    rssField: s.rssField && typeof s.rssField === "object" ? s.rssField : null,
+    rssFieldEditable: s.rssFieldEditable === true,
+    rssFieldToggle: s.rssFieldToggle === true,
+    rssRuleDirty: s.rssRuleDirty === true,
+    rssAutoDl: s.rssAutoDl === true
   };
 }
 
@@ -551,7 +611,11 @@ var VIEW_OF_PANE = {
   searchPluginList: "search",
   rssFeeds: "rss",
   rssArticles: "rss",
-  rssFeedList: "rss"
+  rssFeedList: "rss",
+  rssRules: "rss",
+  rssRuleFields: "rss",
+  rssRulePreview: "rss",
+  rssRuleList: "rss"
 };
 
 // viewOfPane(pane) -> the view a pane belongs to; anything unknown is a
@@ -711,7 +775,13 @@ var RSS_REASONS = {
   article: "no article here",
   unread: "nothing unread",
   processingOn: "RSS is already on",
-  down: "qBittorrent isn't reachable"
+  down: "qBittorrent isn't reachable",
+  // Slice 5b2's rules (tests/fixtures/rss-autorules-cases.json window
+  // reasonRule ... reasonRuleDirty).
+  rule: "no rule here",
+  fieldEditable: "this field can't be edited here",
+  fieldToggle: "Space toggles on/off fields",
+  ruleDirty: "nothing to discard"
 };
 
 // The official plugin list (design D4), which plugin.copyListUrl copies.
@@ -756,6 +826,12 @@ function preconditionMet(needs, s) {
   if (needs === "rssArticle") return s.rssUp === true && !!s.rssArticle && typeof s.rssArticle === "object";
   if (needs === "rssUnread") return s.rssUp === true && typeof s.rssUnread === "number" && s.rssUnread > 0;
   if (needs === "rssProcessingOff") return s.rssUp === true && s.rssProcessingOff === true;
+  // RSS rules (slice 5b2): a rule, the field's kind, or a dirty draft,
+  // each with qBittorrent up.
+  if (needs === "rssRule") return s.rssUp === true && !!s.rssRule && typeof s.rssRule === "object";
+  if (needs === "rssFieldEditable") return s.rssUp === true && !!s.rssRule && typeof s.rssRule === "object" && s.rssFieldEditable === true;
+  if (needs === "rssFieldToggle") return s.rssUp === true && !!s.rssRule && typeof s.rssRule === "object" && s.rssFieldToggle === true;
+  if (needs === "rssRuleDirty") return s.rssUp === true && s.rssRuleDirty === true;
   if (Object.prototype.hasOwnProperty.call(LIBRARY_NEEDS, needs)) return libraryKind(s, LIBRARY_NEEDS[needs]);
   return true;
 }
@@ -791,6 +867,13 @@ function needsReason(needs, s) {
     if (needs === "rssProcessingOff") return RSS_REASONS.processingOn;
     return "";
   }
+  // RSS rules (slice 5b2): down first, then no rule, then the field's kind.
+  if (needs === "rssRule" || needs === "rssFieldEditable" || needs === "rssFieldToggle") {
+    if (s.rssUp !== true) return RSS_REASONS.down;
+    if (!s.rssRule || typeof s.rssRule !== "object") return RSS_REASONS.rule;
+    return needs === "rssFieldEditable" ? RSS_REASONS.fieldEditable : (needs === "rssFieldToggle" ? RSS_REASONS.fieldToggle : "");
+  }
+  if (needs === "rssRuleDirty") return s.rssUp !== true ? RSS_REASONS.down : RSS_REASONS.ruleDirty;
   if (needs === "noMetadata") {
     if (s.cursorPendingMagnet === true) return "already fetching metadata";
     if (s.hasTorrent === true) return "already has metadata";
@@ -897,6 +980,9 @@ function buildArgs(row, s) {
   if (row.needs === "rssUp" || row.needs === "rssItem" || row.needs === "rssUnread") args.item = copyPlain(s.rssItem);
   if (row.needs === "rssArticle") args.article = copyPlain(s.rssArticle);
   if (row.needs === "rssUnread") args.unread = s.rssUnread;
+  // RSS rules (slice 5b2): the rule, and for the field rows the field.
+  if (row.needs === "rssRule" || row.needs === "rssFieldEditable" || row.needs === "rssFieldToggle" || row.needs === "rssRuleDirty") args.rule = copyPlain(s.rssRule);
+  if (row.needs === "rssFieldEditable" || row.needs === "rssFieldToggle") args.field = copyPlain(s.rssField);
   // ":" on a VISUAL range: the palette acts on that range (the window keeps it).
   if (row.id === "palette.open" && s.mode === "VISUAL") args.range = true;
   if (EXTEND_IDS[row.id] === true && s.mode === "VISUAL") {

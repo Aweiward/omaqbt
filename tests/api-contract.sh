@@ -769,8 +769,11 @@ PY
 
 # Slice 5b1: `qbt rss` (tests/fixtures/rss-contract.md) and the fixture's
 # RSS routes as 5.2.3 behaves: the writes are POST only (GET is 405),
-# markAsRead and refreshItem answer 200 on a missing path, values travel
-# on stdin, and a refused value or a usage error sends no request at all.
+# markAsRead answers 204 and refreshItem 200 on a missing path, values
+# travel on stdin, and a refused value or a usage error sends no request
+# at all. Slice 5b2 adds the auto-download rules (rss-rules-contract.md):
+# setRule/renameRule/removeRule are POST only, renameRule is a silent no-op
+# on a clash, and a new rule is created disabled.
 python3 - <<'PY'
 import json, subprocess, sys, urllib.error, urllib.request
 from pathlib import Path
@@ -812,7 +815,8 @@ with harness.fixture_server(extra_env={"QBT_FIXTURE_PREFS": "tests/fixtures/pref
         except urllib.error.HTTPError as e:
             code = e.code
         check(f"GET rss/{action} is 405", code == 405)
-    check("markAsRead on a missing path answers 200", post("/api/v2/rss/markAsRead", "itemPath=nope") == 200)
+    # rsscontroller.cpp returns before setResult: 204, as the fixture since 58cc6f3.
+    check("markAsRead on a missing path answers 204", post("/api/v2/rss/markAsRead", "itemPath=nope") == 204)
     check("refreshItem on a missing path answers 200", post("/api/v2/rss/refreshItem", "itemPath=nope") == 200)
 
     refusals = [
@@ -846,6 +850,41 @@ with harness.fixture_server(extra_env={"QBT_FIXTURE_PREFS": "tests/fixtures/pref
     check("rss add-feed: a 409 in plain words", (r.returncode, r.stderr.decode()) == (1, S["feedDup"] + "\n"))
     r = rss("remove", "Linux")
     check("rss remove", r.returncode == 0 and json.loads(r.stdout) == {"ok": True})
+
+    # Slice 5b2: the rules.
+    RS = json.loads(Path("tests/fixtures/rss-autorules-cases.json").read_text())["sentences"]
+    for action in ("setRule", "renameRule", "removeRule"):
+        try:
+            urllib.request.urlopen(f"{base}/api/v2/rss/{action}?ruleName=x", timeout=5)
+            code = 200
+        except urllib.error.HTTPError as e:
+            code = e.code
+        check(f"GET rss/{action} is 405", code == 405)
+    for (sub, *fields), message, code in [
+        (("rule-create", " ", ""), RS["ruleNameEmpty"], 1),
+        (("rule-check", "mustContain", "(", "true"), RS["badRegex"], 1),
+        (("rule-set", "A", "{}", "{}", "keep"), RS["ruleUsage"], 2),
+        (("rule-set", "A", "{}", "{}"), RS["ruleUsage"], 2),
+    ]:
+        before = count()
+        r = rss(sub, *fields)
+        check(f"rss {sub} {fields!r} refused with no request",
+              (r.returncode, r.stderr.decode()) == (code, message + "\n") and count() == before)
+    r = rss("rule-create", "A", "https://www.debian.org/security/dsa")
+    check("rss rule-create", r.returncode == 0 and json.loads(r.stdout) == {"ok": True, "name": "A"})
+    r = rss("rule-create", "B", "")
+    rules = json.loads(rss("rules").stdout)
+    check("rss rules: both disabled, sorted", [(x["name"], x["enabled"]) for x in rules["rules"]] == [("A", False), ("B", False)])
+    check("renameRule on a clash answers 200 and changes nothing",
+          post("/api/v2/rss/renameRule", "ruleName=A&newRuleName=B") == 200
+          and [x["name"] for x in json.loads(rss("rules").stdout)["rules"]] == ["A", "B"])
+    r = rss("rule-rename", "A", "B")
+    check("rss rule-rename pre-checks the clash", (r.returncode, r.stderr.decode()) == (1, RS["ruleExists"].replace("<name>", "B") + "\n"))
+    r = rss("rule-set", "A", '{"mustContain": "DSA"}', '{"mustContain": "", "enabled": false}', "keep")
+    check("rss rule-set", r.returncode == 0 and json.loads(r.stdout) == {"ok": True})
+    for name in ("A", "B"):
+        r = rss("rule-remove", name)
+        check(f"rss rule-remove {name}", r.returncode == 0 and json.loads(r.stdout) == {"ok": True})
 
     for bad in ("http://example.invalid:1", "http://127.0.0.1:80@127.0.0.2:1"):
         before = count()

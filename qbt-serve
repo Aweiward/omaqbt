@@ -38,6 +38,16 @@ import time
 import warnings
 
 REPO_DIR = os.path.dirname(os.path.realpath(__file__))
+# Omarchy's plugin watcher reloads the plugin (and closes its window) on any
+# file write under the plugin folder, so the imports below must not write
+# lib/__pycache__. Cache bytecode under the runtime state dir, resolved exactly
+# as `qbt` resolves STATE_DIR (QBT_STATE_DIR, else $XDG_RUNTIME_DIR/omaqbt,
+# else /tmp/omaqbt-<uid>), before anything is imported from lib/.
+if os.environ.get("XDG_RUNTIME_DIR"):
+    _state_dir = os.environ.get("QBT_STATE_DIR") or os.path.join(os.environ["XDG_RUNTIME_DIR"], "omaqbt")
+else:
+    _state_dir = os.environ.get("QBT_STATE_DIR") or "/tmp/omaqbt-%d" % os.getuid()
+sys.pycache_prefix = os.path.join(_state_dir, "pycache")
 sys.path.insert(0, os.path.join(REPO_DIR, "lib"))
 import qbtsync  # noqa: E402
 import speedhist  # noqa: E402
