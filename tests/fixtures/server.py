@@ -254,7 +254,10 @@ _SHARE_DEFAULTS = {
 # Serving each request on its own thread (ThreadingHTTPServer, below) means
 # more than one handler can be inside record() at once, and a naive
 # read-modify-write of LOG would drop entries under that race. This lock
-# makes the whole read-modify-write atomic.
+# makes the whole read-modify-write atomic. Tests read LOG from another
+# process while it's written, so the new log goes to a temp file and is
+# renamed over LOG: a reader sees the old list or the new one, never an
+# empty or half-written file.
 _LOG_LOCK = threading.Lock()
 
 
@@ -265,7 +268,9 @@ def record(method, path, body, query, cookie=""):
         if LOG.exists():
             entries = json.loads(LOG.read_text() or "[]")
         entries.append(entry)
-        LOG.write_text(json.dumps(entries))
+        tmp = LOG.with_name(LOG.name + ".tmp")
+        tmp.write_text(json.dumps(entries))
+        os.replace(tmp, LOG)
 
 
 def _control():
