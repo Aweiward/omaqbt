@@ -551,11 +551,18 @@ var SEARCH_ACCEPT = { searchAdd: "add", searchOpenPage: "open", pluginInstall: "
 // (tests/fixtures/rss-rules-cases.json window.confirm*), `detail` optional.
 // Slice 5b2 adds the rules' confirms (tests/fixtures/rss-autorules-cases.json
 // window.confirm*): x's remove, e's turn on, Enter's turn off and edit on
-// an enabled rule, leaving a dirty draft (y save, n keep editing), D's and
-// r's discard, and Settings' auto-download on (rssAutoDlOn, raised by
-// SettingsCommands: Task 2 owns that wiring).
+// an enabled rule, leaving a dirty draft's rule (y save, n keep editing),
+// and D's and r's discard.
 var RSS_ACCEPT = { rssAdd: "add", rssOpenPage: "open", rssRemove: "remove", rssMarkRead: "mark read", rssProcessingOn: "turn on",
-  rssRuleRemove: "remove", rssRuleOn: "turn on", rssRuleEditOff: "turn off and edit", rssRuleLeave: "save", rssRuleDiscard: "discard", rssAutoDlOn: "turn on" };
+  rssRuleRemove: "remove", rssRuleOn: "turn on", rssRuleEditOff: "turn off and edit", rssRuleLeave: "save", rssRuleDiscard: "discard" };
+
+// Settings' own view-copy confirms (slice 5b2, fix round 1): kind -> the
+// word `y` shows, with the same {line, detail} shape as RSS's. Settings
+// → RSS's auto-download on (D8) raises rssAutoDlOn with the case file's
+// confirmAutoDl* line; it lives here, not in RSS_ACCEPT, so RssPane's
+// dropConfirm never drops it, and SettingsCommands.dropConfirm drops
+// these kinds with its own (Task 2 wires both).
+var SETTINGS_ACCEPT = { rssAutoDlOn: "turn on" };
 
 // confirmLine(confirm) -> the CONFIRM status line, from
 // CommandRegistry.dispatch's `confirm` result {commandId, count, withFiles}.
@@ -570,9 +577,11 @@ function confirmLine(confirm) {
   if (Object.prototype.hasOwnProperty.call(LIBRARY_ACCEPT, c.kind)) {
     return { lead: String(c.line || ""), strong: "", tail: "", accept: c.accept ? String(c.accept) : LIBRARY_ACCEPT[c.kind] };
   }
-  if (Object.prototype.hasOwnProperty.call(SEARCH_ACCEPT, c.kind) || Object.prototype.hasOwnProperty.call(RSS_ACCEPT, c.kind)) {
+  if (Object.prototype.hasOwnProperty.call(SEARCH_ACCEPT, c.kind) || Object.prototype.hasOwnProperty.call(RSS_ACCEPT, c.kind) ||
+      Object.prototype.hasOwnProperty.call(SETTINGS_ACCEPT, c.kind)) {
     var detail = String(c.detail || "");
-    var word = Object.prototype.hasOwnProperty.call(SEARCH_ACCEPT, c.kind) ? SEARCH_ACCEPT[c.kind] : RSS_ACCEPT[c.kind];
+    var word = Object.prototype.hasOwnProperty.call(SEARCH_ACCEPT, c.kind) ? SEARCH_ACCEPT[c.kind]
+      : (Object.prototype.hasOwnProperty.call(RSS_ACCEPT, c.kind) ? RSS_ACCEPT[c.kind] : SETTINGS_ACCEPT[c.kind]);
     return { lead: String(c.line || "") + (detail !== "" ? " " : ""), strong: "", tail: detail, accept: c.accept ? String(c.accept) : word };
   }
   if (c.kind === "trackerRemove" || c.kind === "peerBan") {
@@ -1068,6 +1077,17 @@ function rssRulesFooterKeys(pane, f) {
   out.push({ key: "r", label: "reload" });
   if (f.narrow === true) out.push({ key: "Tab", label: "rule list" });
   return out.concat([toRules, help]);
+}
+
+// rssRulesFooterNote(pane, flags) -> the rules area's muted footer note
+// (slice 5b2, OV2): the case file's window autoDlFooter while auto-download
+// is on and qBittorrent is up, in the rule list, the fields and the narrow
+// preview; "" otherwise. RssRulesPane shows it as a muted line under its
+// footer's key hints (never in the status line's hints).
+function rssRulesFooterNote(pane, flags) {
+  var f = flags || {};
+  if (pane !== "rssRules" && pane !== "rssRuleFields" && pane !== "rssRulePreview") return "";
+  return f.rssUp === true && f.rssAutoDl === true ? "auto-download is on: p saves and previews" : "";
 }
 
 // settingQuestion(label, isBool, value, shown) -> {line, accept}: what a
@@ -2727,6 +2747,8 @@ if (typeof module !== "undefined" && module.exports) {
     rssFooterKeys: rssFooterKeys,
     SEARCH_ACCEPT: SEARCH_ACCEPT,
     RSS_ACCEPT: RSS_ACCEPT,
+    SETTINGS_ACCEPT: SETTINGS_ACCEPT,
+    rssRulesFooterNote: rssRulesFooterNote,
     paletteRunsFromView: paletteRunsFromView,
     paletteSearchReason: paletteSearchReason,
     paletteRssReason: paletteRssReason,

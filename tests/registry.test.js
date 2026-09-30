@@ -2874,11 +2874,10 @@ test("5b2: each rules need's reason, and qBittorrent down names the down client 
   assert.deepEqual(blocked("rssRuleFields", "D", { rssRuleDirty: false }), [null, "nothing to discard"]);
   // Over the api-down screen every rules key that needs qBittorrent names it.
   for (const [pane, label] of [["rssRules", "Enter"], ["rssRules", "a"], ["rssRules", "n"], ["rssRules", "x"], ["rssRules", "e"], ["rssRules", "r"],
-    ["rssRuleFields", "Enter"], ["rssRuleFields", "Space"], ["rssRuleFields", "e"], ["rssRuleFields", "p"], ["rssRuleFields", "r"]]) {
+    ["rssRuleFields", "Enter"], ["rssRuleFields", "Space"], ["rssRuleFields", "e"], ["rssRuleFields", "p"], ["rssRuleFields", "r"], ["rssRuleFields", "D"]]) {
     assert.deepEqual(blocked(pane, label, { rssUp: false }), [null, "qBittorrent isn't reachable"], pane + " " + label);
   }
-  // Discarding a local draft needs no qBittorrent; the ways out need nothing.
-  assert.equal(blocked("rssRuleFields", "D", { rssUp: false })[0], "rss.ruleDiscard");
+  // Fix round 1: D needs the dirty draft and qBittorrent up; the ways out need nothing.
   for (const [pane, label, id] of [["rssRules", "Esc", "rss.rulesBack"], ["rssRules", "j", "rss.ruleDown"], ["rssRuleFields", "h", "rss.fieldsBack"],
     ["rssRuleFields", "Esc", "rss.fieldsBack"], ["rssRuleFields", "Tab", "rss.rulesSwitch"], ["rssRuleList", "Esc", "rss.ruleListClose"],
     ["rssRuleList", "Enter", "rss.ruleListPick"], ["rssRulePreview", "Esc", "rss.previewClose"]]) {
@@ -2890,14 +2889,14 @@ test("5b2: each rules need's reason, and qBittorrent down names the down client 
   assert.equal(R("rssFieldEditable", up), "this field can't be edited here");
   assert.equal(R("rssFieldToggle", up), "Space toggles on/off fields");
   assert.equal(R("rssRuleDirty", up), "nothing to discard");
-  for (const need of ["rssRule", "rssFieldEditable", "rssFieldToggle"]) {
+  for (const need of ["rssRule", "rssFieldEditable", "rssFieldToggle", "rssRuleDirty"]) {
     assert.equal(Registry.preconditionMet(need, {}), false, need + " defaults unmet");
     assert.equal(R(need, {}), "qBittorrent isn't reachable", need);
     assert.equal(Registry.preconditionMet(need, Object.assign({}, RSS_ON, { rssUp: false })), false, need + " needs qBittorrent up");
     assert.equal(Registry.preconditionMet(need, RSS_ON), true, need);
   }
-  assert.equal(Registry.preconditionMet("rssRuleDirty", {}), false);
-  assert.equal(Registry.preconditionMet("rssRuleDirty", { rssRuleDirty: true }), true, "a local draft needs no qBittorrent");
+  assert.equal(Registry.preconditionMet("rssRuleDirty", { rssRuleDirty: true }), false, "fix round 1: D needs qBittorrent up too");
+  assert.equal(Registry.preconditionMet("rssRuleDirty", { rssUp: true, rssRuleDirty: true }), true);
   assert.equal(Registry.preconditionMet("rssRule", Object.assign({}, RSS_ON, { rssRule: "Show" })), false, "an object, never a string");
   assert.equal(Registry.preconditionMet("rssFieldEditable", Object.assign({}, RSS_ON, { rssFieldEditable: 1 })), false, "true, never truthy");
 });
@@ -2931,7 +2930,10 @@ test("5b2: rules rows capture the rule and the field frozen at key time", () => 
 test("5b2: the rules CONFIRMs: y is the command again, confirmed, in every rules pane", () => {
   for (const pane of RSS_RULES_PANES) {
     for (const [id, kind] of [["rss.ruleRemove", "rssRuleRemove"], ["rss.ruleToggle", "rssRuleOn"], ["rss.ruleEdit", "rssRuleEditOff"], ["rss.fieldsBack", "rssRuleLeave"],
-      ["rss.ruleDiscard", "rssRuleDiscard"], ["rss.ruleReload", "rssRuleDiscard"]]) {
+      ["rss.ruleDiscard", "rssRuleDiscard"], ["rss.ruleReload", "rssRuleDiscard"],
+      // Fix round 1: every action that leaves a dirty draft's rule asks rssRuleLeave first.
+      ["rss.rulesSwitch", "rssRuleLeave"], ["rss.rulesBack", "rssRuleLeave"], ["rss.ruleListPick", "rssRuleLeave"], ["rss.ruleEdit", "rssRuleLeave"],
+      ["rss.ruleRemove", "rssRuleLeave"], ["rss.ruleToggle", "rssRuleLeave"], ["rss.ruleRename", "rssRuleLeave"], ["rss.rules", "rssRuleLeave"]]) {
       const c = Registry.raiseConfirm(state({ pane: pane }), id, kind, { rule: RSS_RULE });
       const y = dispatch(c.state, evFor("y"));
       assert.deepEqual([y.commandId, y.args.confirmed, y.args.rule.name, y.state.mode], [id, true, "Show", "NORMAL"], pane + " " + kind);

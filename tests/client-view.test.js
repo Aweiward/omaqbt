@@ -2849,7 +2849,7 @@ test("5b1: the RSS tables: flags, input purposes, palette reason, footer and con
   assert.equal(typeof V.PALETTE_VIEW_REASON.rss, "function");
   assert.equal(typeof V.rssFooterKeys, "function");
   assert.deepEqual(V.RSS_ACCEPT, { rssAdd: "add", rssOpenPage: "open", rssRemove: "remove", rssMarkRead: "mark read", rssProcessingOn: "turn on",
-    rssRuleRemove: "remove", rssRuleOn: "turn on", rssRuleEditOff: "turn off and edit", rssRuleLeave: "save", rssRuleDiscard: "discard", rssAutoDlOn: "turn on" });
+    rssRuleRemove: "remove", rssRuleOn: "turn on", rssRuleEditOff: "turn off and edit", rssRuleLeave: "save", rssRuleDiscard: "discard" });
 });
 
 test("5b1: VIEW_FLAG_STATE.rss writes RssPane.flags into the dispatch state, always", () => {
@@ -3078,12 +3078,28 @@ test("5b2: the rules INSERTs' prompts and hints", () => {
 
 test("5b2: the rules confirms show the window's line and their word", () => {
   for (const [kind, word] of [["rssRuleRemove", "remove"], ["rssRuleOn", "turn on"], ["rssRuleEditOff", "turn off and edit"], ["rssRuleLeave", "save"],
-    ["rssRuleDiscard", "discard"], ["rssAutoDlOn", "turn on"]]) {
+    ["rssRuleDiscard", "discard"]]) {
     const line = RULES_WIN.confirmRemove.replace("<name>", "Show");
     assert.deepEqual(V.confirmLine({ kind: kind, line: line }), { lead: line, strong: "", tail: "", accept: word }, kind);
   }
   assert.deepEqual(V.modeHints("CONFIRM", { accept: V.confirmLine({ kind: "rssRuleEditOff", line: "x" }).accept }).map((h) => h.key + " " + h.label),
     ["y turn off and edit", "n/Esc keep"]);
+  // Fix round 1: Settings' auto-download confirm is a Settings kind, so RssPane.dropConfirm (RSS_ACCEPT) never drops it.
+  assert.equal(V.RSS_ACCEPT.rssAutoDlOn, undefined);
+  assert.deepEqual(V.SETTINGS_ACCEPT, { rssAutoDlOn: "turn on" });
+  const auto = RULES_WIN.confirmAutoDl.replace("<r>", "1").replace("<n>", "2");
+  assert.deepEqual(V.confirmLine({ kind: "rssAutoDlOn", line: auto }), { lead: auto, strong: "", tail: "", accept: "turn on" });
+});
+
+test("5b2 fix round 1: rssRulesFooterNote carries the auto-download footer note", () => {
+  const on = Object.assign({}, RULE_FLAGS, { rssAutoDl: true });
+  for (const pane of ["rssRules", "rssRuleFields", "rssRulePreview"]) {
+    assert.equal(V.rssRulesFooterNote(pane, on), RULES_WIN.autoDlFooter, pane);
+    assert.equal(V.rssRulesFooterNote(pane, RULE_FLAGS), "", pane + ": auto-download off");
+    assert.equal(V.rssRulesFooterNote(pane, Object.assign({}, on, { rssUp: false })), "", pane + ": qBittorrent down");
+  }
+  for (const pane of ["rssRuleList", "rssFeeds", "rssArticles", "table"]) assert.equal(V.rssRulesFooterNote(pane, on), "", pane);
+  assert.equal(V.rssRulesFooterNote("rssRuleFields", null), "");
 });
 
 test("5b2: PALETTE_VIEW_REASON.rss: open the rules, then the column a rules row needs; leave the rules for the feeds' rows", () => {

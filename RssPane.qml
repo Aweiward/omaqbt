@@ -122,7 +122,10 @@ import "Model.js" as Model
 //                rss.* row except rss.open. The rules commands (rss.rule*,
 //                rss.field*, rss.rules*, rss.preview*: rulesCommand) go on
 //                to RssRulesPane.run; rss.rules also sets `column` to
-//                "rssRules" and rss.rulesBack sets it back to "rssFeeds".
+//                "rssRules" first. rss.rulesBack goes to RssRulesPane.run
+//                too (a dirty draft asks rssRuleLeave first); the rules area
+//                then calls leaveRules(), which sets `column` back to
+//                "rssFeeds".
 //                The rules INSERTs (rssRuleName, rssRuleRename,
 //                rssRuleField) go to RssRulesPane's commitInput,
 //                cancelInput and inputEdited.
@@ -323,11 +326,6 @@ Item {
         rulesArea.openRules(a.item === undefined ? null : a.item)
         return
       }
-      if (commandId === "rss.rulesBack") {
-        rulesArea.closeRules()
-        column = "rssFeeds"
-        return
-      }
       rulesArea.run(commandId, a, ev)
       return
     }
@@ -359,6 +357,13 @@ Item {
     case "rss.processingOn": rssCmds.processingOn(a.confirmed === true); return
     default: return
     }
+  }
+
+  // Slice 5b2: the rules area leaves (rss.rulesBack once any dirty draft
+  // was saved or there was none): close it and show the feeds.
+  function leaveRules() {
+    rulesArea.closeRules()
+    column = "rssFeeds"
   }
 
   function commitInput(purpose, text) {

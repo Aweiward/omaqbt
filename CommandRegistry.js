@@ -826,12 +826,12 @@ function preconditionMet(needs, s) {
   if (needs === "rssArticle") return s.rssUp === true && !!s.rssArticle && typeof s.rssArticle === "object";
   if (needs === "rssUnread") return s.rssUp === true && typeof s.rssUnread === "number" && s.rssUnread > 0;
   if (needs === "rssProcessingOff") return s.rssUp === true && s.rssProcessingOff === true;
-  // RSS rules (slice 5b2): a rule, and the field's kind, with qBittorrent
-  // up; discarding a local draft needs only the draft.
+  // RSS rules (slice 5b2): a rule, the field's kind, or a dirty draft,
+  // each with qBittorrent up.
   if (needs === "rssRule") return s.rssUp === true && !!s.rssRule && typeof s.rssRule === "object";
   if (needs === "rssFieldEditable") return s.rssUp === true && !!s.rssRule && typeof s.rssRule === "object" && s.rssFieldEditable === true;
   if (needs === "rssFieldToggle") return s.rssUp === true && !!s.rssRule && typeof s.rssRule === "object" && s.rssFieldToggle === true;
-  if (needs === "rssRuleDirty") return s.rssRuleDirty === true;
+  if (needs === "rssRuleDirty") return s.rssUp === true && s.rssRuleDirty === true;
   if (Object.prototype.hasOwnProperty.call(LIBRARY_NEEDS, needs)) return libraryKind(s, LIBRARY_NEEDS[needs]);
   return true;
 }
@@ -873,7 +873,7 @@ function needsReason(needs, s) {
     if (!s.rssRule || typeof s.rssRule !== "object") return RSS_REASONS.rule;
     return needs === "rssFieldEditable" ? RSS_REASONS.fieldEditable : (needs === "rssFieldToggle" ? RSS_REASONS.fieldToggle : "");
   }
-  if (needs === "rssRuleDirty") return RSS_REASONS.ruleDirty;
+  if (needs === "rssRuleDirty") return s.rssUp !== true ? RSS_REASONS.down : RSS_REASONS.ruleDirty;
   if (needs === "noMetadata") {
     if (s.cursorPendingMagnet === true) return "already fetching metadata";
     if (s.hasTorrent === true) return "already has metadata";

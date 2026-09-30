@@ -17,9 +17,11 @@ import qs.Commons
 // RssPane mounts it and hands it every rss.rule*, rss.field*, rss.rules*
 // and rss.preview* command. `R` (rss.rules, from the feeds or the articles)
 // opens it: RssPane sets its `column` to "rssRules" and calls openRules.
-// Esc in the rule list (rss.rulesBack) closes it: RssPane calls closeRules
-// and sets `column` back to "rssFeeds". While it's open it covers the feeds
-// and articles, and the status line stays.
+// Esc in the rule list (rss.rulesBack) comes here like every rules command;
+// once no dirty draft is left (saved after rssRuleLeave's y, or none) this
+// area calls view.leaveRules(), which calls closeRules and sets `column`
+// back to "rssFeeds". While it's open it covers the feeds and articles, and
+// the status line stays.
 //
 // Wide: three columns, the rule list (220 px; each rule's name, and "on" or
 // "off": window stateOn/stateOff) | the fields (RULE_FIELDS, drawn with
@@ -91,9 +93,11 @@ import qs.Commons
 // Called by RssPane:
 //   openRules(item)  `R`: read `qbt rss rules`; item is the Feeds cursor's
 //                feed or folder at key time (or null).
-//   closeRules()  leaving the rules (Esc in the list, RSS closing): drop a
-//                picker; a dirty draft is dropped with no write (the leave
-//                confirm, rssRuleLeave, runs before rss.rulesBack can).
+//   closeRules()  the rules area closes: after view.leaveRules() (no dirty
+//                draft is left by then), or when the Client closes RSS
+//                itself (a magnet's CONFIRM, a torrent row from the palette),
+//                where no confirm can run: a dirty draft is then dropped with
+//                no write. Drops a picker.
 //   windowClosed()  the window closes: drop a dirty draft (no write) and a
 //                rules CONFIRM still up (kinds rssRuleRemove, rssRuleOn,
 //                rssRuleEditOff, rssRuleLeave, rssRuleDiscard: mode NORMAL,
@@ -114,16 +118,30 @@ import qs.Commons
 //                args) and client.confirm = {..., kind, line}; `y` comes back
 //                as the same commandId with args.confirmed:
 //                  rss.ruleRemove → rssRuleRemove (confirmRemove);
-//                  rss.ruleToggle on a rule that's off → rssRuleOn
-//                    (confirmRuleOn, or confirmRuleOnNone with n = 0), after
-//                    a preview; noTorrent > 0 refuses with noTorrentBlock
-//                    as a note and no confirm; on a rule that's on: off at
-//                    once (rssRuleSet enable "off"), no confirm;
+//                  rss.ruleToggle on a rule that's off → rssRuleOn, in this
+//                    order (turning on never carries changes): a dirty draft
+//                    is saved first (rssRuleSet(name, changes, snapshot,
+//                    "keep")); then the SAVED rule is previewed; noTorrent >
+//                    0 refuses with noTorrentBlock as a note and no confirm;
+//                    otherwise the confirm names that preview's n
+//                    (confirmRuleOn, confirmRuleOnNone with n = 0, or
+//                    confirmRuleOnAutoOff while auto-download is off); y
+//                    runs rssRuleSet(name, {}, {}, "on"), which previews
+//                    again and writes nothing if noTorrent grew. On a rule
+//                    that's on: off at once (rssRuleSet(name, {}, {},
+//                    "off")), no confirm;
 //                  rss.ruleEdit on an enabled rule → rssRuleEditOff
 //                    (confirmEditOff; y: rssRuleSet enable "off", then the
 //                    fields); a disabled rule goes straight into the fields;
-//                  rss.fieldsBack with a dirty draft → rssRuleLeave
-//                    (confirmLeave; y saves, n keeps editing);
+//                  every action that leaves a dirty draft's rule →
+//                    rssRuleLeave first (confirmLeave; y saves the draft,
+//                    then the action runs as if pressed again, raising its
+//                    own confirm if it has one; n keeps editing and the
+//                    action doesn't run): rss.fieldsBack, rss.rulesSwitch
+//                    (Tab), rss.rulesBack, rss.ruleListPick, rss.ruleEdit,
+//                    rss.ruleRemove, rss.ruleToggle and rss.ruleRename on a
+//                    different rule, rss.rules (R), and closing the rules
+//                    by a key;
 //                  rss.ruleDiscard and rss.ruleReload with a dirty draft →
 //                    rssRuleDiscard (confirmDiscard).
 //                The INSERTs it starts (commands.startInput): rss.ruleNew
@@ -139,12 +157,18 @@ import qs.Commons
 //                dropped by generation). Auto-download on: commits change
 //                the draft only, with no write (Review Focus 2); `p` saves
 //                it once and previews; so do leaving (y) and turning the
-//                rule on (enable "on"). The footer then shows autoDlFooter.
+//                rule on (saved with "keep" before its preview). After any
+//                successful save the draft is clean and its snapshot
+//                becomes the written values (enabled included; useAutoTmm
+//                stays as it was when the fields were entered). While
+//                auto-download is on, View.rssRulesFooterNote(pane, flags)
+//                gives autoDlFooter: show it as a muted line under this
+//                area's footer key hints.
 //                rss.rulesSwitch: Tab between the columns; narrow, from the
 //                fields it opens rssRuleList. rss.rulePreview narrow: shows
 //                rssRulePreview. rss.previewClose, rss.ruleListPick,
-//                rss.ruleListClose: as named. rss.rulesBack: closeRules
-//                (RssPane then shows the feeds).
+//                rss.ruleListClose: as named. rss.rulesBack: view.leaveRules()
+//                (after rssRuleLeave if the draft is dirty).
 //   commitInput(purpose, text), cancelInput(purpose), inputEdited(purpose,
 //                text)  this area's INSERTs (rssRuleName, rssRuleRename,
 //                rssRuleField): end with commands.endInput, or keep the
@@ -157,9 +181,9 @@ import qs.Commons
 //
 // Caches (Task 3): the last `qbt rss rules` answer (autoDownload and the
 // rules, each with fields and raw), the draft (the rule's name, the
-// snapshot of its fields and of torrentParams.use_auto_tmm when the fields
-// were entered, the changes, a generation), and the last preview per rule
-// with its generation.
+// snapshot of its fields, enabled included, and of torrentParams.use_auto_tmm
+// when the fields were entered, the changes, a generation), and the last
+// preview per rule with its generation.
 Item {
   id: rules
   objectName: "rssRulesView"
@@ -191,6 +215,8 @@ Item {
   }
 
   function run(commandId, args, ev) {
+    // The placeholder never has a draft, so Esc in the list leaves at once.
+    if (commandId === "rss.rulesBack" && view) view.leaveRules()
   }
 
   function commitInput(purpose, text) {

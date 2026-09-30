@@ -1,5 +1,5 @@
 {
-  "_doc": "Slice 5b2 (Task 1, the RSS rules contract): the auto-download rules both lanes enforce and every sentence `qbt rss rule-*` prints, so neither lane hand-copies a message. 5b1's tests/fixtures/rss-rules-cases.json is untouched; this file holds only 5b2's rows and copy. qbt (Task 2: lib/rssautorules.py, tests/test_rss_rules.py) is the enforcing check; the window (Task 3: RssRules.js, tests/rss-rules.test.js) pins its WINDOW and SENTENCES to this file and never pre-checks a regex (qbt's reply is the check). See tests/fixtures/rss-rules-contract.md for the stdin framing, the command shapes and the qBittorrent 5.2.3 facts. cases: {kind, input, ok, normalised?, message?, why}; message is present exactly when ok is false and is always one of `sentences` with its placeholders filled; why labels a failed assertion. Qt's isSpace set (ruling FE) is U+0009-U+000D, U+0020, U+0085, U+00A0 and the Zs, Zl and Zp characters (U+FEFF is not a space); CONTROL is [\\u0000-\\u001f\\u007f-\\u009f]. kind ruleName (a's and n's INSERT; qbt rss rule-create and rule-rename check only the new name, never an existing one, so an odd name made elsewhere stays manageable): trimmed at both ends with Qt's isSpace set, then in this order: nothing left (ruleNameEmpty); a CONTROL character anywhere (ruleNameControl). A backslash and anything else are fine; OV15 dropped D7's reserved prefix. When ok, normalised is the trimmed name. kind regex (the mustContain and mustNotContain fields; qbt rss rule-check with key mustContain or mustNotContain, and rule-set): input {value, useRegex}; the value is never trimmed. In this order: an empty value is ok with normalised \"\" (no condition, OV12); a \\n or \\r anywhere is refused with multiLine in both modes (OV12: pcre2grep -f would read two patterns); with useRegex false the value is ok as is, with no regex check (OV11: in wildcard mode qBittorrent escapes everything but * and ?); with useRegex true qbt runs `pcre2grep -u -i -f <(printf '%s\\n' \"$pattern\") /dev/null` (the pattern on a pipe, never in argv): exit 0 or 1 is ok with normalised the value as is; exit 2 with `Error in regex` on stderr is badRegex; any other outcome (exit 2 without it, such as a pattern past pcre2grep's 8192-byte limit, or any other exit) is regexUnchecked; pcre2grep missing from PATH is noPcre (not a row: it depends on the environment). The rows were checked against pcre2grep 10.48 on 2026-09-30, the pcre2 that qt6-base (and so qBittorrent's QRegularExpression) uses; Python's re differs (it refuses \\K) and must not be the check. kind episode (the episodeFilter field; rule-check and rule-set): trimmed with Qt's isSpace set; an empty value is ok with normalised \"\" (every episode); otherwise it must match ^(\\d{1,4}x(\\d{1,4}(-(\\d{1,4})?)?;){1,})$ case-insensitively, \\d being ASCII 0-9 only, as a whole-string match (a \\n inside fails), else badEpisode. That is the GUI's regex in src/gui/rss/automatedrssdownloader.cpp at release-5.2.3, quoted exactly: QRegularExpression(u\"^(^\\\\d{1,4}x(\\\\d{1,4}(-(\\\\d{1,4})?)?;){1,}){1,1}\"_s, QRegularExpression::CaseInsensitiveOption), checked there with match(text).hasMatch(), which is a prefix match; eng D3 anchors it at the end with $, because the matcher (rss_autodownloadrule.cpp:291, (^\\d{1,4})x(.*;$), also case-insensitive) matches nothing for a filter that doesn't end in ;, and an empty entry (1x2;;) the matcher would skip is refused too. When ok, normalised is the trimmed value, case kept. kind ignoreDays (the ignoreDays field; rule-check): trimmed with Qt's isSpace set; it must be one or more ASCII digits (no sign, point, exponent or unit) with a value from 0 to 365 (compare without overflowing: 20 digits is refused, not wrapped), else badDays. When ok, normalised is the number (a JSON integer, leading zeros dropped). In rule-set the change is that JSON integer: another type is the usage line, a number outside 0-365 is badDays. kind savePath (the savePath field; rule-check and rule-set): trimmed with Qt's isSpace set; empty is ok with normalised \"\" (the category's folder or qBittorrent's default); otherwise, in this order, each refused with badSavePath: a CONTROL character anywhere; not starting with / (relative paths, and ~/ since nothing expands it); containing //, /./ or /../, or ending in /. or /.. (qBittorrent's Path would clean them and the read-back would differ). When ok, normalised is the trimmed path with one trailing / removed unless the path is /. kind fields (fields_of: the RULE_FIELDS values of a rule's JSON, as `qbt rss rules` prints them in each rule's `fields` and as rule-set compares a snapshot): input is a rule's JSON; always ok; normalised is {enabled, mustContain, mustNotContain, useRegex, episodeFilter, smartFilter, affectedFeeds, category, savePath, addStopped, ignoreDays}, read the way fromJsonObject reads it (rss_autodownloadrule.cpp:490): enabled a JSON bool, else true; useRegex and smartFilter a bool, else false; mustContain, mustNotContain and episodeFilter a string, else \"\"; ignoreDays an integer, else 0; affectedFeeds an array (a non-string entry reads as \"\") or one string (one feed), else []. When torrentParams is an object: category is torrentParams.category, savePath torrentParams.save_path (each a string, else \"\"), and addStopped is yes for torrentParams.stopped true, no for false, default when absent or anything else; the flat keys are ignored. Without torrentParams they come from the flat keys assignedCategory, savePath and addPaused (a bool, else default). kind patch (qbt rss rule-set's check-and-patch, D5, D6, OV10, OV13; the read-back and OV9's episode union are in the contract, not rows): input {name, current, changes, snapshot, enable}. current is the rule's JSON as rss/rules gave it; changes holds only the edited fields (keys from mustContain, mustNotContain, useRegex, episodeFilter, smartFilter, affectedFeeds, category, savePath, addStopped, ignoreDays; values in fields' types: addStopped is default, yes or no); snapshot holds the same keys with their fields values at the draft's start, plus useAutoTmm (true, false or null for absent: torrentParams.use_auto_tmm when the draft started) exactly when changes holds savePath; enable is keep, off or on. In this order: (1) D6: for every key in changes, fields_of(current)[key] must equal snapshot[key] exactly (lists in order), else ruleChanged with <name> filled, and nothing is written; useAutoTmm is carried, never compared. (2) OV13: only the changed fields are validated, each by its kind above: mustContain and mustNotContain by regex with the effective useRegex (the change if there is one, else fields_of(current).useRegex), and when changes turns useRegex from false to true both patterns (changed or not) are checked as regexes; episodeFilter by episode; savePath by savePath; ignoreDays 0-365. The first refusal's message wins (in the key order above), and nothing is written. (3) D5: the result is a deep copy of current with only these keys touched, everything else (priority, lastMatch, previouslyMatchedEpisodes, torrentContentLayout, every other torrentParams key) kept exactly: mustContain, mustNotContain, useRegex, episodeFilter, smartFilter, affectedFeeds and ignoreDays set at the top level to the normalised value; category sets torrentParams.category (when torrentParams is an object) and the flat assignedCategory; savePath sets the flat savePath and, with torrentParams, a non-empty path sets torrentParams.save_path and torrentParams.use_auto_tmm false, while an empty one deletes torrentParams.save_path and sets torrentParams.use_auto_tmm to snapshot.useAutoTmm, deleting it when that is null (OV10); addStopped default, yes or no sets the flat addPaused to null, true or false and, with torrentParams, deletes torrentParams.stopped or sets it true or false. A rule without torrentParams gets none created: its flat keys alone are patched. (4) enable: on writes enabled true, off false, keep writes the current fields enabled (so a rule with no enabled key gets true written explicitly: setRule would default it to true anyway). When ok, normalised is the JSON rule-set posts as ruleDef; key order doesn't matter. kind previewJoin (qbt rss rule-preview's join, D4, OV4, OV5): input {items, matching, rule}: items is `qbt rss items`' {feeds, articles} (5b1's shapes, hasTorrent already the 5b1 hasTorrent rule), matching is rss/matchingArticles?ruleName=' {feedName: [titles]}, and only rule.affectedFeeds is read. Always ok; normalised is {will, read, noTorrent, unpreviewable, gone}. The rule's URLs are taken in order with repeats dropped; a URL that no feed's url equals exactly goes to gone (in that order). The rule's resolved feeds are grouped by name (the last path segment, the key matchingArticles uses): a name held by two or more of them makes those feeds unpreviewable, one {name, feedPaths} per name, feedPaths and the groups in items' feed order, and those feeds count nowhere (OV4: a later same-named feed overwrites the earlier one's titles). For every other resolved feed, its titles are matching[feed name] (missing or not an array: none). Every article of items.articles (in that order) whose feedPath is such a feed and whose title equals one of its titles exactly becomes {feedPath, guid, title, dup}, dup being how many articles of that feed have exactly that title (OV5: each of them is counted); it goes to read when isRead, else to will when hasTorrent, else to noTorrent when its torrentURL isn't empty. An unread article with an empty torrentURL is in no group: qBittorrent never queues it (rss_autodownloader.cpp:401), so it neither downloads nor retries. n is will's length and m is noTorrent's. sentences: every line qbt rss rule-* prints (refusals exit 1; ruleUsage exits 2). A bare `qbt rss` or an unknown subcommand still prints 5b1's rssUsage from rss-rules-cases.json. unconfirmedAdd, unconfirmedRename and unconfirmedRemove repeat 5b1's text exactly. window: the window's copy, including the field labels and help lines, the four needs reasons as the status line shows them (CommandRegistry.needsReason returns each without its full stop, starting lower case unless it starts with Space), the INSERT prompts and the confirms. Placeholders: <name>, <n>, <m>, <k>, <r> and <url>, filled in by the caller; no other placeholder exists.",
+  "_doc": "Slice 5b2 (Task 1, the RSS rules contract): the auto-download rules both lanes enforce and every sentence `qbt rss rule-*` prints, so neither lane hand-copies a message. 5b1's tests/fixtures/rss-rules-cases.json is untouched; this file holds only 5b2's rows and copy. qbt (Task 2: lib/rssautorules.py, tests/test_rss_rules.py) is the enforcing check; the window (Task 3: RssRules.js, tests/rss-rules.test.js) pins its WINDOW and SENTENCES to this file and never pre-checks a regex (qbt's reply is the check). See tests/fixtures/rss-rules-contract.md for the stdin framing, the command shapes and the qBittorrent 5.2.3 facts. cases: {kind, input, ok, normalised?, message?, why}; message is present exactly when ok is false and is always one of `sentences` with its placeholders filled; why labels a failed assertion. Qt's isSpace set (ruling FE) is U+0009-U+000D, U+0020, U+0085, U+00A0 and the Zs, Zl and Zp characters (U+FEFF is not a space); CONTROL is [\\u0000-\\u001f\\u007f-\\u009f]. kind ruleName (a's and n's INSERT; qbt rss rule-create and rule-rename check only the new name, never an existing one, so an odd name made elsewhere stays manageable): trimmed at both ends with Qt's isSpace set, then in this order: nothing left (ruleNameEmpty); a CONTROL character anywhere (ruleNameControl). A backslash and anything else are fine; OV15 dropped D7's reserved prefix. When ok, normalised is the trimmed name. kind regex (the mustContain and mustNotContain fields; qbt rss rule-check with key mustContain or mustNotContain, and rule-set): input {value, useRegex}; the value is never trimmed. In this order: an empty value is ok with normalised \"\" (no condition, OV12); a \\n or \\r anywhere is refused with multiLine in both modes (OV12: pcre2grep -f would read two patterns); with useRegex false the value is ok as is, with no regex check (OV11: in wildcard mode qBittorrent escapes everything but * and ?); with useRegex true qbt runs `pcre2grep -u -i -f <(printf '%s\\n' \"$pattern\") /dev/null` (the pattern on a pipe, never in argv): exit 0 or 1 is ok with normalised the value as is; exit 2 with `Error in regex` on stderr is badRegex; any other outcome (exit 2 without it, such as a pattern past pcre2grep's 8192-byte limit, or any other exit) is regexUnchecked; pcre2grep missing from PATH is noPcre (not a row: it depends on the environment). The rows were checked against pcre2grep 10.48 on 2026-09-30, the pcre2 that qt6-base (and so qBittorrent's QRegularExpression) uses; Python's re differs (it refuses \\K) and must not be the check. kind episode (the episodeFilter field; rule-check and rule-set): trimmed with Qt's isSpace set; an empty value is ok with normalised \"\" (every episode); otherwise it must match ^(\\d{1,4}x(\\d{1,4}(-(\\d{1,4})?)?;){1,})$ case-insensitively, \\d being ASCII 0-9 only, as a whole-string match (a \\n inside fails), else badEpisode. That is the GUI's regex in src/gui/rss/automatedrssdownloader.cpp at release-5.2.3, quoted exactly: QRegularExpression(u\"^(^\\\\d{1,4}x(\\\\d{1,4}(-(\\\\d{1,4})?)?;){1,}){1,1}\"_s, QRegularExpression::CaseInsensitiveOption), checked there with match(text).hasMatch(), which is a prefix match; eng D3 anchors it at the end with $, because the matcher (rss_autodownloadrule.cpp:291, (^\\d{1,4})x(.*;$), also case-insensitive) matches nothing for a filter that doesn't end in ;, and an empty entry (1x2;;) the matcher would skip is refused too. When ok, normalised is the trimmed value, case kept. kind ignoreDays (the ignoreDays field; rule-check): trimmed with Qt's isSpace set; it must be one or more ASCII digits (no sign, point, exponent or unit) with a value from 0 to 365 (compare without overflowing: 20 digits is refused, not wrapped), else badDays. When ok, normalised is the number (a JSON integer, leading zeros dropped). In rule-set the change is that JSON integer: another type is the usage line, a number outside 0-365 is badDays. kind savePath (the savePath field; rule-check and rule-set): trimmed with Qt's isSpace set; empty is ok with normalised \"\" (the category's folder or qBittorrent's default); otherwise, in this order, each refused with badSavePath: a CONTROL character anywhere; not starting with / (relative paths, and ~/ since nothing expands it); containing //, /./ or /../, or ending in /. or /.. (qBittorrent's Path would clean them and the read-back would differ). When ok, normalised is the trimmed path with one trailing / removed unless the path is /. kind fields (fields_of: the RULE_FIELDS values of a rule's JSON, as `qbt rss rules` prints them in each rule's `fields` and as rule-set compares a snapshot): input is a rule's JSON; always ok; normalised is {enabled, mustContain, mustNotContain, useRegex, episodeFilter, smartFilter, affectedFeeds, category, savePath, addStopped, ignoreDays}, read the way fromJsonObject reads it (rss_autodownloadrule.cpp:490): enabled a JSON bool, else true; useRegex and smartFilter a bool, else false; mustContain, mustNotContain and episodeFilter a string, else \"\"; ignoreDays an integer, else 0; affectedFeeds an array (a non-string entry reads as \"\") or one string (one feed), else []. When the rule has a torrentParams key, whatever its value (fromJsonObject uses find(), and a value that isn't an object reads as {}): category is torrentParams.category, savePath torrentParams.save_path (each a string, else \"\"), and addStopped is yes for torrentParams.stopped true, no for false, default when absent or anything else; the flat keys are ignored. Without a torrentParams key they come from the flat keys assignedCategory, savePath and addPaused (a bool, else default). kind patch (qbt rss rule-set's check-and-patch, D5, D6, OV10, OV13; the read-back and OV9's episode union are in the contract, not rows): input {name, current, changes, snapshot, enable}. current is the rule's JSON as rss/rules gave it; changes holds only the edited fields (keys from mustContain, mustNotContain, useRegex, episodeFilter, smartFilter, affectedFeeds, category, savePath, addStopped, ignoreDays; values in fields' types: addStopped is default, yes or no); snapshot holds the same keys with their fields values at the draft's start, plus enabled whenever changes isn't empty, plus useAutoTmm (true, false or null for absent: torrentParams.use_auto_tmm when the draft started) exactly when changes holds savePath; enable is keep, off or on. In this order: (0) the shape: enable on with any change or any snapshot key (turning on never carries changes: the window saves the draft with keep first), keep with no changes, or a snapshot whose keys aren't exactly those is ruleUsage (qbt exits 2), and nothing is written. (1) D6: for every key in changes, and enabled, fields_of(current)[key] must equal snapshot[key] exactly (lists in order), else ruleChanged with <name> filled, and nothing is written (so a keep save refuses when the rule was turned on or off elsewhere); useAutoTmm is carried, never compared. (2) OV13: only the changed fields are validated, each by its kind above: mustContain and mustNotContain by regex with the effective useRegex (the change if there is one, else fields_of(current).useRegex), and when changes turns useRegex from false to true both patterns (changed or not) are checked as regexes; episodeFilter by episode; savePath by savePath; ignoreDays 0-365. The first refusal's message wins (in the key order above), and nothing is written. (3) D5: the result is a deep copy of current with only these keys touched, everything else (priority, lastMatch, previouslyMatchedEpisodes, torrentContentLayout, every other torrentParams key) kept exactly: mustContain, mustNotContain, useRegex, episodeFilter, smartFilter, affectedFeeds and ignoreDays set at the top level to the normalised value; category sets torrentParams.category (when the rule has torrentParams; a present value that isn't an object is first replaced by {} when category, savePath or addStopped changes) and the flat assignedCategory; savePath sets the flat savePath and, with torrentParams, a non-empty path sets torrentParams.save_path and torrentParams.use_auto_tmm false, while an empty one deletes torrentParams.save_path and sets torrentParams.use_auto_tmm to snapshot.useAutoTmm, deleting it when that is null (OV10); addStopped default, yes or no sets the flat addPaused to null, true or false and, with torrentParams, deletes torrentParams.stopped or sets it true or false. A rule without torrentParams gets none created: its flat keys alone are patched. (4) enable: on writes enabled true (with no other change), off false, keep writes the current fields enabled (so a rule with no enabled key gets true written explicitly: setRule would default it to true anyway). When ok, normalised is the JSON rule-set posts as ruleDef; key order doesn't matter. kind previewJoin (qbt rss rule-preview's join, D4, OV4, OV5): input {items, matching, rule}: items is `qbt rss items`' {feeds, articles} (5b1's shapes, hasTorrent already the 5b1 hasTorrent rule), matching is rss/matchingArticles?ruleName=' {feedName: [titles]}, and only rule.affectedFeeds is read. Always ok; normalised is {will, read, noTorrent, unpreviewable, gone}. The rule's URLs are taken in order with repeats dropped; a URL that no feed's url equals exactly goes to gone (in that order). The rule's resolved feeds are grouped by name (the last path segment, the key matchingArticles uses): a name held by two or more of them makes those feeds unpreviewable, one {name, feedPaths} per name, feedPaths and the groups in items' feed order, and those feeds count nowhere (OV4: a later same-named feed overwrites the earlier one's titles). For every other resolved feed, its titles are matching[feed name] (missing or not an array: none). Every article of items.articles (in that order) whose feedPath is such a feed and whose title equals one of its titles exactly becomes {feedPath, guid, title, dup}, dup being how many articles of that feed have exactly that title (OV5: each of them is counted); it goes to read when isRead, else to will when hasTorrent, else to noTorrent when its effective URL isn't empty: the effective URL is torrentURL, or link when torrentURL is empty (Article::torrentUrl falls back to the link). An unread article with neither is in no group: qBittorrent never queues it (rss_autodownloader.cpp:401), so it neither downloads nor retries. n is will's length and m is noTorrent's. sentences: every line qbt rss rule-* prints (refusals exit 1; ruleUsage exits 2). A bare `qbt rss` or an unknown subcommand still prints 5b1's rssUsage from rss-rules-cases.json. unconfirmedAdd, unconfirmedRename and unconfirmedRemove repeat 5b1's text exactly. window: the window's copy, including the field labels and help lines, the four needs reasons as the status line shows them (CommandRegistry.needsReason returns each without its full stop, starting lower case unless it starts with Space), the INSERT prompts and the confirms. Placeholders: <name>, <n>, <m>, <k>, <r> and <url>, filled in by the caller; no other placeholder exists.",
   "cases": [
     {
       "kind": "ruleName",
@@ -112,6 +112,27 @@
       "ok": false,
       "message": "Rule names can't contain control characters.",
       "why": "the last C1 control"
+    },
+    {
+      "kind": "ruleName",
+      "input": "\u001cShow",
+      "ok": false,
+      "message": "Rule names can't contain control characters.",
+      "why": "U+001C at the start is a control, not a Qt space (Python's str.strip() would wrongly trim it)"
+    },
+    {
+      "kind": "ruleName",
+      "input": "Show\u001f",
+      "ok": false,
+      "message": "Rule names can't contain control characters.",
+      "why": "U+001F at the end is a control, not a Qt space"
+    },
+    {
+      "kind": "ruleName",
+      "input": "\u001dShow\u001e",
+      "ok": false,
+      "message": "Rule names can't contain control characters.",
+      "why": "U+001D and U+001E at the ends are controls"
     },
     {
       "kind": "regex",
@@ -1270,6 +1291,43 @@
         ],
         "ignoreDays": 0,
         "smartFilter": false,
+        "addPaused": true,
+        "savePath": "/old",
+        "assignedCategory": "tv",
+        "torrentContentLayout": "NoSubfolder",
+        "torrentParams": null
+      },
+      "ok": true,
+      "normalised": {
+        "enabled": false,
+        "mustContain": "Show",
+        "mustNotContain": "",
+        "useRegex": false,
+        "episodeFilter": "",
+        "smartFilter": false,
+        "affectedFeeds": [
+          "https://tracker.example/rss/show"
+        ],
+        "category": "",
+        "savePath": "",
+        "addStopped": "default",
+        "ignoreDays": 0
+      },
+      "why": "a torrentParams key of null still hides the flat keys: fromJsonObject uses find() and reads a non-object as {}"
+    },
+    {
+      "kind": "fields",
+      "input": {
+        "enabled": false,
+        "useRegex": false,
+        "mustContain": "Show",
+        "mustNotContain": "",
+        "episodeFilter": "",
+        "affectedFeeds": [
+          "https://tracker.example/rss/show"
+        ],
+        "ignoreDays": 0,
+        "smartFilter": false,
         "addPaused": 1,
         "savePath": "",
         "assignedCategory": "tv",
@@ -1380,7 +1438,8 @@
           "mustContain": "Show 1080p"
         },
         "snapshot": {
-          "mustContain": "Show"
+          "mustContain": "Show",
+          "enabled": false
         },
         "enable": "keep"
       },
@@ -1492,7 +1551,8 @@
         },
         "snapshot": {
           "savePath": "",
-          "useAutoTmm": true
+          "useAutoTmm": true,
+          "enabled": false
         },
         "enable": "keep"
       },
@@ -1604,7 +1664,8 @@
         },
         "snapshot": {
           "savePath": "",
-          "useAutoTmm": true
+          "useAutoTmm": true,
+          "enabled": false
         },
         "enable": "keep"
       },
@@ -1716,7 +1777,8 @@
         },
         "snapshot": {
           "savePath": "/media/tv",
-          "useAutoTmm": true
+          "useAutoTmm": true,
+          "enabled": false
         },
         "enable": "keep"
       },
@@ -1827,7 +1889,8 @@
         },
         "snapshot": {
           "savePath": "/media/tv",
-          "useAutoTmm": null
+          "useAutoTmm": null,
+          "enabled": false
         },
         "enable": "keep"
       },
@@ -1937,7 +2000,8 @@
         },
         "snapshot": {
           "savePath": "/media/tv",
-          "useAutoTmm": false
+          "useAutoTmm": false,
+          "enabled": false
         },
         "enable": "keep"
       },
@@ -2048,7 +2112,8 @@
         },
         "snapshot": {
           "savePath": "",
-          "useAutoTmm": true
+          "useAutoTmm": true,
+          "enabled": false
         },
         "enable": "keep"
       },
@@ -2112,7 +2177,8 @@
           "addStopped": "yes"
         },
         "snapshot": {
-          "addStopped": "default"
+          "addStopped": "default",
+          "enabled": false
         },
         "enable": "keep"
       },
@@ -2224,7 +2290,8 @@
           "addStopped": "no"
         },
         "snapshot": {
-          "addStopped": "default"
+          "addStopped": "default",
+          "enabled": false
         },
         "enable": "keep"
       },
@@ -2337,7 +2404,8 @@
           "addStopped": "default"
         },
         "snapshot": {
-          "addStopped": "yes"
+          "addStopped": "yes",
+          "enabled": false
         },
         "enable": "keep"
       },
@@ -2448,7 +2516,8 @@
           "category": "anime"
         },
         "snapshot": {
-          "category": "tv"
+          "category": "tv",
+          "enabled": false
         },
         "enable": "keep"
       },
@@ -2559,7 +2628,8 @@
           "category": ""
         },
         "snapshot": {
-          "category": "tv"
+          "category": "tv",
+          "enabled": false
         },
         "enable": "keep"
       },
@@ -2670,7 +2740,8 @@
           "mustContain": "Show 1080p"
         },
         "snapshot": {
-          "mustContain": "Show 720p"
+          "mustContain": "Show 720p",
+          "enabled": false
         },
         "enable": "keep"
       },
@@ -2734,7 +2805,8 @@
           "episodeFilter": "1x2; 3;"
         },
         "snapshot": {
-          "episodeFilter": "1x2;"
+          "episodeFilter": "1x2;",
+          "enabled": false
         },
         "enable": "keep"
       },
@@ -2804,7 +2876,8 @@
           "affectedFeeds": [
             "https://mirror.example/rss/show",
             "https://tracker.example/rss/show"
-          ]
+          ],
+          "enabled": false
         },
         "enable": "keep"
       },
@@ -2869,7 +2942,8 @@
         },
         "snapshot": {
           "savePath": "",
-          "useAutoTmm": true
+          "useAutoTmm": true,
+          "enabled": false
         },
         "enable": "keep"
       },
@@ -2981,7 +3055,8 @@
           "mustNotContain": "720p|HDTV"
         },
         "snapshot": {
-          "mustNotContain": "720p"
+          "mustNotContain": "720p",
+          "enabled": false
         },
         "enable": "keep"
       },
@@ -3307,7 +3382,8 @@
           "ignoreDays": 7
         },
         "snapshot": {
-          "ignoreDays": 0
+          "ignoreDays": 0,
+          "enabled": true
         },
         "enable": "keep"
       },
@@ -3385,7 +3461,8 @@
           "mustContain": "Other"
         },
         "snapshot": {
-          "mustContain": "Show"
+          "mustContain": "Show",
+          "enabled": true
         },
         "enable": "keep"
       },
@@ -3461,29 +3538,344 @@
           }
         },
         "changes": {
-          "mustContain": "Show 2160p",
-          "smartFilter": false
+          "mustContain": "Show 2160p"
         },
         "snapshot": {
           "mustContain": "Show",
-          "smartFilter": true
+          "enabled": false
         },
         "enable": "on"
       },
+      "ok": false,
+      "message": "usage: qbt rss rules|rules-preview-enabled|rule-check|rule-create|rule-set|rule-preview|rule-rename|rule-remove",
+      "why": "fix round 1: on never carries changes (the draft is saved with keep first, then previewed): usage"
+    },
+    {
+      "kind": "patch",
+      "input": {
+        "name": "Show",
+        "current": {
+          "enabled": false,
+          "priority": 2,
+          "useRegex": false,
+          "mustContain": "Show",
+          "mustNotContain": "720p",
+          "episodeFilter": "1x1-;",
+          "affectedFeeds": [
+            "https://tracker.example/rss/show"
+          ],
+          "lastMatch": "28 Sep 2026 20:00:00 +0000",
+          "ignoreDays": 0,
+          "smartFilter": true,
+          "previouslyMatchedEpisodes": [
+            "1x1",
+            "1x2",
+            "1x3",
+            "1x4",
+            "1x5",
+            "1x6"
+          ],
+          "addPaused": null,
+          "torrentContentLayout": "Subfolder",
+          "savePath": "",
+          "assignedCategory": "tv",
+          "torrentParams": {
+            "category": "tv",
+            "tags": [
+              "rss",
+              "show"
+            ],
+            "save_path": "",
+            "download_path": "",
+            "operating_mode": "AutoManaged",
+            "skip_checking": false,
+            "upload_limit": -1,
+            "download_limit": 512000,
+            "seeding_time_limit": -2,
+            "inactive_seeding_time_limit": -2,
+            "share_limit_action": "Default",
+            "ratio_limit": -2,
+            "ssl_certificate": "",
+            "ssl_private_key": "",
+            "ssl_dh_params": "",
+            "content_layout": "Subfolder",
+            "use_auto_tmm": true
+          }
+        },
+        "changes": {},
+        "snapshot": {
+          "enabled": false
+        },
+        "enable": "on"
+      },
+      "ok": false,
+      "message": "usage: qbt rss rules|rules-preview-enabled|rule-check|rule-create|rule-set|rule-preview|rule-rename|rule-remove",
+      "why": "on with a non-empty snapshot is usage too"
+    },
+    {
+      "kind": "patch",
+      "input": {
+        "name": "Show",
+        "current": {
+          "enabled": false,
+          "priority": 2,
+          "useRegex": false,
+          "mustContain": "Show",
+          "mustNotContain": "720p",
+          "episodeFilter": "1x1-;",
+          "affectedFeeds": [
+            "https://tracker.example/rss/show"
+          ],
+          "lastMatch": "28 Sep 2026 20:00:00 +0000",
+          "ignoreDays": 0,
+          "smartFilter": true,
+          "previouslyMatchedEpisodes": [
+            "1x1",
+            "1x2",
+            "1x3",
+            "1x4",
+            "1x5",
+            "1x6"
+          ],
+          "addPaused": null,
+          "torrentContentLayout": "Subfolder",
+          "savePath": "",
+          "assignedCategory": "tv",
+          "torrentParams": {
+            "category": "tv",
+            "tags": [
+              "rss",
+              "show"
+            ],
+            "save_path": "",
+            "download_path": "",
+            "operating_mode": "AutoManaged",
+            "skip_checking": false,
+            "upload_limit": -1,
+            "download_limit": 512000,
+            "seeding_time_limit": -2,
+            "inactive_seeding_time_limit": -2,
+            "share_limit_action": "Default",
+            "ratio_limit": -2,
+            "ssl_certificate": "",
+            "ssl_private_key": "",
+            "ssl_dh_params": "",
+            "content_layout": "Subfolder",
+            "use_auto_tmm": true
+          }
+        },
+        "changes": {},
+        "snapshot": {},
+        "enable": "keep"
+      },
+      "ok": false,
+      "message": "usage: qbt rss rules|rules-preview-enabled|rule-check|rule-create|rule-set|rule-preview|rule-rename|rule-remove",
+      "why": "keep with no changes has nothing to save: usage"
+    },
+    {
+      "kind": "patch",
+      "input": {
+        "name": "Show",
+        "current": {
+          "enabled": false,
+          "priority": 2,
+          "useRegex": false,
+          "mustContain": "Show",
+          "mustNotContain": "720p",
+          "episodeFilter": "1x1-;",
+          "affectedFeeds": [
+            "https://tracker.example/rss/show"
+          ],
+          "lastMatch": "28 Sep 2026 20:00:00 +0000",
+          "ignoreDays": 0,
+          "smartFilter": true,
+          "previouslyMatchedEpisodes": [
+            "1x1",
+            "1x2",
+            "1x3",
+            "1x4",
+            "1x5",
+            "1x6"
+          ],
+          "addPaused": null,
+          "torrentContentLayout": "Subfolder",
+          "savePath": "",
+          "assignedCategory": "tv",
+          "torrentParams": {
+            "category": "tv",
+            "tags": [
+              "rss",
+              "show"
+            ],
+            "save_path": "",
+            "download_path": "",
+            "operating_mode": "AutoManaged",
+            "skip_checking": false,
+            "upload_limit": -1,
+            "download_limit": 512000,
+            "seeding_time_limit": -2,
+            "inactive_seeding_time_limit": -2,
+            "share_limit_action": "Default",
+            "ratio_limit": -2,
+            "ssl_certificate": "",
+            "ssl_private_key": "",
+            "ssl_dh_params": "",
+            "content_layout": "Subfolder",
+            "use_auto_tmm": true
+          }
+        },
+        "changes": {
+          "mustContain": "Show 1080p"
+        },
+        "snapshot": {
+          "mustContain": "Show"
+        },
+        "enable": "keep"
+      },
+      "ok": false,
+      "message": "usage: qbt rss rules|rules-preview-enabled|rule-check|rule-create|rule-set|rule-preview|rule-rename|rule-remove",
+      "why": "a save's snapshot must hold enabled: usage without it"
+    },
+    {
+      "kind": "patch",
+      "input": {
+        "name": "Show",
+        "current": {
+          "enabled": true,
+          "priority": 2,
+          "useRegex": false,
+          "mustContain": "Show",
+          "mustNotContain": "720p",
+          "episodeFilter": "1x1-;",
+          "affectedFeeds": [
+            "https://tracker.example/rss/show"
+          ],
+          "lastMatch": "28 Sep 2026 20:00:00 +0000",
+          "ignoreDays": 0,
+          "smartFilter": true,
+          "previouslyMatchedEpisodes": [
+            "1x1",
+            "1x2",
+            "1x3",
+            "1x4",
+            "1x5",
+            "1x6"
+          ],
+          "addPaused": null,
+          "torrentContentLayout": "Subfolder",
+          "savePath": "",
+          "assignedCategory": "tv",
+          "torrentParams": {
+            "category": "tv",
+            "tags": [
+              "rss",
+              "show"
+            ],
+            "save_path": "",
+            "download_path": "",
+            "operating_mode": "AutoManaged",
+            "skip_checking": false,
+            "upload_limit": -1,
+            "download_limit": 512000,
+            "seeding_time_limit": -2,
+            "inactive_seeding_time_limit": -2,
+            "share_limit_action": "Default",
+            "ratio_limit": -2,
+            "ssl_certificate": "",
+            "ssl_private_key": "",
+            "ssl_dh_params": "",
+            "content_layout": "Subfolder",
+            "use_auto_tmm": true
+          }
+        },
+        "changes": {
+          "mustContain": "Show 1080p"
+        },
+        "snapshot": {
+          "mustContain": "Show",
+          "enabled": false
+        },
+        "enable": "keep"
+      },
+      "ok": false,
+      "message": "Show changed elsewhere; press r to reload it.",
+      "why": "fix round 1: a keep save refuses when enabled changed elsewhere (the WebUI turned the rule on under the editor)"
+    },
+    {
+      "kind": "patch",
+      "input": {
+        "name": "Show",
+        "current": {
+          "enabled": true,
+          "priority": 2,
+          "useRegex": false,
+          "mustContain": "Show",
+          "mustNotContain": "720p",
+          "episodeFilter": "1x1-;",
+          "affectedFeeds": [
+            "https://tracker.example/rss/show"
+          ],
+          "lastMatch": "28 Sep 2026 20:00:00 +0000",
+          "ignoreDays": 0,
+          "smartFilter": true,
+          "previouslyMatchedEpisodes": [
+            "1x1",
+            "1x2",
+            "1x3",
+            "1x4",
+            "1x5",
+            "1x6"
+          ],
+          "addPaused": null,
+          "torrentContentLayout": "Subfolder",
+          "savePath": "",
+          "assignedCategory": "tv",
+          "torrentParams": {
+            "category": "tv",
+            "tags": [
+              "rss",
+              "show"
+            ],
+            "save_path": "",
+            "download_path": "",
+            "operating_mode": "AutoManaged",
+            "skip_checking": false,
+            "upload_limit": -1,
+            "download_limit": 512000,
+            "seeding_time_limit": -2,
+            "inactive_seeding_time_limit": -2,
+            "share_limit_action": "Default",
+            "ratio_limit": -2,
+            "ssl_certificate": "",
+            "ssl_private_key": "",
+            "ssl_dh_params": "",
+            "content_layout": "Subfolder",
+            "use_auto_tmm": true
+          }
+        },
+        "changes": {
+          "ignoreDays": 3
+        },
+        "snapshot": {
+          "ignoreDays": 0,
+          "enabled": true
+        },
+        "enable": "off"
+      },
       "ok": true,
       "normalised": {
-        "enabled": true,
+        "enabled": false,
         "priority": 2,
         "useRegex": false,
-        "mustContain": "Show 2160p",
+        "mustContain": "Show",
         "mustNotContain": "720p",
         "episodeFilter": "1x1-;",
         "affectedFeeds": [
           "https://tracker.example/rss/show"
         ],
         "lastMatch": "28 Sep 2026 20:00:00 +0000",
-        "ignoreDays": 0,
-        "smartFilter": false,
+        "ignoreDays": 3,
+        "smartFilter": true,
         "previouslyMatchedEpisodes": [
           "1x1",
           "1x2",
@@ -3519,7 +3911,59 @@
           "use_auto_tmm": true
         }
       },
-      "why": "changes and on together: the draft saved and turned on (auto-download on, p then e)"
+      "why": "off with changes: enabled is compared, then written false"
+    },
+    {
+      "kind": "patch",
+      "input": {
+        "name": "Show",
+        "current": {
+          "enabled": false,
+          "useRegex": false,
+          "mustContain": "Show",
+          "mustNotContain": "",
+          "episodeFilter": "",
+          "affectedFeeds": [
+            "https://tracker.example/rss/show"
+          ],
+          "ignoreDays": 0,
+          "smartFilter": false,
+          "addPaused": null,
+          "savePath": "",
+          "assignedCategory": "tv",
+          "torrentContentLayout": "NoSubfolder",
+          "torrentParams": null
+        },
+        "changes": {
+          "category": "anime"
+        },
+        "snapshot": {
+          "category": "",
+          "enabled": false
+        },
+        "enable": "keep"
+      },
+      "ok": true,
+      "normalised": {
+        "enabled": false,
+        "useRegex": false,
+        "mustContain": "Show",
+        "mustNotContain": "",
+        "episodeFilter": "",
+        "affectedFeeds": [
+          "https://tracker.example/rss/show"
+        ],
+        "ignoreDays": 0,
+        "smartFilter": false,
+        "addPaused": null,
+        "savePath": "",
+        "assignedCategory": "anime",
+        "torrentContentLayout": "NoSubfolder",
+        "torrentParams": {
+          "category": "anime"
+        }
+      },
+      "why": "torrentParams present but not an object still wins: qBittorrent reads it as {} (fromJsonObject uses find()), so the patch writes an object and not the flat keys alone"
     },
     {
       "kind": "patch",
@@ -3577,7 +4021,8 @@
           "mustContain": "Show 1080p"
         },
         "snapshot": {
-          "mustContain": "Show"
+          "mustContain": "Show",
+          "enabled": false
         },
         "enable": "keep"
       },
@@ -3688,7 +4133,8 @@
           "episodeFilter": "1x2; 3;"
         },
         "snapshot": {
-          "episodeFilter": "1x1-;"
+          "episodeFilter": "1x1-;",
+          "enabled": false
         },
         "enable": "keep"
       },
@@ -3752,7 +4198,8 @@
           "episodeFilter": " 1x5-; "
         },
         "snapshot": {
-          "episodeFilter": "1x1-;"
+          "episodeFilter": "1x1-;",
+          "enabled": false
         },
         "enable": "keep"
       },
@@ -3863,7 +4310,8 @@
           "ignoreDays": 400
         },
         "snapshot": {
-          "ignoreDays": 0
+          "ignoreDays": 0,
+          "enabled": false
         },
         "enable": "keep"
       },
@@ -3927,7 +4375,8 @@
           "mustNotContain": "720p\nHDTV"
         },
         "snapshot": {
-          "mustNotContain": "720p"
+          "mustNotContain": "720p",
+          "enabled": false
         },
         "enable": "keep"
       },
@@ -3991,7 +4440,8 @@
           "useRegex": true
         },
         "snapshot": {
-          "useRegex": false
+          "useRegex": false,
+          "enabled": false
         },
         "enable": "keep"
       },
@@ -4055,7 +4505,8 @@
           "useRegex": true
         },
         "snapshot": {
-          "useRegex": false
+          "useRegex": false,
+          "enabled": false
         },
         "enable": "keep"
       },
@@ -4166,7 +4617,8 @@
           "mustContain": "Show.S\\d+"
         },
         "snapshot": {
-          "mustContain": "Show"
+          "mustContain": "Show",
+          "enabled": false
         },
         "enable": "keep"
       },
@@ -4277,7 +4729,8 @@
           "mustContain": "Show ("
         },
         "snapshot": {
-          "mustContain": "Show"
+          "mustContain": "Show",
+          "enabled": false
         },
         "enable": "keep"
       },
@@ -4393,7 +4846,8 @@
         "snapshot": {
           "affectedFeeds": [
             "https://tracker.example/rss/show"
-          ]
+          ],
+          "enabled": false
         },
         "enable": "keep"
       },
@@ -4478,7 +4932,8 @@
           "savePath": "",
           "useAutoTmm": null,
           "category": "tv",
-          "addStopped": "default"
+          "addStopped": "default",
+          "enabled": false
         },
         "enable": "keep"
       },
@@ -4525,7 +4980,8 @@
           "category": "anime"
         },
         "snapshot": {
-          "category": "films"
+          "category": "films",
+          "enabled": false
         },
         "enable": "keep"
       },
@@ -4564,8 +5020,8 @@
               "name": "Linux",
               "depth": 0,
               "folder": true,
-              "unread": 8,
-              "total": 10,
+              "unread": 9,
+              "total": 11,
               "feeds": 2
             },
             {
@@ -4589,8 +5045,8 @@
               "title": "",
               "isLoading": false,
               "hasError": false,
-              "unread": 5,
-              "total": 6
+              "unread": 6,
+              "total": 7
             },
             {
               "path": "TV",
@@ -4727,6 +5183,17 @@
             },
             {
               "feedPath": "Linux\\Debian",
+              "guid": "d7",
+              "title": "DSA-6006 page only",
+              "date": 1790000000,
+              "isRead": false,
+              "torrentURL": "",
+              "link": "https://www.debian.org/security/2026/dsa-6006",
+              "hasTorrent": false,
+              "host": "www.debian.org"
+            },
+            {
+              "feedPath": "Linux\\Debian",
               "guid": "d6",
               "title": "DSA-6005 zlib",
               "date": 1790000000,
@@ -4767,7 +5234,8 @@
             "DSA-6002 news",
             "DSA-6003 bash",
             "DSA-6004 empty",
-            "DSA-6005 zlib"
+            "DSA-6005 zlib",
+            "DSA-6006 page only"
           ]
         },
         "rule": {
@@ -4812,12 +5280,18 @@
             "guid": "d4",
             "title": "DSA-6003 bash",
             "dup": 1
+          },
+          {
+            "feedPath": "Linux\\Debian",
+            "guid": "d7",
+            "title": "DSA-6006 page only",
+            "dup": 1
           }
         ],
         "unpreviewable": [],
         "gone": []
       },
-      "why": "D4: unread with a torrent is will, read is read, unread with only its page link is noTorrent; a javascript: link has no torrent either; an article with no torrentURL at all is never queued (rss_autodownloader.cpp:401), so it's in no group"
+      "why": "D4: unread with a torrent is will, read is read, unread with only its page link is noTorrent; a javascript: link has no torrent either; an empty torrentURL falls back to the link (Article::torrentUrl), so a page-only article is noTorrent, and one with neither is never queued (rss_autodownloader.cpp:401), so it's in no group"
     },
     {
       "kind": "previewJoin",
@@ -4850,8 +5324,8 @@
               "name": "Linux",
               "depth": 0,
               "folder": true,
-              "unread": 8,
-              "total": 10,
+              "unread": 9,
+              "total": 11,
               "feeds": 2
             },
             {
@@ -4875,8 +5349,8 @@
               "title": "",
               "isLoading": false,
               "hasError": false,
-              "unread": 5,
-              "total": 6
+              "unread": 6,
+              "total": 7
             },
             {
               "path": "TV",
@@ -5010,6 +5484,17 @@
               "link": "",
               "hasTorrent": false,
               "host": ""
+            },
+            {
+              "feedPath": "Linux\\Debian",
+              "guid": "d7",
+              "title": "DSA-6006 page only",
+              "date": 1790000000,
+              "isRead": false,
+              "torrentURL": "",
+              "link": "https://www.debian.org/security/2026/dsa-6006",
+              "hasTorrent": false,
+              "host": "www.debian.org"
             },
             {
               "feedPath": "Linux\\Debian",
@@ -5105,8 +5590,8 @@
               "name": "Linux",
               "depth": 0,
               "folder": true,
-              "unread": 8,
-              "total": 10,
+              "unread": 9,
+              "total": 11,
               "feeds": 2
             },
             {
@@ -5130,8 +5615,8 @@
               "title": "",
               "isLoading": false,
               "hasError": false,
-              "unread": 5,
-              "total": 6
+              "unread": 6,
+              "total": 7
             },
             {
               "path": "TV",
@@ -5265,6 +5750,17 @@
               "link": "",
               "hasTorrent": false,
               "host": ""
+            },
+            {
+              "feedPath": "Linux\\Debian",
+              "guid": "d7",
+              "title": "DSA-6006 page only",
+              "date": 1790000000,
+              "isRead": false,
+              "torrentURL": "",
+              "link": "https://www.debian.org/security/2026/dsa-6006",
+              "hasTorrent": false,
+              "host": "www.debian.org"
             },
             {
               "feedPath": "Linux\\Debian",
@@ -5373,8 +5869,8 @@
               "name": "Linux",
               "depth": 0,
               "folder": true,
-              "unread": 8,
-              "total": 10,
+              "unread": 9,
+              "total": 11,
               "feeds": 2
             },
             {
@@ -5398,8 +5894,8 @@
               "title": "",
               "isLoading": false,
               "hasError": false,
-              "unread": 5,
-              "total": 6
+              "unread": 6,
+              "total": 7
             },
             {
               "path": "TV",
@@ -5533,6 +6029,17 @@
               "link": "",
               "hasTorrent": false,
               "host": ""
+            },
+            {
+              "feedPath": "Linux\\Debian",
+              "guid": "d7",
+              "title": "DSA-6006 page only",
+              "date": 1790000000,
+              "isRead": false,
+              "torrentURL": "",
+              "link": "https://www.debian.org/security/2026/dsa-6006",
+              "hasTorrent": false,
+              "host": "www.debian.org"
             },
             {
               "feedPath": "Linux\\Debian",
@@ -5630,8 +6137,8 @@
               "name": "Linux",
               "depth": 0,
               "folder": true,
-              "unread": 8,
-              "total": 10,
+              "unread": 9,
+              "total": 11,
               "feeds": 2
             },
             {
@@ -5655,8 +6162,8 @@
               "title": "",
               "isLoading": false,
               "hasError": false,
-              "unread": 5,
-              "total": 6
+              "unread": 6,
+              "total": 7
             },
             {
               "path": "TV",
@@ -5790,6 +6297,17 @@
               "link": "",
               "hasTorrent": false,
               "host": ""
+            },
+            {
+              "feedPath": "Linux\\Debian",
+              "guid": "d7",
+              "title": "DSA-6006 page only",
+              "date": 1790000000,
+              "isRead": false,
+              "torrentURL": "",
+              "link": "https://www.debian.org/security/2026/dsa-6006",
+              "hasTorrent": false,
+              "host": "www.debian.org"
             },
             {
               "feedPath": "Linux\\Debian",
@@ -5893,8 +6411,8 @@
               "name": "Linux",
               "depth": 0,
               "folder": true,
-              "unread": 8,
-              "total": 10,
+              "unread": 9,
+              "total": 11,
               "feeds": 2
             },
             {
@@ -5918,8 +6436,8 @@
               "title": "",
               "isLoading": false,
               "hasError": false,
-              "unread": 5,
-              "total": 6
+              "unread": 6,
+              "total": 7
             },
             {
               "path": "TV",
@@ -6053,6 +6571,17 @@
               "link": "",
               "hasTorrent": false,
               "host": ""
+            },
+            {
+              "feedPath": "Linux\\Debian",
+              "guid": "d7",
+              "title": "DSA-6006 page only",
+              "date": 1790000000,
+              "isRead": false,
+              "torrentURL": "",
+              "link": "https://www.debian.org/security/2026/dsa-6006",
+              "hasTorrent": false,
+              "host": "www.debian.org"
             },
             {
               "feedPath": "Linux\\Debian",
@@ -6151,8 +6680,8 @@
               "name": "Linux",
               "depth": 0,
               "folder": true,
-              "unread": 8,
-              "total": 10,
+              "unread": 9,
+              "total": 11,
               "feeds": 2
             },
             {
@@ -6176,8 +6705,8 @@
               "title": "",
               "isLoading": false,
               "hasError": false,
-              "unread": 5,
-              "total": 6
+              "unread": 6,
+              "total": 7
             },
             {
               "path": "TV",
@@ -6311,6 +6840,17 @@
               "link": "",
               "hasTorrent": false,
               "host": ""
+            },
+            {
+              "feedPath": "Linux\\Debian",
+              "guid": "d7",
+              "title": "DSA-6006 page only",
+              "date": 1790000000,
+              "isRead": false,
+              "torrentURL": "",
+              "link": "https://www.debian.org/security/2026/dsa-6006",
+              "hasTorrent": false,
+              "host": "www.debian.org"
             },
             {
               "feedPath": "Linux\\Debian",
@@ -6407,8 +6947,8 @@
               "name": "Linux",
               "depth": 0,
               "folder": true,
-              "unread": 8,
-              "total": 10,
+              "unread": 9,
+              "total": 11,
               "feeds": 2
             },
             {
@@ -6432,8 +6972,8 @@
               "title": "",
               "isLoading": false,
               "hasError": false,
-              "unread": 5,
-              "total": 6
+              "unread": 6,
+              "total": 7
             },
             {
               "path": "TV",
@@ -6567,6 +7107,17 @@
               "link": "",
               "hasTorrent": false,
               "host": ""
+            },
+            {
+              "feedPath": "Linux\\Debian",
+              "guid": "d7",
+              "title": "DSA-6006 page only",
+              "date": 1790000000,
+              "isRead": false,
+              "torrentURL": "",
+              "link": "https://www.debian.org/security/2026/dsa-6006",
+              "hasTorrent": false,
+              "host": "www.debian.org"
             },
             {
               "feedPath": "Linux\\Debian",
@@ -6655,8 +7206,8 @@
               "name": "Linux",
               "depth": 0,
               "folder": true,
-              "unread": 8,
-              "total": 10,
+              "unread": 9,
+              "total": 11,
               "feeds": 2
             },
             {
@@ -6680,8 +7231,8 @@
               "title": "",
               "isLoading": false,
               "hasError": false,
-              "unread": 5,
-              "total": 6
+              "unread": 6,
+              "total": 7
             },
             {
               "path": "TV",
@@ -6815,6 +7366,17 @@
               "link": "",
               "hasTorrent": false,
               "host": ""
+            },
+            {
+              "feedPath": "Linux\\Debian",
+              "guid": "d7",
+              "title": "DSA-6006 page only",
+              "date": 1790000000,
+              "isRead": false,
+              "torrentURL": "",
+              "link": "https://www.debian.org/security/2026/dsa-6006",
+              "hasTorrent": false,
+              "host": "www.debian.org"
             },
             {
               "feedPath": "Linux\\Debian",
@@ -6904,8 +7466,8 @@
               "name": "Linux",
               "depth": 0,
               "folder": true,
-              "unread": 8,
-              "total": 10,
+              "unread": 9,
+              "total": 11,
               "feeds": 2
             },
             {
@@ -6929,8 +7491,8 @@
               "title": "",
               "isLoading": false,
               "hasError": false,
-              "unread": 5,
-              "total": 6
+              "unread": 6,
+              "total": 7
             },
             {
               "path": "TV",
@@ -7064,6 +7626,17 @@
               "link": "",
               "hasTorrent": false,
               "host": ""
+            },
+            {
+              "feedPath": "Linux\\Debian",
+              "guid": "d7",
+              "title": "DSA-6006 page only",
+              "date": 1790000000,
+              "isRead": false,
+              "torrentURL": "",
+              "link": "https://www.debian.org/security/2026/dsa-6006",
+              "hasTorrent": false,
+              "host": "www.debian.org"
             },
             {
               "feedPath": "Linux\\Debian",
@@ -7146,8 +7719,8 @@
               "name": "Linux",
               "depth": 0,
               "folder": true,
-              "unread": 8,
-              "total": 10,
+              "unread": 9,
+              "total": 11,
               "feeds": 2
             },
             {
@@ -7171,8 +7744,8 @@
               "title": "",
               "isLoading": false,
               "hasError": false,
-              "unread": 5,
-              "total": 6
+              "unread": 6,
+              "total": 7
             },
             {
               "path": "TV",
@@ -7306,6 +7879,17 @@
               "link": "",
               "hasTorrent": false,
               "host": ""
+            },
+            {
+              "feedPath": "Linux\\Debian",
+              "guid": "d7",
+              "title": "DSA-6006 page only",
+              "date": 1790000000,
+              "isRead": false,
+              "torrentURL": "",
+              "link": "https://www.debian.org/security/2026/dsa-6006",
+              "hasTorrent": false,
+              "host": "www.debian.org"
             },
             {
               "feedPath": "Linux\\Debian",
@@ -7490,6 +8074,7 @@
     "reasonRuleDirty": "Nothing to discard.",
     "confirmRuleOn": "Turn on <name>? Up to <n> unread articles download now.",
     "confirmRuleOnNone": "Turn on <name>? Nothing in your feeds matches yet.",
+    "confirmRuleOnAutoOff": "Turn on <name>? Auto-download is off, so nothing downloads until you turn it on in Settings → RSS.",
     "confirmEditOff": "Editing turns <name> off until you turn it back on.",
     "confirmLeave": "Save changes to <name>? y save · n keep editing",
     "confirmDiscard": "Discard your changes to <name>?",

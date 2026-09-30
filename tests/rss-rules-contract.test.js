@@ -108,6 +108,7 @@ const WINDOW = {
   reasonRuleDirty: "Nothing to discard.",
   confirmRuleOn: "Turn on <name>? Up to <n> unread articles download now.",
   confirmRuleOnNone: "Turn on <name>? Nothing in your feeds matches yet.",
+  confirmRuleOnAutoOff: "Turn on <name>? Auto-download is off, so nothing downloads until you turn it on in Settings → RSS.",
   confirmEditOff: "Editing turns <name> off until you turn it back on.",
   confirmLeave: "Save changes to <name>? y save · n keep editing",
   confirmDiscard: "Discard your changes to <name>?",
@@ -185,8 +186,11 @@ test("rules cases: the input shapes per kind", () => {
       assert.deepEqual(Object.keys(c.input).sort(), ["changes", "current", "enable", "name", "snapshot"], label);
       assert.ok(["keep", "off", "on"].includes(c.input.enable), label);
       for (const k of Object.keys(c.input.changes)) assert.ok(EDIT_KEYS.includes(k), label + " " + k);
-      const want = Object.keys(c.input.changes).concat("savePath" in c.input.changes ? ["useAutoTmm"] : []).sort();
-      assert.deepEqual(Object.keys(c.input.snapshot).sort(), want, label + ": the snapshot holds the changed keys (and useAutoTmm with savePath)");
+      const changed = Object.keys(c.input.changes);
+      const want = changed.concat(changed.length > 0 ? ["enabled"] : [], "savePath" in c.input.changes ? ["useAutoTmm"] : []).sort();
+      const usage = c.message === data.sentences.ruleUsage;
+      if (!usage) assert.deepEqual(Object.keys(c.input.snapshot).sort(), want, label + ": the snapshot holds the changed keys, enabled, and useAutoTmm with savePath");
+      if (!usage && c.input.enable === "on") assert.deepEqual([changed.length, Object.keys(c.input.snapshot).length], [0, 0], label + ": on never carries changes");
       if (c.ok) assert.equal(typeof c.normalised.enabled, "boolean", label + ": enabled is always written");
     }
     if (c.kind === "previewJoin") {
@@ -239,6 +243,15 @@ test("rules cases: the rows the brief and the controller asked for are there", (
     has("patch", (c) => c.ok && c.input.enable === e && c.input.current.enabled === before && c.normalised.enabled === after, "enable " + e + " from " + before);
   }
   has("patch", (c) => c.ok && !("enabled" in c.input.current) && c.normalised.enabled === true, "enabled written explicitly when absent");
+  // Fix round 1: on never carries changes; a save's snapshot holds enabled.
+  has("patch", (c) => c.input.enable === "on" && Object.keys(c.input.changes).length > 0 && c.message === S.ruleUsage, "on with changes is a usage refusal");
+  has("patch", (c) => c.ok && c.input.enable === "on" && Object.keys(c.input.changes).length === 0 && c.normalised.enabled === true, "on with empty changes");
+  has("patch", (c) => c.input.enable === "keep" && c.input.snapshot.enabled !== c.input.current.enabled && c.message === S.ruleChanged.replace("<name>", c.input.name),
+    "a keep save refuses when enabled changed elsewhere");
+  has("patch", (c) => c.ok && c.input.current.torrentParams === null && c.normalised.torrentParams && typeof c.normalised.torrentParams === "object",
+    "a present non-object torrentParams still wins");
+  has("fields", (c) => c.input.torrentParams === null && c.normalised.category === "", "a null torrentParams still hides the flat keys");
+  has("ruleName", (c) => /^[\u001c-\u001f]|[\u001c-\u001f]$/.test(c.input) && c.message === S.ruleNameControl, "U+001C-U+001F at the ends are controls");
   has("patch", (c) => c.ok && !("torrentParams" in c.input.current) && !("torrentParams" in c.normalised) && c.input.changes.savePath, "a legacy rule gets no torrentParams");
   has("patch", (c) => c.ok && c.input.current.episodeFilter === "1x2; 3;" && c.normalised.episodeFilter === "1x2; 3;", "OV13: an untouched odd value round-trips");
   has("patch", (c) => c.ok && c.input.current.previouslyMatchedEpisodes && c.input.current.previouslyMatchedEpisodes.length === 7 &&
@@ -249,6 +262,10 @@ test("rules cases: the rows the brief and the controller asked for are there", (
   assert.ok(J.some((c) => c.normalised.unpreviewable.length > 0 && c.normalised.will.length === 0), "same-named feeds are unpreviewable");
   assert.ok(J.some((c) => c.normalised.will.some((e) => e.dup > 1)), "duplicate titles counted with dup");
   assert.ok(J.some((c) => c.normalised.gone.length > 0), "a gone URL");
+  assert.ok(J.some((c) => c.normalised.noTorrent.some((e) => {
+    const a = c.input.items.articles.find((x) => x.guid === e.guid && x.feedPath === e.feedPath);
+    return a.torrentURL === "" && a.link !== "";
+  })), "noTorrent uses the link when torrentURL is empty");
   // hasTorrent is 5b1's rule: every article's flag is consistent with its links.
   for (const c of J) {
     for (const a of c.input.items.articles) {
@@ -289,12 +306,18 @@ test("rules cases: the sentences and the window's copy are exactly these", () =>
   for (const k of ["unconfirmedAdd", "unconfirmedRename", "unconfirmedRemove"]) assert.equal(data.sentences[k], RSS5B1.sentences[k], k);
 });
 
-test("rules cases: every placeholder is one of name, title, host, n, m, k, r, url and reason", () => {
+test("rules cases: every placeholder is one the _doc lists, and it lists only used ones", () => {
+  const listed = data._doc.match(/Placeholders: ([^.]*)filled in by the caller/);
+  assert.ok(listed, "_doc lists the placeholders");
+  const allowed = new Set(listed[1].match(/<[a-z]+>/g));
+  assert.deepEqual(Array.from(allowed).sort(), ["<k>", "<m>", "<n>", "<name>", "<r>", "<url>"]);
+  const used = new Set();
   for (const group of ["sentences", "window"]) {
     for (const [k, s] of Object.entries(data[group])) {
-      for (const m of s.match(/<[^<>]*>/g) || []) assert.ok(["<name>", "<title>", "<host>", "<n>", "<m>", "<k>", "<r>", "<url>", "<reason>"].includes(m), group + "." + k + ": " + m);
+      for (const m of s.match(/<[^<>]*>/g) || []) { assert.ok(allowed.has(m), group + "." + k + ": " + m); used.add(m); }
     }
   }
+  assert.deepEqual(Array.from(used).sort(), Array.from(allowed).sort(), "every listed placeholder is used");
 });
 
 test("rules cases: the registry's reasons, the confirms and the INSERT prompts are the case file's", () => {
@@ -305,9 +328,13 @@ test("rules cases: the registry's reasons, the confirms and the INSERT prompts a
   assert.equal(sentence(Registry.needsReason("rssFieldEditable", up)), W.reasonFieldEditable);
   assert.equal(sentence(Registry.needsReason("rssFieldToggle", up)), W.reasonFieldToggle);
   assert.equal(sentence(Registry.needsReason("rssRuleDirty", up)), W.reasonRuleDirty);
-  for (const need of ["rssRule", "rssFieldEditable", "rssFieldToggle"]) assert.equal(sentence(Registry.needsReason(need, {})), RSS5B1.window.reasonDown, need);
+  for (const need of ["rssRule", "rssFieldEditable", "rssFieldToggle", "rssRuleDirty"]) assert.equal(sentence(Registry.needsReason(need, {})), RSS5B1.window.reasonDown, need);
   for (const [kind, word] of [["rssRuleRemove", "remove"], ["rssRuleOn", "turn on"], ["rssRuleEditOff", "turn off and edit"], ["rssRuleLeave", "save"],
-    ["rssRuleDiscard", "discard"], ["rssAutoDlOn", "turn on"]]) assert.equal(View.RSS_ACCEPT[kind], word, kind);
+    ["rssRuleDiscard", "discard"]]) assert.equal(View.RSS_ACCEPT[kind], word, kind);
+  // Fix round 1: Settings' auto-download confirm is Settings', so RssPane.dropConfirm can't drop it.
+  assert.equal(View.RSS_ACCEPT.rssAutoDlOn, undefined);
+  assert.deepEqual(View.SETTINGS_ACCEPT, { rssAutoDlOn: "turn on" });
+  assert.equal(View.rssRulesFooterNote("rssRuleFields", { rssUp: true, rssAutoDl: true }), W.autoDlFooter);
   assert.deepEqual(View.inputPrompt("rssRuleName"), { prompt: W.promptRuleName, placeholder: "" });
   assert.deepEqual(View.inputPrompt("rssRuleRename", "Show"), { prompt: W.promptRuleRename, placeholder: "Show" });
   assert.deepEqual(View.inputPrompt("rssRuleField"), { prompt: W.promptRuleField, placeholder: "" });
@@ -349,12 +376,23 @@ test("rules contract: the qbt shapes the lanes build against are written down", 
     "`pcre2grep -u -i -f <(printf '%s\\n' \"$pattern\") /dev/null`",
     "each command takes exactly K fields: `rules` and `rules-preview-enabled` read no stdin; `rule-preview` and `rule-remove` take 1; `rule-create` and `rule-rename` take 2; `rule-check` takes 3; `rule-set` takes 4;",
     "A bare `qbt rss` or an unknown subcommand still prints 5b1's usage line",
-    "the rule is written with `enabled` false first",
+    "previews the saved rule as `rule-preview` does before any write",
     "union_episodes",
     "Service.rssAutoPreview(cb)",
     "rssRules(cb)", "rssRuleCheck(key, value, useRegex, cb)", "rssRuleCreate(name, feedUrl)", "rssRuleSet(name, changes, snapshot, enable)",
     "rssRulePreview(name, cb)", "rssRuleRename(from, to)", "rssRuleRemove(name)",
     "RssRules.js pins its `WINDOW` and `SENTENCES` to rss-autorules-cases.json",
-    "\"confirmVia\": \"rssAutoDl\""
+    "\"confirmVia\": \"rssAutoDl\"",
+    // Fix round 1.
+    "`rssRuleSet(name, {}, {}, \"on\")`",
+    "With `on`, `changesJson` and `snapshotJson` must both be `{}`",
+    "having written nothing",
+    "After any successful save the draft is clean and its snapshot becomes the written values",
+    "Every action that leaves a dirty draft's rule raises CONFIRM `rssRuleLeave` first",
+    "`View.SETTINGS_ACCEPT`",
+    "`SettingsCommands.dropConfirm`",
+    "`View.rssRulesFooterNote(pane, flags)`",
+    "the effective URL: torrentURL, or link when torrentURL is empty",
+    "any value, even one that isn't an object"
   ]) assert.ok(contract.includes(s), s);
 });
