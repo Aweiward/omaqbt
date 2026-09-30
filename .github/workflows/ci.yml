@@ -7,15 +7,19 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    # OmaqBT runs on Omarchy, which is Arch. Ubuntu's toolchain drifts from
+    # it in ways the tests notice: no pcre2grep, jq 1.7 corrupting multibyte
+    # characters on a 4096-byte read boundary, and Python 3.12 leaving
+    # truncated .pyc files under `ulimit -f`.
+    container: archlinux:latest
     steps:
+      - name: Install Arch packages
+        run: |
+          pacman -Syu --noconfirm --needed git jq curl python nodejs npm pcre2 diffutils
+          echo 'en_US.UTF-8 UTF-8' > /etc/locale.gen
+          locale-gen
+
       - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-
-      - name: Ensure jq and curl are present
-        run: sudo apt-get update && sudo apt-get install -y jq curl
 
       - name: Python unit tests
         run: python3 -m unittest discover -s tests -p 'test_*.py'
@@ -30,7 +34,7 @@ jobs:
       # xdg-mime, and update-desktop-database into a throwaway PATH dir and
       # points HOME/XDG_STATE_HOME/XDG_RUNTIME_DIR at a tmp tree, so it
       # never touches real desktop files or MIME registrations. No extra
-      # packages or env needed beyond jq/curl/python3 above.
+      # packages or env needed beyond jq/curl/python above.
       - name: Magnet handler tests
         run: bash tests/magnet-handler.sh
 
