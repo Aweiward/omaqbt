@@ -1,6 +1,6 @@
 # OmaqBT
 
-A themed [Omarchy](https://omarchy.org) Quattro bar widget for qBittorrent. The mark shows live ↓/↑ speeds while anything is transferring, and a desktop notification fires when a download finishes. Left-click the mark to watch live transfers, add a magnet or a `.torrent` file, start or stop, remove a torrent, and set file priorities. Right-click starts or stops everything. The official Qt window stays as an escape hatch.
+A themed [Omarchy](https://omarchy.org) Quattro bar widget for qBittorrent. The mark shows live ↓/↑ speeds while anything is transferring, and a desktop notification fires when a download finishes. Left-click the mark for a quick popup: watch live transfers, add a magnet or a `.torrent` file, start or stop, remove a torrent, and set file priorities. For everything else, open the window, a full view with the torrent table, Search, RSS and Settings. Right-click starts or stops everything. The official Qt app stays as an escape hatch.
 
 OmaqBT talks to `qbittorrent-nox` on your existing `~/.config/qBittorrent` library through the local Web API. It does not talk to any host other than `127.0.0.1`.
 
@@ -28,30 +28,63 @@ omarchy bar move aweiward.omaqbt --section right
 
 ## Usage
 
-- Left click: open or close the panel
+### The popup
+
+- Left click: open or close the popup
 - Right click: start or stop all torrents
 - Middle click: refresh
-- Esc: close the panel
+- Esc: close the popup
+
+Under the header sits an **Open the window** row with a `w` hint. `w`, Enter on the row, or a click closes the popup and opens the window (or brings it up if it is already open).
 
 While a torrent is downloading or seeding, compact ↓/↑ speeds appear next to the bar mark (horizontal bars only; hover for exact rates). When a download reaches 100% between two polls, a desktop notification fires through `notify-send`. Already-finished torrents never re-notify, including on shell restart.
 
-If Mullvad (or `QBT_BIND_IFACE`) is up but the running daemon is not bound to it, the mark shows the warning badge and the panel offers **Restart daemon to bind**. Restarting writes the bind keys and brings the daemon back on the tunnel.
+If Mullvad (or `QBT_BIND_IFACE`) is up but the running daemon is not bound to it, the mark shows the warning badge and the popup offers **Restart daemon to bind**. Restarting writes the bind keys and brings the daemon back on the tunnel.
 
-Clicking a `magnet:` link in a browser opens this panel (after the browser’s own “open xdg-open?” prompt, if any). The torrent is added so metadata can load, then stopped. The confirm row shows the name (and size when known). Enter starts it. Esc cancels and deletes it. Paste, `y`, and drag-drop are unchanged.
+Clicking a `magnet:` link in a browser opens the popup, or the window when it is open (after the browser’s own “open xdg-open?” prompt, if any). The torrent is added so metadata can load, then stopped. The confirm row shows the name (and size when known). Enter starts it. Esc cancels and deletes it. Paste, `y`, and drag-drop are unchanged.
 
-List keys: `j`/`k` move, Enter opens files, Space start/stop, `o` open the save folder, `x` remove (keep files), `X` delete files, `t` start/stop all, `s` cycle sort (default → speed → eta → added), `z` turtle mode, `a`/`p`/`c`/`*` filter, `/` magnet field, `y` add clipboard magnet, `r` refresh. On detail: `y` copy magnet, `m` move, `e` recheck. While a browser magnet is waiting, Enter starts it and Esc cancels it (unless the paste field is focused).
+List keys: `j`/`k` move, Enter opens the torrent's detail, Space start/stop, `o` open the save folder, `x` remove (keep files, no confirm), `X` delete files (asks first), `t` start/stop all, `s` cycle sort (default → speed → eta → added), `z` turtle mode, `a`/`p`/`c`/`*` filter, `/` magnet field, `y` add clipboard magnet, `r` refresh. On detail: `y` copy magnet, `m` move, `e` recheck. While a browser magnet is waiting, Enter starts it and Esc cancels it (unless the paste field is focused).
 
-The field takes a magnet, a `.torrent` URL, or a local `.torrent` path (`/…`, `~/…`, or `file://…`). Once it holds something addable, a **Save to…** field and an **Add stopped** row appear: Enter adds and starts, Add stopped adds without starting, and the save path overrides qBittorrent’s default when filled. Dropping a `.torrent` file or magnet link onto the open panel adds it too. From a terminal, `qbt add` also accepts `--category <name>`.
+The field takes a magnet, a `.torrent` URL, or a local `.torrent` path (`/…`, `~/…`, or `file://…`). Once it holds something addable, a **Save to…** field and an **Add stopped** row appear: Enter adds and starts, Add stopped adds without starting, and the save path overrides qBittorrent’s default when filled. Dropping a `.torrent` file or magnet link onto the open popup adds it too. From a terminal, `qbt add` also accepts `--category <name>`.
 
 Typing anything that is not addable filters the list by name; Esc clears the filter first, then closes.
 
-File view keys: `j`/`k` move, Enter cycle priority, `x` skip, Space start/stop, `X` delete files, Backspace or `h` back.
+File view keys: `j`/`k` move, Enter cycle priority, Space start/stop, Backspace, Left or `h` back. On the files section `x` skips the file under the cursor. Elsewhere in the detail view `x` removes the torrent (keep files) and `X` deletes its files (asks first).
 
 On a torrent’s detail view, **Copy magnet** (`y`) writes the magnet to the clipboard. **Move to…** (`m`) opens a path field prefilled with the current save folder; Enter moves the files there (qBittorrent `setLocation`), Esc cancels the field. **Force recheck** (`e`) starts a hash check immediately. Those three keys do nothing on the list (`y` there still adds from the clipboard).
 
 **Turtle mode** (`z`, or the row in the list) toggles qBittorrent’s alternative speed limits; the header shows “turtle” while it is on. Configure the alternative rates themselves in qBittorrent.
 
 On a torrent’s detail view, size, ratio, seeds/peers, the added date, and the save path sit under the title, followed by **Open folder**, **Copy magnet**, **Move to…**, **Force recheck**, **Remove, keep files** and **Delete files**. Below the file list controls, clickable rows cycle the per-torrent download/upload limit (∞ → 8M → 4M → 1M → 256K), toggle sequential download, and cycle the seed ratio limit (global → 1.0 → 2.0 → none). Open folder (`o`) opens the save path in your file manager. Remove takes it out of the list and leaves the download on disk. Delete asks first, then removes the torrent and its files.
+
+### The window
+
+The window is a separate, full-size view. Open it from the popup (the **Open the window** row or `w`), or from a terminal:
+
+```sh
+omarchy-shell shell toggle aweiward.omaqbt
+```
+
+That command toggles, so run it again to close the window.
+
+**Keybind.** To open it from the keyboard, add this line to `~/.config/hypr/bindings.conf`:
+
+```
+bindd = SUPER SHIFT, Q, OmaqBT window, exec, omarchy-shell shell toggle aweiward.omaqbt
+```
+
+Pick another key if Super+Shift+Q is taken.
+
+The window shows one view at a time: the torrents (the default), Settings, Search and RSS. From the torrents:
+
+- `F` opens Search
+- `N` opens RSS
+- `,` opens Settings
+- `R` opens the auto-download rules, inside RSS
+- `:` opens the command palette
+- `?` opens help
+
+`?` lists each view's keys. Esc steps back out of a view.
 
 ## Configure
 
@@ -82,7 +115,7 @@ Session\InterfaceAddress=
 
 That binds the tunnel interface, not a single relay IP, so a Mullvad city change does not stall announces.
 
-No other qBittorrent keys are rewritten. The plugin never stores a Web UI password.
+The window's Settings view writes the qBittorrent preferences you change there. Nothing else is rewritten. The plugin never stores a Web UI password.
 
 ## Remove
 
@@ -115,11 +148,11 @@ systemctl --user stop omaqbt-nox.service
 ## Requirements
 
 - Omarchy 4 (Quattro) / `omarchy-shell`
-- `qbittorrent-nox` 5.2+ (installed from the panel if missing)
+- `qbittorrent-nox` 5.2+ (installed from the popup if missing)
 - On PATH for the helper: `curl`, `jq`, `python3`
 - `notify-send` (libnotify) for completion notifications; without it they are skipped silently
 - `xdg-open` (xdg-utils) for **Open folder**
-- `pkexec` only when installing the package from the panel (no TTY for `sudo`)
+- `pkexec` only when installing the package from the popup (no TTY for `sudo`)
 - `systemctl --user` for `omaqbt-nox.service`
 
 ## What this plugin does on your system
@@ -130,17 +163,24 @@ systemctl --user stop omaqbt-nox.service
 - Writes the localhost Web UI keys listed under Configure. It stops the daemon first so qBittorrent does not overwrite those keys on exit.
 - If `wg0-mullvad` is up, also writes the `[BitTorrent]` interface keys so qBittorrent binds the tunnel, not a single relay IP.
 - Stores sync state in `$XDG_RUNTIME_DIR/omaqbt/` (private, mode 700). If that variable is unset it falls back to a uid-scoped `/tmp/omaqbt-<uid>`, created with `umask 077`, and refuses to write through a symlink or a directory it does not own.
-- Sends a desktop notification through `notify-send` when a download completes, and when a browser magnet arrives but the panel could not open.
+- Sends a desktop notification through `notify-send` when a download completes, and when a browser magnet arrives but the popup could not open.
 - On widget load, writes `~/.local/share/applications/omaqbt-magnet.desktop` and claims `x-scheme-handler/magnet`. Chromium may still ask to open xdg-open; that is a browser prompt, not a bug in this plugin.
 - Stores pending browser magnets in `${XDG_STATE_HOME:-$HOME/.local/state}/omaqbt/` (not the runtime rid dir).
-- Does not add torrents, delete files, or start the daemon unless you click or press the matching control, or click a `magnet:` link that this handler claimed.
+- Writes the qBittorrent preferences you change in the window's Settings view, and its RSS feeds and rules. Once you turn a rule on, and auto-download on, RSS can add torrents by itself.
+- Apart from the RSS rules you turned on, it does not add torrents, delete files, or start the daemon unless you click or press the matching control, or click a `magnet:` link that this handler claimed.
 
 ## Dev
 
 ```sh
-node --test tests/*.test.js
+npm test
+npm run test:qml
+python3 -m unittest discover -s tests -p 'test_*.py'
+tests/actions.sh
 tests/api-contract.sh
 tests/magnet-handler.sh
+tests/serve-parity.sh
+npm run lint:qml
+node tools/gen-settings-schema.js --check
 omarchy plugin validate .
 ```
 
