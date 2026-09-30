@@ -66,7 +66,10 @@ import "Model.js" as Model
 //                has no host route); the prefill carries the host or name.
 //                An unchanged rename ends the INSERT with no qbt call.
 //   column       the pane keys dispatch in while RSS shows (Client.keyPane):
-//                "rssFeeds", "rssArticles" or "rssFeedList" (narrow overlay).
+//                "rssFeeds", "rssArticles" or "rssFeedList" (narrow overlay);
+//                slice 5b2's rules area adds "rssRules", "rssRuleFields",
+//                "rssRulePreview" and "rssRuleList" (RssRulesPane.qml's
+//                header; `rulesOpen` is true while it's one of those).
 //   flags        the dispatch flags (View.VIEW_FLAG_STATE.rss writes them into
 //                the dispatch state every time; View.rssFooterKeys reads them
 //                for the footer, through the Client's `rss` footer field),
@@ -91,9 +94,15 @@ import "Model.js" as Model
 //                                   items` answer arrives;
 //                  narrow           as above;
 //                  wide             the Article pane is full width (narrow
-//                                   only); dispatch state rssWide.
-//   pickerOpen, picker  false and null: RSS has no picker (5b2's feeds
-//                picker will).
+//                                   only); dispatch state rssWide;
+//                  rssRulesOpen, rssRule, rssField, rssFieldEditable,
+//                  rssFieldToggle, rssRuleDirty, rssAutoDl
+//                                   slice 5b2's rules flags, from
+//                                   RssRulesPane.flags (its header), always
+//                                   written (null and false while the rules
+//                                   are closed or qBittorrent is down).
+//   pickerOpen, picker  the rules area's field picker (RssRulesPane's
+//                pickerOpen and picker); false and null otherwise.
 //   leaveRequested()  asks the Client to leave RSS (Esc). The view never
 //                hides itself.
 //
@@ -106,10 +115,17 @@ import "Model.js" as Model
 //   windowClosed()  the window is closing: drop an RSS CONFIRM still up
 //                (kinds View.RSS_ACCEPT: mode back to NORMAL, no pending,
 //                client.confirm null), as SearchPane.dropConfirm does.
-//   acceptPicker(), dropPicker()  no-ops (no picker).
-//   togglePicker() -> false.
+//   acceptPicker(), dropPicker(), togglePicker()  handed to the rules
+//                area (its field pickers); togglePicker() -> false unless
+//                its multi picker is open.
 //   owns(commandId) -> whether Client.run hands this command here: every
-//                rss.* row except rss.open.
+//                rss.* row except rss.open. The rules commands (rss.rule*,
+//                rss.field*, rss.rules*, rss.preview*: rulesCommand) go on
+//                to RssRulesPane.run; rss.rules also sets `column` to
+//                "rssRules" and rss.rulesBack sets it back to "rssFeeds".
+//                The rules INSERTs (rssRuleName, rssRuleRename,
+//                rssRuleField) go to RssRulesPane's commitInput,
+//                cancelInput and inputEdited.
 //   run(commandId, args, ev)  one of those commands, resolved by
 //                CommandRegistry. args (frozen copies taken at key time):
 //                  args.item     rssItem (rss.addFeed, rss.addFolder,
@@ -157,8 +173,12 @@ Item {
   // The view host contract (the header).
   readonly property string name: "rss"
   readonly property var inputPurposes: View.VIEW_INPUT_PURPOSES_BY_VIEW.rss
-  readonly property bool pickerOpen: false
-  readonly property var picker: null
+  readonly property bool pickerOpen: rulesArea.pickerOpen
+  readonly property var picker: rulesArea.picker
+  // Slice 5b2: the rules area shows while `column` is one of its panes.
+  readonly property var rulesPanes: ["rssRules", "rssRuleFields", "rssRulePreview", "rssRuleList"]
+  readonly property bool rulesOpen: rulesPanes.indexOf(column) !== -1
+  readonly property var rulesPurposes: ["rssRuleName", "rssRuleRename", "rssRuleField"]
 
   // The behaviour behind each key (RssCommands.qml).
   readonly property var cmds: rssCmds
@@ -221,7 +241,14 @@ Item {
     rssProcessingOff: rss.processingOff,
     rssUp: rss.loaded && !rss.downShown,
     narrow: rss.narrow,
-    wide: rss.narrow && rss.wide })
+    wide: rss.narrow && rss.wide,
+    rssRulesOpen: rss.rulesOpen,
+    rssRule: rss.downShown || !rss.rulesOpen ? null : rulesArea.flags.rssRule,
+    rssField: rss.downShown || !rss.rulesOpen ? null : rulesArea.flags.rssField,
+    rssFieldEditable: !rss.downShown && rss.rulesOpen && rulesArea.flags.rssFieldEditable === true,
+    rssFieldToggle: !rss.downShown && rss.rulesOpen && rulesArea.flags.rssFieldToggle === true,
+    rssRuleDirty: rss.rulesOpen && rulesArea.flags.rssRuleDirty === true,
+    rssAutoDl: rulesArea.flags.rssAutoDl === true })
 
   readonly property int padX: Style.space(12)
   readonly property int rowHeight: Style.space(28)
@@ -246,6 +273,7 @@ Item {
   }
 
   function closeView() {
+    if (rulesOpen) rulesArea.closeRules()
     column = "rssFeeds"
     wide = false
     capped = false
@@ -254,6 +282,7 @@ Item {
   }
 
   function windowClosed() {
+    rulesArea.windowClosed()
     dropConfirm()
     rssCmds.awaiter.clear()
     rssCmds.input = null
@@ -276,11 +305,32 @@ Item {
     return id !== "rss.open" && id.indexOf("rss.") === 0
   }
 
+  // Slice 5b2: the commands the rules area runs.
+  function rulesCommand(commandId) {
+    var id = String(commandId || "")
+    return ["rss.rule", "rss.field", "rss.rules", "rss.preview"].some(function(p) { return id.indexOf(p) === 0 })
+  }
+
   function run(commandId, args, ev) {
     if (!open) return
     // The down screen: only the ways out.
-    if (downShown && ["rss.back", "rss.feedsClose"].indexOf(commandId) === -1) return
+    if (downShown && ["rss.back", "rss.feedsClose", "rss.rulesBack", "rss.fieldsBack", "rss.ruleListClose", "rss.previewClose"].indexOf(commandId) === -1) return
     var a = args || ({})
+    if (rulesCommand(commandId)) {
+      if (commandId === "rss.rules") {
+        wide = false
+        column = "rssRules"
+        rulesArea.openRules(a.item === undefined ? null : a.item)
+        return
+      }
+      if (commandId === "rss.rulesBack") {
+        rulesArea.closeRules()
+        column = "rssFeeds"
+        return
+      }
+      rulesArea.run(commandId, a, ev)
+      return
+    }
     switch (commandId) {
     case "rss.down": move(1); return
     case "rss.up": move(-1); return
@@ -312,14 +362,17 @@ Item {
   }
 
   function commitInput(purpose, text) {
+    if (rulesPurposes.indexOf(purpose) !== -1) { rulesArea.commitInput(purpose, text); return }
     rssCmds.commitInput(purpose, text)
   }
 
   function cancelInput(purpose) {
+    if (rulesPurposes.indexOf(purpose) !== -1) { rulesArea.cancelInput(purpose); return }
     rssCmds.cancelInput()
   }
 
   function inputEdited(purpose, text) {
+    if (rulesPurposes.indexOf(purpose) !== -1) rulesArea.inputEdited(purpose, text)
   }
 
   function flagsNow() {
@@ -327,13 +380,15 @@ Item {
   }
 
   function acceptPicker() {
+    rulesArea.acceptPicker()
   }
 
   function dropPicker() {
+    rulesArea.dropPicker()
   }
 
   function togglePicker() {
-    return false
+    return rulesArea.togglePicker() === true
   }
 
   // ---- the items ---------------------------------------------------------------------------
@@ -528,6 +583,21 @@ Item {
     id: rssCmds
     view: rss
   }
+
+  // ---- the rules area (slice 5b2; RssRulesPane.qml's header) ----------------------------------
+  // Over the feeds and articles while `column` is a rules pane; the feeds
+  // overlay below (rssFeedList) never shows at the same time.
+  RssRulesPane {
+    id: rulesArea
+    anchors.fill: parent
+    service: rss.service
+    client: rss.client
+    commands: rss.commands
+    view: rss
+    narrow: rss.narrow
+    open: rss.open && rss.rulesOpen
+  }
+  readonly property alias rulesPane: rulesArea
 
   Connections {
     target: rss.service

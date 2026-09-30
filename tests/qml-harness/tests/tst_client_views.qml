@@ -1263,7 +1263,7 @@ TestCase {
     compare(h, rssPane(o), "the host is the mounted RssPane")
     compare(h.name, "rss")
     compare(h.column, "rssFeeds")
-    compare(JSON.stringify(h.inputPurposes), JSON.stringify(["rssFeedUrl", "rssFeedName", "rssFolderName", "rssRename"]))
+    compare(JSON.stringify(h.inputPurposes), JSON.stringify(["rssFeedUrl", "rssFeedName", "rssFolderName", "rssRename", "rssRuleName", "rssRuleRename", "rssRuleField"]))
     compare(h.pickerOpen, false)
     compare(h.picker, null)
     compare(h.togglePicker(), false)
@@ -1315,7 +1315,8 @@ TestCase {
     compare(o.c.keyPane, "rssFeeds")
     var f = h.flagsNow()
     verify(f !== null)
-    compare(JSON.stringify(Object.keys(f).sort()), JSON.stringify(["narrow", "rssArticle", "rssFeedRow", "rssItem", "rssProcessingOff", "rssUnread", "rssUp", "wide"]))
+    compare(JSON.stringify(Object.keys(f).sort()), JSON.stringify(["narrow", "rssArticle", "rssAutoDl", "rssFeedRow", "rssField", "rssFieldEditable", "rssFieldToggle",
+      "rssItem", "rssProcessingOff", "rssRule", "rssRuleDirty", "rssRulesOpen", "rssUnread", "rssUp", "wide"]))
     // The footer reads RSS's own keys (View.rssFooterKeys through the `rss` field).
     compare(o.c.mode, "NORMAL")
     // The torrent keys are dead here: t, z and q never reach the torrents.
@@ -1342,5 +1343,53 @@ TestCase {
     o.c.close()
     o.c.open("")
     compare(o.c.activeView, "torrents")
+  }
+
+  // Slice 5b2 (Task 1): the rules area. RssPane mounts Task 1's placeholder
+  // RssRulesPane (Task 3 fills it in), owns every rss.rule* command, and
+  // routes `column` to the rules panes.
+  function test_5b2_the_rules_placeholder_is_mounted_and_owned() {
+    var o = make()
+    var h = rssPane(o)
+    var rules = findName(content(o), "rssRulesView")
+    verify(rules !== null, "RssRulesPane is mounted")
+    compare(h.rulesPane, rules, "RssPane holds it")
+    verify(!rules.visible, "hidden while the rules aren't open")
+    var ids = ["rss.rules", "rss.ruleDown", "rss.ruleUp", "rss.ruleEdit", "rss.ruleNew", "rss.ruleRename", "rss.ruleRemove", "rss.ruleToggle",
+      "rss.ruleReload", "rss.fieldEdit", "rss.fieldToggle", "rss.rulePreview", "rss.ruleDiscard", "rss.fieldsBack", "rss.rulesBack",
+      "rss.rulesSwitch", "rss.ruleListPick", "rss.ruleListClose", "rss.previewClose"]
+    for (var i = 0; i < ids.length; i++) {
+      compare(h.owns(ids[i]), true, ids[i])
+      verify(Registry.commands.some(function(r) { return r.id === ids[i] }), ids[i] + " is a registry row")
+    }
+    // The flags the placeholder reports: the rules closed, nothing under a cursor.
+    bigN(o)
+    compare(o.c.activeView, "rss")
+    var f = h.flagsNow()
+    compare(f.rssRulesOpen, false)
+    compare(f.rssRule, null)
+    compare(f.rssField, null)
+    compare(f.rssFieldEditable, false)
+    compare(f.rssFieldToggle, false)
+    compare(f.rssRuleDirty, false)
+    compare(f.rssAutoDl, false)
+    // R (rss.rules) opens the rules area: keys dispatch in the rule list;
+    // Esc there (rss.rulesBack) brings the feeds back.
+    h.run("rss.rules", ({}))
+    compare(h.column, "rssRules")
+    compare(o.c.keyPane, "rssRules")
+    verify(rules.visible)
+    compare(h.flagsNow().rssRulesOpen, true)
+    esc(o)
+    compare(h.column, "rssFeeds")
+    compare(o.c.keyPane, "rssFeeds")
+    verify(!rules.visible)
+    compare(o.c.activeView, "rss", "Esc from the rules stays in RSS")
+    // Leaving RSS closes the rules too.
+    h.run("rss.rules", ({}))
+    h.leaveRequested()
+    compare(o.c.activeView, "torrents")
+    compare(h.column, "rssFeeds")
+    verify(!rules.visible)
   }
 }

@@ -549,7 +549,13 @@ var SEARCH_ACCEPT = { searchAdd: "add", searchOpenPage: "open", pluginInstall: "
 // RSS's confirms (slice 5b1), raised by the RSS view like Search's: kind ->
 // the word `y` shows. `line` is the case file's confirm text, filled in
 // (tests/fixtures/rss-rules-cases.json window.confirm*), `detail` optional.
-var RSS_ACCEPT = { rssAdd: "add", rssOpenPage: "open", rssRemove: "remove", rssMarkRead: "mark read", rssProcessingOn: "turn on" };
+// Slice 5b2 adds the rules' confirms (tests/fixtures/rss-autorules-cases.json
+// window.confirm*): x's remove, e's turn on, Enter's turn off and edit on
+// an enabled rule, leaving a dirty draft (y save, n keep editing), D's and
+// r's discard, and Settings' auto-download on (rssAutoDlOn, raised by
+// SettingsCommands: Task 2 owns that wiring).
+var RSS_ACCEPT = { rssAdd: "add", rssOpenPage: "open", rssRemove: "remove", rssMarkRead: "mark read", rssProcessingOn: "turn on",
+  rssRuleRemove: "remove", rssRuleOn: "turn on", rssRuleEditOff: "turn off and edit", rssRuleLeave: "save", rssRuleDiscard: "discard", rssAutoDlOn: "turn on" };
 
 // confirmLine(confirm) -> the CONFIRM status line, from
 // CommandRegistry.dispatch's `confirm` result {commandId, count, withFiles}.
@@ -800,6 +806,15 @@ function inputPrompt(purpose, shown) {
   if (purpose === "rssFeedName") return { prompt: "Feed name", placeholder: String(shown || "") };
   if (purpose === "rssFolderName") return { prompt: "Folder name", placeholder: "" };
   if (purpose === "rssRename") return { prompt: "Rename", placeholder: String(shown || "") };
+  // RSS rules (slice 5b2, the case file rss-autorules-cases.json's window
+  // prompts): a's name, n's rename (prefilled with the current name, which
+  // `shown` never carries: ClientCommands.inputShown has no host route) and
+  // a field's value (the field key lives in the rules area's own input
+  // state; the prefill carries the current value). A label passed as
+  // `shown` would be the field's prompt.
+  if (purpose === "rssRuleName") return { prompt: "Rule name", placeholder: "" };
+  if (purpose === "rssRuleRename") return { prompt: "Rename rule", placeholder: String(shown || "") };
+  if (purpose === "rssRuleField") return { prompt: shown ? String(shown) : "New value", placeholder: "" };
   // A setting's input editor (Task 6); `shown` is its label.
   if (purpose === "settingEdit") return { prompt: String(shown || ""), placeholder: "" };
   return { prompt: "/", placeholder: "filter by name, or paste a magnet" };
@@ -823,6 +838,9 @@ function modeHints(mode, ctx) {
     if (c.purpose === "pluginInstall") return [{ key: "Enter", label: "install" }, { key: "Esc", label: "cancel" }];
     if (c.purpose === "rssFeedUrl" || c.purpose === "rssFeedName" || c.purpose === "rssFolderName") return [{ key: "Enter", label: "add" }, { key: "Esc", label: "cancel" }];
     if (c.purpose === "rssRename") return [{ key: "Enter", label: "rename" }, { key: "Esc", label: "cancel" }];
+    if (c.purpose === "rssRuleName") return [{ key: "Enter", label: "create" }, { key: "Esc", label: "cancel" }];
+    if (c.purpose === "rssRuleRename") return [{ key: "Enter", label: "rename" }, { key: "Esc", label: "cancel" }];
+    if (c.purpose === "rssRuleField") return [{ key: "Enter", label: "set" }, { key: "Esc", label: "cancel" }];
     if (c.purpose === "settingEdit" || c.purpose === "categoryPath" || Object.prototype.hasOwnProperty.call(LIMIT_PROMPTS, c.purpose)) return [{ key: "Enter", label: "set" }, { key: "Esc", label: "cancel" }];
     return [{ key: "Enter", label: "keep filter" }, { key: "Esc", label: "cancel" }];
   }
@@ -970,6 +988,7 @@ function searchFooterKeys(pane, flags) {
 function rssFooterKeys(pane, flags) {
   var f = flags || {};
   var help = { key: "?", label: "keys" };
+  if (pane === "rssRules" || pane === "rssRuleFields" || pane === "rssRulePreview" || pane === "rssRuleList") return rssRulesFooterKeys(pane, f);
   if (pane === "rssFeedList") {
     if (f.rssUp !== true) return [{ key: "j/k", label: "move" }, { key: "Esc", label: "close" }, help];
     return [{ key: "j/k", label: "move" }, { key: "Enter", label: "choose" }, { key: "Esc", label: "close" }, help];
@@ -1002,6 +1021,53 @@ function rssFooterKeys(pane, flags) {
     out.push({ key: "h", label: "feeds" });
   }
   return out.concat(tail);
+}
+
+// rssRulesFooterKeys(pane, flags) -> the rules panes' footer (slice 5b2),
+// ending with "? keys". flags as rssFooterKeys, plus rssRule ({name,
+// enabled} or null), rssFieldEditable, rssFieldToggle, rssRuleDirty and
+// rssAutoDl. The rule list: move, then on a rule edit; new; on a rule
+// rename, remove and e (turn on or off by the rule's state); reload; on a
+// rule Tab to the fields; Esc to the feeds. The fields: move, Enter on an
+// editable field, Space on a toggle, e, p (it saves first only while
+// auto-download is on and the draft is dirty: OV2), D with a dirty draft,
+// reload, narrow Tab for the rule list, h back to the rules. The narrow
+// rule list: move, choose, close; the narrow preview: Esc back.
+// qBittorrent down: only the ways out.
+function rssRulesFooterKeys(pane, f) {
+  var help = { key: "?", label: "keys" };
+  var up = f.rssUp === true;
+  if (pane === "rssRuleList") {
+    if (!up) return [{ key: "j/k", label: "move" }, { key: "Esc", label: "close" }, help];
+    return [{ key: "j/k", label: "move" }, { key: "Enter", label: "choose" }, { key: "Esc", label: "close" }, help];
+  }
+  if (pane === "rssRulePreview") return [{ key: "Esc", label: "back" }, help];
+  var rule = f.rssRule && typeof f.rssRule === "object" ? f.rssRule : null;
+  var toggle = { key: "e", label: rule && rule.enabled === true ? "turn off" : "turn on" };
+  if (pane === "rssRules") {
+    var back = { key: "Esc", label: "feeds" };
+    if (!up) return [back, help];
+    var list = [{ key: "j/k", label: "move" }];
+    if (rule) list.push({ key: "Enter", label: "edit" });
+    list.push({ key: "a", label: "new" });
+    if (rule) list.push({ key: "n", label: "rename" }, { key: "x", label: "remove" }, toggle);
+    list.push({ key: "r", label: "reload" });
+    if (rule) list.push({ key: "Tab", label: "fields" });
+    return list.concat([back, help]);
+  }
+  var toRules = { key: "h", label: "rules" };
+  if (!up) return [toRules, help];
+  var out = [{ key: "j/k", label: "move" }];
+  if (rule && f.rssFieldEditable === true) out.push({ key: "Enter", label: "edit" });
+  if (rule && f.rssFieldToggle === true) out.push({ key: "Space", label: "toggle" });
+  if (rule) {
+    out.push(toggle);
+    out.push({ key: "p", label: f.rssAutoDl === true && f.rssRuleDirty === true ? "save and preview" : "preview" });
+  }
+  if (f.rssRuleDirty === true) out.push({ key: "D", label: "discard" });
+  out.push({ key: "r", label: "reload" });
+  if (f.narrow === true) out.push({ key: "Tab", label: "rule list" });
+  return out.concat([toRules, help]);
 }
 
 // settingQuestion(label, isBool, value, shown) -> {line, accept}: what a
@@ -1257,6 +1323,14 @@ function rssFlagState(rss, st) {
   st.rssProcessingOff = r.rssProcessingOff === true;
   st.rssUp = r.rssUp === true;
   st.rssWide = r.wide === true;
+  // Slice 5b2: the rules area's flags, written just as every time.
+  st.rssRulesOpen = r.rssRulesOpen === true;
+  st.rssRule = r.rssRule && typeof r.rssRule === "object" ? r.rssRule : null;
+  st.rssField = r.rssField && typeof r.rssField === "object" ? r.rssField : null;
+  st.rssFieldEditable = r.rssFieldEditable === true;
+  st.rssFieldToggle = r.rssFieldToggle === true;
+  st.rssRuleDirty = r.rssRuleDirty === true;
+  st.rssAutoDl = r.rssAutoDl === true;
 }
 
 // Slice 5b0: each view's dispatch-field mapper, by view name. The settings
@@ -2089,9 +2163,13 @@ function paletteSearchReason(rows, state) {
 
 // Slice 5b1: an RSS action from elsewhere names the step it needs: RSS
 // open, then the column its rows live in (an Articles-only row: the
-// articles; anything else: the feeds).
+// articles; anything else: the feeds). Slice 5b2: a rules row names
+// opening the rules (R) from outside them, then the rules column it lives
+// in (a fields-only row: the fields; anything else: the rule list); a
+// feeds or articles row from inside the rules names leaving them (Esc).
+var RSS_RULES_PANES = { rssRules: true, rssRuleFields: true, rssRulePreview: true, rssRuleList: true };
 function paletteRssReason(rows, state) {
-  var feeds = false, articles = false, any = false;
+  var feeds = false, articles = false, any = false, rules = false, ruleList = false, fields = false;
   for (var i = 0; i < rows.length; i++) {
     var panes = rows[i].panes || [];
     for (var j = 0; j < panes.length; j++) {
@@ -2099,10 +2177,19 @@ function paletteRssReason(rows, state) {
       any = true;
       if (panes[j] === "rssFeeds") feeds = true;
       if (panes[j] === "rssArticles") articles = true;
+      if (RSS_RULES_PANES[panes[j]] === true) rules = true;
+      if (panes[j] === "rssRules" || panes[j] === "rssRuleList") ruleList = true;
+      if (panes[j] === "rssRuleFields") fields = true;
     }
   }
   if (!any) return "";
   if (!(state && state.activeView === "rss")) return "open RSS";
+  var inRules = RSS_RULES_PANES[String(state.viewPane || "")] === true;
+  if (rules) {
+    if (!inRules) return "open the rules (R)";
+    return fields && !ruleList ? "focus the fields" : "focus the rule list";
+  }
+  if (inRules) return "leave the rules (Esc)";
   return articles && !feeds ? "focus the articles" : "focus the feeds";
 }
 
@@ -2386,7 +2473,7 @@ function paletteState(tableState, hasCursorRow, inspector, pane, view, settings,
 var VIEW_INPUT_PURPOSES_BY_VIEW = {
   settings: ["settingsSearch", "settingEdit"],
   search: ["searchQuery", "pluginInstall"],
-  rss: ["rssFeedUrl", "rssFeedName", "rssFolderName", "rssRename"]
+  rss: ["rssFeedUrl", "rssFeedName", "rssFolderName", "rssRename", "rssRuleName", "rssRuleRename", "rssRuleField"]
 };
 var SEARCH_INPUT_PURPOSES = VIEW_INPUT_PURPOSES_BY_VIEW.search;
 var VIEW_INPUT_PURPOSES = Registry.VIEWS.reduce(function(all, v) {

@@ -710,10 +710,12 @@ test("every command row has the documented shape", () => {
   // listRow/secretSet/undoEntry/listEditable/listItem/narrow: slice 4b Task 1.
   // searchResult/searchPluginOn/searchPlugin/pluginsIdle: slice 5a Task 1.
   // rssFeedRow/rssItem/rssArticle/rssUnread/rssProcessingOff/rssUp: slice 5b1 Task 1.
+  // rssRule/rssFieldEditable/rssFieldToggle/rssRuleDirty: slice 5b2 Task 1.
   const validNeeds = ["none", "torrent", "selection", "tracker", "peer", "trackersTab", "noMetadata", "libraryGroup", "libraryName", "categoryName", "limitRow", "limitToggle", "toggleRow", "editableRow",
     "listRow", "secretSet", "undoEntry", "listEditable", "listItem", "narrow",
     "searchResult", "searchPluginOn", "searchPlugin", "pluginsIdle",
-    "rssFeedRow", "rssItem", "rssArticle", "rssUnread", "rssProcessingOff", "rssUp"];
+    "rssFeedRow", "rssItem", "rssArticle", "rssUnread", "rssProcessingOff", "rssUp",
+    "rssRule", "rssFieldEditable", "rssFieldToggle", "rssRuleDirty"];
   const validTabs = ["info", "trackers", "peers", "files", "chart"];
   for (const row of commands) {
     assert.ok(row.id === null || typeof row.id === "string");
@@ -2245,7 +2247,11 @@ test("4b: the new needs default unmet, and only undo names a reason", () => {
 // --- Views and Search (slice 5a, Task 1: eng C1, OV2) ---------------------------------
 
 const SEARCH_PANES = ["searchResults", "searchPlugins", "searchPluginList"];
-const RSS_PANES = ["rssFeeds", "rssArticles", "rssFeedList"];
+// 5b1's panes (the feeds and articles, the narrow feeds overlay) and 5b2's
+// rules panes (the rule list, the fields, the narrow preview and rule list).
+const RSS_FEED_PANES = ["rssFeeds", "rssArticles", "rssFeedList"];
+const RSS_RULES_PANES = ["rssRules", "rssRuleFields", "rssRulePreview", "rssRuleList"];
+const RSS_PANES = RSS_FEED_PANES.concat(RSS_RULES_PANES);
 const VIEW_PANES = ALL_SETTINGS_PANES.concat(SEARCH_PANES).concat(RSS_PANES);
 // A row "touches torrents" when its need is about a torrent, a torrent's
 // tracker or peer, the Info tab's Limits or the filters' categories/tags.
@@ -2557,15 +2563,19 @@ test("every view but the torrents has VIEW_META with a real opener", () => {
 const RSS_ITEM = { path: "Linux\\Debian security", name: "Debian security", folder: false, feeds: 0 };
 const RSS_ARTICLE = { feedPath: "Linux\\Debian security", guid: "dsa-6000", title: "DSA-6000 openssl", isRead: false, hasTorrent: true, inLibrary: false,
   link: "https://www.debian.org/security/2026/dsa-6000", torrentURL: "magnet:?xt=urn:btih:" + "ab".repeat(20), host: "www.debian.org" };
-const RSS_ON = { rssItem: RSS_ITEM, rssFeedRow: true, rssArticle: RSS_ARTICLE, rssUnread: 3, rssProcessingOff: true, rssUp: true };
+// Slice 5b2: the rules flags, all on (the rule, the field, dirty, auto-download on).
+const RSS_RULE = { name: "Show", enabled: false };
+const RSS_FIELD = { key: "mustContain", kind: "regexText", value: "Show" };
+const RSS_ON = { rssItem: RSS_ITEM, rssFeedRow: true, rssArticle: RSS_ARTICLE, rssUnread: 3, rssProcessingOff: true, rssUp: true,
+  rssRulesOpen: true, rssRule: RSS_RULE, rssField: RSS_FIELD, rssFieldEditable: true, rssFieldToggle: true, rssRuleDirty: true, rssAutoDl: true };
 
 // The brief's registry table, row by row (NORMAL): id, keys, panes, needs,
 // and the row's `when` and paletteHidden. j/k also take Down/Up, and the
 // navigation rows are paletteHidden, as Settings' and Search's are.
 const RSS_ROWS = [
   ["rss.open", ["N"], TORRENT_PANES, "none", undefined, undefined],
-  ["rss.down", ["j", "Down"], RSS_PANES, "none", undefined, true],
-  ["rss.up", ["k", "Up"], RSS_PANES, "none", undefined, true],
+  ["rss.down", ["j", "Down"], RSS_FEED_PANES, "none", undefined, true],
+  ["rss.up", ["k", "Up"], RSS_FEED_PANES, "none", undefined, true],
   ["rss.toArticles", ["l", "Enter"], ["rssFeeds"], "rssFeedRow", undefined, true],
   ["rss.toFeeds", ["h"], ["rssArticles"], "none", undefined, true],
   ["rss.switch", ["Tab"], ["rssFeeds", "rssArticles"], "none", undefined, true],
@@ -2582,7 +2592,27 @@ const RSS_ROWS = [
   ["rss.processingOn", ["O"], ["rssFeeds", "rssArticles"], "rssProcessingOff", undefined, undefined],
   ["rss.back", ["Esc"], ["rssFeeds", "rssArticles"], "none", undefined, true],
   ["rss.feedsClose", ["Esc"], ["rssFeedList"], "none", undefined, true],
-  ["rss.feedsPick", ["Enter"], ["rssFeedList"], "none", undefined, true]
+  ["rss.feedsPick", ["Enter"], ["rssFeedList"], "none", undefined, true],
+  // Slice 5b2 (Task 1): the rules.
+  ["rss.rules", ["R"], ["rssFeeds", "rssArticles"], "rssUp", undefined, undefined],
+  ["rss.ruleDown", ["j", "Down"], ["rssRules", "rssRuleFields", "rssRuleList"], "none", undefined, true],
+  ["rss.ruleUp", ["k", "Up"], ["rssRules", "rssRuleFields", "rssRuleList"], "none", undefined, true],
+  ["rss.ruleEdit", ["Enter", "l"], ["rssRules"], "rssRule", undefined, undefined],
+  ["rss.ruleNew", ["a"], ["rssRules"], "rssUp", undefined, undefined],
+  ["rss.ruleRename", ["n"], ["rssRules"], "rssRule", undefined, undefined],
+  ["rss.ruleRemove", ["x"], ["rssRules"], "rssRule", undefined, undefined],
+  ["rss.ruleToggle", ["e"], ["rssRules", "rssRuleFields"], "rssRule", undefined, undefined],
+  ["rss.ruleReload", ["r"], ["rssRules", "rssRuleFields"], "rssUp", undefined, undefined],
+  ["rss.fieldEdit", ["Enter"], ["rssRuleFields"], "rssFieldEditable", undefined, true],
+  ["rss.fieldToggle", ["Space"], ["rssRuleFields"], "rssFieldToggle", undefined, true],
+  ["rss.rulePreview", ["p"], ["rssRuleFields"], "rssRule", undefined, undefined],
+  ["rss.ruleDiscard", ["D"], ["rssRuleFields"], "rssRuleDirty", undefined, undefined],
+  ["rss.fieldsBack", ["h", "Esc"], ["rssRuleFields"], "none", undefined, true],
+  ["rss.rulesBack", ["Esc"], ["rssRules"], "none", undefined, true],
+  ["rss.rulesSwitch", ["Tab"], ["rssRules", "rssRuleFields"], "none", undefined, true],
+  ["rss.ruleListPick", ["Enter"], ["rssRuleList"], "none", undefined, true],
+  ["rss.ruleListClose", ["Esc"], ["rssRuleList"], "none", undefined, true],
+  ["rss.previewClose", ["Esc"], ["rssRulePreview"], "none", undefined, true]
 ];
 
 test("rss: the rows are the brief's table, NORMAL only", () => {
@@ -2610,7 +2640,7 @@ test("N opens RSS from every torrent pane in NORMAL; in the Feeds column it adds
   const add = dispatch(state(Object.assign({ pane: "rssFeeds" }, RSS_ON)), evFor("N"));
   assert.deepEqual([add.commandId, add.state.mode], ["rss.addFolder", "NORMAL"], "the RSS view starts the INSERT itself");
   assert.deepEqual(add.args.item, RSS_ITEM);
-  for (const pane of ALL_SETTINGS_PANES.concat(SEARCH_PANES, ["rssArticles", "rssFeedList"])) {
+  for (const pane of ALL_SETTINGS_PANES.concat(SEARCH_PANES, ["rssArticles", "rssFeedList"], RSS_RULES_PANES)) {
     assert.equal(dispatch(state(Object.assign({ pane: pane }, ALL_ON, RSS_ON)), evFor("N")).commandId, null, "N in " + pane);
   }
   for (const pane of VIEW_PANES) assert.equal(Registry.dispatchCommand(state({ pane: pane }), "rss.open").commandId, null, ":RSS from " + pane);
@@ -2620,7 +2650,7 @@ test("N opens RSS from every torrent pane in NORMAL; in the Feeds column it adds
   for (const k of ["O", "A"]) assert.deepEqual(commands.filter((r) => r.keys.includes(k)).map((r) => r.panes.every((p) => RSS_PANES.includes(p))), [true], k + " is RSS's only");
 });
 
-const KEYS_RSS = ["j", "k", "Down", "Up", "l", "h", "Enter", "Tab", "Shift-Tab", "Esc", "a", "N", "n", "x", "r", "A", "Space", "d", "O",
+const KEYS_RSS = ["j", "k", "Down", "Up", "l", "h", "Enter", "Tab", "Shift-Tab", "Esc", "a", "N", "n", "x", "r", "A", "Space", "d", "O", "R", "p", "D",
   "?", ":", "t", "z", "s", "S", "q", "1", "4", "F", ",", "/", "c", "y", "P", "i", "U", "u", "g", "G", "V", "f", "e", "m", "o", "C", "T", "Ctrl-l", "Ctrl-h"];
 const RSS_FEEDS = { j: "rss.down", Down: "rss.down", k: "rss.up", Up: "rss.up", l: "rss.toArticles", Enter: "rss.toArticles", Tab: "rss.switch",
   a: "rss.addFeed", N: "rss.addFolder", n: "rss.rename", x: "rss.remove", r: "rss.refresh", A: "rss.markAllRead", O: "rss.processingOn",
@@ -2629,10 +2659,25 @@ const RSS_ARTICLES = { j: "rss.down", Down: "rss.down", k: "rss.up", Up: "rss.up
   r: "rss.refresh", A: "rss.markAllRead", Space: "rss.markRead", Enter: "rss.add", d: "rss.openPage", O: "rss.processingOn", Esc: "rss.back",
   "?": "help.toggle", ":": "palette.open" };
 const RSS_FEED_LIST = { j: "rss.down", Down: "rss.down", k: "rss.up", Up: "rss.up", Enter: "rss.feedsPick", Esc: "rss.feedsClose", "?": "help.toggle", ":": "palette.open" };
+// Slice 5b2: R opens the rules from the feeds and the articles; the rules panes.
+RSS_FEEDS.R = "rss.rules";
+RSS_ARTICLES.R = "rss.rules";
+const RSS_RULES = { j: "rss.ruleDown", Down: "rss.ruleDown", k: "rss.ruleUp", Up: "rss.ruleUp", Enter: "rss.ruleEdit", l: "rss.ruleEdit", a: "rss.ruleNew",
+  n: "rss.ruleRename", x: "rss.ruleRemove", e: "rss.ruleToggle", r: "rss.ruleReload", Tab: "rss.rulesSwitch", Esc: "rss.rulesBack", "?": "help.toggle", ":": "palette.open" };
+const RSS_RULE_FIELDS = { j: "rss.ruleDown", Down: "rss.ruleDown", k: "rss.ruleUp", Up: "rss.ruleUp", Enter: "rss.fieldEdit", Space: "rss.fieldToggle",
+  e: "rss.ruleToggle", r: "rss.ruleReload", p: "rss.rulePreview", D: "rss.ruleDiscard", h: "rss.fieldsBack", Esc: "rss.fieldsBack", Tab: "rss.rulesSwitch",
+  "?": "help.toggle", ":": "palette.open" };
+const RSS_RULE_LIST = { j: "rss.ruleDown", Down: "rss.ruleDown", k: "rss.ruleUp", Up: "rss.ruleUp", Enter: "rss.ruleListPick", Esc: "rss.ruleListClose",
+  "?": "help.toggle", ":": "palette.open" };
+const RSS_RULE_PREVIEW = { Esc: "rss.previewClose", "?": "help.toggle", ":": "palette.open" };
 const KEY_MAP_RSS = {
   rssFeeds: { wide: RSS_FEEDS, narrow: RSS_FEEDS },
   rssArticles: { wide: RSS_ARTICLES, narrow: Object.assign({}, RSS_ARTICLES, { l: "rss.articleWide" }) },
-  rssFeedList: { wide: RSS_FEED_LIST, narrow: RSS_FEED_LIST }
+  rssFeedList: { wide: RSS_FEED_LIST, narrow: RSS_FEED_LIST },
+  rssRules: { wide: RSS_RULES, narrow: RSS_RULES },
+  rssRuleFields: { wide: RSS_RULE_FIELDS, narrow: RSS_RULE_FIELDS },
+  rssRuleList: { wide: RSS_RULE_LIST, narrow: RSS_RULE_LIST },
+  rssRulePreview: { wide: RSS_RULE_PREVIEW, narrow: RSS_RULE_PREVIEW }
 };
 
 test("rss: every key x RSS pane x narrow resolves as pinned, and nothing else resolves", () => {
@@ -2767,4 +2812,130 @@ test("rss: ? lists each RSS pane's keys, plus : and ?", () => {
     assert.deepEqual(Array.from(new Set(ids)).sort(), Array.from(new Set(want)).sort(), pane);
   }
   assert.ok(!helpFor("NORMAL", "rssArticles", undefined, { narrow: false }).some((r) => r.id === "rss.articleWide"), "l is narrow-only");
+});
+
+// --- Slice 5b2: RSS rules (Task 1, the contract) --------------------------------
+
+test("5b2: R opens the rules from the feeds and the articles only", () => {
+  for (const pane of ["rssFeeds", "rssArticles"]) {
+    const r = dispatch(state(Object.assign({ pane: pane }, RSS_ON)), evFor("R"));
+    assert.deepEqual([r.commandId, r.state.mode], ["rss.rules", "NORMAL"], pane);
+    assert.deepEqual(r.args.item, RSS_ITEM, pane + ": the Feeds cursor's feed, for a's rule-create");
+  }
+  assert.deepEqual(commands.filter((r) => r.id === "rss.rules").map((r) => r.panes), [["rssFeeds", "rssArticles"]]);
+  for (const pane of ["rssFeedList"].concat(RSS_RULES_PANES)) {
+    assert.equal(dispatch(state(Object.assign({ pane: pane }, RSS_ON)), evFor("R")).commandId, null, "R in " + pane);
+  }
+  // R stays tracker.reannounce in the inspector, and means nothing on the other torrent panes.
+  assert.deepEqual(commands.filter((r) => r.keys.includes("R")).map((r) => r.id).sort(), ["rss.rules", "tracker.reannounce"]);
+  assert.deepEqual(dispatch(state({ pane: "rssFeeds", rssUp: false }), evFor("R")).blocked, "qBittorrent isn't reachable");
+});
+
+test("5b2: e, p and D are scoped to their panes; no torrent row reaches a rules pane", () => {
+  const panesOf = (id) => commands.find((r) => r.id === id).panes;
+  assert.deepEqual(panesOf("rss.ruleToggle"), ["rssRules", "rssRuleFields"]);
+  assert.deepEqual(panesOf("rss.rulePreview"), ["rssRuleFields"]);
+  assert.deepEqual(panesOf("rss.ruleDiscard"), ["rssRuleFields"]);
+  for (const [label, live] of [["e", ["rssRules", "rssRuleFields"]], ["p", ["rssRuleFields"]], ["D", ["rssRuleFields"]]]) {
+    for (const pane of TORRENT_PANES.concat(ALL_SETTINGS_PANES, SEARCH_PANES, RSS_PANES)) {
+      const r = dispatch(state(Object.assign({ pane: pane, inspectorTab: pane === "inspector" ? "info" : "" }, ALL_ON, SEARCH_ON, RSS_ON)), evFor(label));
+      if (live.includes(pane)) assert.ok(/^rss\.rule/.test(r.commandId), label + " in " + pane);
+      else if (RSS_PANES.includes(pane)) assert.equal(r.commandId, null, label + " in " + pane);
+      else assert.ok(r.commandId === null || !/^rss\./.test(r.commandId), label + " in " + pane + " is never a rules row");
+    }
+  }
+  // The any-pane torrent rows (t, z, s, q, 1-5 ...) are dead in every rules pane.
+  for (const pane of RSS_RULES_PANES) {
+    for (const row of anyPaneViewRows()) {
+      for (const label of row.keys) {
+        if (label === "g g" || label === "Esc Esc") continue;
+        const r = dispatch(state(Object.assign({ pane: pane, cursorNoMetadata: true, hasTorrent: true, selectionCount: 2 }, RSS_ON)), evFor(label));
+        if (ANY_PANE_LIVE_IN_SETTINGS.includes(row.id)) assert.equal(r.commandId, row.id, pane + " " + label);
+        else assert.ok(r.commandId === null || /^rss\./.test(r.commandId), row.id + " " + label + " in " + pane + " resolved to " + r.commandId);
+      }
+    }
+    assert.equal(Registry.viewOfPane(pane), "rss", pane);
+    assert.equal(Registry.isRssPane(pane), true, pane);
+  }
+  assert.deepEqual(Registry.RSS_PANES, RSS_PANES);
+});
+
+test("5b2: each rules need's reason, and qBittorrent down names the down client first", () => {
+  const blocked = (pane, label, flags) => {
+    const r = dispatch(state(Object.assign({ pane: pane }, RSS_ON, flags)), evFor(label));
+    return [r.commandId, r.blocked];
+  };
+  for (const [pane, label] of [["rssRules", "Enter"], ["rssRules", "l"], ["rssRules", "n"], ["rssRules", "x"], ["rssRules", "e"], ["rssRuleFields", "e"], ["rssRuleFields", "p"]]) {
+    assert.deepEqual(blocked(pane, label, { rssRule: null }), [null, "no rule here"], pane + " " + label);
+  }
+  assert.deepEqual(blocked("rssRuleFields", "Enter", { rssFieldEditable: false }), [null, "this field can't be edited here"]);
+  assert.deepEqual(blocked("rssRuleFields", "Enter", { rssRule: null }), [null, "no rule here"], "no rule names that first");
+  assert.deepEqual(blocked("rssRuleFields", "Space", { rssFieldToggle: false }), [null, "Space toggles on/off fields"]);
+  assert.deepEqual(blocked("rssRuleFields", "D", { rssRuleDirty: false }), [null, "nothing to discard"]);
+  // Over the api-down screen every rules key that needs qBittorrent names it.
+  for (const [pane, label] of [["rssRules", "Enter"], ["rssRules", "a"], ["rssRules", "n"], ["rssRules", "x"], ["rssRules", "e"], ["rssRules", "r"],
+    ["rssRuleFields", "Enter"], ["rssRuleFields", "Space"], ["rssRuleFields", "e"], ["rssRuleFields", "p"], ["rssRuleFields", "r"]]) {
+    assert.deepEqual(blocked(pane, label, { rssUp: false }), [null, "qBittorrent isn't reachable"], pane + " " + label);
+  }
+  // Discarding a local draft needs no qBittorrent; the ways out need nothing.
+  assert.equal(blocked("rssRuleFields", "D", { rssUp: false })[0], "rss.ruleDiscard");
+  for (const [pane, label, id] of [["rssRules", "Esc", "rss.rulesBack"], ["rssRules", "j", "rss.ruleDown"], ["rssRuleFields", "h", "rss.fieldsBack"],
+    ["rssRuleFields", "Esc", "rss.fieldsBack"], ["rssRuleFields", "Tab", "rss.rulesSwitch"], ["rssRuleList", "Esc", "rss.ruleListClose"],
+    ["rssRuleList", "Enter", "rss.ruleListPick"], ["rssRulePreview", "Esc", "rss.previewClose"]]) {
+    assert.equal(blocked(pane, label, { rssUp: false, rssRule: null })[0], id, pane + " " + label);
+  }
+  const R = Registry.needsReason;
+  const up = { rssUp: true, rssRule: RSS_RULE };
+  assert.equal(R("rssRule", { rssUp: true }), "no rule here");
+  assert.equal(R("rssFieldEditable", up), "this field can't be edited here");
+  assert.equal(R("rssFieldToggle", up), "Space toggles on/off fields");
+  assert.equal(R("rssRuleDirty", up), "nothing to discard");
+  for (const need of ["rssRule", "rssFieldEditable", "rssFieldToggle"]) {
+    assert.equal(Registry.preconditionMet(need, {}), false, need + " defaults unmet");
+    assert.equal(R(need, {}), "qBittorrent isn't reachable", need);
+    assert.equal(Registry.preconditionMet(need, Object.assign({}, RSS_ON, { rssUp: false })), false, need + " needs qBittorrent up");
+    assert.equal(Registry.preconditionMet(need, RSS_ON), true, need);
+  }
+  assert.equal(Registry.preconditionMet("rssRuleDirty", {}), false);
+  assert.equal(Registry.preconditionMet("rssRuleDirty", { rssRuleDirty: true }), true, "a local draft needs no qBittorrent");
+  assert.equal(Registry.preconditionMet("rssRule", Object.assign({}, RSS_ON, { rssRule: "Show" })), false, "an object, never a string");
+  assert.equal(Registry.preconditionMet("rssFieldEditable", Object.assign({}, RSS_ON, { rssFieldEditable: 1 })), false, "true, never truthy");
+});
+
+test("5b2: rules rows capture the rule and the field frozen at key time", () => {
+  const rule = Object.assign({}, RSS_RULE, { nested: { x: 1 } });
+  const field = Object.assign({}, RSS_FIELD, { nested: { x: 1 } });
+  const s = (pane) => state(Object.assign({ pane: pane }, RSS_ON, { rssRule: rule, rssField: field }));
+  for (const [pane, label, id] of [["rssRules", "Enter", "rss.ruleEdit"], ["rssRules", "n", "rss.ruleRename"], ["rssRules", "x", "rss.ruleRemove"],
+    ["rssRules", "e", "rss.ruleToggle"], ["rssRuleFields", "e", "rss.ruleToggle"], ["rssRuleFields", "p", "rss.rulePreview"], ["rssRuleFields", "D", "rss.ruleDiscard"],
+    ["rssRuleFields", "Enter", "rss.fieldEdit"], ["rssRuleFields", "Space", "rss.fieldToggle"]]) {
+    const r = dispatch(s(pane), evFor(label));
+    assert.equal(r.commandId, id, pane + " " + label);
+    assert.ok(Object.isFrozen(r.args.rule), id + ": args.rule is frozen");
+    assert.deepEqual(r.args.rule, RSS_RULE, id + ": plain fields only");
+    assert.equal(r.confirm, undefined, id + ": the window raises any rules confirm");
+  }
+  for (const label of ["Enter", "Space"]) {
+    const r = dispatch(s("rssRuleFields"), evFor(label));
+    assert.ok(Object.isFrozen(r.args.field), label);
+    assert.deepEqual(r.args.field, RSS_FIELD, label);
+  }
+  assert.equal(dispatch(s("rssRules"), evFor("x")).args.field, undefined, "only the field rows carry the field");
+  // a (new rule) carries the Feeds cursor's feed, for rule-create's feed.
+  assert.deepEqual(dispatch(s("rssRules"), evFor("a")).args.item, RSS_ITEM);
+  // Navigation carries nothing.
+  assert.deepEqual(dispatch(s("rssRules"), evFor("j")).args, {});
+  assert.deepEqual(dispatch(s("rssRuleFields"), evFor("h")).args, {});
+});
+
+test("5b2: the rules CONFIRMs: y is the command again, confirmed, in every rules pane", () => {
+  for (const pane of RSS_RULES_PANES) {
+    for (const [id, kind] of [["rss.ruleRemove", "rssRuleRemove"], ["rss.ruleToggle", "rssRuleOn"], ["rss.ruleEdit", "rssRuleEditOff"], ["rss.fieldsBack", "rssRuleLeave"],
+      ["rss.ruleDiscard", "rssRuleDiscard"], ["rss.ruleReload", "rssRuleDiscard"]]) {
+      const c = Registry.raiseConfirm(state({ pane: pane }), id, kind, { rule: RSS_RULE });
+      const y = dispatch(c.state, evFor("y"));
+      assert.deepEqual([y.commandId, y.args.confirmed, y.args.rule.name, y.state.mode], [id, true, "Show", "NORMAL"], pane + " " + kind);
+      assert.equal(dispatch(c.state, evFor("n")).commandId, "confirm.cancel", pane + " " + kind);
+    }
+  }
 });
