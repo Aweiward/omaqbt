@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import copy
+import email.utils
 import json
 import os
 import posixpath
@@ -7,6 +8,7 @@ import re
 import sys
 import threading
 import time
+from datetime import timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, unquote_plus, urlparse
@@ -1168,6 +1170,9 @@ def _rss_reset(body):
         _RSS_IDS["log"] = int(spec.get("logStart") or 0)
         for row in spec.get("log") or []:
             _log_append(row["message"], row.get("type", "warning"))
+        RSS_RULES.clear()
+        RSS_RULES.update(copy.deepcopy(spec.get("rules") or {}))
+        _RSS_RULE_CALLS["setRule"] = 0
 
 
 def _log_main(query):
@@ -1186,6 +1191,241 @@ def _log_main(query):
     with _RSS_LOCK:
         rows = [dict(r) for r in RSS_LOG if r["id"] > last and r["type"] & wanted]
     return 200, json.dumps(rows).encode()
+
+
+# Slice 5b2: qBittorrent 5.2.3's auto-download rules (rsscontroller.cpp,
+# rss_autodownloader.cpp, rss_autodownloadrule.cpp, addtorrentparams.cpp).
+# RSS_RULES maps a name to the rule as rss/rules shows it: setRule stores
+# toJsonObject(fromJsonObject(ruleDef)) (_rss_rule_canon), so a missing
+# key takes its default (`{}`, or a ruleDef that isn't JSON, makes an
+# enabled blank rule), a torrentParams key of any value hides the flat
+# savePath/assignedCategory/addPaused, and the flat keys and torrentParams
+# are both emitted. /fixture/rss-reset seeds its "rules" exactly as given
+# (so a test can plant an odd rule) and clears them otherwise.
+# renameRule answers 200 and changes nothing on a clash or a missing rule;
+# removeRule answers 200 for an unknown name. matchingArticles answers
+# {feedName: [titles]} for a saved rule: the control file's "rss_matching"
+# {ruleName: {feedName: [titles]}} verbatim when it names the rule, else a
+# case-insensitive substring match of mustContain on every article (read
+# or not) of each affectedFeeds URL, keyed by the feed's name, a later
+# same-named feed overwriting (rsscontroller.cpp:242), no key for a feed
+# with no match. The control file's "rss_setrule_inject" {"at": N
+# (default 1), "every": bool, "append": [episodes], "drop": [episodes],
+# "lastMatch": str, "remove": bool} changes the stored rule right after
+# the Nth setRule since the reset (or every one), as the auto-downloader
+# does when a save re-runs its queue (OV9). Each write also takes
+# _write_fault's "rss_<action>", and the reads "rss_rules" and
+# "rss_matchingArticles".
+RSS_RULES = {}
+_RSS_RULE_CALLS = {"setRule": 0}
+RSS_RULE_WRITES = ("setRule", "renameRule", "removeRule")
+_CONTENT_LAYOUTS = ("Original", "Subfolder", "NoSubfolder")
+_STOP_CONDITIONS = ("None", "MetadataReceived", "FilesChecked")
+_SHARE_ACTIONS = ("Default", "Stop", "Remove", "RemoveWithContent", "EnableSuperSeeding")
+
+
+def _rule_int(value, default):
+    if isinstance(value, int) and not isinstance(value, bool):
+        return value if -2 ** 31 <= value < 2 ** 31 else default
+    if isinstance(value, float) and value.is_integer() and -2 ** 31 <= value < 2 ** 31:
+        return int(value)
+    return default
+
+
+def _rule_str(value):
+    return value if isinstance(value, str) else ""
+
+
+def _rule_str_list(value):
+    if isinstance(value, str):
+        return [value]
+    return [_rule_str(v) for v in value] if isinstance(value, list) else []
+
+
+def _rule_path(value):
+    """Path(text).data(): cleaned (a trailing / goes)."""
+    text = _rule_str(value)
+    return _clean_path(text) if text else ""
+
+
+def _rule_optional_bool(obj, key):
+    """getOptionalBool: absent or null is unset; anything else toBool()."""
+    value = obj.get(key)
+    if value is None:
+        return None
+    return value is True
+
+
+def _rule_rfc2822(value):
+    """QDateTime::fromString(.., Qt::RFC2822Date).toString(Qt::RFC2822Date)."""
+    if not isinstance(value, str) or not value:
+        return ""
+    try:
+        when = email.utils.parsedate_to_datetime(value)
+    except (TypeError, ValueError, IndexError, OverflowError):
+        return ""
+    if when is None:
+        return ""
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=timezone.utc)
+    return when.strftime("%d %b %Y %H:%M:%S %z")
+
+
+def _rss_rule_canon(obj):
+    """toJsonObject(fromJsonObject(obj)) (rss_autodownloadrule.cpp:462-559)."""
+    o = obj if isinstance(obj, dict) else {}
+    if "torrentParams" in o:
+        tp = o["torrentParams"] if isinstance(o["torrentParams"], dict) else {}
+        layout = tp.get("content_layout")
+        cond = tp.get("stop_condition")
+        tags = sorted({t for t in _rule_str_list(tp.get("tags")) if t})
+        ratio = tp.get("ratio_limit")
+        params = {
+            "category": _rule_str(tp.get("category")), "tags": tags,
+            "save_path": _rule_path(tp.get("save_path")), "download_path": _rule_path(tp.get("download_path")),
+            "operating_mode": "Forced" if tp.get("operating_mode") == "Forced" else "AutoManaged",
+            "skip_checking": tp.get("skip_checking") is True,
+            "upload_limit": _rule_int(tp.get("upload_limit"), -1),
+            "download_limit": _rule_int(tp.get("download_limit"), -1),
+            "seeding_time_limit": _rule_int(tp.get("seeding_time_limit"), -2),
+            "inactive_seeding_time_limit": _rule_int(tp.get("inactive_seeding_time_limit"), -2),
+            "share_limit_action": tp.get("share_limit_action") if tp.get("share_limit_action") in _SHARE_ACTIONS else "Default",
+            "ratio_limit": ratio if isinstance(ratio, (int, float)) and not isinstance(ratio, bool) else -2,
+            "ssl_certificate": _rule_str(tp.get("ssl_certificate")),
+            "ssl_private_key": _rule_str(tp.get("ssl_private_key")),
+            "ssl_dh_params": _rule_str(tp.get("ssl_dh_params")),
+        }
+        optional = {
+            "add_to_top_of_queue": _rule_optional_bool(tp, "add_to_top_of_queue"),
+            "stopped": _rule_optional_bool(tp, "stopped"),
+            "stop_condition": None if cond is None else (cond if cond in _STOP_CONDITIONS else "None"),
+            "content_layout": None if layout is None else (layout if layout in _CONTENT_LAYOUTS else "Original"),
+            "use_auto_tmm": _rule_optional_bool(tp, "use_auto_tmm"),
+            "use_download_path": _rule_optional_bool(tp, "use_download_path"),
+        }
+    else:
+        # The deprecated flat keys (rss_autodownloadrule.cpp:535-557).
+        path = _rule_path(o.get("savePath"))
+        params = {
+            "category": _rule_str(o.get("assignedCategory")), "tags": [], "save_path": path, "download_path": "",
+            "operating_mode": "AutoManaged", "skip_checking": False, "upload_limit": -1, "download_limit": -1,
+            "seeding_time_limit": -2, "inactive_seeding_time_limit": -2, "share_limit_action": "Default",
+            "ratio_limit": -2, "ssl_certificate": "", "ssl_private_key": "", "ssl_dh_params": "",
+        }
+        layout = None
+        if "torrentContentLayout" in o:
+            text = _rule_str(o.get("torrentContentLayout"))
+            layout = (text if text in _CONTENT_LAYOUTS else "Original") if text else None
+        elif isinstance(o.get("createSubfolder"), bool):
+            layout = "Original" if o["createSubfolder"] else "NoSubfolder"
+        paused = o.get("addPaused")
+        optional = {"add_to_top_of_queue": None, "stopped": paused if isinstance(paused, bool) else None,
+                    "stop_condition": None, "content_layout": layout,
+                    "use_auto_tmm": False if path else None, "use_download_path": None}
+    for key, value in optional.items():
+        if value is not None:
+            params[key] = value
+    enabled = o.get("enabled")
+    return {
+        "enabled": enabled if isinstance(enabled, bool) else True,
+        "priority": _rule_int(o.get("priority"), 0),
+        "useRegex": o.get("useRegex") is True,
+        "mustContain": _rule_str(o.get("mustContain")),
+        "mustNotContain": _rule_str(o.get("mustNotContain")),
+        "episodeFilter": _rule_str(o.get("episodeFilter")),
+        "affectedFeeds": _rule_str_list(o.get("affectedFeeds")),
+        "lastMatch": _rule_rfc2822(o.get("lastMatch")),
+        "ignoreDays": _rule_int(o.get("ignoreDays"), 0),
+        "smartFilter": o.get("smartFilter") is True,
+        "previouslyMatchedEpisodes": _rule_str_list(o.get("previouslyMatchedEpisodes")),
+        "addPaused": optional["stopped"],
+        "torrentContentLayout": optional["content_layout"],
+        "savePath": params["save_path"],
+        "assignedCategory": params["category"],
+        "torrentParams": params,
+    }
+
+
+def _rss_feed_paths(node, prefix=""):
+    """(path, feed) for every feed under node, in the tree's order."""
+    for name, child in node.items():
+        path = name if prefix == "" else prefix + "\\" + name
+        if _rss_is_feed(child):
+            yield path, child
+        elif isinstance(child, dict):
+            yield from _rss_feed_paths(child, path)
+
+
+def _rss_setrule_inject(name):
+    spec = _control().get("rss_setrule_inject")
+    if not isinstance(spec, dict) or name not in RSS_RULES:
+        return
+    at = spec.get("at", 1)
+    if spec.get("every") is not True and _RSS_RULE_CALLS["setRule"] != at:
+        return
+    if spec.get("remove") is True:
+        del RSS_RULES[name]
+        return
+    rule = RSS_RULES[name]
+    eps = [e for e in rule["previouslyMatchedEpisodes"] if e not in (spec.get("drop") or [])]
+    rule["previouslyMatchedEpisodes"] = eps + [e for e in spec.get("append") or [] if e not in eps]
+    if isinstance(spec.get("lastMatch"), str):
+        rule["lastMatch"] = spec["lastMatch"]
+
+
+def _rss_rule_post(action, body):
+    form = parse_qs(body, keep_blank_values=True)
+
+    def arg(name):
+        return (form.get(name) or [None])[0]
+
+    required = {"setRule": ("ruleName", "ruleDef"), "renameRule": ("ruleName", "newRuleName"), "removeRule": ("ruleName",)}
+    missing = [p for p in required[action] if arg(p) is None]
+    if missing:
+        return 400, ("Missing required parameters: " + ", ".join(missing)).encode()
+    name = arg("ruleName")
+    with _RSS_LOCK:
+        if action == "setRule":
+            try:
+                rule_def = json.loads(arg("ruleDef"))
+            except ValueError:
+                rule_def = {}
+            RSS_RULES[name] = _rss_rule_canon(rule_def)
+            _RSS_RULE_CALLS["setRule"] += 1
+            _rss_setrule_inject(name)
+        elif action == "renameRule":
+            new = arg("newRuleName")
+            if name in RSS_RULES and new not in RSS_RULES:
+                renamed = {}
+                for k, v in RSS_RULES.items():
+                    renamed[new if k == name else k] = v
+                RSS_RULES.clear()
+                RSS_RULES.update(renamed)
+        else:
+            RSS_RULES.pop(name, None)
+    return 200, b""
+
+
+def _rss_matching(name):
+    """GET rss/matchingArticles?ruleName= (rsscontroller.cpp:222)."""
+    with _RSS_LOCK:
+        rule = RSS_RULES.get(name)
+        if rule is None:
+            return {}
+        scripted = _control().get("rss_matching")
+        if isinstance(scripted, dict) and isinstance(scripted.get(name), dict):
+            return scripted[name]
+        feeds = {f["url"]: (path, f) for path, f in _rss_feed_paths(RSS_TREE)}
+        must = _rule_str(rule.get("mustContain")).lower()
+        out = {}
+        for url in _rule_str_list(rule.get("affectedFeeds")):
+            if url not in feeds:
+                continue
+            path, feed = feeds[url]
+            titles = [a.get("title", "") for a in feed["articles"] if must in str(a.get("title", "")).lower()]
+            if titles:
+                out[path.rpartition("\\")[2]] = titles
+        return out
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -1264,7 +1504,30 @@ class Handler(BaseHTTPRequestHandler):
             code, payload = _rss_items(parsed.query)
             self._send(code, payload)
             return
-        if action not in RSS_WRITES:
+        if action in ("rules", "matchingArticles"):
+            # Slice 5b2: the rules reads take either method.
+            fault = _write_fault("rss_" + action)
+            if fault == "unreadable":
+                self._send(200, b"<html>not json</html>")
+                return
+            if fault == "sleep7":
+                time.sleep(7)
+            elif fault and fault != "noop":
+                self._fault_reply(fault)
+                return
+            if action == "rules":
+                with _RSS_LOCK:
+                    payload = json.dumps(RSS_RULES, sort_keys=True)
+            else:
+                qs = parse_qs(parsed.query, keep_blank_values=True)
+                qs.update(parse_qs(body, keep_blank_values=True))
+                if "ruleName" not in qs:
+                    self._send(400, b"Missing required parameters: ruleName", content_type="text/plain")
+                    return
+                payload = json.dumps(_rss_matching(qs["ruleName"][0]), sort_keys=True)
+            self._send(200, payload.encode())
+            return
+        if action not in RSS_WRITES and action not in RSS_RULE_WRITES:
             self._send(404, b"Not Found", content_type="text/plain")
             return
         if method != "POST":
@@ -1279,7 +1542,10 @@ class Handler(BaseHTTPRequestHandler):
         if fault:
             self._fault_reply(fault)
             return
-        code, payload = _rss_post(action, body)
+        if action in RSS_RULE_WRITES:
+            code, payload = _rss_rule_post(action, body)
+        else:
+            code, payload = _rss_post(action, body)
         self._send(code, payload, content_type="text/plain")
 
     def do_GET(self):
@@ -1288,7 +1554,7 @@ class Handler(BaseHTTPRequestHandler):
             # Test-only and unrecorded: the tree as it is, without ticking
             # the RSS clock.
             with _RSS_LOCK:
-                payload = json.dumps({"tree": RSS_TREE, "log": RSS_LOG, "loading": RSS_LOADING})
+                payload = json.dumps({"tree": RSS_TREE, "log": RSS_LOG, "loading": RSS_LOADING, "rules": RSS_RULES})
             self._send(200, payload.encode())
             return
         if parsed.path == "/fixture/state":

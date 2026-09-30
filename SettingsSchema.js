@@ -2550,9 +2550,9 @@ var SCHEMA = {
   "section": "RSS",
   "group": "RSS",
   "label": "RSS auto-downloading",
-  "help": "Download torrents from feeds by rule. Slice 5.",
+  "help": "Download matching feed articles by your rules. Turning it on first says how much would download.",
   "type": "bool",
-  "deferred": true
+  "confirmVia": "rssAutoDl"
  },
  "rss_download_repack_proper_episodes": {
   "section": "RSS",

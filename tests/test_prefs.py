@@ -433,6 +433,14 @@ class PrefSetFidelityTest(PrefsCase):
         for bad in ("1", "0", "True", "yes", "on", ""):
             self.set_refused("dht", bad, "Use true or false.")
 
+    def test_auto_download_is_writable(self):
+        # Slice 5b2 (D8): un-deferred; the window asks first (confirmVia),
+        # qbt writes it like any bool.
+        self.assertEqual(self.set_ok("rss_auto_downloading_enabled", "true"), {"rss_auto_downloading_enabled": True})
+        self.assertEqual(self.state()["rss_auto_downloading_enabled"], True)
+        self.assertEqual(self.set_ok("rss_auto_downloading_enabled", "false"), {"rss_auto_downloading_enabled": False})
+        self.set_refused("rss_auto_downloading_enabled", "yes", "Use true or false.")
+
     def test_special_characters_reach_qbittorrent_exactly(self):
         for value in ("a&b=c&dht=true", "a+b", "100% %20%zz", "say \"hi\" 'x'", "back\\slash",
                       "café 🦊 𝄞", "$(touch /tmp/pwned) `x`", "tab\there", "{\"json\":1}"):

@@ -4,6 +4,7 @@ import qs.Commons
 import "../../.."
 import "../../../SettingsSchema.js" as Schema
 import "../../../SettingsView.js" as SettingsView
+import "../../../ClientView.js" as View
 
 // Editing settings (slice 4a, Task 6): Space toggles, Enter opens the
 // status-line INSERT or the choice picker, every write path asks
@@ -87,6 +88,10 @@ TestCase {
       function setPref(k, v, o) { if (busy) { calls.push({ name: "setPref", args: [k, v, o] }); return 0 } return rec("setPref", [k, v, o]) }
       function readPrefs(cb) { rec("readPrefs", []); prefsCbs.push(cb) }
       function answer(result) { var cb = prefsCbs.shift(); cb(result) }
+      // Slice 5b2 (D8): the auto-download count, answered by answerAuto.
+      property var autoCbs: []
+      function rssAutoPreview(cb) { rec("rssAutoPreview", []); autoCbs.push(cb) }
+      function answerAuto(ok, err, data) { var cb = autoCbs.shift(); cb(ok, err, data) }
     }
   }
 
@@ -891,5 +896,112 @@ TestCase {
     endProc(again, 0, JSON.stringify(prefs({ dht: false })), "")
     compare(valueText(o, "dht"), "off")
     compare(status(o), "DHT off · u undoes")
+  }
+
+  // ---- auto-download on (slice 5b2, D8) ---------------------------------------------
+
+  readonly property string autoKey: "rss_auto_downloading_enabled"
+
+  function autoOff() { return prefs({ rss_auto_downloading_enabled: false }) }
+
+  function test_auto_download_on_counts_first_then_asks_with_the_counts() {
+    var o = make(autoOff())
+    focusKey(o, autoKey)
+    space(o)
+    compare(calls(o.svc, "rssAutoPreview").length, 1, "the count runs first")
+    compare(o.c.mode, "NORMAL", "nothing asks until the count is in")
+    compare(writes(o).length, 0)
+    o.svc.answerAuto(true, "", { rules: 2, will: 5, noTorrent: 1 })
+    compare(o.c.mode, "CONFIRM")
+    compare(o.c.confirm.kind, "rssAutoDlOn")
+    compare(o.c.confirm.line, SettingsView.AUTO_DL.confirmAutoDl.replace("<r>", "2").replace("<n>", "5"))
+    compare(View.confirmLine(o.c.confirm).accept, "turn on")
+    compare(writes(o).length, 0, "nothing is written before y")
+    key(o.c, "y")
+    compare(writes(o), [[autoKey, "true"]])
+    finish(o, true)
+    compare(status(o), "RSS auto-downloading on · u undoes")
+  }
+
+  function test_auto_download_with_no_rules_on_still_asks_and_n_writes_nothing() {
+    var o = make(autoOff())
+    focusKey(o, autoKey)
+    space(o)
+    o.svc.answerAuto(true, "", { rules: 0, will: 0, noTorrent: 0 })
+    compare(o.c.confirm.line, SettingsView.AUTO_DL.confirmAutoDlNone)
+    key(o.c, "n")
+    compare(o.c.mode, "NORMAL")
+    compare(writes(o).length, 0)
+  }
+
+  function test_a_failed_count_asks_without_numbers() {
+    var o = make(autoOff())
+    focusKey(o, autoKey)
+    space(o)
+    o.svc.answerAuto(false, "qBittorrent refused it (HTTP 500)", null)
+    compare(o.c.mode, "CONFIRM")
+    compare(o.c.confirm.line, SettingsView.AUTO_DL.confirmAutoDlUncounted)
+    key(o.c, "y")
+    compare(writes(o), [[autoKey, "true"]])
+  }
+
+  function test_auto_download_off_asks_nothing() {
+    var o = make(prefs({ rss_auto_downloading_enabled: true }))
+    focusKey(o, autoKey)
+    space(o)
+    compare(calls(o.svc, "rssAutoPreview").length, 0)
+    compare(o.c.confirm, null)
+    compare(writes(o), [[autoKey, "false"]])
+  }
+
+  function test_a_second_space_while_counting_counts_once() {
+    var o = make(autoOff())
+    focusKey(o, autoKey)
+    space(o)
+    space(o)
+    compare(calls(o.svc, "rssAutoPreview").length, 1)
+    o.svc.answerAuto(true, "", { rules: 1, will: 1, noTorrent: 0 })
+    compare(o.c.mode, "CONFIRM")
+    key(o.c, "n")
+    space(o)
+    compare(calls(o.svc, "rssAutoPreview").length, 2, "a new press after the answer counts again")
+  }
+
+  function test_a_count_that_lands_after_settings_closed_asks_nothing() {
+    var o = make(autoOff())
+    focusKey(o, autoKey)
+    space(o)
+    for (var i = 0; i < 4 && view(o).open; i++) esc(o)
+    verify(!view(o).open)
+    o.svc.answerAuto(true, "", { rules: 1, will: 1, noTorrent: 0 })
+    compare(o.c.mode, "NORMAL")
+    compare(o.c.confirm, null)
+    compare(writes(o).length, 0)
+  }
+
+  function test_a_count_that_lands_over_another_mode_asks_nothing() {
+    var o = make(autoOff())
+    focusKey(o, autoKey)
+    space(o)
+    focusKey(o, "max_connec")
+    enter(o)
+    compare(o.c.mode, "INSERT")
+    o.svc.answerAuto(true, "", { rules: 1, will: 1, noTorrent: 0 })
+    compare(o.c.mode, "INSERT", "the field stays")
+    esc(o)
+    compare(o.c.confirm, null)
+    compare(writes(o).length, 0)
+  }
+
+  function test_closing_the_window_drops_the_auto_download_question() {
+    var o = make(autoOff())
+    focusKey(o, autoKey)
+    space(o)
+    o.svc.answerAuto(true, "", { rules: 1, will: 3, noTorrent: 0 })
+    compare(o.c.mode, "CONFIRM")
+    o.c.close()
+    compare(o.c.mode, "NORMAL")
+    compare(o.c.confirm, null)
+    compare(writes(o).length, 0)
   }
 }

@@ -427,7 +427,8 @@ function rowFor(key, prefs) {
 // schema sections, "Banned IPs" (a list section: list is "banned_IPs", its
 // count the bans, its column the list editor; absent when loaded prefs lack
 // the key), then "Other" when it has rows, then "RSS" (slice 5b1: its keys
-// live; rss_auto_downloading_enabled stays deferred until 5b2).
+// live; slice 5b2 un-defers rss_auto_downloading_enabled, which asks first:
+// autoDlQuestion).
 function sections(prefs) {
   var out = SECTIONS.map(function (s) {
     return { name: s, label: s, count: rows(s, prefs).length, dimmed: false };
@@ -950,6 +951,40 @@ function doneNote(key, value) {
   return entry && entry.restart ? note + RESTART_NOTE : note;
 }
 
+// --- Slice 5b2 (D8): auto-download on ---------------------------------------------------------
+//
+// A key with the schema's confirmVia "rssAutoDl" (rss_auto_downloading_enabled)
+// asks before it turns on: SettingsCommands first counts what would download
+// (Service.rssAutoPreview -> {rules, will, noTorrent}), then raises CONFIRM
+// rssAutoDlOn (View.SETTINGS_ACCEPT) with autoDlQuestion's line. Turning it
+// off asks nothing. The three lines are the rules case file's window copy
+// (tests/fixtures/rss-autorules-cases.json; settings-view.test.js pins them).
+var AUTO_DL = {
+  confirmAutoDl: "Turn on auto-download? <r> rules are on; up to <n> unread articles download now.",
+  confirmAutoDlNone: "No rules are on yet; nothing downloads until you turn one on.",
+  confirmAutoDlUncounted: "Turn on auto-download? Couldn't count what would download."
+};
+
+// confirmVia(key) -> the schema's confirmVia ("rssAutoDl"), or "".
+function confirmVia(key) {
+  var entry = entryOf(key);
+  return entry && typeof entry.confirmVia === "string" ? entry.confirmVia : "";
+}
+
+function countOk(n) {
+  return typeof n === "number" && n >= 0 && Math.floor(n) === n;
+}
+
+// autoDlQuestion(ok, data) -> the CONFIRM line for rssAutoPreview's answer:
+// r rules on and up to n articles, none on, or uncounted when the count
+// failed or came back unreadable.
+function autoDlQuestion(ok, data) {
+  var d = data || null;
+  if (ok !== true || !d || !countOk(d.rules) || !countOk(d.will)) return AUTO_DL.confirmAutoDlUncounted;
+  if (d.rules === 0) return AUTO_DL.confirmAutoDlNone;
+  return AUTO_DL.confirmAutoDl.replace("<r>", String(d.rules)).replace("<n>", String(d.will));
+}
+
 // --- Slice 4b (Task 4): undo -------------------------------------------------------------------
 //
 // SettingsCommands keeps this visit's history, newest last: {key, label,
@@ -1184,6 +1219,9 @@ if (typeof module !== "undefined") {
     listTitle: listTitle,
     listDoneNote: listDoneNote,
     secretQuestion: secretQuestion,
-    secretDoneNote: secretDoneNote
+    secretDoneNote: secretDoneNote,
+    AUTO_DL: AUTO_DL,
+    confirmVia: confirmVia,
+    autoDlQuestion: autoDlQuestion
   };
 }

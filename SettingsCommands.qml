@@ -50,6 +50,15 @@ import "SettingsView.js" as SettingsView
 // edit" question with the risky-change reason as its detail. n keeps the
 // current value and the entry is gone, so the next u moves on; a failed
 // undo write puts its entry back. Leaving Settings clears the history.
+//
+// Slice 5b2 (Task 2, D8): a key whose schema entry has confirmVia
+// "rssAutoDl" (rss_auto_downloading_enabled) turning on first counts what
+// would download (Service.rssAutoPreview), then raises CONFIRM rssAutoDlOn
+// (View.SETTINGS_ACCEPT) with SettingsView.autoDlQuestion's line; its y
+// comes back as settings.write like any setting's. A failed count still
+// asks, without numbers. Turning it off asks nothing. An answer that lands
+// after Settings closed or reopened, or over another mode, is dropped. u
+// undoing a turn-off goes through the same count and question.
 QtObject {
   id: edits
 
@@ -82,6 +91,8 @@ QtObject {
   property int visit: 0
   // u's re-read is out.
   property bool undoReading: false
+  // D8: the auto-download count is out (the key it's for), or "".
+  property string autoDlCounting: ""
 
   readonly property var picker: settingsView.picker
   readonly property bool pickerOpen: settingsView.pickerOpen
@@ -317,6 +328,7 @@ QtObject {
   // CONFIRM on the captured key and value; otherwise the write runs now.
   function propose(k, label, from, to) {
     if (SettingsView.equalValue(k, from, to)) return
+    if (SettingsView.confirmVia(k) === "rssAutoDl" && to === true) { countAutoDl(k, label, from, to); return }
     var detail = SettingsView.confirmFor(k, from, to)
     if (detail === "") { write(k, label, to); return }
     var c = client
@@ -327,6 +339,43 @@ QtObject {
     cf.line = q.line
     cf.detail = detail
     cf.accept = q.accept
+    c.regState = r.state
+    c.confirmHashes = []
+    c.confirm = cf
+  }
+
+  // D8: count, then ask. One count at a time; a second Space while it's
+  // out does nothing. done/undoEntry: an undo's (undoWith), carried to the
+  // write; an undo whose count can't ask gets its entry back.
+  function countAutoDl(k, label, from, to, done, undoEntry) {
+    var c = client
+    if (autoDlCounting !== "") { if (undoEntry) restoreUndo(undoEntry); return }
+    if (!c.service || typeof c.service.rssAutoPreview !== "function") {
+      raiseAutoDl(k, label, from, to, SettingsView.autoDlQuestion(false, null), done, undoEntry)
+      return
+    }
+    var myVisit = visit
+    autoDlCounting = k
+    c.service.rssAutoPreview(function(ok, err, data) {
+      if (myVisit !== edits.visit) return
+      edits.autoDlCounting = ""
+      if (!edits.settingsView.open) return
+      // A re-read meanwhile already shows it on: nothing to ask.
+      if (SettingsView.equalValue(k, SettingsView.currentValue(k, edits.settingsView.prefs), to)) return
+      if (edits.client.mode !== "NORMAL") { if (undoEntry) edits.restoreUndo(undoEntry); return }
+      edits.raiseAutoDl(k, label, from, to, SettingsView.autoDlQuestion(ok, data), done, undoEntry)
+    })
+  }
+
+  function raiseAutoDl(k, label, from, to, line, done, undoEntry) {
+    var c = client
+    var args = { key: k, label: label, value: to, from: from }
+    if (done) args.done = done
+    if (undoEntry) args.undo = undoEntry
+    var r = Registry.raiseConfirm(c.regState, "settings.write", "rssAutoDlOn", args)
+    var cf = ({})
+    for (var f in r.confirm) cf[f] = r.confirm[f]
+    cf.line = line
     c.regState = r.state
     c.confirmHashes = []
     c.confirm = cf
@@ -428,6 +477,7 @@ QtObject {
     undoStack = []
     undoPending = []
     undoReading = false
+    autoDlCounting = ""
     visit = visit + 1
   }
 
@@ -489,6 +539,8 @@ QtObject {
     var cur = SettingsView.currentValue(k, p)
     var done = SettingsView.undoDoneNote(k, e.label, e.from, more)
     var stale = !SettingsView.sameStored(k, now, e.to)
+    // D8: undo never turns auto-download on without its count and question.
+    if (SettingsView.confirmVia(k) === "rssAutoDl" && target === true) { countAutoDl(k, e.label, cur, target, done, e); return }
     var detail = SettingsView.confirmFor(k, cur, target)
     if (!stale && detail === "") { write(k, e.label, target, done, e); return }
     // One CONFIRM: the "changed since" question (or the edit's own), with
@@ -570,10 +622,13 @@ QtObject {
     settingsView.pickerOpen = false
   }
 
-  // Client.close(): a settings question never outlives Settings.
+  // Client.close(): a settings question never outlives Settings (its own
+  // kinds and View.SETTINGS_ACCEPT's view-copy ones, D8's rssAutoDlOn).
   function dropConfirm() {
     var c = client
-    if (c.mode !== "CONFIRM" || !c.confirm || (c.confirm.kind !== "settingConfirm" && c.confirm.kind !== "secretClear")) return
+    if (c.mode !== "CONFIRM" || !c.confirm) return
+    var kind = c.confirm.kind
+    if (kind !== "settingConfirm" && kind !== "secretClear" && !Object.prototype.hasOwnProperty.call(View.SETTINGS_ACCEPT, kind)) return
     var st = ({})
     for (var k in c.regState) st[k] = c.regState[k]
     st.mode = "NORMAL"
