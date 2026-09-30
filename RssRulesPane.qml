@@ -269,7 +269,7 @@ Item {
       rssField: f ? { key: f.key, kind: f.kind, value: f.value } : null,
       rssFieldEditable: editable,
       rssFieldToggle: toggle,
-      rssRuleDirty: rules.draft !== null && Rules.isDirty(rules.draft.values, rules.draft.snapshot),
+      rssRuleDirty: rules.dirty(),
       rssAutoDl: rules.autoDl()
     }
   }
@@ -289,6 +289,8 @@ Item {
 
   function openRules(item) {
     ruleCmds.reset(false)
+    pendingEnter = ""
+    pendingFollow = ""
     // A draft kept across a forced leave is there again, still dirty.
     if (draft !== null) setColumn("rssRuleFields")
     ruleCmds.readRules("open")
@@ -297,6 +299,10 @@ Item {
   function closeRules() {
     if (pickerOpen) ruleCmds.dropPicker()
     ruleCmds.reset(false)
+    // A read landing after this moves nothing (the draft itself is kept).
+    pendingEnter = ""
+    pendingFollow = ""
+    pendingCheck = ""
   }
 
   function windowClosed() {
@@ -350,7 +356,9 @@ Item {
   function cursorRule() { return ruleList[listIndex] || null }
   function overlayRule() { return ruleList[overlayIndex] || null }
 
-  function dirty() { return draft !== null && Rules.isDirty(draft.values, draft.snapshot) }
+  // The draft has changes not saved: only while auto-download is on (OV2).
+  // Off, a commit's save is already on its way, and nothing waits for p.
+  function dirty() { return draft !== null && autoDl() && Rules.isDirty(draft.values, draft.snapshot) }
   function writing(name) { return writes[name] !== undefined }
 
   function markWriting(name, key, on) {
@@ -381,7 +389,7 @@ Item {
     var check = pendingCheck
     pendingCheck = ""
     if (draft !== null && check !== "") checkDraft(check === "reload")
-    if (pendingEnter !== "") {
+    if (pendingEnter !== "" && open) {
       var name = pendingEnter
       pendingEnter = ""
       var r = ruleByName(name)
@@ -397,6 +405,7 @@ Item {
     var r = ruleByName(draft.name)
     if (!r || r.enabled === true) {
       if (!r) ruleCmds.note(Rules.SENTENCES.ruleGone, "urgent")
+      else ruleCmds.note(Rules.sentence("ruleChanged", { name: Rules.displayName(draft.name) }), "muted")
       draft = null
       if (inFieldsPane()) setColumn("rssRules")
       return

@@ -268,6 +268,12 @@ QtObject {
   function toggle(rule, confirmed) {
     var cur = area.ruleByName(rule.name)
     if (!cur || !svcHas("rssRuleSet")) return
+    // y on "Turn on X?" once X was turned on elsewhere: nothing to do (it
+    // must never become an off).
+    if (cur.enabled === true && confirmed === true) {
+      note(Rules.sentence("noteOn", { name: Rules.displayName(rule.name) }), "muted")
+      return
+    }
     if (cur.enabled === true) {
       area.bumpGen(rule.name)
       remember(service.rssRuleSet(rule.name, ({}), ({}), "off"), { kind: "off", name: rule.name })
@@ -288,7 +294,9 @@ QtObject {
 
   // The saved rule's preview, then the confirm with its n (or the
   // noTorrent refusal). An answer after the rules closed, or with another
-  // mode up, raises nothing.
+  // mode up, raises nothing; nor does a stale one: a write for the rule was
+  // sent after it was asked for (its generation moved), or the draft has
+  // changes again (turning on never carries them, and y would drop them).
   function turnOnPreview(name) {
     if (!svcHas("rssRulePreview")) return
     onToken++
@@ -296,6 +304,9 @@ QtObject {
     var gen = area.genOf(name)
     var t = service.rssRulePreview(name, function(ok, error, data) {
       if (token !== cmds.onToken) return
+      if (cmds.area.genOf(name) !== gen) return
+      var d = cmds.area.draft
+      if (d && d.name === name && cmds.area.dirty()) return
       if (!ok) { cmds.fail(error); return }
       var g = Rules.previewGroups(data)
       cmds.area.storePreview(name, gen, { groups: g })
@@ -596,7 +607,9 @@ QtObject {
       return
     }
     if (e.kind === "off") {
-      if (e.edit === true) area.pendingEnter = e.name
+      // Enter's turn-off: the fields open once it's read back, unless the
+      // rules closed meanwhile.
+      if (e.edit === true) { if (area.open) area.pendingEnter = e.name }
       else note(Rules.sentence("noteOff", { name: Rules.displayName(e.name) }), "muted")
     } else if (e.kind === "on") {
       note(Rules.sentence("noteOn", { name: Rules.displayName(e.name) }), "muted")

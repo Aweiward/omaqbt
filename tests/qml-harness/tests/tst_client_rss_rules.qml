@@ -710,6 +710,110 @@ TestCase {
     compare(confirmText(o), fill(w.confirmRuleOnNone, { name: "Arch ISO" }))
   }
 
+  // ---- fix round 1 -------------------------------------------------------------------------------
+
+  function onCount(o) { return calls(o.svc, "rssRuleSet").filter(function(c) { return c.args[3] === "on" }).length }
+
+  function test_fix1_a_turn_on_preview_older_than_a_save_raises_no_confirm() {
+    var o = make()
+    openRules(o, rulesFx({ auto: true }))
+    editRule(o, 0, preview([]))
+    key(o.c, "e")
+    var old = last(o.svc, "rssRulePreview")
+    compare(old.args, ["Arch ISO"])
+    // An edit and its keep-save go out before that preview answers.
+    toField(o, "smartFilter")
+    space(o)
+    key(o.c, "p")
+    compare(sets(o), 1)
+    answerCall(o, old, true, "", preview(["a", "b"]))
+    compare(o.c.mode, "NORMAL", "no confirm from a preview older than the save")
+    compare(onCount(o), 0)
+    finishCall(o, "rssRuleSet", true, "", { ok: true })
+    compare(onCount(o), 0)
+  }
+
+  function test_fix1_a_turn_on_preview_answering_onto_a_dirty_draft_raises_no_confirm() {
+    var o = make()
+    openRules(o, rulesFx({ auto: true }))
+    editRule(o, 0, preview([]))
+    key(o.c, "e")
+    var old = last(o.svc, "rssRulePreview")
+    toField(o, "smartFilter")
+    space(o)
+    compare(rr(o).flags.rssRuleDirty, true)
+    answerCall(o, old, true, "", preview(["a"]))
+    compare(o.c.mode, "NORMAL")
+    compare(onCount(o), 0)
+    compare(sets(o), 0)
+    compare(rr(o).flags.rssRuleDirty, true, "the edits are still there")
+  }
+
+  function test_fix2_an_edit_off_landing_after_esc_stays_on_the_feeds() {
+    var o = make()
+    openRules(o)
+    j(o)
+    enter(o)
+    key(o.c, "y")
+    compare(last(o.svc, "rssRuleSet").args, ["Debian", {}, {}, "off"])
+    esc(o)
+    compare(o.c.keyPane, "rssFeeds")
+    finishCall(o, "rssRuleSet", true, "", { ok: true })
+    answer(o, "rssRules", true, "", rulesFx({ set: { Debian: { enabled: false } } }))
+    compare(o.c.keyPane, "rssFeeds", "the rules don't reopen")
+    compare(rr(o).draft, null)
+    // Reopened later: the list, not Debian's fields.
+    shifted(o, "R")
+    answer(o, "rssRules", true, "", rulesFx({ set: { Debian: { enabled: false } } }))
+    compare(o.c.keyPane, "rssRules")
+  }
+
+  function test_fix3_auto_download_off_a_draft_is_never_dirty() {
+    var o = make()
+    openRules(o)
+    editRule(o, 0, preview([]))
+    typeField(o, "mustContain", "Arch 1", { ok: true, value: "Arch 1" })
+    compare(sets(o), 1)
+    compare(rr(o).flags.rssRuleDirty, false, "the save is on its way")
+    shifted(o, "D")
+    compare(statusText(o), w.reasonRuleDirty)
+    key(o.c, "h")
+    compare(o.c.mode, "NORMAL", "no leave confirm")
+    compare(o.c.keyPane, "rssRules")
+    finishCall(o, "rssRuleSet", true, "", { ok: true })
+    compare(sets(o), 1)
+  }
+
+  function test_fix4_y_on_turn_on_for_a_rule_turned_on_elsewhere_does_nothing() {
+    var o = make()
+    openRules(o, rulesFx({ auto: true }))
+    key(o.c, "e")
+    key(o.c, "r")
+    answer(o, "rssRulePreview", true, "", preview(["a"]))
+    compare(o.c.mode, "CONFIRM")
+    // Meanwhile the WebUI turned it on.
+    answer(o, "rssRules", true, "", rulesFx({ auto: true, set: { "Arch ISO": { enabled: true } } }))
+    key(o.c, "y")
+    compare(sets(o), 0, "never an off, never a second on")
+    compare(statusText(o), fill(w.noteOn, { name: "Arch ISO" }))
+  }
+
+  function test_fix5_a_kept_draft_dropped_on_reopen_says_why() {
+    var o = make()
+    openRules(o, rulesFx({ auto: true }))
+    editRule(o, 0, preview([]))
+    typeField(o, "mustContain", "Arch 1", { ok: true, value: "Arch 1" })
+    o.c.leaveView()
+    shifted(o, "N")
+    answer(o, "rssItems", true, "", items())
+    shifted(o, "R")
+    answer(o, "rssRules", true, "", rulesFx({ auto: true, set: { "Arch ISO": { enabled: true } } }))
+    compare(o.c.keyPane, "rssRules")
+    compare(rr(o).draft, null)
+    compare(statusText(o), fill(s.ruleChanged, { name: "Arch ISO" }))
+    compare(sets(o), 0)
+  }
+
   // ---- pickers --------------------------------------------------------------------------------------
 
   function test_the_feeds_picker_toggles_with_space_applies_with_enter_and_shows_gone_urls() {
