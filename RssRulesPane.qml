@@ -96,8 +96,11 @@ import qs.Commons
 //   closeRules()  the rules area closes: after view.leaveRules() (no dirty
 //                draft is left by then), or when the Client closes RSS
 //                itself (a magnet's CONFIRM, a torrent row from the palette),
-//                where no confirm can run: a dirty draft is then dropped with
-//                no write. Drops a picker.
+//                where no confirm can run: a dirty draft is then KEPT, still
+//                dirty, as the view's state survives leaving (as Search's
+//                does), so it is there when the rules reopen and the leave
+//                confirm still guards it. Only windowClosed() drops a dirty
+//                draft, with no write. Drops a picker.
 //   windowClosed()  the window closes: drop a dirty draft (no write) and a
 //                rules CONFIRM still up (kinds rssRuleRemove, rssRuleOn,
 //                rssRuleEditOff, rssRuleLeave, rssRuleDiscard: mode NORMAL,
