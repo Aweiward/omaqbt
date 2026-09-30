@@ -428,8 +428,7 @@ TestCase {
 
   function test_a_new_magnet_asks_for_attention() {
     var o = make()
-    var wm = null
-    for (var i = 0; i < o.c.data.length; i++) if (o.c.data[i] && o.c.data[i].focusAttempts !== undefined) wm = o.c.data[i]
+    var wm = o.c.wmFocus
     verify(wm !== null)
     tryVerify(function() { return !wm.retry.running }, 3000)
     addPending(o, "d", false)
@@ -441,8 +440,7 @@ TestCase {
 
   function test_no_attention_request_while_the_palette_owns_the_keys() {
     var o = make()
-    var wm = null
-    for (var i = 0; i < o.c.data.length; i++) if (o.c.data[i] && o.c.data[i].focusAttempts !== undefined) wm = o.c.data[i]
+    var wm = o.c.wmFocus
     tryVerify(function() { return !wm.retry.running }, 3000)
     key(o.c, ":")
     addPending(o, "d", false)
@@ -454,8 +452,7 @@ TestCase {
   // ---- final review: a double Esc never cancels (settle + grace) -----------
 
   function wmOf(c) {
-    for (var i = 0; i < c.data.length; i++) if (c.data[i] && c.data[i].focusAttempts !== undefined) return c.data[i]
-    return null
+    return c.wmFocus
   }
   function palette(c) { return findWith(winOf(c).contentItem, "focusField") }
   readonly property string waitNote: "Magnet waiting \u2014 finish, then confirm"

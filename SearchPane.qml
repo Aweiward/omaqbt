@@ -153,7 +153,7 @@ Item {
   readonly property string busyKind: service && typeof service.searchPluginChange === "string" ? service.searchPluginChange : localBusy
   readonly property bool pluginsBusy: busyKind !== ""
   // A change ended (in this window or before it was rebuilt): the list again.
-  onPluginsBusyChanged: if (!pluginsBusy) cmds.loadPlugins()
+  onPluginsBusyChanged: if (!pluginsBusy) search.cmds.loadPlugins()
   readonly property int plugins: pluginList.length
   readonly property int enabledPlugins: SearchView.enabledCount(pluginList)
   property int pluginListIndex: 0
@@ -233,7 +233,7 @@ Item {
     } else if (!downNow) {
       downHold = false
       downHoldTimer.stop()
-      if (open && !pluginsLoaded && !pluginsReading) cmds.loadPlugins()
+      if (open && !pluginsLoaded && !pluginsReading) search.cmds.loadPlugins()
     }
   }
 
@@ -251,7 +251,7 @@ Item {
   function openView() {
     column = "searchResults"
     syncLibrary()
-    cmds.loadPlugins()
+    search.cmds.loadPlugins()
   }
 
   function closeView() {
@@ -260,8 +260,8 @@ Item {
 
   function windowClosed() {
     dropConfirm()
-    cmds.closeJob()
-    cmds.awaiter.clear()
+    search.cmds.closeJob()
+    search.cmds.awaiter.clear()
   }
 
   function dropConfirm() {
@@ -289,7 +289,7 @@ Item {
     var a = args || ({})
     switch (commandId) {
     case "search.back":
-      if (!cmds.stopSearch()) leaveRequested()
+      if (!search.cmds.stopSearch()) leaveRequested()
       return
     case "search.focusPlugins":
     case "search.pluginsOverlay": column = "searchPlugins"; return
@@ -298,7 +298,7 @@ Item {
       if (column === "searchPlugins" && ev && (ev.key === 0x01000004 || ev.key === 0x01000005) && columnRows[columnIndex] && columnRows[columnIndex].kind === "recent") {
         var q = columnRows[columnIndex].query
         column = "searchResults"
-        cmds.rerun(q)
+        search.cmds.rerun(q)
         return
       }
       column = "searchResults"
@@ -318,18 +318,18 @@ Item {
       return
     }
     case "search.sortReverse": sortDesc = !sortDesc; rebuild(); return
-    case "search.add": cmds.addResult(a.result, a.confirmed === true); return
-    case "search.copyLink": cmds.copyLink(a.result); return
-    case "search.openPage": cmds.openPage(a.result, a.confirmed === true); return
+    case "search.add": search.cmds.addResult(a.result, a.confirmed === true); return
+    case "search.copyLink": search.cmds.copyLink(a.result); return
+    case "search.openPage": search.cmds.openPage(a.result, a.confirmed === true); return
     case "plugin.down": movePlugin(1); return
     case "plugin.up": movePlugin(-1); return
-    case "plugin.toggle": cmds.togglePlugin(a.plugin); return
-    case "plugin.uninstall": cmds.uninstallPlugin(a.plugin, a.confirmed === true); return
+    case "plugin.toggle": search.cmds.togglePlugin(a.plugin); return
+    case "plugin.uninstall": search.cmds.uninstallPlugin(a.plugin, a.confirmed === true); return
     case "plugin.install":
-      if (a.confirmed === true) cmds.installPlugin(a)
+      if (a.confirmed === true) search.cmds.installPlugin(a)
       else if (commands && !pluginsBusy) commands.startInput("pluginInstall", "")
       return
-    case "plugin.updateAll": cmds.updatePlugins(); return
+    case "plugin.updateAll": search.cmds.updatePlugins(); return
     case "plugin.copyListUrl":
       if (service && typeof service.copyText === "function") client.track(service.copyText(Registry.SEARCH_PLUGIN_LIST_URL, client.opts([])), "copyText", [])
       return
@@ -338,8 +338,8 @@ Item {
   }
 
   function commitInput(purpose, text) {
-    if (purpose === "searchQuery") cmds.commitQuery(text)
-    else if (purpose === "pluginInstall") cmds.commitInstall(text)
+    if (purpose === "searchQuery") search.cmds.commitQuery(text)
+    else if (purpose === "pluginInstall") search.cmds.commitInstall(text)
     else if (commands) commands.endInput()
   }
 
@@ -568,7 +568,7 @@ Item {
 
   function syncLibrary() {
     libSet = SearchView.librarySet(service ? service.torrents : [])
-    cmds.awaiter.check()
+    search.cmds.awaiter.check()
   }
 
   onColumnRowsChanged: {
@@ -585,10 +585,10 @@ Item {
   }
   onServiceChanged: syncLibrary()
 
-  SearchCommands {
-    id: cmds
-    view: search
-  }
+  // A property, not a bare child: under Qt 6.11's incremental GC a bare
+  // non-visual child sometimes came out empty (no properties, no functions).
+  // See RssRulesPane.qml's ruleCmds.
+  readonly property SearchCommands cmds: SearchCommands { view: search }
 
   Connections {
     target: search.service
@@ -1167,7 +1167,7 @@ Item {
         anchors.verticalCenter: parent.verticalCenter
         elide: Text.ElideRight
         text: search.currentResult ? [search.currentResult.name, SearchView.resultHost(search.currentResult),
-          cmds.sizeText(search.currentResult.size), SearchView.pluginLabel(search.currentResult.engine, search.pluginList)].join(" · ") : ""
+          search.cmds.sizeText(search.currentResult.size), SearchView.pluginLabel(search.currentResult.engine, search.pluginList)].join(" · ") : ""
         textFormat: Text.PlainText
         font.family: Style.fontFamily
         font.pixelSize: Style.font.bodySmall

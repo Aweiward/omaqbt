@@ -202,9 +202,7 @@ TestCase {
   function tab(o) { key(o.c, "", 0x01000001) }
   function backtab(o) { key(o.c, "", 0x01000002) }
   function cmds(o) {
-    var d = o.c.data
-    for (var i = 0; i < d.length; i++) if (d[i] && typeof d[i].commitSecret === "function") return d[i]
-    return null
+    return o.c.settingsCmds
   }
   function field(o) { return line(o).inputField }
   function listTexts(o) {
@@ -278,9 +276,7 @@ TestCase {
     return hits
   }
   function clientCommands(o) {
-    var d = o.c.data
-    for (var i = 0; i < d.length; i++) if (d[i] && typeof d[i].runPaletteRow === "function") return d[i]
-    return null
+    return o.c.commands
   }
   function sweepAll(o, s) {
     var hits = []

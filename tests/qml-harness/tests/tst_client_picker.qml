@@ -668,8 +668,7 @@ TestCase {
   // the scrim or a row ends each of the torrents' pickers.
 
   function cmdsOf(o) {
-    for (var i = 0; i < o.c.data.length; i++) if (o.c.data[i] && typeof o.c.data[i].runPaletteRow === "function") return o.c.data[i]
-    return null
+    return o.c.commands
   }
   function choiceItem(picker, title) {
     return (function find(obj) {
