@@ -31,6 +31,9 @@ Panel {
   // sees it: the catcher's deleteRequested() carries no key, so this tells x from X.
   property string lastKeyText: ""
   property string windowNote: ""
+  // Set by the catcher's returnRequested, which fires just before
+  // activateRequested for Enter only: activate without it is Space.
+  property bool enterPending: false
 
   readonly property color foreground: bar ? bar.foreground : Color.foreground
   readonly property color urgent: bar ? bar.urgent : Color.urgent
@@ -330,8 +333,20 @@ Panel {
     var a = r.action
     if (a === "openWindow") openWindowFromPopup()
     else if (a === "back") closeDetail()
-    else if (a === "remove") handleTextKey("x")
-    else if (a === "deleteFiles") handleTextKey("X")
+    else if (a === "remove") {
+      if (view === "detail") removeKeepFiles(detailHash)
+      else if (selectedTorrent) qbt.deleteHash(selectedTorrent.hash, false)
+    }
+    else if (a === "deleteFiles") {
+      var hash = view === "detail" ? detailHash : (selectedTorrent ? selectedTorrent.hash : "")
+      if (hash) askDeleteFiles(hash)
+    }
+    else if (a === "skipFile") skipSelectedFile()
+    else if (a === "toggle") {
+      if (!qbt.ready) return
+      if (view === "detail") { if (detailHash) qbt.toggleHash(detailHash) }
+      else if (selectedTorrent) qbt.toggleHash(selectedTorrent.hash)
+    }
     else if (a === "moveCursor") {
       if (!cursorActive) { cursorActive = true; return }
       moveCursor(r.args[0], r.args[1])
@@ -449,6 +464,7 @@ Panel {
     confirmOpen = false
     windowNote = ""
     lastKeyText = ""
+    enterPending = false
     if (panelFlick) panelFlick.contentY = 0
     qbt.refresh()
     qbt.loadMagnetSnapshot()
@@ -548,7 +564,12 @@ Panel {
       // every key before it bubbles up here.
       onActiveFocusChanged: if (activeFocus) keySpy.forceActiveFocus()
       onMoveRequested: function(dx, dy) { root.routeKey("move", { dx: dx, dy: dy }) }
-      onActivateRequested: root.routeKey("activate", root.lastKeyText)
+      onReturnRequested: root.enterPending = true
+      onActivateRequested: {
+        var key = root.enterPending ? "enter" : "space"
+        root.enterPending = false
+        root.routeKey("activate", key)
+      }
       onCloseRequested: root.routeKey("close", null)
       onDeleteRequested: {
         var key = root.lastKeyText

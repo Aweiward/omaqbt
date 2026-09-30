@@ -19,6 +19,9 @@ TestCase {
   property string lastKeyText: ""
   property var deletes: []
   property int activates: 0
+  property bool enterPending: false
+  property var activateKeys: []
+  property var texts: []
   property int sameWindowShortcuts: 0
   property bool sameWindowShortcutOn: false
 
@@ -32,7 +35,15 @@ TestCase {
       tc.deletes.push(tc.lastKeyText)
       tc.lastKeyText = ""
     }
-    onActivateRequested: tc.activates++
+    // Panel.qml's Enter/Space split: returnRequested fires just before
+    // activateRequested for Enter only.
+    onReturnRequested: tc.enterPending = true
+    onActivateRequested: {
+      tc.activates++
+      tc.activateKeys.push(tc.enterPending ? "enter" : "space")
+      tc.enterPending = false
+    }
+    onTextKey: function(t) { tc.texts.push(t) }
 
     Item {
       id: spy
@@ -59,6 +70,9 @@ TestCase {
     lastKeyText = ""
     deletes = []
     activates = 0
+    enterPending = false
+    activateKeys = []
+    texts = []
     sameWindowShortcuts = 0
     sameWindowShortcutOn = false
     catcher.forceActiveFocus()
@@ -86,5 +100,18 @@ TestCase {
     keyClick(Qt.Key_Space)
     compare(sameWindowShortcuts, 1, "the focused window's Shortcut fires")
     compare(activates, 0, "and the catcher never sees Space: no double fire either way")
+  }
+
+  function test_enter_and_space_are_told_apart_by_returnRequested() {
+    keyClick(Qt.Key_Return)
+    keyClick(Qt.Key_Space)
+    keyClick(Qt.Key_Enter)
+    keyClick(Qt.Key_Space)
+    compare(activateKeys, ["enter", "space", "enter", "space"])
+  }
+
+  function test_backspace_arrives_as_a_text_key() {
+    keyClick(Qt.Key_Backspace)
+    compare(texts, ["\b"], "the catcher emits textKey(\"\\b\") for Backspace")
   }
 }

@@ -58,10 +58,13 @@ test("x removes and X deletes files on the list row under the cursor", () => {
   assert.equal(action("delete", "X", { view: "list", section: "rows" }), "deleteFiles");
 });
 
-test("x and X in the detail view keep handleTextKey's meaning", () => {
-  // Panel.qml dispatches remove -> handleTextKey("x") and deleteFiles -> handleTextKey("X"),
-  // so the detail view's x skips the selected file (README) and X asks to delete the detail torrent.
-  for (const section of ["remove", "files", "copyMagnet", "deleteFiles"]) {
+test("detail x on the files section skips the file under the cursor; X still deletes the torrent", () => {
+  assert.equal(action("delete", "x", { view: "detail", section: "files" }), "skipFile");
+  assert.equal(action("delete", "X", { view: "detail", section: "files" }), "deleteFiles");
+});
+
+test("detail x and X elsewhere act on the detail torrent", () => {
+  for (const section of ["openFolder", "copyMagnet", "moveTo", "recheck", "remove", "deleteFiles"]) {
     assert.equal(action("delete", "x", { view: "detail", section }), "remove", section);
     assert.equal(action("delete", "X", { view: "detail", section }), "deleteFiles", section);
   }
@@ -110,15 +113,38 @@ test("h stays a cursor move (a no-op) in the list view, and other moves are unch
 // ---- activate / close -------------------------------------------------------------------
 
 test("Enter on the window row opens the window", () => {
+  assert.equal(action("activate", "enter", { view: "list", section: "window" }), "openWindow");
   assert.equal(action("activate", null, { view: "list", section: "window" }), "openWindow");
 });
 
-test("activate otherwise keeps today's behaviour", () => {
-  assert.equal(action("activate", null, { view: "list", section: "rows" }), "activateCursor");
-  assert.equal(action("activate", null, { view: "list", section: "header" }), "activateCursor");
-  assert.equal(action("activate", null, { view: "detail", section: "remove" }), "activateCursor");
-  assert.equal(action("activate", null, { view: "list", section: "window", magnetConfirmOpen: true }), "startMagnet");
-  assert.equal(action("activate", null, { view: "list", section: "rows", magnetConfirmOpen: true }), "startMagnet");
+test("Enter keeps today's behaviour", () => {
+  assert.equal(action("activate", "enter", { view: "list", section: "rows" }), "activateCursor", "Enter opens the detail");
+  assert.equal(action("activate", "enter", { view: "list", section: "header" }), "activateCursor");
+  assert.equal(action("activate", "enter", { view: "detail", section: "remove" }), "activateCursor");
+  assert.equal(action("activate", null, { view: "list", section: "rows" }), "activateCursor", "no key means Enter");
+  assert.equal(action("activate", "enter", { view: "list", section: "window", magnetConfirmOpen: true }), "startMagnet");
+  assert.equal(action("activate", "enter", { view: "list", section: "rows", magnetConfirmOpen: true }), "startMagnet");
+});
+
+test("Space starts or stops the torrent under the cursor, or the detail torrent", () => {
+  assert.equal(action("activate", "space", { view: "list", section: "rows" }), "toggle");
+  for (const section of ["remove", "files", "copyMagnet", "openFolder", "moveTo", "recheck", "deleteFiles"])
+    assert.equal(action("activate", "space", { view: "detail", section }), "toggle", section);
+});
+
+test("Space elsewhere behaves as Enter", () => {
+  assert.equal(action("activate", "space", { view: "list", section: "header" }), "activateCursor");
+  assert.equal(action("activate", "space", { view: "list", section: "clipboard" }), "activateCursor");
+  assert.equal(action("activate", "space", { view: "list", section: "window" }), "openWindow");
+  assert.equal(action("activate", "space", { view: "list", section: "install" }), "activateCursor");
+  assert.equal(action("activate", "space", { view: "list", section: "rows", magnetConfirmOpen: true }), "startMagnet");
+});
+
+test("Backspace goes back in the detail view and does nothing in the list", () => {
+  assert.equal(action("text", "\b", { view: "detail", section: "files" }), "back");
+  assert.equal(action("text", "\b", { view: "detail", section: "remove" }), "back");
+  assert.equal(action("text", "\b", { view: "list", section: "rows" }), "none");
+  assert.equal(action("text", "\b", { view: "list", section: "header" }), "none");
 });
 
 test("close cancels a waiting magnet first, else closes", () => {
@@ -137,7 +163,8 @@ test("an unknown signal does nothing", () => {
 test("nothing but none while the catcher is blocked", () => {
   const signals = [
     ["text", "w"], ["text", "t"], ["text", "/"], ["delete", "x"], ["delete", "X"],
-    ["move", { dx: -1, dy: 0 }], ["move", { dx: 0, dy: 1 }], ["activate", null], ["close", null]
+    ["move", { dx: -1, dy: 0 }], ["move", { dx: 0, dy: 1 }], ["activate", null], ["activate", "enter"],
+    ["activate", "space"], ["text", "\b"], ["close", null]
   ];
   const states = [];
   for (const view of ["list", "detail"])
