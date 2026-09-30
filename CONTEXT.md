@@ -5,8 +5,12 @@ OmaqBT is qBittorrent's client inside the Omarchy bar. It has two surfaces: a sm
 ## Language
 
 **Mark**:
-The OmaqBT icon in the bar, showing live speeds and status badges.
+The OmaqBT icon in the bar, showing the **Logo**, live speeds and status badges.
 _Avoid_: icon, widget
+
+**Logo**:
+OmaqBT's artwork: a square q whose right wall runs down into a download arrow. It appears on the **Mark**, in the **Popup**, and anywhere OmaqBT is shown outside the bar.
+_Avoid_: mark, icon
 
 **Popup**:
 The small view that opens under the mark on a left click, for quick checks: transfers, adding a magnet, start/stop, remove, file priorities.
@@ -28,4 +32,5 @@ _Avoid_: tab, page, mode
 
 ## Flagged ambiguities
 
+- "Mark" meant the bar item in this glossary and the q artwork in the logo's brand notes. Resolved: the artwork is the **Logo**; the **Mark** is the bar item that shows it.
 - "Panel" meant the **Popup** in the README and the **Window** in the plugin manifest (Omarchy's `"panel"` kind). Resolved: user-facing text says **Popup** and **Window**; "panel" appears only as Omarchy's manifest kind.

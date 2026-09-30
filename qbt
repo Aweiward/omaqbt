@@ -1158,6 +1158,7 @@ NoDisplay=true
 StartupNotify=false
 MimeType=x-scheme-handler/magnet;
 Exec=${exec_path} magnet-inbox %u
+Icon=$(dirname "$exec_path")/assets/logo/omaqbt-knockout.svg
 EOF
 }
 

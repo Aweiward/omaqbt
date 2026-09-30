@@ -516,10 +516,11 @@ Panel {
     bar: root.bar
     iconComponent: Component {
       Item {
-        QbittorrentIcon {
+        OmaqbtLogo {
           anchors.centerIn: parent
-          iconSize: Style.space(11)
+          iconSize: Style.font.icon
           color: root.barIconColor
+          tailColor: root.qbt.transferring ? Color.accent : root.barIconColor
           badgeColor: root.urgent
           warning: root.qbt.warning
         }
@@ -656,9 +657,10 @@ Panel {
               fontFamily: root.fontFamily
               iconOpacity: root.qbt.transferring ? 1.0 : 0.5
               iconComponent: Component {
-                QbittorrentIcon {
+                OmaqbtLogo {
                   iconSize: Style.font.display
                   color: root.qbt.transferring ? root.foreground : root.dim
+                  tailColor: root.qbt.transferring ? Color.accent : root.dim
                   badgeColor: root.urgent
                   warning: root.qbt.warning
                 }
