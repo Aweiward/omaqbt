@@ -67,6 +67,9 @@ printf '%s\n' "$printed" | grep -q 'MimeType=x-scheme-handler/magnet;' || fail "
 printf '%s\n' "$printed" | grep -q 'NoDisplay=true' || fail "print NoDisplay"
 printf '%s\n' "$printed" | grep -q 'magnet-inbox %u' || fail "print Exec %u"
 printf '%s\n' "$printed" | grep -q '^Exec=/' || fail "print Exec must be absolute"
+icon=$(printf '%s\n' "$printed" | sed -n 's/^Icon=//p')
+[[ $icon == /*/assets/logo/omaqbt-knockout.svg ]] || fail "print Icon must be the absolute logo path, got $icon"
+[[ -f $icon ]] || fail "print Icon file missing: $icon"
 
 $QBT magnet-inbox "$magnet" || fail "inbox append"
 [[ -f $inbox ]] || fail "inbox file missing"

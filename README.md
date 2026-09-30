@@ -1,3 +1,5 @@
+<p align="center"><img src="assets/logo/omaqbt-knockout.svg" width="96" alt="OmaqBT logo"></p>
+
 # OmaqBT
 
 A themed [Omarchy](https://omarchy.org) Quattro bar widget for qBittorrent. The mark shows live ↓/↑ speeds while anything is transferring, and a desktop notification fires when a download finishes. Left-click the mark for a quick popup: watch live transfers, add a magnet or a `.torrent` file, start or stop, remove a torrent, and set file priorities. For everything else, open the window, a full view with the torrent table, Search, RSS and Settings. Right-click starts or stops everything. The official Qt app stays as an escape hatch.
@@ -8,7 +10,7 @@ License: [MIT](LICENSE).
 
 ![OmaqBT on the Omarchy bar](preview.png)
 
-![OmaqBT torrent detail, remove, and file list](preview-detail.png)
+![OmaqBT torrent detail and actions](preview-detail.png)
 
 ## Install
 
