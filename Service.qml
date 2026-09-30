@@ -1373,6 +1373,19 @@ Scope {
   function rssAddFolder(path) { return rssRun("add-folder", [String(path)], null) }
   function rssRename(from, to) { return rssRun("rename", [String(from), String(to)], null) }
   function rssRemove(path) { return rssRun("remove", [String(path)], null) }
+  // Slice 5b2 (Task 3): the auto-download rules, on the same lane
+  // (tests/fixtures/rss-rules-contract.md). The reads answer cb(ok, error,
+  // data); the writes end in rssFinished. rule-set's changes and snapshot
+  // go as JSON ({} for a pure on or off), enable as keep, off or on.
+  function rssRules(cb) { return rssRead("rules", null, cb) }
+  function rssRuleCheck(key, value, useRegex, cb) { return rssRead("rule-check", [String(key), String(value), useRegex === true ? "true" : "false"], cb) }
+  function rssRulePreview(name, cb) { return rssRead("rule-preview", [String(name)], cb) }
+  function rssRuleCreate(name, feedUrl) { return rssRun("rule-create", [String(name), String(feedUrl || "")], null) }
+  function rssRuleSet(name, changes, snapshot, enable) {
+    return rssRun("rule-set", [String(name), JSON.stringify(changes || ({})), JSON.stringify(snapshot || ({})), String(enable)], null)
+  }
+  function rssRuleRename(from, to) { return rssRun("rule-rename", [String(from), String(to)], null) }
+  function rssRuleRemove(name) { return rssRun("rule-remove", [String(name)], null) }
   // path "" refreshes everything (one empty field).
   function rssRefresh(path) { return rssRun("refresh", [String(path)], null) }
   // guid "" marks a whole feed or folder (path "" everything); expect is
