@@ -29,12 +29,15 @@ test("README splits Usage into the popup and the window", () => {
   assert.ok(usage.includes("### The window"), "### The window is under ## Usage");
 });
 
-test("README has the toggle command and the exact Hyprland bind line", () => {
-  assert.ok(readme.includes("omarchy-shell shell toggle aweiward.omaqbt"));
-  assert.ok(
-    readme.includes("bindd = SUPER SHIFT, Q, OmaqBT window, exec, omarchy-shell shell toggle aweiward.omaqbt"),
-    "the bind line is exact"
-  );
+test("the window section has the toggle command and the exact Hyprland bind line", () => {
+  const windowText = section("### The window");
+  assert.ok(windowText.includes("omarchy-shell shell toggle aweiward.omaqbt"), "the toggle command is in the window section");
+  const bindLine = "bindd = SUPER SHIFT, Q, OmaqBT window, exec, omarchy-shell shell toggle aweiward.omaqbt";
+  const conf = windowText.indexOf("~/.config/hypr/bindings.conf");
+  const bind = windowText.indexOf(bindLine);
+  assert.notEqual(conf, -1, "the window section names ~/.config/hypr/bindings.conf");
+  assert.notEqual(bind, -1, "the bind line is exact and in the window section");
+  assert.ok(bind > conf && bind - conf < 200, "the bind line follows the bindings.conf mention");
 });
 
 test("each documented window opener maps to its registry id", () => {
@@ -57,8 +60,26 @@ test("each documented window opener maps to its registry id", () => {
   assert.ok(windowText.includes("`?` lists each view's keys"));
 });
 
-test("the popup section documents w", () => {
-  assert.ok(section("### The popup").includes("`w`"));
+test("each window key sits on a line with its label", () => {
+  const windowText = section("### The window");
+  const pairs = [
+    /`F`[^\n]*Search/,
+    /`N`[^\n]*RSS/,
+    /`,`[^\n]*Settings/,
+    /`:`[^\n]*palette/,
+    /`\?`[^\n]*(keys|help)/,
+    /`R`[^\n]*[Rr]ules/
+  ];
+  for (const re of pairs) assert.match(windowText, re);
+});
+
+test("the popup section documents the Open the window row and its keys", () => {
+  const popup = section("### The popup");
+  assert.ok(popup.includes("**Open the window**"), "the row label is documented");
+  const line = popup.split("\n").find((l) => l.includes("**Open the window**")) || "";
+  assert.ok(line.includes("`w`"), "w is documented on the row's line");
+  assert.match(line, /Enter/, "Enter on the row is documented");
+  assert.match(line, /click/, "a click on the row is documented");
 });
 
 test("user-facing README prose never says panel", () => {

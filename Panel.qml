@@ -421,13 +421,9 @@ Panel {
       if (view === "list") setFilter("completed")
     } else if (t === "*") {
       if (view === "list") setFilter("all")
-    } else if (t === "x") {
-      if (view === "detail") skipSelectedFile()
-      else if (selectedTorrent) qbt.deleteHash(selectedTorrent.hash, false)
-    } else if (t === "X") {
-      var hash = view === "detail" ? detailHash : (selectedTorrent ? selectedTorrent.hash : "")
-      if (hash) askDeleteFiles(hash)
-    } else if (t === "h" || t === "H") {
+    } else if (t === "H") {
+      // The catcher sends h as a move and x/X as delete (PopupKeys.route);
+      // only a shifted H arrives here as text.
       if (view === "detail") closeDetail()
     } else if (t === "s" || t === "S") {
       if (view === "list") sortMode = Model.cycleSort(sortMode)

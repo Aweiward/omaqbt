@@ -80,9 +80,10 @@ The window shows one view at a time: the torrents (the default), Settings, Searc
 - `F` opens Search
 - `N` opens RSS
 - `,` opens Settings
-- `R` opens the auto-download rules, inside RSS
 - `:` opens the command palette
 - `?` opens help
+
+Inside RSS, `R` opens Rules, the auto-download rules.
 
 `?` lists each view's keys. Esc steps back out of a view.
 
@@ -115,7 +116,7 @@ Session\InterfaceAddress=
 
 That binds the tunnel interface, not a single relay IP, so a Mullvad city change does not stall announces.
 
-The window's Settings view writes the qBittorrent preferences you change there. Nothing else is rewritten. The plugin never stores a Web UI password.
+Nothing else in that file is rewritten by the plugin. The window's views write to qBittorrent when you change something there: preferences in Settings, feeds and rules in RSS, categories, speed limits, and search plugins. qBittorrent saves those changes itself. The plugin never stores a Web UI password.
 
 ## Remove
 
@@ -183,5 +184,7 @@ npm run lint:qml
 node tools/gen-settings-schema.js --check
 omarchy plugin validate .
 ```
+
+`npm run test:qml` turns off Qt's incremental garbage collector (`QV4_GC_TIMELIMIT=0`), because a Qt 6.11 bug could leave a newly created QML object empty.
 
 `tests/api-contract.sh` talks to a fixture HTTP server. It does not start `qbittorrent-nox`, add a real torrent, or delete files on disk.
