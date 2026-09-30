@@ -16,6 +16,12 @@ if [[ -n ${XDG_RUNTIME_DIR:-} ]]; then
 else
   STATE_DIR="${QBT_STATE_DIR:-/tmp/omaqbt-$(id -u)}"
 fi
+# Omarchy watches the deployed plugin folder with `inotifywait -r` and reloads
+# the plugin (closing its window) on any file write under it, so Python must
+# never write .pyc files into lib/__pycache__. Cache bytecode under the state
+# dir instead; Python creates the directory itself. Exported before any python3
+# child runs. qbt-serve mirrors this location (sys.pycache_prefix).
+export PYTHONPYCACHEPREFIX="$STATE_DIR/pycache"
 RID_FILE="${QBT_RID_FILE:-$STATE_DIR/rid.json}"
 # qBittorrent keeps sync/maindata rid state per WebUI session. Without a
 # persisted SID every poll opens a new session and gets a full update.
