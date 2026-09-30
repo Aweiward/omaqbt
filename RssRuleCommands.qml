@@ -30,7 +30,10 @@ import "RssRules.js" as Rules
 //   the saved rule is previewed; noTorrent > 0 refuses with a note, else
 //   the confirm names n, and its y is the only rssRuleSet(name, {}, {},
 //   "on"). Turning off is immediate. A rule turned on from its fields
-//   leaves them (an enabled rule isn't edited).
+//   leaves them (an enabled rule isn't edited). An on or off write marks
+//   the rule as writing, like a save; e while one runs is BUSY_NOTE.
+// - A leave confirm's deferred action, and any CONFIRM, never runs once
+//   the rules have closed (a forced leave) or over another mode.
 // - Previews (D12): one at a time, the newest queued request wins, and an
 //   answer is dropped when a write for its rule was sent after it was
 //   asked for (each rule's generation).
@@ -99,9 +102,12 @@ QtObject {
   }
 
   // Raises one of the rules' CONFIRMs (RssCommands.raise's recipe): `y`
-  // comes back as commandId with args plus confirmed.
+  // comes back as commandId with args plus confirmed. Never once the rules
+  // have closed, nor over another mode (a magnet's CONFIRM, an INSERT): a
+  // deferred action landing then raises nothing.
   function raise(commandId, kind, args, line) {
     var c = client
+    if (!c || !area || !area.open || c.mode !== "NORMAL") return
     var r = Registry.raiseConfirm(c.regState, commandId, kind, args)
     var cf = ({})
     for (var f in r.confirm) cf[f] = r.confirm[f]
@@ -238,8 +244,9 @@ QtObject {
       return
     }
     if (!svcHas("rssRuleSet")) return
+    if (area.writing(rule.name)) { note(View.BUSY_NOTE, "muted"); return }
     area.bumpGen(rule.name)
-    remember(service.rssRuleSet(rule.name, ({}), ({}), "off"), { kind: "off", name: rule.name, edit: true })
+    onOff(rule.name, "off", { kind: "off", name: rule.name, edit: true })
   }
 
   function startNew(item) {
@@ -265,9 +272,17 @@ QtObject {
 
   // ---- e: on and off --------------------------------------------------------------------
 
+  // An on or off write: marked as writing (the fields take no edits until
+  // it ends, so nothing is committed that turnedOn would then drop).
+  function onOff(name, enable, entry) {
+    if (remember(service.rssRuleSet(name, ({}), ({}), enable), entry)) area.markWriting(name, "enabled", true)
+  }
+
   function toggle(rule, confirmed) {
     var cur = area.ruleByName(rule.name)
     if (!cur || !svcHas("rssRuleSet")) return
+    // A write for the rule is running (a save, or another on or off).
+    if (area.writing(rule.name)) { note(View.BUSY_NOTE, "muted"); return }
     // y on "Turn on X?" once X was turned on elsewhere: nothing to do (it
     // must never become an off).
     if (cur.enabled === true && confirmed === true) {
@@ -276,12 +291,12 @@ QtObject {
     }
     if (cur.enabled === true) {
       area.bumpGen(rule.name)
-      remember(service.rssRuleSet(rule.name, ({}), ({}), "off"), { kind: "off", name: rule.name })
+      onOff(rule.name, "off", { kind: "off", name: rule.name })
       return
     }
     if (confirmed === true) {
       area.bumpGen(rule.name)
-      remember(service.rssRuleSet(rule.name, ({}), ({}), "on"), { kind: "on", name: rule.name })
+      onOff(rule.name, "on", { kind: "on", name: rule.name })
       return
     }
     // A dirty draft is saved first (keep); a refused save turns nothing on.
@@ -398,7 +413,9 @@ QtObject {
     var n = next || ({})
     if (n.preview === true) area.requestPreview(name)
     if (typeof n.turnOn === "string") turnOnPreview(n.turnOn)
-    if (typeof n.commandId === "string") run(n.commandId, n.args)
+    // The leave confirm's action, only while the rules are still open: a
+    // forced leave (a magnet's CONFIRM, the palette) cancels it.
+    if (typeof n.commandId === "string" && area.open) run(n.commandId, n.args)
   }
 
   // ---- the INSERTs -----------------------------------------------------------------------
@@ -601,6 +618,7 @@ QtObject {
       readRules("")
       return
     }
+    if (e.kind === "off" || e.kind === "on") area.markWriting(e.name, "", false)
     if (!ok) {
       fail(error)
       readRules("")

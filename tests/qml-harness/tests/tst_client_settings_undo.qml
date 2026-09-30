@@ -94,7 +94,9 @@ TestCase {
       function answer(result) { var cb = prefsCbs.shift(); cb(result) }
       // Slice 5b2 (D8): the auto-download count.
       property var autoCbs: []
-      function rssAutoPreview(cb) { rec("rssAutoPreview", []); autoCbs.push(cb) }
+      // autoRefused: the Service refuses the count with 0 (never answers).
+      property bool autoRefused: false
+      function rssAutoPreview(cb) { var t = rec("rssAutoPreview", []); if (autoRefused) return 0; autoCbs.push(cb); return t }
       function answerAuto(ok, err, data) { var cb = autoCbs.shift(); cb(ok, err, data) }
     }
   }
@@ -868,6 +870,20 @@ TestCase {
     saved(o, prefs({ rss_auto_downloading_enabled: true }))
     compare(stack(o).length, 0, "undo's own write records nothing")
     compare(status(o), SettingsView.undoDoneNote(k, "RSS auto-downloading", true, 0))
+  }
+
+  function test_u_turning_auto_download_on_refuses_on_no_torrent_links() {
+    var k = "rss_auto_downloading_enabled"
+    var o = make(prefs({ rss_auto_downloading_enabled: true }))
+    focusKey(o, k)
+    space(o)
+    saved(o, prefs({ rss_auto_downloading_enabled: false }))
+    undo(o, prefs({ rss_auto_downloading_enabled: false }))
+    o.svc.answerAuto(true, "", { rules: 1, will: 2, noTorrent: 4 })
+    compare(o.c.mode, "NORMAL", "no confirm")
+    compare(writes(o).length, 1, "nothing more is written")
+    compare(status(o), SettingsView.AUTO_DL.autoDlNoTorrent.replace("<m>", "4"))
+    compare(stack(o).length, 1, "the entry is back for a later u")
   }
 
   function test_n_on_the_undo_auto_download_question_writes_nothing() {

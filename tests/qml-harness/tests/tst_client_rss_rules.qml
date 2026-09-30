@@ -814,6 +814,117 @@ TestCase {
     compare(sets(o), 0)
   }
 
+  // ---- final fix wave ----------------------------------------------------------------------------------
+
+  function test_final_the_field_rows_are_setting_rows_with_no_type_tag() {
+    var o = make()
+    openRules(o)
+    editRule(o, 0, preview([]))
+    wait(30)
+    var row = findName(rr(o), "rssRuleFieldRow")
+    verify(row !== null, "the fields draw with SettingRow, under their own objectName")
+    compare(findName(rr(o), "settingsRow"), null, "no row in RSS claims to be a settings row")
+    var tag = findName(row, "settingsTag")
+    compare(tag.visible, false, "an empty type tag takes no room")
+    var value = findName(row, "settingsValue")
+    compare(value.x + value.width, row.width - 12, "the value runs to the right margin")
+  }
+
+  function test_final_a_leave_y_action_never_runs_after_a_forced_leave() {
+    var o = make(700)
+    openRules(o, rulesFx({ auto: true }))
+    editRule(o, 0, preview([]))
+    typeField(o, "mustContain", "Arch 1", { ok: true, value: "Arch 1" })
+    tab(o)
+    compare(o.c.keyPane, "rssRuleList")
+    j(o, 1)
+    enter(o)
+    compare(confirmText(o), fill(w.confirmLeave, { name: "Arch ISO" }))
+    key(o.c, "y")
+    compare(last(o.svc, "rssRuleSet").args[3], "keep", "the save is in flight")
+    // The Client closes RSS itself before the save ends.
+    o.c.leaveView()
+    compare(o.c.activeView, "torrents")
+    var mode = o.c.mode
+    finishCall(o, "rssRuleSet", true, "", { ok: true })
+    compare(o.c.confirm, null, "Debian's edit-off confirm isn't raised")
+    compare(o.c.mode, mode)
+    compare(sets(o), 1)
+  }
+
+  function test_final_the_gen_guard_with_auto_download_off() {
+    var o = make()
+    openRules(o)
+    editRule(o, 0, preview([]))
+    key(o.c, "e")
+    var old = last(o.svc, "rssRulePreview")
+    compare(old.args, ["Arch ISO"])
+    // A commit saves at once (auto-download off): the rule's gen moves.
+    toField(o, "smartFilter")
+    space(o)
+    compare(sets(o), 1)
+    compare(rr(o).flags.rssRuleDirty, false, "auto-download off, a draft is never dirty")
+    answerCall(o, old, true, "", preview(["a"]))
+    compare(o.c.mode, "NORMAL", "no confirm from a preview older than the save")
+    compare(o.c.confirm, null)
+    compare(onCount(o), 0)
+  }
+
+  function test_final_a_turn_on_preview_landing_over_an_insert_raises_nothing() {
+    var o = make()
+    openRules(o)
+    editRule(o, 0, preview([]))
+    key(o.c, "e")
+    var old = last(o.svc, "rssRulePreview")
+    toField(o, "mustContain")
+    enter(o)
+    compare(o.c.mode, "INSERT")
+    answerCall(o, old, true, "", preview(["a"]))
+    compare(o.c.mode, "INSERT", "the field stays open")
+    compare(o.c.confirm, null)
+    compare(onCount(o), 0)
+  }
+
+  function test_final_no_edit_is_taken_while_an_on_write_runs() {
+    var o = make()
+    openRules(o, rulesFx({ auto: true }))
+    editRule(o, 0, preview([]))
+    key(o.c, "e")
+    answer(o, "rssRulePreview", true, "", preview(["a"]))
+    key(o.c, "y")
+    compare(last(o.svc, "rssRuleSet").args, ["Arch ISO", {}, {}, "on"])
+    compare(o.c.keyPane, "rssRuleFields")
+    toField(o, "smartFilter")
+    space(o)
+    compare(rr(o).draft.values.smartFilter, false, "Space takes no edit the on write would drop")
+    compare(rr(o).flags.rssRuleDirty, false)
+    toField(o, "mustContain")
+    enter(o)
+    compare(o.c.mode, "NORMAL", "no INSERT while it runs")
+    finishCall(o, "rssRuleSet", true, "", { ok: true })
+    compare(o.c.keyPane, "rssRules")
+    compare(sets(o), 1)
+  }
+
+  function test_final_e_while_a_write_for_the_rule_runs_is_busy() {
+    var o = make()
+    openRules(o, rulesFx({ auto: true }))
+    key(o.c, "e")
+    answer(o, "rssRulePreview", true, "", preview(["a"]))
+    key(o.c, "y")
+    compare(sets(o), 1)
+    var previews = calls(o.svc, "rssRulePreview").length
+    key(o.c, "e")
+    compare(statusText(o), View.BUSY_NOTE)
+    compare(o.c.mode, "NORMAL")
+    compare(sets(o), 1)
+    compare(calls(o.svc, "rssRulePreview").length, previews, "no second turn-on preview")
+    finishCall(o, "rssRuleSet", true, "", { ok: true })
+    answer(o, "rssRules", true, "", rulesFx({ auto: true, set: { "Arch ISO": { enabled: true } } }))
+    key(o.c, "e")
+    compare(last(o.svc, "rssRuleSet").args, ["Arch ISO", {}, {}, "off"], "once it ends, e works again")
+  }
+
   // ---- pickers --------------------------------------------------------------------------------------
 
   function test_the_feeds_picker_toggles_with_space_applies_with_enter_and_shows_gone_urls() {

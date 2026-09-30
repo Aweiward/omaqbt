@@ -55,8 +55,10 @@ import "SettingsView.js" as SettingsView
 // "rssAutoDl" (rss_auto_downloading_enabled) turning on first counts what
 // would download (Service.rssAutoPreview), then raises CONFIRM rssAutoDlOn
 // (View.SETTINGS_ACCEPT) with SettingsView.autoDlQuestion's line; its y
-// comes back as settings.write like any setting's. A failed count still
-// asks, without numbers. Turning it off asks nothing. An answer that lands
+// comes back as settings.write like any setting's. A failed count (or one
+// that couldn't start) still asks, without numbers. A count with noTorrent
+// > 0 refuses with SettingsView.autoDlRefusal's note, no confirm and no
+// write (mirroring OV3). Turning it off asks nothing. An answer that lands
 // after Settings closed or reopened, or over another mode, is dropped. u
 // undoing a turn-off goes through the same count and question.
 QtObject {
@@ -356,15 +358,27 @@ QtObject {
     }
     var myVisit = visit
     autoDlCounting = k
-    c.service.rssAutoPreview(function(ok, err, data) {
+    var ticket = c.service.rssAutoPreview(function(ok, err, data) {
       if (myVisit !== edits.visit) return
       edits.autoDlCounting = ""
       if (!edits.settingsView.open) return
       // A re-read meanwhile already shows it on: nothing to ask.
       if (SettingsView.equalValue(k, SettingsView.currentValue(k, edits.settingsView.prefs), to)) return
       if (edits.client.mode !== "NORMAL") { if (undoEntry) edits.restoreUndo(undoEntry); return }
+      var refusal = SettingsView.autoDlRefusal(ok, data)
+      if (refusal !== "") {
+        if (undoEntry) edits.restoreUndo(undoEntry)
+        edits.client.note(refusal, "urgent")
+        return
+      }
       edits.raiseAutoDl(k, label, from, to, SettingsView.autoDlQuestion(ok, data), done, undoEntry)
     })
+    // The count never started (the Service refused it with 0): its answer
+    // won't come, so ask now, without numbers.
+    if (!(typeof ticket === "number" && ticket > 0) && autoDlCounting === k) {
+      autoDlCounting = ""
+      raiseAutoDl(k, label, from, to, SettingsView.autoDlQuestion(false, null), done, undoEntry)
+    }
   }
 
   function raiseAutoDl(k, label, from, to, line, done, undoEntry) {

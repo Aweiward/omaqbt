@@ -3351,6 +3351,7 @@ rss_read_rules() {
 # RULE_HAS: "yes" when rss/rules (RSS_RULES) holds the name $1 exactly.
 rule_has() {
   rule_py has "$1" "$RSS_RULES"
+  (( RULE_RC == 0 )) || die "qBittorrent sent something unreadable"
   RULE_HAS=$RULE_OUT
 }
 
@@ -3405,6 +3406,7 @@ rss_rules() {
   rules=$RSS_RULES
   api_try GET "/api/v2/app/preferences" || die "qBittorrent refused it (${API_FAIL})"
   rule_py list "$rules" "$API_BODY"
+  (( RULE_RC == 0 )) || die "qBittorrent sent something unreadable"
   printf '%s\n' "$RULE_OUT"
 }
 
@@ -3441,7 +3443,9 @@ rule_preview_of() {
   matching=$RULE_MATCHING
   rss_read_tree
   rule_py preview "$name" "$RSS_RULES" "$matching" "$RSS_TREE"
-  (( RULE_RC == 0 )) || die "$RULE_GONE"
+  # 3 is the rule missing; anything else (a crash exits 1) isn't "gone".
+  (( RULE_RC == 3 )) && die "$RULE_GONE"
+  (( RULE_RC == 0 )) || die "qBittorrent sent something unreadable"
   RULE_PREVIEW=$RULE_OUT
 }
 

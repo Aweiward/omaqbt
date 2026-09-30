@@ -81,6 +81,7 @@ var WINDOW = {
   confirmAutoDl: "Turn on auto-download? <r> rules are on; up to <n> unread articles download now.",
   confirmAutoDlNone: "No rules are on yet; nothing downloads until you turn one on.",
   confirmAutoDlUncounted: "Turn on auto-download? Couldn't count what would download.",
+  autoDlNoTorrent: "<m> matching articles have no torrent link, and qBittorrent would retry them forever. Tighten or turn off the rules that match them first.",
   autoDlFooter: "auto-download is on: p saves and previews",
   noteCreated: "Created <name>; it stays off until you turn it on.",
   noteOn: "<name> is on.",

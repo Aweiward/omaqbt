@@ -240,11 +240,16 @@ def fields_of(raw):
     if "torrentParams" in o:
         tp = o["torrentParams"] if isinstance(o["torrentParams"], dict) else {}
         category, path, stopped = tp.get("category"), tp.get("save_path"), tp.get("stopped")
+        # getOptionalBool (addtorrentparams.cpp:80): absent or null is
+        # unset, anything else is QJsonValue::toBool (non-bools read false).
+        add_stopped = "default" if stopped is None else "yes" if stopped is True else "no"
     else:
         category, path, stopped = o.get("assignedCategory"), o.get("savePath"), o.get("addPaused")
+        # toOptionalBool (rss_autodownloadrule.cpp): only a bool is set.
+        add_stopped = "yes" if stopped is True else "no" if stopped is False else "default"
     out["category"] = _string(category)
     out["savePath"] = _string(path)
-    out["addStopped"] = "yes" if stopped is True else "no" if stopped is False else "default"
+    out["addStopped"] = add_stopped
     out["ignoreDays"] = _qt_int(o.get("ignoreDays"))
     return out
 
@@ -283,6 +288,10 @@ def check_shape(changes, snapshot, enable):
     if "savePath" in changes:
         want.add("useAutoTmm")
     if set(snapshot) != want:
+        raise Usage()
+    # OV15: a save only ever touches a disabled rule (the fields are
+    # entered only on one), so a keep save's snapshot must say it was off.
+    if enable == "keep" and snapshot.get("enabled") is not False:
         raise Usage()
     for key, value in snapshot.items():
         if key == "enabled":

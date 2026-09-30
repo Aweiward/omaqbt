@@ -209,7 +209,12 @@ else
 fi
 # A torrentParams round trip: tags set through the raw setRule (qbt never
 # edits them) survive a qbt save, and every other key reads back as it was.
-before=$(rule_of "$RULE" | jq -c '.raw | .torrentParams.tags = ["omaqbt-probe"]')
+# Only ever post a rule we just read, and only while it's off: an empty
+# ruleDef would reset it, and an enabled one could download.
+raw=$(rule_of "$RULE" | jq -c '.raw') || raw=""
+[[ -n $raw && $(printf '%s' "$raw" | jq '.enabled == false') == true ]] \
+  || stop "$RULE isn't there, or isn't off, before the raw setRule; not posting it"
+before=$(printf '%s' "$raw" | jq -c '.torrentParams.tags = ["omaqbt-probe"]')
 code=$(printf '%s' "$before" | curl -s --noproxy '*' --max-time 5 -o /dev/null -w '%{http_code}' -X POST \
   --data-urlencode "ruleName=$RULE" --data-urlencode "ruleDef@-" "$base/api/v2/rss/setRule" || true)
 [[ $code == 200 ]] || fail "raw setRule with tags: $code"

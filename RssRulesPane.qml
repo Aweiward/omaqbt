@@ -135,7 +135,8 @@ import "RssRules.js" as Rules
 //                    runs rssRuleSet(name, {}, {}, "on"), which previews
 //                    again and writes nothing if noTorrent grew. On a rule
 //                    that's on: off at once (rssRuleSet(name, {}, {},
-//                    "off")), no confirm;
+//                    "off")), no confirm. While a write for the rule runs,
+//                    it only notes BUSY_NOTE;
 //                  rss.ruleEdit on an enabled rule → rssRuleEditOff
 //                    (confirmEditOff; y: rssRuleSet enable "off", then the
 //                    fields); a disabled rule goes straight into the fields;
@@ -224,8 +225,9 @@ Item {
   property var gens: ({})
   property string busyPreview: ""
   property string queuedPreview: ""
-  // name -> the field key being saved ("" for the whole draft): a write
-  // for that rule is running.
+  // name -> the field key being saved ("" for the whole draft, "enabled"
+  // for an on or off): a write for that rule is running, and the fields
+  // take no edits and e no second write until it ends.
   property var writes: ({})
   // After a read: enter this rule's fields (Enter's turn-off), put the
   // cursor on this rule (a, n), check a kept draft ("open", "reload").
@@ -819,6 +821,7 @@ Item {
           model: rules.fieldRowsList
           delegate: SettingRow {
             id: fieldRow
+            objectName: "rssRuleFieldRow"
             required property var modelData
             required property int index
             width: fieldColumn.width

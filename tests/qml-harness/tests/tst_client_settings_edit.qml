@@ -90,7 +90,9 @@ TestCase {
       function answer(result) { var cb = prefsCbs.shift(); cb(result) }
       // Slice 5b2 (D8): the auto-download count, answered by answerAuto.
       property var autoCbs: []
-      function rssAutoPreview(cb) { rec("rssAutoPreview", []); autoCbs.push(cb) }
+      // autoRefused: the Service refuses the count with 0 (never answers).
+      property bool autoRefused: false
+      function rssAutoPreview(cb) { var t = rec("rssAutoPreview", []); if (autoRefused) return 0; autoCbs.push(cb); return t }
       function answerAuto(ok, err, data) { var cb = autoCbs.shift(); cb(ok, err, data) }
     }
   }
@@ -911,7 +913,7 @@ TestCase {
     compare(calls(o.svc, "rssAutoPreview").length, 1, "the count runs first")
     compare(o.c.mode, "NORMAL", "nothing asks until the count is in")
     compare(writes(o).length, 0)
-    o.svc.answerAuto(true, "", { rules: 2, will: 5, noTorrent: 1 })
+    o.svc.answerAuto(true, "", { rules: 2, will: 5, noTorrent: 0 })
     compare(o.c.mode, "CONFIRM")
     compare(o.c.confirm.kind, "rssAutoDlOn")
     compare(o.c.confirm.line, SettingsView.AUTO_DL.confirmAutoDl.replace("<r>", "2").replace("<n>", "5"))
@@ -943,6 +945,36 @@ TestCase {
     compare(o.c.confirm.line, SettingsView.AUTO_DL.confirmAutoDlUncounted)
     key(o.c, "y")
     compare(writes(o), [[autoKey, "true"]])
+  }
+
+  // Final fix wave (mirroring OV3): articles with no torrent link refuse.
+  function test_a_count_with_no_torrent_links_refuses_with_no_confirm() {
+    var o = make(autoOff())
+    focusKey(o, autoKey)
+    space(o)
+    o.svc.answerAuto(true, "", { rules: 2, will: 5, noTorrent: 3 })
+    compare(o.c.mode, "NORMAL", "no confirm")
+    compare(o.c.confirm, null)
+    compare(writes(o).length, 0, "nothing is written")
+    compare(status(o), SettingsView.AUTO_DL.autoDlNoTorrent.replace("<m>", "3"))
+    compare(valueText(o, autoKey), "off")
+    space(o)
+    compare(calls(o.svc, "rssAutoPreview").length, 2, "the next press counts again")
+  }
+
+  function test_a_count_the_service_refuses_asks_without_numbers() {
+    var o = make(autoOff())
+    o.svc.autoRefused = true
+    focusKey(o, autoKey)
+    space(o)
+    compare(calls(o.svc, "rssAutoPreview").length, 1)
+    compare(o.c.mode, "CONFIRM", "the uncounted question, not a stuck count")
+    compare(o.c.confirm.kind, "rssAutoDlOn")
+    compare(o.c.confirm.line, SettingsView.AUTO_DL.confirmAutoDlUncounted)
+    key(o.c, "n")
+    o.svc.autoRefused = false
+    space(o)
+    compare(calls(o.svc, "rssAutoPreview").length, 2, "the count isn't left marked as out")
   }
 
   function test_auto_download_off_asks_nothing() {

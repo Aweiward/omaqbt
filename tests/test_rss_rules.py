@@ -636,8 +636,22 @@ class RuleSetTest(RulesCase):
         self.refused_without_a_post(self.rule_set("Show", {"mustContain": "x"}, {"mustContain": "Show 720p", "enabled": False}),
                                     sentence("ruleChanged", name="Show"), before)
         # Turned on elsewhere under the editor.
-        self.refused_without_a_post(self.rule_set("Show", {"mustContain": "x"}, {"mustContain": "Show", "enabled": True}),
+        rule = full_rule()
+        rule["enabled"] = True
+        self.reset(rules={"Show": rule})
+        before = len(self.log())
+        self.refused_without_a_post(self.rule_set("Show", {"mustContain": "x"}, {"mustContain": "Show", "enabled": False}),
                                     sentence("ruleChanged", name="Show"), before)
+
+    def test_ov15_a_keep_save_on_a_snapshot_that_was_on_is_usage(self):
+        # Saves only ever touch a disabled rule: a keep whose snapshot says
+        # the rule was on is refused before any request.
+        rule = full_rule()
+        rule["enabled"] = True
+        self.reset(rules={"Show": rule})
+        before = len(self.log())
+        self.refused(self.rule_set("Show", {"mustContain": "x"}, {"mustContain": "Show", "enabled": True}), S["ruleUsage"], 2)
+        self.assertEqual(self.since(before), [])
 
     def test_ov9_an_episode_the_auto_downloader_adds_is_kept(self):
         self.reset(rules={"Show": full_rule()})
@@ -677,7 +691,7 @@ class RuleSetTest(RulesCase):
 
     def test_rule_gone(self):
         before = len(self.log())
-        self.refused_without_a_post(self.rule_set("Nope", {"mustContain": "x"}, {"mustContain": "", "enabled": True}),
+        self.refused_without_a_post(self.rule_set("Nope", {"mustContain": "x"}, {"mustContain": "", "enabled": False}),
                                     S["ruleGone"], before)
 
     def test_a_read_back_mismatch(self):
@@ -815,6 +829,30 @@ class RulePreviewTest(RulesCase):
     def test_gone(self):
         before = len(self.log())
         self.refused_without_a_post(self.rss("rule-preview", "Nope"), S["ruleGone"], before)
+
+    def crashing_python(self, mode):
+        """A PATH whose python3 exits 1 (as a crash does) for rssautorules.py
+        <mode>, and runs the real one otherwise."""
+        farm = Path(tempfile.mkdtemp(prefix="qbt-crash-"))
+        self.addCleanup(shutil.rmtree, farm, True)
+        shim = farm / "python3"
+        shim.write_text("#!/bin/bash\n"
+                        f'[[ ${{2:-}} == {mode} ]] && {{ cat >/dev/null; echo Traceback >&2; exit 1; }}\n'
+                        f'exec {sys.executable} "$@"\n')
+        shim.chmod(0o755)
+        return {"PATH": str(farm) + os.pathsep + os.environ["PATH"]}
+
+    def test_a_crash_is_unreadable_not_gone(self):
+        # Only rssautorules.py's exit 3 means the rule is missing.
+        self.reset(rules={"Deb": disabled([DEBIAN_URL], mustContain="DSA")})
+        env = self.crashing_python("preview")
+        self.refused(self.rss("rule-preview", "Deb", env=env), "qBittorrent sent something unreadable")
+        self.refused(self.rule_set("Deb", {}, {}, "on", env=env), "qBittorrent sent something unreadable")
+        self.assertFalse(self.rules_state()["Deb"]["enabled"])
+        self.refused(self.rss("rule-remove", "Deb", env=self.crashing_python("has")), "qBittorrent sent something unreadable")
+        self.assertIn("Deb", self.rules_state())
+        r = self.rss("rules", env=self.crashing_python("list"))
+        self.refused(r, "qBittorrent sent something unreadable")
 
     def test_preview_enabled_dedupes(self):
         self.reset(rules={

@@ -1,15 +1,14 @@
 import QtQuick
 import qs.Commons
 
-// One settings row (28 px), lifted verbatim from SettingsPane.qml's inline
-// SettingsRow (slice 5b2, Task 3) so the RSS rules' fields draw with the
-// same delegate: the label (with its section in a search), the value, a
-// muted "after restart" on restart keys, and the muted type tag. Locked
+// One settings row (28 px), shared by SettingsPane.qml and the RSS rules'
+// fields (slice 5b2): the label (with its section in a search), the value,
+// a muted "after restart" on restart keys, and the muted type tag (hidden,
+// with its width given back to the value, when the row has no tag). Locked
 // rows ("OmaqBT") and dimmed dependents are painted dim; other muted
-// values (sentinels, "—" while loading) in muted. SettingsPane's own copy
-// is an inline component under `pragma ComponentBehavior: Bound`, which
-// another file can't instantiate; switching SettingsPane over to this file
-// is a one-hunk swap (the objectNames are the same).
+// values (sentinels, "—" while loading) in muted. The objectName defaults
+// to "settingsRow" (Settings' harness tests find rows by it); other users
+// set their own.
 Item {
   id: rowItem
   objectName: "settingsRow"
@@ -27,7 +26,8 @@ Item {
     ? Math.max(Math.round(width * 0.25), Math.min(rowLabel.implicitWidth + Style.space(12) + (showSection ? rowSection.implicitWidth : 0) + Style.space(8),
       width - rowValue.implicitWidth - Style.space(32)))
     : Math.min(Style.space(300), Math.round(width * 0.45))
-  readonly property int tagWidth: compact ? 0 : Style.space(78)
+  readonly property bool hasTag: String(row.typeTag || "") !== ""
+  readonly property int tagWidth: compact || !hasTag ? 0 : Style.space(78)
 
   Rectangle {
     visible: rowItem.current
@@ -86,8 +86,8 @@ Item {
     id: rowRestart
     objectName: "settingsRestart"
     visible: rowItem.row.restart === true && !rowItem.compact
-    anchors.right: rowTag.left
-    anchors.rightMargin: Style.space(8)
+    anchors.right: rowTag.visible ? rowTag.left : parent.right
+    anchors.rightMargin: rowTag.visible ? Style.space(8) : Style.space(12)
     anchors.verticalCenter: parent.verticalCenter
     text: "after restart"
     textFormat: Text.PlainText
@@ -98,7 +98,7 @@ Item {
   Text {
     id: rowTag
     objectName: "settingsTag"
-    visible: !rowItem.compact
+    visible: !rowItem.compact && rowItem.hasTag
     anchors.right: parent.right
     anchors.rightMargin: Style.space(12)
     anchors.verticalCenter: parent.verticalCenter

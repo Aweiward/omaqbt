@@ -1107,8 +1107,18 @@ test("5b2 D8: the auto-download lines are the rules case file's window copy", ()
   assert.deepEqual(V.AUTO_DL, {
     confirmAutoDl: RULES_WINDOW.confirmAutoDl,
     confirmAutoDlNone: RULES_WINDOW.confirmAutoDlNone,
-    confirmAutoDlUncounted: RULES_WINDOW.confirmAutoDlUncounted
+    confirmAutoDlUncounted: RULES_WINDOW.confirmAutoDlUncounted,
+    autoDlNoTorrent: RULES_WINDOW.autoDlNoTorrent
   });
+});
+
+test("5b2 final fix: autoDlRefusal refuses a readable count with noTorrent > 0, and only that", () => {
+  assert.equal(V.autoDlRefusal(true, { rules: 2, will: 5, noTorrent: 3 }), RULES_WINDOW.autoDlNoTorrent.replace("<m>", "3"));
+  assert.equal(V.autoDlRefusal(true, { rules: 1, will: 0, noTorrent: 1 }), RULES_WINDOW.autoDlNoTorrent.replace("<m>", "1"));
+  for (const [ok, data] of [[true, { rules: 2, will: 5, noTorrent: 0 }], [true, { rules: 0, will: 0, noTorrent: 0 }], [false, { rules: 2, will: 5, noTorrent: 3 }],
+    [false, null], [true, null], [true, {}], [true, { rules: 1, will: 1, noTorrent: "2" }], [true, { rules: 1, will: 1, noTorrent: -1 }], [true, { rules: 1, will: 1, noTorrent: 1.5 }]]) {
+    assert.equal(V.autoDlRefusal(ok, data), "", JSON.stringify([ok, data]));
+  }
 });
 
 test("5b2 D8: rss_auto_downloading_enabled is a live toggle that confirms via rssAutoDl", () => {

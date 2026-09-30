@@ -116,6 +116,7 @@ const WINDOW = {
   confirmAutoDl: "Turn on auto-download? <r> rules are on; up to <n> unread articles download now.",
   confirmAutoDlNone: "No rules are on yet; nothing downloads until you turn one on.",
   confirmAutoDlUncounted: "Turn on auto-download? Couldn't count what would download.",
+  autoDlNoTorrent: "<m> matching articles have no torrent link, and qBittorrent would retry them forever. Tighten or turn off the rules that match them first.",
   autoDlFooter: "auto-download is on: p saves and previews",
   noteCreated: "Created <name>; it stays off until you turn it on.",
   noteOn: "<name> is on.",
@@ -239,10 +240,14 @@ test("rules cases: the rows the brief and the controller asked for are there", (
     has("patch", (c) => c.ok && c.input.changes.addStopped === v && c.normalised.torrentParams && c.normalised.torrentParams.stopped === stopped && c.normalised.addPaused === paused, "stopped " + v);
   }
   has("patch", (c) => !c.ok && c.message === S.ruleChanged.replace("<name>", c.input.name), "a snapshot conflict");
-  for (const [e, before, after] of [["on", false, true], ["off", true, false], ["keep", true, true], ["keep", false, false]]) {
+  for (const [e, before, after] of [["on", false, true], ["off", true, false], ["keep", false, false]]) {
     has("patch", (c) => c.ok && c.input.enable === e && c.input.current.enabled === before && c.normalised.enabled === after, "enable " + e + " from " + before);
   }
   has("patch", (c) => c.ok && !("enabled" in c.input.current) && c.normalised.enabled === true, "enabled written explicitly when absent");
+  // Final fix wave: OV15, a keep save only touches a disabled rule.
+  has("patch", (c) => c.input.enable === "keep" && c.input.snapshot.enabled === true && c.message === S.ruleUsage, "keep with snapshot.enabled true is a usage refusal");
+  has("fields", (c) => c.input.torrentParams && c.input.torrentParams.stopped === null && c.normalised.addStopped === "default", "a null torrentParams.stopped is default");
+  has("fields", (c) => c.input.torrentParams && ![true, false, null, undefined].includes(c.input.torrentParams.stopped) && c.normalised.addStopped === "no", "a non-bool torrentParams.stopped is no");
   // Fix round 1: on never carries changes; a save's snapshot holds enabled.
   has("patch", (c) => c.input.enable === "on" && Object.keys(c.input.changes).length > 0 && c.message === S.ruleUsage, "on with changes is a usage refusal");
   has("patch", (c) => c.ok && c.input.enable === "on" && Object.keys(c.input.changes).length === 0 && c.normalised.enabled === true, "on with empty changes");

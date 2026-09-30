@@ -956,13 +956,16 @@ function doneNote(key, value) {
 // A key with the schema's confirmVia "rssAutoDl" (rss_auto_downloading_enabled)
 // asks before it turns on: SettingsCommands first counts what would download
 // (Service.rssAutoPreview -> {rules, will, noTorrent}), then raises CONFIRM
-// rssAutoDlOn (View.SETTINGS_ACCEPT) with autoDlQuestion's line. Turning it
-// off asks nothing. The three lines are the rules case file's window copy
-// (tests/fixtures/rss-autorules-cases.json; settings-view.test.js pins them).
+// rssAutoDlOn (View.SETTINGS_ACCEPT) with autoDlQuestion's line. A count
+// with noTorrent > 0 refuses instead (autoDlRefusal, mirroring OV3: no
+// confirm, nothing written). Turning it off asks nothing. The lines are the
+// rules case file's window copy (tests/fixtures/rss-autorules-cases.json;
+// settings-view.test.js pins them).
 var AUTO_DL = {
   confirmAutoDl: "Turn on auto-download? <r> rules are on; up to <n> unread articles download now.",
   confirmAutoDlNone: "No rules are on yet; nothing downloads until you turn one on.",
-  confirmAutoDlUncounted: "Turn on auto-download? Couldn't count what would download."
+  confirmAutoDlUncounted: "Turn on auto-download? Couldn't count what would download.",
+  autoDlNoTorrent: "<m> matching articles have no torrent link, and qBittorrent would retry them forever. Tighten or turn off the rules that match them first."
 };
 
 // confirmVia(key) -> the schema's confirmVia ("rssAutoDl"), or "".
@@ -983,6 +986,15 @@ function autoDlQuestion(ok, data) {
   if (ok !== true || !d || !countOk(d.rules) || !countOk(d.will)) return AUTO_DL.confirmAutoDlUncounted;
   if (d.rules === 0) return AUTO_DL.confirmAutoDlNone;
   return AUTO_DL.confirmAutoDl.replace("<r>", String(d.rules)).replace("<n>", String(d.will));
+}
+
+// autoDlRefusal(ok, data) -> the refusal note when a readable count has
+// noTorrent m > 0 (turning auto-download on is refused: qBittorrent would
+// retry those articles forever), else "" (ask autoDlQuestion's line).
+function autoDlRefusal(ok, data) {
+  var d = data || null;
+  if (ok !== true || !d || !countOk(d.noTorrent) || d.noTorrent === 0) return "";
+  return AUTO_DL.autoDlNoTorrent.replace("<m>", String(d.noTorrent));
 }
 
 // --- Slice 4b (Task 4): undo -------------------------------------------------------------------
@@ -1222,6 +1234,7 @@ if (typeof module !== "undefined") {
     secretDoneNote: secretDoneNote,
     AUTO_DL: AUTO_DL,
     confirmVia: confirmVia,
-    autoDlQuestion: autoDlQuestion
+    autoDlQuestion: autoDlQuestion,
+    autoDlRefusal: autoDlRefusal
   };
 }
