@@ -802,6 +802,144 @@ class ClientTests(unittest.TestCase):
             thread.join(timeout=2)
 
 
+KEY_A = "qbt_FixtureKey23456789abcdefghjk"
+KEY_B = "qbt_RotatedKey3456789ABCDEFGHJKL"
+
+
+def write_conf(path, body):
+    Path(path).write_text(body)
+
+
+class ReadApiKeyTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.conf = os.path.join(self.tmp.name, "qBittorrent.conf")
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def read(self, body):
+        Path(self.conf).write_text(body)
+        return qbtsync.read_api_key(self.conf)
+
+    def test_reads_the_key_from_preferences(self):
+        self.assertEqual(self.read(f"[Preferences]\nWebUI\\APIKey={KEY_A}\nWebUI\\Port=8080\n"), KEY_A)
+
+    def test_the_fixture_conf_holds_the_fixture_key(self):
+        self.assertEqual(qbtsync.read_api_key(str(FIXTURES / "qBittorrent.conf")), KEY_A)
+
+    def test_missing_file_is_none(self):
+        self.assertIsNone(qbtsync.read_api_key(self.conf))
+        self.assertIsNone(qbtsync.read_api_key(""))
+        self.assertIsNone(qbtsync.read_api_key(None))
+
+    def test_only_the_preferences_section_counts(self):
+        self.assertIsNone(self.read(f"[BitTorrent]\nWebUI\\APIKey={KEY_A}\n"))
+        self.assertIsNone(self.read(f"WebUI\\APIKey={KEY_A}\n[Preferences]\nWebUI\\Port=1\n"))
+        self.assertIsNone(self.read(f"[Preferences]\n[Meta]\nWebUI\\APIKey={KEY_A}\n"))
+        self.assertEqual(self.read(f"[BitTorrent]\nx=1\n[Preferences]  \nWebUI\\APIKey={KEY_A}\n"), KEY_A)
+
+    def test_last_line_wins_and_crlf_is_stripped(self):
+        self.assertEqual(self.read(f"[Preferences]\nWebUI\\APIKey={KEY_A}\nWebUI\\APIKey={KEY_B}\n"), KEY_B)
+        self.assertEqual(self.read(f"[Preferences]\r\nWebUI\\APIKey={KEY_A}\r\n"), KEY_A)
+
+    def test_malformed_keys_are_none(self):
+        for key in ("", KEY_A[:-1], KEY_A + "x", "qbt-" + KEY_A[4:], "QBT_" + KEY_A[4:],
+                    KEY_A[:-1] + "é", KEY_A[:-1] + "-", " " + KEY_A, KEY_A + " ", KEY_A[:-1] + "١"):
+            with self.subTest(key=key):
+                self.assertIsNone(self.read(f"[Preferences]\nWebUI\\APIKey={key}\n"))
+
+    def test_a_prefixed_name_is_not_the_key(self):
+        self.assertIsNone(self.read(f"[Preferences]\nXWebUI\\APIKey={KEY_A}\nWebUI\\APIKeyOld={KEY_A}\n"))
+
+
+class ClientAuthTests(unittest.TestCase):
+    """Client against a tiny threaded server that records each request's
+    Authorization header and answers 403 unless it is `Bearer <self.key>`."""
+
+    def setUp(self):
+        import http.server
+
+        test = self
+        self.key = KEY_A
+        self.seen = []
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *args):
+                pass
+
+            def do_GET(self):
+                auth = self.headers.get("Authorization")
+                test.seen.append((self.path, auth))
+                if self.path == "/redirect":
+                    self.send_response(302)
+                    self.send_header("Location", "/landing")
+                    self.end_headers()
+                    return
+                if self.path != "/landing" and auth != f"Bearer {test.key}":
+                    self.send_response(403)
+                    self.end_headers()
+                    self.wfile.write(b"Forbidden")
+                    return
+                body = b"ok"
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+        self.server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self.base = f"http://127.0.0.1:{self.server.server_address[1]}"
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.thread.start()
+        self.tmp = tempfile.TemporaryDirectory()
+        self.conf = os.path.join(self.tmp.name, "qBittorrent.conf")
+
+    def tearDown(self):
+        self.server.shutdown()
+        self.server.server_close()
+        self.thread.join(timeout=2)
+        self.tmp.cleanup()
+
+    def client(self, conf):
+        return qbtsync.Client(self.base, http.cookiejar.CookieJar(), timeout=2, conf=conf)
+
+    def test_sends_the_conf_key_as_a_bearer_header(self):
+        write_conf(self.conf, f"[Preferences]\nWebUI\\APIKey={KEY_A}\n")
+        self.assertEqual(self.client(self.conf).get("/api/v2/app/version"), "ok")
+        self.assertEqual(self.seen, [("/api/v2/app/version", f"Bearer {KEY_A}")])
+
+    def test_rereads_the_key_after_the_conf_changes(self):
+        write_conf(self.conf, f"[Preferences]\nWebUI\\APIKey={KEY_A}\n")
+        client = self.client(self.conf)
+        client.get("/a")
+        self.key = KEY_B
+        write_conf(self.conf, f"[Preferences]\nWebUI\\APIKey={KEY_B}\n")
+        self.assertEqual(client.get("/b"), "ok")
+        self.assertEqual([auth for _, auth in self.seen], [f"Bearer {KEY_A}", f"Bearer {KEY_B}"])
+
+    def test_no_conf_or_no_valid_key_sends_no_header(self):
+        write_conf(self.conf, "[Preferences]\nWebUI\\APIKey=qbt_short\n")
+        for conf in (None, self.conf, os.path.join(self.tmp.name, "missing.conf")):
+            with self.subTest(conf=conf):
+                self.seen.clear()
+                with self.assertRaises(qbtsync.ApiError):
+                    self.client(conf).get("/x")
+                self.assertEqual(self.seen, [("/x", None)])
+
+    def test_a_403_is_the_api_key_message(self):
+        write_conf(self.conf, f"[Preferences]\nWebUI\\APIKey={KEY_B}\n")
+        with self.assertRaises(qbtsync.ApiError) as ctx:
+            self.client(self.conf).get("/x")
+        self.assertEqual(ctx.exception.code, 403)
+        self.assertEqual(ctx.exception.message, "qBittorrent refused OmaqBT's API key")
+        self.assertNotIn(KEY_B, str(ctx.exception))
+
+    def test_a_redirect_does_not_carry_the_key(self):
+        write_conf(self.conf, f"[Preferences]\nWebUI\\APIKey={KEY_A}\n")
+        self.assertEqual(self.client(self.conf).get("/redirect"), "ok")
+        self.assertEqual(self.seen, [("/redirect", f"Bearer {KEY_A}"), ("/landing", None)])
+
+
 class BuildStatusTests(unittest.TestCase):
     """Exercises build_status against a fake Client so no network is used."""
 
@@ -1034,7 +1172,7 @@ class BuildStatusTests(unittest.TestCase):
     def test_maindata_failure_leaves_api_false_and_reports_error(self):
         probe = self.base_probe()
         client = self.FakeClient({
-            "/api/v2/sync/maindata?rid=0": qbtsync.ApiError(403, "localhost auth is required"),
+            "/api/v2/sync/maindata?rid=0": qbtsync.ApiError(403, "qBittorrent refused OmaqBT's API key"),
         })
         sync = qbtsync.SyncState()
         slow = qbtsync.SlowCache(interval=0)
@@ -1042,7 +1180,7 @@ class BuildStatusTests(unittest.TestCase):
         self.assertFalse(status["api"])
         self.assertEqual(status["dlSpeed"], 0)
         self.assertEqual(status["torrents"], [])
-        self.assertEqual(errors, ["localhost auth is required"])
+        self.assertEqual(errors, ["qBittorrent refused OmaqBT's API key"])
         # slow-poll calls never happen when maindata itself failed
         self.assertNotIn("/api/v2/transfer/speedLimitsMode", client.calls)
 
@@ -1240,8 +1378,55 @@ class BuildStatusTests(unittest.TestCase):
             ["installed", "daemon", "lockHolder", "api", "altSpeed", "dlSpeed",
              "upSpeed", "torrents", "vpnIface", "bindIface", "categories",
              "categoryPaths", "categoryLimits", "tags", "defaultSavePath",
-             "relocation", "shareDefaults"],
+             "relocation", "shareDefaults", "auth", "authRefused"],
         )
+
+    def test_auth_passes_through_from_the_probe(self):
+        for value in ("ok", "bypass", "nokey"):
+            with self.subTest(auth=value):
+                status, _ = qbtsync.build_status(
+                    self.base_probe(auth=value), self.FakeClient({}), qbtsync.SyncState(),
+                    qbtsync.SlowCache(interval=0), 1000.0)
+                self.assertEqual(status["auth"], value)
+
+    def test_auth_defaults_to_ok_without_a_probe_value(self):
+        for probe in (self.base_probe(), self.base_probe(auth=""), self.base_probe(auth=None),
+                      self.base_probe(auth=3)):
+            with self.subTest(probe=probe):
+                status, _ = qbtsync.build_status(
+                    probe, self.FakeClient({}), qbtsync.SyncState(), qbtsync.SlowCache(interval=0), 1000.0)
+                self.assertEqual(status["auth"], "ok")
+                self.assertFalse(status["authRefused"])
+
+    def test_a_maindata_403_sets_auth_refused(self):
+        client = self.FakeClient({
+            "/api/v2/sync/maindata?rid=0": qbtsync.ApiError(403, "qBittorrent refused OmaqBT's API key"),
+        })
+        status, errors = qbtsync.build_status(
+            self.base_probe(), client, qbtsync.SyncState(), qbtsync.SlowCache(interval=0), 1000.0)
+        self.assertTrue(status["authRefused"])
+        self.assertFalse(status["api"])
+        self.assertEqual(errors, ["qBittorrent refused OmaqBT's API key"])
+
+    def test_a_preferences_403_sets_auth_refused(self):
+        full = json.loads((FIXTURES / "maindata-full.json").read_text())
+        client = self.FakeClient({
+            "/api/v2/sync/maindata?rid=0": json.dumps(full),
+            "/api/v2/transfer/speedLimitsMode": "0",
+            "/api/v2/app/preferences": qbtsync.ApiError(403, "qBittorrent refused OmaqBT's API key"),
+        })
+        status, _ = qbtsync.build_status(
+            self.base_probe(), client, qbtsync.SyncState(), qbtsync.SlowCache(interval=0), 1000.0)
+        self.assertTrue(status["api"])
+        self.assertTrue(status["authRefused"])
+
+    def test_other_failures_leave_auth_refused_false(self):
+        client = self.FakeClient({
+            "/api/v2/sync/maindata?rid=0": qbtsync.ApiError(None, "couldn't connect"),
+        })
+        status, _ = qbtsync.build_status(
+            self.base_probe(), client, qbtsync.SyncState(), qbtsync.SlowCache(interval=0), 1000.0)
+        self.assertFalse(status["authRefused"])
 
 
 if __name__ == "__main__":
