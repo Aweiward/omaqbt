@@ -1046,6 +1046,8 @@ function emptyStatus() {
     defaultSavePath: "",
     relocation: { torrentChanged: false, categoryPathChanged: false },
     shareDefaults: { ratio: -1, seedingTime: -1, action: "Stop" },
+    auth: "ok",
+    authRefused: false,
     error: ""
   };
 }
@@ -1127,6 +1129,10 @@ function parseStatusJson(raw) {
       seedingTime: (parsed.shareDefaults && parsed.shareDefaults.seedingTime != null) ? Number(parsed.shareDefaults.seedingTime) : -1,
       action: String((parsed.shareDefaults && parsed.shareDefaults.action) || "Stop")
     },
+    // The probe's view of qBittorrent.conf ("ok" | "bypass" | "nokey"), and
+    // whether qBittorrent answered an API call with 403.
+    auth: (typeof parsed.auth === "string" && parsed.auth !== "") ? parsed.auth : "ok",
+    authRefused: parsed.authRefused === true,
     error: String(parsed.error || "")
   };
 }

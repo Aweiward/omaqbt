@@ -188,6 +188,24 @@ test("parseStatusJson returns not-ok for garbage", () => {
   assert.deepEqual(status.tags, []);
 });
 
+test("parseStatusJson reads auth and authRefused, defaulting to \"ok\" and false", () => {
+  const set = Model.parseStatusJson(JSON.stringify({ installed: true, daemon: true, auth: "bypass", authRefused: true, torrents: [] }));
+  assert.equal(set.auth, "bypass");
+  assert.equal(set.authRefused, true);
+
+  const missing = Model.parseStatusJson(JSON.stringify({ installed: true, torrents: [] }));
+  assert.equal(missing.auth, "ok");
+  assert.equal(missing.authRefused, false);
+
+  const odd = Model.parseStatusJson(JSON.stringify({ installed: true, auth: 5, authRefused: "yes", torrents: [] }));
+  assert.equal(odd.auth, "ok");
+  assert.equal(odd.authRefused, false);
+
+  const garbage = Model.parseStatusJson("nope");
+  assert.equal(garbage.auth, "ok");
+  assert.equal(garbage.authRefused, false);
+});
+
 test("parseStatusJson copies category, tags and tracker per row with safe defaults", () => {
   const parsed = Model.parseStatusJson(JSON.stringify({
     installed: true, daemon: true, api: true,
