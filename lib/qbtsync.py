@@ -30,9 +30,10 @@ API_KEY_REFUSED = "qBittorrent refused OmaqBT's API key"
 
 
 def sanitize(text):
-    """Scrub session ids and passwords the same way bash `sanitize()` does."""
+    """Scrub session ids, passwords and API keys the same way bash `sanitize()` does."""
     text = _SID_RE.sub("SID=<redacted>", text)
     text = _PASSWORD_RE.sub("password=<redacted>", text)
+    text = _API_KEY_RE.sub("qbt_<redacted>", text)
     return text
 
 
@@ -47,8 +48,9 @@ def read_api_key(conf_path):
     """The valid WebUI\\APIKey from qBittorrent.conf's [Preferences], or None.
 
     Reads the conf the way qbt's `conf_pref` does: only the [Preferences]
-    section, the last matching line wins, and a trailing CR goes. A missing
-    or unreadable conf, or a key that isn't well-formed, is None.
+    section, the last matching line wins, and a trailing CR goes. Spaces and
+    tabs around the name and the value go too, as QSettings trims them. A
+    missing or unreadable conf, or a key that isn't well-formed, is None.
     """
     if not conf_path:
         return None
@@ -57,19 +59,19 @@ def read_api_key(conf_path):
             lines = f.read().split("\n")
     except OSError:
         return None
-    prefix = "WebUI\\APIKey="
     key = None
     in_prefs = False
     for line in lines:
         if line.startswith("["):
             in_prefs = re.fullmatch(r"\[Preferences\]\s*", line) is not None
             continue
-        if in_prefs and line.startswith(prefix):
-            key = line[len(prefix):]
+        if line.endswith("\r"):
+            line = line[:-1]
+        name, sep, value = line.partition("=")
+        if in_prefs and sep and name.strip(" \t") == "WebUI\\APIKey":
+            key = value.strip(" \t")
     if key is None:
         return None
-    if key.endswith("\r"):
-        key = key[:-1]
     return key if _API_KEY_RE.fullmatch(key) else None
 
 
@@ -141,8 +143,8 @@ class Client:
         self.timeout = timeout
         self.conf = conf
         # An empty ProxyHandler replaces urllib's default one, so http_proxy
-        # and friends can never route a localhost request (or its SID
-        # cookie) through a proxy.
+        # and friends can never route a localhost request (or its API
+        # key) through a proxy.
         self.opener = urllib.request.build_opener(
             urllib.request.ProxyHandler({}),
             urllib.request.HTTPCookieProcessor(cookiejar),

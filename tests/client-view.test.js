@@ -390,7 +390,7 @@ test("dispatchPane: rows and noMatch keep the real pane", () => {
   assert.equal(V.dispatchPane("filters", "noMatch"), "filters");
 });
 
-test("stateCopy auth: names the refused key and offers the restart that rewrites it", () => {
+test("stateCopy auth: names the refused key and offers the restart that re-reads it", () => {
   const c = V.stateCopy("auth");
   assert.equal(c.title, "qBittorrent refused OmaqBT's API key");
   assert.deepEqual(c.keys, [{ key: "Enter", label: "Restart daemon" }]);
@@ -2296,7 +2296,7 @@ test("settingsReadNote: a failed read names itself when qBittorrent is up, and s
   assert.equal(V.settingsReadNote("rows", true, "qBittorrent refused it (HTTP 403)"), "Couldn't read settings: HTTP 403");
   assert.equal(V.settingsReadNote("empty", true, "Could not read preferences"), "Couldn't read settings: Could not read preferences");
   assert.equal(V.settingsReadNote("rows", true, ""), "Couldn't read settings.");
-  for (const st of ["gui", "notInstalled", "daemon", "api", "loading"]) assert.equal(V.settingsReadNote(st, true, "x"), "", st);
+  for (const st of ["gui", "notInstalled", "daemon", "auth", "api", "loading"]) assert.equal(V.settingsReadNote(st, true, "x"), "", st);
   assert.equal(V.settingsReadNote("rows", false, "x"), "");
 });
 

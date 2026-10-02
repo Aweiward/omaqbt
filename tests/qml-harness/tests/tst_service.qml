@@ -445,6 +445,16 @@ TestCase {
     compare(svc.authRefused, false)
   }
 
+  function test_auth_refused_raises_the_bar_warning() {
+    var svc = createTemporaryObject(serviceComp, tc)
+    svc.applyStatus(authStatus({ auth: "ok" }))
+    compare(svc.warning, false, "daemon and api up, key accepted")
+    svc.applyStatus(authStatus({ auth: "ok", authRefused: true }))
+    compare(svc.warning, true, "a refused key warns though daemon and api are up")
+    svc.applyStatus(authStatus({ auth: "ok", authRefused: false }))
+    compare(svc.warning, false, "clearing authRefused lowers it")
+  }
+
   function test_unsecured_daemon_runs_secure_daemon_once_per_minute() {
     var o = idleService(), svc = o.svc, p = o.p
     var spy = spyOn(svc)

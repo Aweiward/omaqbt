@@ -627,14 +627,11 @@ def main():
     # get their own short timeout, so a stalled inspect route can never
     # hold up the status client's much longer 5s budget.
     inspect_client = qbtsync.Client(probe["base"], jar, timeout=INSPECT_TIMEOUT, conf=conf)
-    # Search reads (slice 5a) are the one exception to the in-memory jar:
-    # qBittorrent keeps search jobs per WebUI session, so each search watch
-    # reads through qbt's own session, loaded read-only from its curl
-    # cookie file (Ruling FH, _search_load_session). Torrents, sync and
-    # preferences are global state, so the status and inspect clients keep
-    # their own session. Until a watch loads, this client has an empty jar.
-    # Under the API key every client's session is the key's, so these
-    # sessions are now one and the same.
+    # qBittorrent keeps search jobs per WebUI session. Every client here,
+    # and qbt too, sends the Bearer API key, so qBittorrent sees one
+    # session (the key's) and search reads see qbt's jobs. The search
+    # client keeps its CurlCookieJar only for the old cookie path
+    # (_search_load_session), which is now inert.
     search_client = qbtsync.Client(probe["base"], qbtsync.CurlCookieJar(), timeout=SEARCH_TIMEOUT, conf=conf)
     state = {
         "helper": helper,

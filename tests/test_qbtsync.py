@@ -33,8 +33,16 @@ class SanitizeTests(unittest.TestCase):
         # a boundary, matching bash sanitize()'s [^;[:space:]]* class.
         self.assertEqual(qbtsync.sanitize("password=hunter2;x=1"), "password=<redacted>;x=1")
 
+    def test_redacts_api_keys(self):
+        # Same replacement text as bash sanitize(): the "qbt_" stays.
+        key = "qbt_FixtureKey23456789abcdefghjk"
+        self.assertEqual(qbtsync.sanitize(f"Authorization: Bearer {key}\n"),
+                         "Authorization: Bearer qbt_<redacted>\n")
+        self.assertEqual(qbtsync.sanitize(f"WebUI\\APIKey={key}"), "WebUI\\APIKey=qbt_<redacted>")
+
     def test_leaves_other_text_alone(self):
         self.assertEqual(qbtsync.sanitize("HTTP 404 not found"), "HTTP 404 not found")
+        self.assertEqual(qbtsync.sanitize("qbt_short"), "qbt_short")
 
 
 class AssertLocalTests(unittest.TestCase):
@@ -845,9 +853,20 @@ class ReadApiKeyTests(unittest.TestCase):
 
     def test_malformed_keys_are_none(self):
         for key in ("", KEY_A[:-1], KEY_A + "x", "qbt-" + KEY_A[4:], "QBT_" + KEY_A[4:],
-                    KEY_A[:-1] + "é", KEY_A[:-1] + "-", " " + KEY_A, KEY_A + " ", KEY_A[:-1] + "١"):
+                    KEY_A[:-1] + "é", KEY_A[:-1] + "-", KEY_A[:14] + " " + KEY_A[14:], KEY_A[:-1] + "١"):
             with self.subTest(key=key):
                 self.assertIsNone(self.read(f"[Preferences]\nWebUI\\APIKey={key}\n"))
+
+    def test_spaces_and_tabs_around_the_name_and_value_are_trimmed(self):
+        # QSettings trims whitespace around "=", so a hand-edited
+        # "WebUI\\APIKey = qbt_..." is still the key qBittorrent uses.
+        for line in (f"WebUI\\APIKey = {KEY_A}", f"WebUI\\APIKey\t=\t{KEY_A}",
+                     f"  WebUI\\APIKey={KEY_A}  ", f"\tWebUI\\APIKey ={KEY_A} \r"):
+            with self.subTest(line=line):
+                self.assertEqual(self.read(f"[Preferences]\n{line}\n"), KEY_A)
+        self.assertEqual(self.read(f"[Preferences]\nWebUI\\APIKey={KEY_A}\nWebUI\\APIKey = {KEY_B}\n"), KEY_B)
+        self.assertIsNone(self.read(f"[Preferences]\nWebUI\\APIKey={KEY_A}\nWebUI\\APIKey =  \n"))
+        self.assertIsNone(self.read(f"[BitTorrent]\nWebUI\\APIKey = {KEY_A}\n"))
 
     def test_a_prefixed_name_is_not_the_key(self):
         self.assertIsNone(self.read(f"[Preferences]\nXWebUI\\APIKey={KEY_A}\nWebUI\\APIKeyOld={KEY_A}\n"))

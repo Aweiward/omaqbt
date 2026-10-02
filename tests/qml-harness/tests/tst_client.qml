@@ -22,6 +22,7 @@ TestCase {
       property bool daemon: true
       property string lockHolder: "none"
       property bool api: true
+      property bool authRefused: false
       property bool altSpeed: false
       property real dlSpeed: 0
       property real upSpeed: 0
@@ -296,6 +297,20 @@ TestCase {
     compare(o.c.tableState, "gui")
     key(o.c, "r")
     verify(lastCall(o.svc, "refresh") !== null)
+  }
+
+  function test_auth_state_restarts_the_daemon_and_clears() {
+    var o = make()
+    o.svc.torrents = list3()
+    compare(o.c.tableState, "rows")
+    o.svc.authRefused = true
+    compare(o.c.tableState, "auth")
+    key(o.c, "\r", 0x01000004)
+    var sd = lastCall(o.svc, "startDaemon")
+    verify(sd !== null, "Enter restarts the daemon")
+    compare(sd.args[0].origin, "window")
+    o.svc.authRefused = false
+    compare(o.c.tableState, "rows")
   }
 
   function test_text_filter_and_no_match() {
