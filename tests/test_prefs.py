@@ -1681,5 +1681,78 @@ class SecretArgvTest(StdinCase):
             self.assertNotIn(b"S3CRET", out)
 
 
+class ValueStdinArgvTest(StdinCase):
+    """Marketplace review, 2026-10-02: a setting's value can carry a private
+    tracker's passkey (add_trackers, add_trackers_url). The widget sends it
+    with `pref-set <key> --value-stdin`, and qbt hands it to jq through the
+    environment, so it is on no spawned process's argv (/proc/*/cmdline is
+    world readable; /proc/*/environ is owner-only)."""
+
+    make_shims = SecretArgvTest.make_shims
+
+    def argvs(self, log):
+        out = []
+        for chunk in log.read_bytes().split(b"ARGV\0")[1:]:
+            out.append(chunk.split(b"ENV\0", 1)[0].decode("utf-8", "replace"))
+        return "\n".join(out)
+
+    def test_a_tracker_list_with_a_passkey_never_reaches_an_argv(self):
+        env, log = self.make_shims()
+        passkey = "PASSKEYvalue0123456789abcdef"
+        trackers = f"https://tracker.example.com/{passkey}/announce\nudp://open.example:1337/announce"
+        before = len(self.log())
+        r = self.run_stdin("add_trackers", trackers, mode="--value-stdin", env=env)
+        self.assertEqual((r.returncode, r.stdout.decode().strip(), r.stderr.decode()), (0, '{"ok":true}', ""))
+        posts = self.posts_since(before)
+        self.assertEqual(len(posts), 1)
+        self.assertEqual(self.sent(posts[0]), {"add_trackers": trackers})
+        self.assertEqual(self.state()["add_trackers"], trackers)
+        # A second line added to a list that already holds the passkey: the
+        # stored list is read back and compared, still off every argv.
+        more = trackers + "\nhttps://tracker2.example.com/" + passkey + "/announce"
+        r = self.run_stdin("add_trackers", more, mode="--value-stdin", env=env)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.state()["add_trackers"], more)
+        url = f"https://lists.example.com/trackers.txt?token={passkey}"
+        r = self.run_stdin("add_trackers_url", url, mode="--value-stdin", env=env)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.state()["add_trackers_url"], url)
+        argv = self.argvs(log)
+        self.assertIn("jq", argv)
+        self.assertIn("curl", argv)
+        self.assertNotIn(passkey, argv)
+
+    def test_value_stdin_takes_an_empty_value_and_plain_settings(self):
+        r = self.run_stdin("add_trackers", "", mode="--value-stdin")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.state()["add_trackers"], "")
+        r = self.run_stdin("dht", "false", mode="--value-stdin")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIs(self.state()["dht"], False)
+
+    def test_value_stdin_keeps_the_password_rules(self):
+        r = self.run_stdin("proxy_password", "x", mode="--value-stdin")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("--stdin", r.stderr.decode())
+
+    def test_a_value_stdin_that_never_ends_gives_up(self):
+        import subprocess
+        p = subprocess.Popen([QBT, "pref-set", "add_trackers", "--value-stdin"], env=self.env,
+                             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        # stdin stays open and silent: wait(), not communicate(), which
+        # would close it and send an empty value.
+        try:
+            p.wait(timeout=25)
+        except subprocess.TimeoutExpired:
+            p.kill()
+            self.fail("pref-set --value-stdin waited forever on an open stdin")
+        finally:
+            p.stdin.close()
+        self.assertEqual(p.returncode, 1)
+        self.assertIn(b"usage:", p.stderr.read())
+        p.stdout.close()
+        p.stderr.close()
+
+
 if __name__ == "__main__":
     unittest.main()

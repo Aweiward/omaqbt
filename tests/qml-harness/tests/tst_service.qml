@@ -1211,12 +1211,16 @@ TestCase {
     compare(got.error, "qBittorrent isn't running.")
   }
 
-  function test_setPref_runs_a_ticketed_pref_set_with_dash_dash() {
+  function test_setPref_runs_a_ticketed_pref_set_with_the_value_on_stdin() {
     var o = idleService(), svc = o.svc, p = o.p
     var spy = spyOn(svc)
     var t = svc.setPref("listen_port", "6881", { origin: "window", hashes: [] })
     verify(t > 0)
-    compare(p.command, [svc.helperPath, "pref-set", "listen_port", "--", "6881"])
+    compare(p.command, [svc.helperPath, "pref-set", "listen_port", "--value-stdin"])
+    verify(p.stdinEnabled)
+    p.started()
+    compare(p.writes[p.writes.length - 1], "6881")
+    verify(!p.stdinEnabled, "stdin closed after the value")
     finish(p, 0, "{\"ok\":true}", "")
     compare(spy.count, 1)
     compare(spy.signalArguments[0][0], t)
@@ -1227,7 +1231,7 @@ TestCase {
   function test_setPref_shows_saving_status_for_the_widget() {
     var o = idleService(), svc = o.svc, p = o.p
     svc.setPref("scan_dirs", "{}")
-    compare(p.command, [svc.helperPath, "pref-set", "scan_dirs", "--", "{}"])
+    compare(p.command, [svc.helperPath, "pref-set", "scan_dirs", "--value-stdin"])
     compare(svc.actionStatus, "Saving setting…")
     finish(p, 0, "{\"ok\":true}", "")
   }
@@ -1235,7 +1239,29 @@ TestCase {
   function test_setPref_passes_a_composite_HHMM_value_through_as_a_string() {
     var o = idleService(), svc = o.svc, p = o.p
     svc.setPref("schedule_from", "23:30")
-    compare(p.command, [svc.helperPath, "pref-set", "schedule_from", "--", "23:30"])
+    compare(p.command, [svc.helperPath, "pref-set", "schedule_from", "--value-stdin"])
+    p.started()
+    compare(p.writes[p.writes.length - 1], "23:30")
+    finish(p, 0, "{\"ok\":true}", "")
+  }
+
+  // Marketplace review: add_trackers can hold a private tracker's passkey,
+  // so a setting's value never rides on argv. An empty value (a cleared
+  // list) is still written.
+  function test_setPref_keeps_a_tracker_list_off_argv() {
+    var o = idleService(), svc = o.svc, p = o.p
+    var list = "https://tracker.example.com/PASSKEYsecret99/announce\nudp://open.example:1/announce"
+    svc.setPref("add_trackers", list)
+    compare(p.command, [svc.helperPath, "pref-set", "add_trackers", "--value-stdin"])
+    verify(p.command.join(" ").indexOf("PASSKEYsecret99") === -1)
+    p.started()
+    compare(p.writes[p.writes.length - 1], list)
+    finish(p, 0, "{\"ok\":true}", "")
+    svc.setPref("add_trackers", "")
+    verify(p.stdinEnabled, "an empty value still opens stdin")
+    p.started()
+    compare(p.writes[p.writes.length - 1], "")
+    verify(!p.stdinEnabled)
     finish(p, 0, "{\"ok\":true}", "")
   }
 
@@ -1280,7 +1306,7 @@ TestCase {
     // above and would only add an unrelated "gave up" warning to this one.
     svc.sidecarState = "down"
     svc.setPref("listen_port", "6881", { origin: "window", hashes: [] })
-    compare(p.command, [svc.helperPath, "pref-set", "listen_port", "--", "6881"])
+    compare(p.command, [svc.helperPath, "pref-set", "listen_port", "--value-stdin"])
     finish(p, 0, "{\"ok\":true}", "")
     var sp = actionProc(svc, "status")
     verify(sp !== null, "the bash status refresh ran")

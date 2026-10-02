@@ -91,8 +91,8 @@ test("user-facing README prose never says panel", () => {
   assert.equal(/\bpanels?\b/i.test(prose), false, "found: " + (prose.match(/.*\bpanels?\b.*/i) || [""])[0]);
 });
 
-test("manifest is 2.1.2 and both descriptions name the window", () => {
-  assert.equal(manifest.version, "2.1.2");
+test("manifest is 2.1.3 and both descriptions name the window", () => {
+  assert.equal(manifest.version, "2.1.3");
   assert.match(manifest.description, /window/);
   assert.match(manifest.barWidget.description, /window/);
 });
