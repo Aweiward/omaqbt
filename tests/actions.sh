@@ -229,7 +229,7 @@ with harness.fixture_server() as (port, env):
     if posts:
         qs = parse_qs(posts[0]["body"])
         check("tracker-edit hash", (qs.get("hash") or [""])[0] == HASH_A)
-        check("tracker-edit origUrl", (qs.get("origUrl") or [""])[0] == TRACKER_URL)
+        check("tracker-edit url (5.2.3 names the old URL url)", (qs.get("url") or [""])[0] == TRACKER_URL)
         check("tracker-edit newUrl", (qs.get("newUrl") or [""])[0] == TRACKER_URL2)
 
     before = len(read_log(env))

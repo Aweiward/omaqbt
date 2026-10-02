@@ -443,11 +443,14 @@ Scope {
 
   // opts: {origin: "widget"|"window", hashes: [...]}. Returns the ticket.
   // Window actions leave actionStatus and lastError alone; the window builds
-  // its own message from actionFinished.
-  function runAction(cmd, statusText, opts) {
+  // its own message from actionFinished. stdin (optional): a secret-bearing
+  // value (a tracker URL, a magnet) written to the child's stdin once it has
+  // started, never put on argv, where /proc/<pid>/cmdline shows it to every
+  // local account.
+  function runAction(cmd, statusText, opts, stdin) {
     var ticket = actionTicketSeq + 1
     actionTicketSeq = ticket
-    var item = Model.makeActionItem(ticket, cmd, statusText, opts)
+    var item = Model.makeActionItem(ticket, cmd, statusText, opts, stdin)
     // currentAction also counts: after a failed start the process is no
     // longer running, but its action stays current until the deferred
     // start check below finishes it, and starting another here would
@@ -472,7 +475,19 @@ Scope {
       actionStatus = item.status || ""
     }
     actionProcess.command = item.cmd
+    actionProcess.stdinEnabled = item.stdin !== null
     actionProcess.running = true
+  }
+
+  // The child runs: an action's stdin value goes once, then stdin closes
+  // (EOF). Like rssStarted.
+  function actionStarted() {
+    var item = currentAction
+    if (!item || item.stdin === null || item.written === true) return
+    item.written = true
+    actionProcess.write(item.stdin)
+    item.stdin = null
+    actionProcess.stdinEnabled = false
   }
 
   // Ends the current action: the one path for a command that exited and
@@ -481,6 +496,9 @@ Scope {
   function finishAction(ok, err) {
     var done = currentAction
     currentAction = null
+    // Exited or never started: either way stdin closes before the next
+    // action (startQueuedAction reopens it for one that has its own).
+    actionProcess.stdinEnabled = false
     var fromWindow = !!done && done.origin === "window"
     var cmd = (done && done.cmd) || []
     var kind = cmd.length > 1 ? String(cmd[1]) : ""
@@ -715,8 +733,9 @@ Scope {
     if (stopped) cmd.push("--stopped")
     var dir = String(savePath || "").trim()
     if (dir !== "") { cmd.push("--savepath"); cmd.push(dir) }
-    cmd.push(t)
-    return runAction(cmd, stopped ? "Adding torrent (stopped)…" : "Adding torrent…", opts)
+    // The target (a magnet or URL can carry a passkey) goes on stdin.
+    cmd.push("--stdin")
+    return runAction(cmd, stopped ? "Adding torrent (stopped)…" : "Adding torrent…", opts, t)
   }
 
   function addUrl(url, opts) { return addTarget(url, false, "", opts) }
@@ -903,7 +922,12 @@ Scope {
       actionStatus = statusText
     }
     copyProcess.done = done
-    copyProcess.command = ["wl-copy", "--", text]
+    // The text (a magnet, a tracker URL) goes on stdin: wl-copy stays
+    // resident serving the clipboard, and its argv would show a passkey in
+    // /proc/<pid>/cmdline the whole time.
+    copyProcess.pendingText = String(text)
+    copyProcess.command = ["wl-copy", "--type", "text/plain;charset=utf-8"]
+    copyProcess.stdinEnabled = true
     copyProcess.running = true
     return done ? done.ticket : 0
   }
@@ -949,19 +973,21 @@ Scope {
     return runAction([helperPath, "reannounce", hash], "Reannouncing…", opts)
   }
 
+  // A tracker URL can carry a passkey: it goes on stdin (`--stdin`), the
+  // hash stays on argv. tracker-edit reads old NUL new, no trailing NUL.
   function addTracker(hash, url, opts) {
     if (!hash || !url) return 0
-    return runAction([helperPath, "tracker-add", hash, url], "Adding tracker…", opts)
+    return runAction([helperPath, "tracker-add", hash, "--stdin"], "Adding tracker…", opts, String(url))
   }
 
   function editTracker(hash, oldUrl, newUrl, opts) {
     if (!hash || !oldUrl || !newUrl) return 0
-    return runAction([helperPath, "tracker-edit", hash, oldUrl, newUrl], "Changing tracker…", opts)
+    return runAction([helperPath, "tracker-edit", hash, "--stdin"], "Changing tracker…", opts, String(oldUrl) + "\u0000" + String(newUrl))
   }
 
   function removeTracker(hash, url, opts) {
     if (!hash || !url) return 0
-    return runAction([helperPath, "tracker-remove", hash, url], "Removing tracker…", opts)
+    return runAction([helperPath, "tracker-remove", hash, "--stdin"], "Removing tracker…", opts, String(url))
   }
 
   function banPeer(peer, opts) {
@@ -1141,10 +1167,11 @@ Scope {
   // enable, update: an install reads back for up to 20 s, which must not
   // hold up a stop). Every argv is an array, never a shell string. Returns
   // the ticket searchFinished carries back, or 0 on a Service that isn't
-  // started.
-  function searchRun(lane, cmd) {
+  // started. stdin (optional): a value written to the child once it starts,
+  // then closed, kept off argv.
+  function searchRun(lane, cmd, stdin) {
     if (!started) return 0
-    var item = { ticket: mintTicket(), cmd: cmd }
+    var item = { ticket: mintTicket(), cmd: cmd, stdin: typeof stdin === "string" ? stdin : null }
     var plugins = lane === "plugins"
     var p = plugins ? searchPluginProcess : searchJobProcess
     if (p.running || (plugins ? searchPluginItem : searchJobItem) !== null) {
@@ -1173,7 +1200,19 @@ Scope {
     if (plugins) searchPluginItem = item
     else searchJobItem = item
     p.command = item.cmd
+    p.stdinEnabled = item.stdin !== null && item.stdin !== undefined
     p.running = true
+  }
+
+  // A lane's child runs: its stdin value goes out once, then stdin closes.
+  function searchStarted(plugins) {
+    var p = plugins ? searchPluginProcess : searchJobProcess
+    var item = plugins ? searchPluginItem : searchJobItem
+    if (!item || item.stdin === null || item.stdin === undefined || item.written === true) return
+    item.written = true
+    p.write(item.stdin)
+    item.stdin = null
+    p.stdinEnabled = false
   }
 
   // The end of a lane's run (exited, or never started): the next queued
@@ -1184,6 +1223,8 @@ Scope {
   function finishSearchItem(plugins, ok, err, data) {
     var item = plugins ? searchPluginItem : searchJobItem
     var queue = plugins ? searchPluginQueue : searchJobQueue
+    var proc = plugins ? searchPluginProcess : searchJobProcess
+    proc.stdinEnabled = false
     if (queue.length > 0 && started) {
       if (plugins) searchPluginQueue = queue.slice(1)
       else searchJobQueue = queue.slice(1)
@@ -1247,10 +1288,11 @@ Scope {
   function searchStop(id) { return searchRun("jobs", [helperPath, "search", "stop", String(id)]) }
   function searchDelete(id) { return searchRun("jobs", [helperPath, "search", "delete", String(id)]) }
   // plugin: the result's engineName, passed only when non-empty.
+  // A private plugin's link can carry a passkey: it goes on stdin.
   function searchAdd(link, plugin) {
-    var cmd = [helperPath, "search", "add", String(link)]
+    var cmd = [helperPath, "search", "add", "--stdin"]
     if (plugin) cmd.push(String(plugin))
-    return searchRun("jobs", cmd)
+    return searchRun("jobs", cmd, String(link))
   }
   function searchPluginList() { return searchRun("plugins", [helperPath, "search-plugin", "list"]) }
   function searchPluginInstall(url) { return searchRun("plugins", [helperPath, "search-plugin", "install", String(url)]) }
@@ -1758,9 +1800,24 @@ Scope {
     id: copyProcess
     // The window's ticket record for this copy, or null (the widget).
     property var done: null
+    // The text to copy, held only until it is written to stdin.
+    property string pendingText: ""
     running: false
     command: []
+    stdinEnabled: false
     stderr: StdioCollector { id: copyErr; waitForEnd: true }
+    onStarted: {
+      if (!copyProcess.stdinEnabled) return
+      copyProcess.write(copyProcess.pendingText)
+      copyProcess.pendingText = ""
+      copyProcess.stdinEnabled = false
+    }
+    // Ended, or never started: nothing is left held or open.
+    onRunningChanged: {
+      if (running) return
+      copyProcess.pendingText = ""
+      copyProcess.stdinEnabled = false
+    }
     onExited: function(exitCode) {
       var done = copyProcess.done
       copyProcess.done = null
@@ -1781,8 +1838,10 @@ Scope {
     id: actionProcess
     running: false
     command: []
+    stdinEnabled: false
     stdout: StdioCollector { id: actionOut; waitForEnd: true }
     stderr: StdioCollector { id: actionErr; waitForEnd: true }
+    onStarted: root.actionStarted()
     // A program that can't start (qbt missing, not executable) emits no
     // exited, only running going false -- the viewStateMkdirProcess case.
     // The check is deferred because a harness (or any emitter) may flip
@@ -1910,6 +1969,8 @@ Scope {
     readonly property string searchLane: "jobs"
     running: false
     command: []
+    stdinEnabled: false
+    onStarted: root.searchStarted(false)
     stdout: StdioCollector { id: searchJobOut; waitForEnd: true }
     stderr: StdioCollector { id: searchJobErr; waitForEnd: true }
     onRunningChanged: {
@@ -1925,6 +1986,8 @@ Scope {
     readonly property string searchLane: "plugins"
     running: false
     command: []
+    stdinEnabled: false
+    onStarted: root.searchStarted(true)
     stdout: StdioCollector { id: searchPluginOut; waitForEnd: true }
     stderr: StdioCollector { id: searchPluginErr; waitForEnd: true }
     onRunningChanged: {

@@ -80,13 +80,63 @@ TestCase {
     compare(s.signalArguments[2][3], null, "unparsable stdout is null data")
   }
 
+  // A private plugin's link can carry a passkey: it goes to qbt on stdin,
+  // written once the child starts, never on argv.
+  function test_search_add_puts_the_link_on_stdin() {
+    var svc = createTemporaryObject(serviceComp, tc)
+    var jobs = lane(svc, "jobs")
+    var h = svc.helperPath
+    var link = "https://tracker.example/download.php?id=7&passkey=SECRETpass123"
+    svc.searchAdd(link, "jackett")
+    compare(jobs.command, [h, "search", "add", "--stdin", "jackett"])
+    verify(jobs.command.join(" ").indexOf("SECRETpass123") === -1, "no passkey on argv")
+    verify(jobs.stdinEnabled, "stdin open for the link")
+    jobs.started()
+    compare(jobs.writes, [link])
+    verify(!jobs.stdinEnabled, "stdin closed after the write")
+    jobs.started()
+    compare(jobs.writes, [link], "written once")
+    // A second add queued behind the first writes its own link.
+    var link2 = "magnet:?xt=urn:btih:" + "e".repeat(40) + "&tr=https%3A%2F%2Ft.example%2FSECRETtwo%2Fannounce"
+    svc.searchAdd(link2, "")
+    finish(jobs, 0, "{\"ok\":true,\"via\":\"add\"}")
+    compare(jobs.command, [h, "search", "add", "--stdin"])
+    verify(jobs.stdinEnabled, "the queued add opens stdin again")
+    jobs.started()
+    compare(jobs.writes, [link, link2])
+    finish(jobs, 0, "{\"ok\":true,\"via\":\"add\"}")
+    // A stop needs no stdin.
+    svc.searchStop(7)
+    verify(!jobs.stdinEnabled, "no stdin for a stop")
+    finish(jobs, 0, "{\"ok\":true}")
+  }
+
+  // A search add that never starts hands the queued one its own link, and
+  // writes nothing of its own.
+  function test_a_failed_start_hands_the_next_search_add_its_own_link() {
+    var svc = createTemporaryObject(serviceComp, tc)
+    var jobs = lane(svc, "jobs")
+    var first = "https://tracker.example/download.php?passkey=FIRSTsecret"
+    var second = "https://tracker.example/download.php?passkey=SECONDsecret"
+    svc.searchAdd(first, "")
+    svc.searchAdd(second, "")
+    jobs.running = false
+    wait(0)
+    verify(jobs.running, "the queued add started")
+    verify(jobs.stdinEnabled, "with stdin open")
+    jobs.started()
+    compare(jobs.writes, [second])
+    verify(!jobs.stdinEnabled)
+    finish(jobs, 0, "{\"ok\":true,\"via\":\"add\"}")
+  }
+
   function test_every_verb_has_its_argv() {
     var svc = createTemporaryObject(serviceComp, tc)
     var jobs = lane(svc, "jobs"), plug = lane(svc, "plugins")
     var h = svc.helperPath
     svc.searchStop(7);                       compare(jobs.command, [h, "search", "stop", "7"]); finish(jobs, 0, "{\"ok\":true}")
-    svc.searchAdd("magnet:?xt=urn:btih:x", "");  compare(jobs.command, [h, "search", "add", "magnet:?xt=urn:btih:x"], "no empty plugin argument"); finish(jobs, 0, "")
-    svc.searchAdd("https://e.org/d/1", "piratebay"); compare(jobs.command, [h, "search", "add", "https://e.org/d/1", "piratebay"]); finish(jobs, 0, "")
+    svc.searchAdd("magnet:?xt=urn:btih:x", "");  compare(jobs.command, [h, "search", "add", "--stdin"], "no empty plugin argument"); finish(jobs, 0, "")
+    svc.searchAdd("https://e.org/d/1", "piratebay"); compare(jobs.command, [h, "search", "add", "--stdin", "piratebay"]); finish(jobs, 0, "")
     svc.searchPluginList();                  compare(plug.command, [h, "search-plugin", "list"]); finish(plug, 0, "[]")
     svc.searchPluginUninstall("eztv");       compare(plug.command, [h, "search-plugin", "uninstall", "eztv"]); finish(plug, 0, "")
     svc.searchPluginEnable("eztv", true);    compare(plug.command, [h, "search-plugin", "enable", "eztv", "on"]); finish(plug, 0, "")

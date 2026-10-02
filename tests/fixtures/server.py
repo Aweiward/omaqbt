@@ -1894,6 +1894,11 @@ class Handler(BaseHTTPRequestHandler):
             if _control().get("writes") == "409secret":
                 self._send(409, SECRET_ERROR_BODY, content_type="text/plain")
                 return
+            # qBittorrent 5.2.3 (torrentscontroller.cpp editTrackerAction)
+            # names the old URL "url"; without it the request is a 400.
+            if parsed.path == "/api/v2/torrents/editTracker" and not {"hash", "url"} <= set(parse_qs(body)):
+                self._send(400, b"Missing required parameter", content_type="text/plain")
+                return
             self._send(200, b"Ok.")
             return
         if parsed.path in _LIBRARY_WRITES:
