@@ -925,7 +925,7 @@ Scope {
     // resident serving the clipboard, and its argv would show a passkey in
     // /proc/<pid>/cmdline the whole time.
     copyProcess.pendingText = String(text)
-    copyProcess.command = ["wl-copy"]
+    copyProcess.command = ["wl-copy", "--type", "text/plain;charset=utf-8"]
     copyProcess.stdinEnabled = true
     copyProcess.running = true
     return done ? done.ticket : 0
@@ -1166,10 +1166,11 @@ Scope {
   // enable, update: an install reads back for up to 20 s, which must not
   // hold up a stop). Every argv is an array, never a shell string. Returns
   // the ticket searchFinished carries back, or 0 on a Service that isn't
-  // started.
-  function searchRun(lane, cmd) {
+  // started. stdin (optional): a value written to the child once it starts,
+  // then closed, kept off argv.
+  function searchRun(lane, cmd, stdin) {
     if (!started) return 0
-    var item = { ticket: mintTicket(), cmd: cmd }
+    var item = { ticket: mintTicket(), cmd: cmd, stdin: typeof stdin === "string" ? stdin : null }
     var plugins = lane === "plugins"
     var p = plugins ? searchPluginProcess : searchJobProcess
     if (p.running || (plugins ? searchPluginItem : searchJobItem) !== null) {
@@ -1198,7 +1199,18 @@ Scope {
     if (plugins) searchPluginItem = item
     else searchJobItem = item
     p.command = item.cmd
+    p.stdinEnabled = item.stdin !== null && item.stdin !== undefined
     p.running = true
+  }
+
+  // A lane's child runs: its stdin value goes out once, then stdin closes.
+  function searchStarted(plugins) {
+    var p = plugins ? searchPluginProcess : searchJobProcess
+    var item = plugins ? searchPluginItem : searchJobItem
+    if (!item || item.stdin === null || item.stdin === undefined || item.written === true) return
+    item.written = true
+    p.write(item.stdin)
+    p.stdinEnabled = false
   }
 
   // The end of a lane's run (exited, or never started): the next queued
@@ -1209,6 +1221,8 @@ Scope {
   function finishSearchItem(plugins, ok, err, data) {
     var item = plugins ? searchPluginItem : searchJobItem
     var queue = plugins ? searchPluginQueue : searchJobQueue
+    var proc = plugins ? searchPluginProcess : searchJobProcess
+    proc.stdinEnabled = false
     if (queue.length > 0 && started) {
       if (plugins) searchPluginQueue = queue.slice(1)
       else searchJobQueue = queue.slice(1)
@@ -1272,10 +1286,11 @@ Scope {
   function searchStop(id) { return searchRun("jobs", [helperPath, "search", "stop", String(id)]) }
   function searchDelete(id) { return searchRun("jobs", [helperPath, "search", "delete", String(id)]) }
   // plugin: the result's engineName, passed only when non-empty.
+  // A private plugin's link can carry a passkey: it goes on stdin.
   function searchAdd(link, plugin) {
-    var cmd = [helperPath, "search", "add", String(link)]
+    var cmd = [helperPath, "search", "add", "--stdin"]
     if (plugin) cmd.push(String(plugin))
-    return searchRun("jobs", cmd)
+    return searchRun("jobs", cmd, String(link))
   }
   function searchPluginList() { return searchRun("plugins", [helperPath, "search-plugin", "list"]) }
   function searchPluginInstall(url) { return searchRun("plugins", [helperPath, "search-plugin", "install", String(url)]) }
@@ -1952,6 +1967,8 @@ Scope {
     readonly property string searchLane: "jobs"
     running: false
     command: []
+    stdinEnabled: false
+    onStarted: root.searchStarted(false)
     stdout: StdioCollector { id: searchJobOut; waitForEnd: true }
     stderr: StdioCollector { id: searchJobErr; waitForEnd: true }
     onRunningChanged: {
@@ -1967,6 +1984,8 @@ Scope {
     readonly property string searchLane: "plugins"
     running: false
     command: []
+    stdinEnabled: false
+    onStarted: root.searchStarted(true)
     stdout: StdioCollector { id: searchPluginOut; waitForEnd: true }
     stderr: StdioCollector { id: searchPluginErr; waitForEnd: true }
     onRunningChanged: {

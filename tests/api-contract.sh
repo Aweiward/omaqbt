@@ -745,6 +745,13 @@ with harness.fixture_server() as (sport, senv0):
     r = via_stdin(["tracker-edit", "a" * 40], SECRET_TRACKER)
     argv_check("tracker-edit --stdin refuses a missing new url", r.returncode != 0)
 
+    SEARCH_MAGNET = ("magnet:?xt=urn:btih:" + "fedcba9876543210" * 2 + "fedcba98" + "&tr="
+                     + urllib.parse.quote(SECRET_TRACKER, safe=""))
+    r = via_stdin(["search", "add"], SEARCH_MAGNET)
+    argv_check("search add --stdin a private magnet succeeds", r.returncode == 0)
+    argv_check("search add --stdin sends the magnet",
+               any(q.get("urls") == [SEARCH_MAGNET] for q in posted("/api/v2/torrents/add")))
+
     inbox = pathlib.Path(senv0["QBT_MAGNET_STATE"]) / "magnet-inbox.jsonl"
     inbox.parent.mkdir(parents=True, exist_ok=True)
     inbox.write_text(json.dumps({"url": SECRET_INBOX_MAGNET, "ts": 1}) + "\n")

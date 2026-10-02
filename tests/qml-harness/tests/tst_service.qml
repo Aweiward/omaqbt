@@ -619,7 +619,7 @@ TestCase {
       if (o && o.command && o.command[0] === "wl-copy") p = o
     }
     verify(p !== null)
-    compare(p.command, ["wl-copy"], "the text never rides on wl-copy's argv")
+    compare(p.command, ["wl-copy", "--type", "text/plain;charset=utf-8"], "the text never rides on wl-copy's argv")
     compare(p.stdinEnabled, true)
     p.started()
     compare(p.writes, ["https://tracker.example/announce?passkey=abc123"], "the text goes on stdin")
@@ -798,7 +798,7 @@ TestCase {
       if (o && o.command && o.command[0] === "wl-copy") p = o
     }
     verify(p !== null)
-    compare(p.command, ["wl-copy"])
+    compare(p.command, ["wl-copy", "--type", "text/plain;charset=utf-8"])
     p.started()
     compare(p.writes.length, 1)
     compare(p.writes[0].indexOf("magnet:?xt=urn:btih:"), 0, "the magnet goes on stdin")

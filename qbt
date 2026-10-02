@@ -3049,8 +3049,14 @@ search_stop_delete() {
 # plugin goes through search/downloadTorrent. via:"plugin" only means the
 # request was accepted (downloadTorrent answers an empty 200 at once).
 search_add() {
-  [[ $# -eq 1 || $# -eq 2 ]] || die "usage: qbt search add <link> [<plugin>]"
+  local usage="usage: qbt search add <link> [<plugin>] | --stdin [<plugin>] (the link on stdin)"
+  [[ $# -eq 1 || $# -eq 2 ]] || die "$usage"
   local link=$1 plugin=${2:-}
+  # A private plugin's link can carry a passkey: the widget sends it here.
+  if [[ $link == --stdin ]]; then
+    stdin_fields 1 "$usage"
+    link=${STDIN_FIELDS[0]}
+  fi
   if [[ $# -eq 2 ]]; then
     search_rule addLink "$link" "$plugin"
   else
