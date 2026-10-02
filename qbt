@@ -189,6 +189,70 @@ base_url() {
   printf 'http://127.0.0.1:%s' "$(read_port)"
 }
 
+# The [Preferences] value of a qBittorrent.conf key ("" when absent). The key
+# reaches awk through the environment: -v would read "WebUI\APIKey"'s
+# backslash as an escape.
+conf_pref() {
+  [[ -f $CONF ]] || return 0
+  local val
+  val=$(PREF_KEY=$1 awk '
+    /^\[/ { sect = ($0 ~ /^\[Preferences\][[:space:]]*$/); next }
+    sect && index($0, ENVIRON["PREF_KEY"] "=") == 1 { val = substr($0, length(ENVIRON["PREF_KEY"]) + 2) }
+    END { printf "%s", val }' "$CONF" 2>/dev/null || true)
+  printf '%s' "${val%$'\r'}"
+}
+
+# qBittorrent 5.2.3's Web API key (WebUI\APIKey), when the conf holds a valid
+# one. OmaqBT signs every request with it: the localhost login bypass is off
+# (marketplace review, 2026-10-02), since loopback is shared by every local
+# account.
+api_key() {
+  local key LC_ALL=C
+  key=$(conf_pref 'WebUI\APIKey')
+  [[ $key =~ ^qbt_[A-Za-z0-9]{28}$ ]] && printf '%s' "$key"
+  return 0
+}
+
+# Sets AUTH_ARGS to curl's arguments for the API key: a header file, never the
+# key itself, so it stays off every process's argv (/proc/*/cmdline is world
+# readable). The file lives in the owner-only state dir and is replaced
+# atomically. A process substitution can't stand in for it: its fd is closed
+# by the time curl runs. With no valid key nothing is sent, and qBittorrent
+# answers 403.
+AUTH_ARGS=()
+prepare_auth() {
+  AUTH_ARGS=()
+  local dir file key line tmp
+  dir=$(dirname "$COOKIE_FILE")
+  ensure_state_dir "$dir"
+  file="$dir/auth-header"
+  key=$(api_key)
+  if [[ -z $key ]]; then
+    rm -f "$file"
+    return 0
+  fi
+  line="Authorization: Bearer $key"
+  if [[ -L $file || ! -f $file || $(<"$file") != "$line" ]]; then
+    tmp=$(umask 077; mktemp "$dir/.auth-header.XXXXXX") || die "cannot write the API key header"
+    printf '%s\n' "$line" >"$tmp"
+    mv -f "$tmp" "$file"
+  fi
+  AUTH_ARGS=(-H "@$file")
+}
+
+# "bypass" while the conf still skips the login for localhost (OmaqBT's old
+# setup, fixed by `qbt secure-daemon`), "nokey" without a valid API key, else
+# "ok". qBittorrent's defaults: LocalHostAuth on, the subnet whitelist off.
+auth_state() {
+  if [[ $(conf_pref 'WebUI\LocalHostAuth') == false || $(conf_pref 'WebUI\AuthSubnetWhitelistEnabled') == true ]]; then
+    printf 'bypass'
+  elif [[ -z $(api_key) ]]; then
+    printf 'nokey'
+  else
+    printf 'ok'
+  fi
+}
+
 # The whole base must be http://127.0.0.1:<port>, optionally followed by a
 # path. Matching the full prefix (not a sed-extracted "host") is what stops
 # userinfo ("http://127.0.0.1:80@127.0.0.2:1"), a backslash
@@ -260,7 +324,7 @@ api_exec() {
   # As the old $(cat "$tmp") did: trailing newlines go.
   while [[ $resp == *$'\n' ]]; do resp=${resp%$'\n'}; done
   if [[ $code == 403 ]]; then
-    die "localhost auth is required"
+    die "qBittorrent refused OmaqBT's API key"
   fi
   # B1: torrents/add answers 202 (APIStatus::Async) when a source is a URL
   # qBittorrent must download first (an https .torrent). Only the add call
@@ -291,7 +355,8 @@ api() {
   local url
   url="$(base_url)$path"
   ensure_state_dir "$(dirname "$COOKIE_FILE")"
-  local args=(-sS -g --noproxy '*' --max-time 5 -X "$method" -b "$COOKIE_FILE" -c "$COOKIE_FILE" "$url")
+  prepare_auth
+  local args=(-sS -g --noproxy '*' --max-time 5 -X "$method" -b "$COOKIE_FILE" -c "$COOKIE_FILE" "${AUTH_ARGS[@]}" "$url")
   if [[ -n $body ]]; then
     args+=(-H "Content-Type: application/x-www-form-urlencoded" --data "$body")
   fi
@@ -302,7 +367,8 @@ api_form() {
   assert_local_base
   local method=$1 path=$2
   shift 2
-  api_exec -sS -g --noproxy '*' --max-time 30 -X "$method" "$(base_url)$path" "$@"
+  prepare_auth
+  api_exec -sS -g --noproxy '*' --max-time 30 -X "$method" "${AUTH_ARGS[@]}" "$(base_url)$path" "$@"
 }
 
 cmd_probe() {
@@ -327,7 +393,9 @@ cmd_probe() {
     --arg stateDir "$(dirname "$RID_FILE")" \
     --arg ridFile "$RID_FILE" \
     --arg cookieFile "$COOKIE_FILE" \
-    '{installed:$installed, daemon:$daemon, lockHolder:$lock, vpnIface:$vpnIface, base:$base, stateDir:$stateDir, ridFile:$ridFile, cookieFile:$cookieFile, pcre2grep:$pcre2grep}'
+    --arg conf "$CONF" \
+    --arg auth "$(auth_state)" \
+    '{installed:$installed, daemon:$daemon, lockHolder:$lock, vpnIface:$vpnIface, base:$base, stateDir:$stateDir, ridFile:$ridFile, cookieFile:$cookieFile, conf:$conf, auth:$auth, pcre2grep:$pcre2grep}'
 }
 
 # The lib/ directory next to this script (the python modules).
@@ -1589,8 +1657,8 @@ api_try_result() {
   fi
   if [[ $out =~ \(HTTP\ ([[:digit:]]{3})\) ]]; then
     API_FAIL="HTTP ${BASH_REMATCH[1]}"
-  elif [[ $out == *"localhost auth is required"* ]]; then
-    API_FAIL="localhost auth is required"
+  elif [[ $out == *"qBittorrent refused OmaqBT's API key"* ]]; then
+    API_FAIL="qBittorrent refused OmaqBT's API key"
   else
     API_FAIL="couldn't reach qBittorrent"
   fi
@@ -2291,15 +2359,16 @@ utf8_exact() {
 api_stdin() {
   local method=$1 path=$2
   ensure_state_dir "$(dirname "$COOKIE_FILE")"
+  prepare_auth
   (umask 077; curl -sS -g --noproxy '*' --max-time 5 -o /dev/null -w '%{http_code}' -X "$method" \
-    -b "$COOKIE_FILE" -c "$COOKIE_FILE" -H "Content-Type: application/x-www-form-urlencoded" \
+    -b "$COOKIE_FILE" -c "$COOKIE_FILE" "${AUTH_ARGS[@]}" -H "Content-Type: application/x-www-form-urlencoded" \
     --data-binary @- "$(base_url)$path" 2>/dev/null) || true
 }
 
 # api_try's failure reason for an api_stdin status.
 api_stdin_fail() {
   if [[ $1 == 403 ]]; then
-    printf 'localhost auth is required'
+    printf '%s' "qBittorrent refused OmaqBT's API key"
   elif [[ $1 =~ ^[[:digit:]]{3}$ && $1 != 000 ]]; then
     printf 'HTTP %s' "$1"
   else
@@ -3047,8 +3116,9 @@ rss_post() {
   local path=$1 accept_202=${2:-0} out code resp
   assert_local_base
   ensure_state_dir "$(dirname "$COOKIE_FILE")"
+  prepare_auth
   out=$(umask 077; curl -sS -g --noproxy '*' --max-time 5 -w '\n%{http_code}' -X POST \
-    -b "$COOKIE_FILE" -c "$COOKIE_FILE" -H "Content-Type: application/x-www-form-urlencoded" \
+    -b "$COOKIE_FILE" -c "$COOKIE_FILE" "${AUTH_ARGS[@]}" -H "Content-Type: application/x-www-form-urlencoded" \
     --data-binary @- "$(base_url)$path" 2>/dev/null) || true
   if [[ $out == *$'\n'* ]]; then
     code=${out##*$'\n'}
@@ -3063,7 +3133,7 @@ rss_post() {
   case $code in
     200|204) return 0 ;;
     409) RSS_409=$resp API_FAIL="HTTP 409" ;;
-    403) API_FAIL="localhost auth is required" ;;
+    403) API_FAIL="qBittorrent refused OmaqBT's API key" ;;
     000) API_FAIL="couldn't reach qBittorrent" ;;
     *) API_FAIL="HTTP $code" ;;
   esac
@@ -3369,8 +3439,9 @@ rss_get() {
   local path=$1 out code
   assert_local_base
   ensure_state_dir "$(dirname "$COOKIE_FILE")"
+  prepare_auth
   out=$(umask 077; curl -sS -g --noproxy '*' --max-time 5 -w '\n%{http_code}' -G \
-    -b "$COOKIE_FILE" -c "$COOKIE_FILE" --data-binary @- "$(base_url)$path" 2>/dev/null) || true
+    -b "$COOKIE_FILE" -c "$COOKIE_FILE" "${AUTH_ARGS[@]}" --data-binary @- "$(base_url)$path" 2>/dev/null) || true
   API_BODY="" API_FAIL=""
   if [[ $out == *$'\n'* ]]; then
     code=${out##*$'\n'}
@@ -3381,7 +3452,7 @@ rss_get() {
   [[ $code =~ ^[[:digit:]]{3}$ ]] || code=000
   case $code in
     200) return 0 ;;
-    403) API_FAIL="localhost auth is required" ;;
+    403) API_FAIL="qBittorrent refused OmaqBT's API key" ;;
     000) API_FAIL="couldn't reach qBittorrent" ;;
     *) API_FAIL="HTTP $code" ;;
   esac
