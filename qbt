@@ -239,6 +239,14 @@ print("qbt_" + "".join(secrets.choice(alphabet) for _ in range(28)), end="")') |
   printf '%s' "$key"
 }
 
+# qBittorrent rewrites its conf at 0644 on exit, key and all, so every probe
+# and every signed request puts a key-holding conf back to owner-only. Only
+# this user's own regular file; any failure is left to the next run.
+secure_conf_mode() {
+  [[ -f $CONF && ! -L $CONF && -O $CONF && -n $(api_key) ]] || return 0
+  [[ $(stat -c '%a' "$CONF" 2>/dev/null) == 600 ]] || chmod 600 "$CONF" 2>/dev/null || true
+}
+
 # Sets AUTH_ARGS to curl's arguments for the API key: a header file, never the
 # key itself, so it stays off every process's argv (/proc/*/cmdline is world
 # readable). The file lives in the owner-only state dir and is replaced
@@ -257,6 +265,7 @@ prepare_auth() {
     rm -f "$file"
     return 0
   fi
+  secure_conf_mode
   line="Authorization: Bearer $key"
   if [[ -L $file || ! -f $file || $(<"$file") != "$line" ]]; then
     tmp=$(umask 077; mktemp "$dir/.auth-header.XXXXXX") || die "cannot write the API key header"
@@ -412,6 +421,7 @@ api_form() {
 
 cmd_probe() {
   assert_local_base
+  secure_conf_mode
   ensure_state_dir "$(dirname "$RID_FILE")"
   ensure_state_dir "$(dirname "$COOKIE_FILE")"
   local installed=false daemon=false

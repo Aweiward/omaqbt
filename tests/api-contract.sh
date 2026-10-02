@@ -545,6 +545,13 @@ subprocess.run(["./qbt", "secure-daemon"], env=e, text=True, capture_output=True
 auth_check("secure-daemon leaves the conf owner-only", stat.S_IMODE(c.stat().st_mode) == 0o600)
 auth_check("secure-daemon leaves the conf dir owner-only", stat.S_IMODE(c.parent.stat().st_mode) == 0o700)
 
+# qBittorrent rewrites its conf at 0644 on exit (seen live with 5.2.3), so
+# every probe puts a key-holding conf back to owner-only.
+h, c, e = auth_home([f"WebUI\\APIKey={KEPT_KEY}"])
+c.chmod(0o644)
+subprocess.run(["./qbt", "probe"], env=e, text=True, capture_output=True)
+auth_check("a probe puts a key-holding conf back to owner-only", stat.S_IMODE(c.stat().st_mode) == 0o600)
+
 # The restart path, with a systemctl shim that logs its calls (and starts
 # nothing): a key that can't be made, or a nox that won't stop, leaves the
 # conf as it was and the daemon running.
