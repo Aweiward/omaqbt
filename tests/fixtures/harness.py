@@ -23,6 +23,23 @@ sys.path.insert(0, str(FIXTURES_DIR.parent.parent / "lib"))
 import qbtsync  # noqa: E402
 SERVER_SCRIPT = FIXTURES_DIR / "server.py"
 CONF_PATH = FIXTURES_DIR / "qBittorrent.conf"
+# The API key in CONF_PATH, which the fixture server demands on every
+# /api/v2/ route (server.py FIXTURE_API_KEY).
+FIXTURE_API_KEY = "qbt_FixtureKey23456789abcdefghjk"
+AUTH_HEADER = ("Authorization", f"Bearer {FIXTURE_API_KEY}")
+
+
+def authorize_urllib():
+    """Makes this test process's own urllib.request.urlopen calls (setup and
+    inspection, not the code under test) send the fixture key. qbt, qbt-serve
+    and qbtsync.Client build their own requests, so they still have to send
+    it themselves."""
+    opener = urllib.request.build_opener()
+    opener.addheaders.append(AUTH_HEADER)
+    urllib.request.install_opener(opener)
+
+
+authorize_urllib()
 
 
 def _free_port():
@@ -154,6 +171,7 @@ def qbt_request(env, path, data=None, timeout=5, jar_path=None):
         jar.load()
     opener = urllib.request.build_opener(
         urllib.request.ProxyHandler({}), urllib.request.HTTPCookieProcessor(jar))
+    opener.addheaders.append(AUTH_HEADER)
     req = urllib.request.Request(env["QBT_BASE"] + path, data=data,
                                  method="GET" if data is None else "POST")
     try:
