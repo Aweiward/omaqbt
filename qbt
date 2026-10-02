@@ -618,7 +618,8 @@ cmd_tracker_edit() {
   [[ $old != *'|'* ]] || die "This tracker's URL can't be edited through the WebUI API"
   valid_tracker_url "$old" || die "invalid tracker url"
   valid_tracker_url "$new" || die "invalid tracker url"
-  api POST "/api/v2/torrents/editTracker" "hash=${hash}&origUrl=$(uri_encode "$old")&newUrl=$(uri_encode "$new")" >/dev/null
+  # qBittorrent 5.2.3 names the old URL "url"; older versions called it "origUrl".
+  api POST "/api/v2/torrents/editTracker" "hash=${hash}&url=$(uri_encode "$old")&newUrl=$(uri_encode "$new")" >/dev/null
   printf '%s\n' '{"ok":true}'
 }
 

@@ -725,7 +725,7 @@ with harness.fixture_server() as (sport, senv0):
     r = via_stdin(["tracker-edit", "a" * 40], SECRET_TRACKER + "\0" + SECRET_TRACKER2)
     argv_check("tracker-edit --stdin succeeds", r.returncode == 0)
     argv_check("tracker-edit --stdin sends both urls",
-               any(q.get("origUrl") == [SECRET_TRACKER] and q.get("newUrl") == [SECRET_TRACKER2]
+               any(q.get("url") == [SECRET_TRACKER] and q.get("newUrl") == [SECRET_TRACKER2]
                    for q in posted("/api/v2/torrents/editTracker")))
     r = via_stdin(["tracker-remove", "a" * 40], SECRET_TRACKER)
     argv_check("tracker-remove --stdin succeeds", r.returncode == 0)
