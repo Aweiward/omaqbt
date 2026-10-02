@@ -480,6 +480,9 @@ Panel {
     settings: root.settings
     active: root.bar !== null && root.sharedService === null
     startDelayMs: 1500
+    // A replacement bar hands widgets a facade with no serviceFor(), so this
+    // fallback runs next to the service-kind instance, which notifies.
+    notifications: false
   }
 
   Binding {

@@ -14,6 +14,9 @@ Scope {
   // A local fallback waits this long after becoming active before it starts,
   // so a hot reload (service torn down before its widgets) never overlaps.
   property int startDelayMs: 0
+  // Off for the bar widget's fallback: under a replacement bar the
+  // service-kind instance still runs and sends every desktop notification.
+  property bool notifications: true
   property bool started: false
 
   property bool installed: false
@@ -402,7 +405,7 @@ Scope {
   }
 
   function notify(text) {
-    if (!text) return
+    if (!text || !notifications) return
     if (notifyProcess.running) {
       notifyQueue = Model.enqueueAction(notifyQueue, { text: String(text) })
       return

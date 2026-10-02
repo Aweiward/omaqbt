@@ -1300,4 +1300,39 @@ TestCase {
     wait(0)
     compare(sweepService(svc, secretValue), [], "after a run that never started")
   }
+
+  // --- completion notifications (#3) -----------------------------------------
+
+  Component { id: quietServiceComp; Service { notifications: false } }
+  function notifyRuns(svc) {
+    var runs = []
+    for (var i = 0; i < svc.data.length; i++) {
+      var o = svc.data[i]
+      if (o && o.running === true && o.command && o.command[0] === "notify-send") runs.push(o.command)
+    }
+    return runs
+  }
+  // One torrent goes from half done to done between two syncs.
+  function finishOneTorrent(svc) {
+    var a = hh("a")
+    svc.applyStatus(JSON.stringify({ torrents: [{ hash: a, name: "Fiction.iso", progress: 0.5 }] }))
+    svc.applyStatus(JSON.stringify({ torrents: [{ hash: a, name: "Fiction.iso", progress: 1 }] }))
+  }
+
+  function test_a_finished_download_notifies() {
+    var svc = createTemporaryObject(serviceComp, tc)
+    finishOneTorrent(svc)
+    compare(notifyRuns(svc), [["notify-send", "-a", "OmaqBT", "OmaqBT", "Fiction.iso finished downloading"]])
+  }
+
+  // The bar widget's fallback Service under a replacement bar: the
+  // service-kind instance is still running and notifies for both.
+  function test_a_service_with_notifications_off_never_notifies() {
+    var svc = createTemporaryObject(quietServiceComp, tc)
+    finishOneTorrent(svc)
+    compare(notifyRuns(svc), [])
+    svc.notify("Direct call")
+    compare(notifyRuns(svc), [])
+    compare(svc.notifyQueue, [])
+  }
 }
