@@ -102,11 +102,15 @@ Starting the daemon writes these keys under `[Preferences]` in `~/.config/qBitto
 ```
 WebUI\Enabled=true
 WebUI\Address=127.0.0.1
-WebUI\LocalHostAuth=false
-WebUI\AuthSubnetWhitelistEnabled=true
-WebUI\AuthSubnetWhitelist=127.0.0.1, ::1
+WebUI\LocalHostAuth=true
+WebUI\AuthSubnetWhitelistEnabled=false
+WebUI\APIKey=<generated if missing>
 WebUI\Port=<existing port, or 8080>
 ```
+
+OmaqBT signs in to the Web API with qBittorrent's API key. It reads the key from `qBittorrent.conf` and never puts it on a command line, so other accounts on your machine can't use the Web API without it. Older OmaqBT versions turned localhost login off. If your daemon was set up that way, OmaqBT secures it automatically: it writes the keys above and restarts the daemon once. If qBittorrent ever refuses the key, the popup shows **Restart daemon**.
+
+The browser Web UI at `http://127.0.0.1:<port>` now asks for a username and password. If you haven't set a password, `qbittorrent-nox` prints a temporary one each time it starts; read it with `journalctl --user -u omaqbt-nox`. Sign in with it, then set your own under Tools → Options → Web UI.
 
 If `wg0-mullvad` is present (or `QBT_BIND_IFACE` is set), starting the daemon also writes under `[BitTorrent]`:
 
@@ -140,7 +144,7 @@ If the plugin is already gone:
 xdg-mime default org.qbittorrent.qBittorrent.desktop x-scheme-handler/magnet
 ```
 
-That disables the widget and deletes the plugin checkout. It does **not** uninstall `qbittorrent-nox`, stop `omaqbt-nox.service`, delete torrents, or revert the Web UI keys above. It also does **not** restore the magnet handler unless you ran uninstall first.
+That disables the widget and deletes the plugin checkout. It does **not** uninstall `qbittorrent-nox`, stop `omaqbt-nox.service`, delete torrents, or revert the Web UI keys above, so localhost login stays on and the API key stays in `qBittorrent.conf`. It also does **not** restore the magnet handler unless you ran uninstall first.
 
 To stop the daemon yourself:
 
@@ -163,14 +167,14 @@ systemctl --user stop omaqbt-nox.service
 - Runs `qbt` from the plugin folder. That helper is the only process that talks HTTP, and only to `127.0.0.1`.
 - Installs the Arch extra package `qbittorrent-nox` through `omarchy pkg add` when you click Install. Privilege is `pkexec`, not a sudoers rule.
 - Writes `~/.config/systemd/user/omaqbt-nox.service` and enables it as your user.
-- Writes the localhost Web UI keys listed under Configure. It stops the daemon first so qBittorrent does not overwrite those keys on exit.
+- Writes the localhost Web UI keys listed under Configure, including an API key when there isn't one. It stops the daemon first so qBittorrent does not overwrite those keys on exit.
 - If `wg0-mullvad` is up, also writes the `[BitTorrent]` interface keys so qBittorrent binds the tunnel, not a single relay IP.
 - Stores sync state in `$XDG_RUNTIME_DIR/omaqbt/` (private, mode 700). If that variable is unset it falls back to a uid-scoped `/tmp/omaqbt-<uid>`, created with `umask 077`, and refuses to write through a symlink or a directory it does not own.
 - Sends a desktop notification through `notify-send` when a download completes, and when a browser magnet arrives but the popup could not open.
 - On widget load, writes `~/.local/share/applications/omaqbt-magnet.desktop` and claims `x-scheme-handler/magnet`. Chromium may still ask to open xdg-open; that is a browser prompt, not a bug in this plugin.
 - Stores pending browser magnets in `${XDG_STATE_HOME:-$HOME/.local/state}/omaqbt/` (not the runtime rid dir).
 - Writes the qBittorrent preferences you change in the window's Settings view, and its RSS feeds and rules. Once you turn a rule on, and auto-download on, RSS can add torrents by itself.
-- Apart from the RSS rules you turned on, it does not add torrents, delete files, or start the daemon unless you click or press the matching control, or click a `magnet:` link that this handler claimed.
+- Apart from the RSS rules you turned on, and the one restart that secures a daemon set up by an older OmaqBT, it does not add torrents, delete files, or start the daemon unless you click or press the matching control, or click a `magnet:` link that this handler claimed.
 
 ## Dev
 
