@@ -888,7 +888,9 @@ TestCase {
     key(c, "y")
     var w = actionProc(svc, "pref-set")
     verify(w !== null, "qbt pref-set runs")
-    compare(w.command.slice(1), ["pref-set", "dht", "--", "false"])
+    compare(w.command.slice(1), ["pref-set", "dht", "--value-stdin"])
+    w.started()
+    compare(w.writes[w.writes.length - 1], "false")
     var before = wireCmds(wire, "refresh-slow").length
     endProc(w, 0, "{\"ok\":true}", "")
     compare(wireCmds(wire, "refresh-slow").length, before + 1, "the sidecar re-reads its cached preferences")

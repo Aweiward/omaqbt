@@ -756,13 +756,16 @@ with harness.fixture_server() as (sport, senv0):
     # when nothing is written) gives up, rather than holding a queue forever.
     held = subprocess.Popen(["./qbt", "tracker-add", "a" * 40, "--stdin"], env=senv,
                             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    # wait(), not communicate(), which would close stdin and send nothing.
     try:
-        out, err = held.communicate(timeout=25)
+        held.wait(timeout=25)
         argv_check("a --stdin run on a stdin that never ends gives up with the usage line",
-                   held.returncode == 1 and b"usage:" in err)
+                   held.returncode == 1 and b"usage:" in held.stderr.read())
     except subprocess.TimeoutExpired:
         held.kill()
         argv_check("a --stdin run on a stdin that never ends gives up with the usage line", False)
+    finally:
+        held.stdin.close()
 
     inbox = pathlib.Path(senv0["QBT_MAGNET_STATE"]) / "magnet-inbox.jsonl"
     inbox.parent.mkdir(parents=True, exist_ok=True)

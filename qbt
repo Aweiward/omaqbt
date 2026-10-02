@@ -51,6 +51,16 @@ uri_encode() {
   URI_V=$1 jq -nr 'env.URI_V|@uri'
 }
 
+# Reads stdin to EOF into STDIN_VALUE: one value, which may be empty but may
+# not hold a NUL. A stdin that never ends is given up after 10 s (see
+# stdin_fields). For `pref-set <key> --value-stdin`.
+stdin_value() {
+  local usage=$1 rc=0
+  STDIN_VALUE=""
+  IFS= read -t 10 -r -d '' STDIN_VALUE || rc=$?
+  (( rc == 1 )) || die "$usage"
+}
+
 # Reads stdin to EOF into STDIN_FIELDS, split on NUL: no trailing NUL (a
 # trailing one is one more, empty, field). Anything but exactly $1 fields,
 # or an empty one, dies with the usage line $2. How the widget hands qbt a
@@ -1690,8 +1700,9 @@ PY
 # HTTP code (api_error_detail=code), never a body.
 # ---------------------------------------------------------------------------
 
+# The same, for the settings, search and RSS code (see uri_encode).
 uri() {
-  jq -nr --arg v "$1" '$v|@uri'
+  uri_encode "$1"
 }
 
 # Leading/trailing "spaces": U+0020 plus every other character
@@ -2650,16 +2661,24 @@ pref_set_secret() {
 # Confirms are window-only by design (eng D4): qbt's gates are the locks and refusals below.
 cmd_pref_set() {
   local api_error_detail=code
-  local usage="usage: qbt pref-set <key> (-- <value> | --stdin | --clear)"
-  local mode
+  local usage="usage: qbt pref-set <key> (-- <value> | --value-stdin | --stdin | --clear)"
+  local mode from_stdin=false
   if [[ $# -eq 3 && $2 == -- ]]; then
     mode=value
+  elif [[ $# -eq 2 && $2 == --value-stdin ]]; then
+    # The widget's form: a value such as add_trackers can carry a private
+    # tracker's passkey, so it stays off argv.
+    mode=value from_stdin=true
   elif [[ $# -eq 2 && ( $2 == --stdin || $2 == --clear ) ]]; then
     mode=$2
   else
     die "$usage"
   fi
   local key=$1 value=${3:-}
+  if [[ $from_stdin == true ]]; then
+    stdin_value "$usage"
+    value=$STDIN_VALUE
+  fi
   (
     LC_ALL=C
     [[ $key =~ ^[A-Za-z][A-Za-z0-9_]{0,127}$ ]]
@@ -2741,8 +2760,10 @@ cmd_pref_set() {
     [[ $stored == *$'\n'x ]] || die "qBittorrent sent something unreadable"
     stored=${stored%$'\n'x}
   fi
-  cast=$(jq -c --arg key "$key" --arg v "$value" --arg other "$other" --arg home "${HOME%/}" --arg stored "$stored" \
-    "$PREF_CAST_JQ" "$schema" 2>/dev/null) \
+  # The value and the stored list reach jq through the environment, never
+  # its argv: either can hold a tracker URL with a passkey.
+  cast=$(JQ_V=$value JQ_STORED=$stored jq -c --arg key "$key" --arg other "$other" --arg home "${HOME%/}" \
+    "env.JQ_V as \$v | env.JQ_STORED as \$stored | $PREF_CAST_JQ" "$schema" 2>/dev/null) \
     || die "The settings schema is unreadable."
   err=$(jq -r '.error // empty' <<<"$cast")
   [[ -z $err ]] || die "$err"

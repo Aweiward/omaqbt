@@ -648,14 +648,16 @@ Scope {
     startPrefsRead(next.item)
   }
 
-  // Settings (Task 3): a normal ticketed write, `qbt pref-set <key> --
-  // <value>`. A composite's key is the composite's own key and its value
-  // is "HH:MM" -- passed through as a plain string like everything else
-  // here, since qbt is the one that knows how to split it. finishAction
-  // reads its every success as a preferences change (refreshSlow above).
+  // Settings (Task 3): a normal ticketed write, `qbt pref-set <key>
+  // --value-stdin` with the value on stdin: a value such as add_trackers can
+  // hold a private tracker's passkey, so it never rides on argv. A
+  // composite's key is the composite's own key and its value is "HH:MM" --
+  // passed through as a plain string like everything else here, since qbt
+  // is the one that knows how to split it. finishAction reads its every
+  // success as a preferences change (refreshSlow above).
   function setPref(key, value, opts) {
     if (!key) return 0
-    return runAction([helperPath, "pref-set", String(key), "--", String(value)], "Saving setting…", opts)
+    return runAction([helperPath, "pref-set", String(key), "--value-stdin"], "Saving setting…", opts, String(value))
   }
 
   // ---- slice 4b: secrets and the ban list (Task 3) ------------------------------
