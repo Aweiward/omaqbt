@@ -221,7 +221,10 @@ function enqueueAction(queue, item) {
 
 // A queued action. origin is "window" only when asked for exactly; everything
 // else is the bar widget, which keeps its actionStatus/lastError behaviour.
-function makeActionItem(ticket, cmd, statusText, opts) {
+// stdin: a value the helper reads on stdin, kept off argv (a tracker URL or a
+// magnet carries a passkey any local account could read in /proc/<pid>/cmdline);
+// null when the action takes none.
+function makeActionItem(ticket, cmd, statusText, opts, stdin) {
   var o = opts || {};
   var hashes = [];
   if (Array.isArray(o.hashes)) {
@@ -232,7 +235,8 @@ function makeActionItem(ticket, cmd, statusText, opts) {
     status: statusText || "",
     ticket: ticket,
     origin: o.origin === "window" ? "window" : "widget",
-    hashes: hashes
+    hashes: hashes,
+    stdin: typeof stdin === "string" ? stdin : null
   };
 }
 
