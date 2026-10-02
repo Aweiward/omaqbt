@@ -44,6 +44,30 @@ die() {
   exit 1
 }
 
+# A value percent-encoded for a form body. It reaches jq through the
+# environment (owner-only), never its argv: /proc/*/cmdline is world
+# readable, and a tracker URL, magnet or download link can carry a passkey.
+uri_encode() {
+  URI_V=$1 jq -nr 'env.URI_V|@uri'
+}
+
+# Reads stdin to EOF into STDIN_FIELDS, split on NUL: no trailing NUL (a
+# trailing one is one more, empty, field). Anything but exactly $1 fields,
+# or an empty one, dies with the usage line $2. How the widget hands qbt a
+# value that may carry a passkey (`--stdin`), off every argv.
+stdin_fields() {
+  local want=$1 usage=$2 f="" v
+  STDIN_FIELDS=()
+  while IFS= read -r -d '' f; do
+    STDIN_FIELDS+=("$f")
+  done
+  STDIN_FIELDS+=("$f")
+  (( ${#STDIN_FIELDS[@]} == want )) || die "$usage"
+  for v in "${STDIN_FIELDS[@]}"; do
+    [[ -n $v ]] || die "$usage"
+  done
+}
+
 # Accepts "all", or one or more torrent hashes joined by "|" (each a 40-char
 # v1 or 64-char v2 infohash). Anything else -- extra params, shell
 # metacharacters, empty segments -- is rejected before it ever reaches a
@@ -405,10 +429,14 @@ api() {
   ensure_state_dir "$(dirname "$COOKIE_FILE")"
   prepare_auth
   local args=(-sS -g --noproxy '*' --max-time 5 -X "$method" -b "$COOKIE_FILE" -c "$COOKIE_FILE" "${AUTH_ARGS[@]}" "$url")
-  if [[ -n $body ]]; then
-    args+=(-H "Content-Type: application/x-www-form-urlencoded" --data "$body")
+  if [[ -z $body ]]; then
+    (umask 077; api_exec "${args[@]}")
+    return
   fi
-  (umask 077; api_exec "${args[@]}")
+  # The body goes on curl's stdin, never its argv: it may hold a tracker
+  # URL, magnet or download link with a passkey in it.
+  args+=(-H "Content-Type: application/x-www-form-urlencoded" --data-binary @-)
+  (umask 077; printf '%s' "$body" | api_exec "${args[@]}")
 }
 
 api_form() {
@@ -462,16 +490,23 @@ cmd_status() {
 }
 
 cmd_add() {
-  local stopped=false savepath="" category="" target=""
+  local stopped=false savepath="" category="" target="" from_stdin=false
   while [[ $# -gt 0 ]]; do
     case $1 in
       --stopped) stopped=true; shift ;;
+      --stdin) from_stdin=true; shift ;;
       --savepath) [[ $# -ge 2 ]] || die "--savepath needs a value"; savepath=$2; shift 2 ;;
       --category) [[ $# -ge 2 ]] || die "--category needs a value"; category=$2; shift 2 ;;
       *) target=$1; shift ;;
     esac
   done
-  [[ -n $target ]] || die "usage: qbt add [--stopped] [--savepath <dir>] [--category <name>] <magnet, .torrent URL, or .torrent file>"
+  local add_usage="usage: qbt add [--stopped] [--savepath <dir>] [--category <name>] <magnet, .torrent URL, or .torrent file> | --stdin"
+  if [[ $from_stdin == true ]]; then
+    [[ -z $target ]] || die "$add_usage"
+    stdin_fields 1 "$add_usage"
+    target=${STDIN_FIELDS[0]}
+  fi
+  [[ -n $target ]] || die "$add_usage"
   local path=$target
   [[ $path == file://* ]] && path=${path#file://}
   [[ $path == "~/"* ]] && path=$HOME/${path#\~/}
@@ -485,10 +520,10 @@ cmd_add() {
     api_form POST "/api/v2/torrents/add" "${args[@]}" >/dev/null
   else
     local body api_accept_202=1
-    body="urls=$(jq -nr --arg u "$target" '$u|@uri')"
+    body="urls=$(uri_encode "$target")"
     [[ $stopped == true ]] && body+="&stopped=true&paused=true"
-    [[ -n $savepath ]] && body+="&savepath=$(jq -nr --arg v "$savepath" '$v|@uri')"
-    [[ -n $category ]] && body+="&category=$(jq -nr --arg v "$category" '$v|@uri')"
+    [[ -n $savepath ]] && body+="&savepath=$(uri_encode "$savepath")"
+    [[ -n $category ]] && body+="&category=$(uri_encode "$category")"
     api POST "/api/v2/torrents/add" "$body" >/dev/null
   fi
   printf '%s\n' '{"ok":true}'
@@ -524,7 +559,7 @@ cmd_set_location() {
   valid_hashes "$hash" || die "invalid hash list"
   [[ $location == "~/"* ]] && location=$HOME/${location#\~/}
   [[ $location == /* ]] || die "location must be an absolute path"
-  api POST "/api/v2/torrents/setLocation" "hashes=${hash}&location=$(jq -nr --arg v "$location" '$v|@uri')" >/dev/null
+  api POST "/api/v2/torrents/setLocation" "hashes=${hash}&location=$(uri_encode "$location")" >/dev/null
   printf '%s\n' '{"ok":true}'
 }
 
@@ -551,17 +586,25 @@ cmd_reannounce() {
 cmd_tracker_add() {
   local hash=${1:-} url=${2:-}
   local api_error_detail=code
-  [[ -n $hash && -n $url ]] || die "usage: qbt tracker-add <hash> <url>"
+  if [[ $url == --stdin && $# -eq 2 ]]; then
+    stdin_fields 1 "usage: qbt tracker-add <hash> --stdin (the url on stdin)"
+    url=${STDIN_FIELDS[0]}
+  fi
+  [[ -n $hash && -n $url ]] || die "usage: qbt tracker-add <hash> <url> | <hash> --stdin"
   valid_single_hash "$hash" || die "invalid hash"
   valid_tracker_url "$url" || die "invalid tracker url"
-  api POST "/api/v2/torrents/addTrackers" "hash=${hash}&urls=$(jq -nr --arg v "$url" '$v|@uri')" >/dev/null
+  api POST "/api/v2/torrents/addTrackers" "hash=${hash}&urls=$(uri_encode "$url")" >/dev/null
   printf '%s\n' '{"ok":true}'
 }
 
 cmd_tracker_edit() {
   local hash=${1:-} old=${2:-} new=${3:-}
   local api_error_detail=code
-  [[ -n $hash && -n $old && -n $new ]] || die "usage: qbt tracker-edit <hash> <old-url> <new-url>"
+  if [[ $old == --stdin && $# -eq 2 ]]; then
+    stdin_fields 2 "usage: qbt tracker-edit <hash> --stdin (old and new url on stdin, NUL-separated)"
+    old=${STDIN_FIELDS[0]} new=${STDIN_FIELDS[1]}
+  fi
+  [[ -n $hash && -n $old && -n $new ]] || die "usage: qbt tracker-edit <hash> <old-url> <new-url> | <hash> --stdin"
   valid_single_hash "$hash" || die "invalid hash"
   # F13: qBittorrent's WebUI joins a torrent's trackers with "|"; a tracker
   # whose own URL contains "|" can't be addressed unambiguously through
@@ -569,18 +612,22 @@ cmd_tracker_edit() {
   [[ $old != *'|'* ]] || die "This tracker's URL can't be edited through the WebUI API"
   valid_tracker_url "$old" || die "invalid tracker url"
   valid_tracker_url "$new" || die "invalid tracker url"
-  api POST "/api/v2/torrents/editTracker" "hash=${hash}&origUrl=$(jq -nr --arg v "$old" '$v|@uri')&newUrl=$(jq -nr --arg v "$new" '$v|@uri')" >/dev/null
+  api POST "/api/v2/torrents/editTracker" "hash=${hash}&origUrl=$(uri_encode "$old")&newUrl=$(uri_encode "$new")" >/dev/null
   printf '%s\n' '{"ok":true}'
 }
 
 cmd_tracker_remove() {
   local hash=${1:-} url=${2:-}
   local api_error_detail=code
-  [[ -n $hash && -n $url ]] || die "usage: qbt tracker-remove <hash> <url>"
+  if [[ $url == --stdin && $# -eq 2 ]]; then
+    stdin_fields 1 "usage: qbt tracker-remove <hash> --stdin (the url on stdin)"
+    url=${STDIN_FIELDS[0]}
+  fi
+  [[ -n $hash && -n $url ]] || die "usage: qbt tracker-remove <hash> <url> | <hash> --stdin"
   valid_single_hash "$hash" || die "invalid hash"
   [[ $url != *'|'* ]] || die "This tracker's URL can't be edited through the WebUI API"
   valid_tracker_url "$url" || die "invalid tracker url"
-  api POST "/api/v2/torrents/removeTrackers" "hash=${hash}&urls=$(jq -nr --arg v "$url" '$v|@uri')" >/dev/null
+  api POST "/api/v2/torrents/removeTrackers" "hash=${hash}&urls=$(uri_encode "$url")" >/dev/null
   printf '%s\n' '{"ok":true}'
 }
 
@@ -589,7 +636,7 @@ cmd_ban_peer() {
   local api_error_detail=code
   [[ -n $peer ]] || die "usage: qbt ban-peer <ip:port>"
   valid_peer "$peer" || die "invalid peer"
-  api POST "/api/v2/transfer/banPeers" "peers=$(jq -nr --arg v "$peer" '$v|@uri')" >/dev/null
+  api POST "/api/v2/transfer/banPeers" "peers=$(uri_encode "$peer")" >/dev/null
   printf '%s\n' '{"ok":true}'
 }
 
@@ -756,10 +803,10 @@ cmd_fetch_metadata() {
   fetch_metadata_wait_for "$hash" "$timeout" gone || fetch_metadata_rescue "$hash" "$magnet"
 
   local add_body
-  add_body="urls=$(jq -nr --arg v "$magnet" '$v|@uri')"
-  add_body+="&savepath=$(jq -nr --arg v "$savepath" '$v|@uri')"
-  add_body+="&category=$(jq -nr --arg v "$category" '$v|@uri')"
-  add_body+="&tags=$(jq -nr --arg v "$tags" '$v|@uri')"
+  add_body="urls=$(uri_encode "$magnet")"
+  add_body+="&savepath=$(uri_encode "$savepath")"
+  add_body+="&category=$(uri_encode "$category")"
+  add_body+="&tags=$(uri_encode "$tags")"
   add_body+="&stopCondition=MetadataReceived&stopped=false&paused=false"
 
   # The add's response body is not read: qBittorrent's success body for it
@@ -1253,11 +1300,12 @@ magnet_notify() {
   "$cmd" -a OmaqBT OmaqBT "$text" >/dev/null 2>&1 || true
 }
 
+# The magnet reaches python through the environment, never its argv.
 magnet_meta() {
-  python3 - "$1" <<'PY'
-import json, re, sys, base64
+  MAGNET_URL=$1 python3 - <<'PY'
+import json, os, re, sys, base64
 from urllib.parse import parse_qs, unquote_plus
-url = sys.argv[1]
+url = os.environ["MAGNET_URL"]
 ids = []
 for m in re.finditer(r"xt=urn:btih:([A-Za-z0-9]+)", url, re.I):
     v = m.group(1)
@@ -1346,7 +1394,8 @@ print(json.dumps(rows))
 PY
 )
   fi
-  jq -n --argjson inbox "$inbox" --argjson pending "$pending" '{inbox:$inbox,pending:$pending}'
+  # Both lists hold magnets: they go to jq through the environment.
+  JQ_INBOX=$inbox JQ_PENDING=$pending jq -n '{inbox:(env.JQ_INBOX|fromjson),pending:(env.JQ_PENDING|fromjson)}'
   printf '\n'
 }
 
@@ -1413,9 +1462,10 @@ cmd_magnet_inbox() {
   pending=$(magnet_pending_path)
   meta=$(magnet_meta "$url")
   set +e
-  python3 - "$inbox" "$pending" "$url" "$meta" "$force" <<'PY'
+  MAGNET_URL=$url python3 - "$inbox" "$pending" "$meta" "$force" <<'PY'
 import json, os, sys, time
-inbox_path, pending_path, url, meta_raw, force_raw = sys.argv[1:6]
+inbox_path, pending_path, meta_raw, force_raw = sys.argv[1:5]
+url = os.environ["MAGNET_URL"]
 force = force_raw == "1"
 meta = json.loads(meta_raw)
 ids = set(meta.get("ids") or [])
@@ -1477,9 +1527,10 @@ PY
     label=$(jq -r '.dn // empty' <<<"$meta")
     [[ -n $label ]] || label=$(jq -r '.ids[0] // "magnet"' <<<"$meta")
     magnet_notify "Click the mark to start ${label}"
-    python3 - "$(magnet_inbox_path)" "$url" <<'PY'
+    MAGNET_URL=$url python3 - "$(magnet_inbox_path)" <<'PY'
 import json, os, sys
-path, url = sys.argv[1:3]
+path = sys.argv[1]
+url = os.environ["MAGNET_URL"]
 rows = []
 if os.path.isfile(path):
     for ln in open(path):
@@ -1525,7 +1576,7 @@ cmd_magnet_inbox_drop() {
   rest=$(tail -n +2 "$inbox" || true)
   printf '%s' "$rest" >"$inbox"
   local cancel
-  cancel=$(magnet_read_cancel | jq -c --arg u "$url" '. + [$u] | unique')
+  cancel=$(magnet_read_cancel | JQ_U=$url jq -c '. + [env.JQ_U] | unique')
   magnet_write_cancel "$cancel"
   printf '%s\n' '{"ok":true}'
 }
@@ -1561,8 +1612,8 @@ PY
   local pending
   pending=$(magnet_read_pending)
   local already_pending
-  already_pending=$(jq -e --argjson ids "$ids_json" --arg u "$url" '
-    [.[] | select(.url == $u or ((.hashes // [.hash]) | map(ascii_downcase) | any(. as $h | ($ids | map(ascii_downcase) | index($h)))) ) ] | length > 0
+  already_pending=$(JQ_U=$url jq -e --argjson ids "$ids_json" '
+    [.[] | select(.url == env.JQ_U or ((.hashes // [.hash]) | map(ascii_downcase) | any(. as $h | ($ids | map(ascii_downcase) | index($h)))) ) ] | length > 0
   ' <<<"$pending" && echo yes || echo no)
   if [[ $already_pending == yes ]]; then
     tail -n +2 "$inbox" >"${inbox}.tmp" || true
@@ -1580,7 +1631,7 @@ PY
     return 0
   fi
   local body
-  body="urls=$(jq -nr --arg u "$url" '$u|@uri')"
+  body="urls=$(uri_encode "$url")"
   body+="&stopCondition=MetadataReceived&stopped=false&paused=false"
   api POST "/api/v2/torrents/add" "$body" >/dev/null
   info=$(magnet_info)
@@ -1609,20 +1660,20 @@ PY
   dn=$(jq -r '.dn // empty' <<<"$meta")
   local cancel
   cancel=$(magnet_read_cancel)
-  if jq -e --arg u "$url" --arg h "$hash" 'index($u) or index($h)' <<<"$cancel" >/dev/null; then
+  if JQ_U=$url jq -e --arg h "$hash" 'index(env.JQ_U) or index($h)' <<<"$cancel" >/dev/null; then
     api POST "/api/v2/torrents/delete" "hashes=${hash}&deleteFiles=true" >/dev/null || true
     tail -n +2 "$inbox" >"${inbox}.tmp" || true
     mv "${inbox}.tmp" "$inbox"
-    magnet_write_cancel "$(jq -c --arg u "$url" --arg h "$hash" '[.[] | select(. != $u and . != $h)]' <<<"$cancel")"
+    magnet_write_cancel "$(JQ_U=$url jq -c --arg h "$hash" '[.[] | select(. != env.JQ_U and . != $h)]' <<<"$cancel")"
     printf '%s\n' '{"ok":true,"cancelled":true}'
     return 0
   fi
   tail -n +2 "$inbox" >"${inbox}.tmp" || true
   mv "${inbox}.tmp" "$inbox"
   local row
-  row=$(jq -n --arg hash "$hash" --arg url "$url" --argjson hashes "$hashes" --arg dn "$dn" --argjson addedAt "$(date +%s)" \
-    '{hash:$hash,url:$url,hashes:$hashes,dn:$dn,addedAt:$addedAt}')
-  magnet_write_pending "$(jq -c --argjson row "$row" '. + [$row]' <<<"$pending")"
+  row=$(JQ_U=$url jq -n --arg hash "$hash" --argjson hashes "$hashes" --arg dn "$dn" --argjson addedAt "$(date +%s)" \
+    '{hash:$hash,url:env.JQ_U,hashes:$hashes,dn:$dn,addedAt:$addedAt}')
+  magnet_write_pending "$(JQ_ROW=$row jq -c '. + [env.JQ_ROW|fromjson]' <<<"$pending")"
   printf '%s\n' '{"ok":true}'
 }
 

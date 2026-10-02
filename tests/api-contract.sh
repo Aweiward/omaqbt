@@ -674,6 +674,95 @@ if auth_failures:
     raise SystemExit(f"{len(auth_failures)} auth-contract check(s) failed")
 print("auth-contract ok")
 
+# Private tracker URLs, private magnets and .torrent download links carry
+# passkeys (marketplace review, 2026-10-02). They reach qbt on stdin
+# (`--stdin`), and from qbt reach curl, jq and python3 on stdin or in the
+# environment (owner-only), never on any argv (/proc/*/cmdline is world
+# readable). Argv-only shims log every command line; the passkey must be on
+# none while each request still arrives intact.
+PASSKEY = "PASSKEYs3cr3t0123456789abcdef"
+SECRET_TRACKER = f"https://tracker.example.com/{PASSKEY}/announce"
+SECRET_TRACKER2 = f"https://tracker2.example.com/{PASSKEY}/announce"
+SECRET_MAGNET = ("magnet:?xt=urn:btih:" + "e" * 40 + "&tr=" + urllib.parse.quote(SECRET_TRACKER, safe=""))
+SECRET_DOWNLOAD = f"https://tracker.example.com/download.php?id=7&passkey={PASSKEY}"
+SECRET_INBOX_MAGNET = ("magnet:?xt=urn:btih:" + "0123456789abcdef" * 2 + "01234567" + "&tr=" + urllib.parse.quote(SECRET_TRACKER2, safe=""))
+argv_failures = []
+
+
+def argv_check(label, cond):
+    print(("ok - " if cond else "FAIL - ") + label)
+    if not cond:
+        argv_failures.append(label)
+
+
+def argv_shim(dirpath, name, real, log_path):
+    dirpath.mkdir(exist_ok=True)
+    s = dirpath / name
+    s.write_text(f"#!/bin/sh\nprintf '%s\\n' \"$0 $*\" >>'{log_path}'\nexec '{real}' \"$@\"\n")
+    s.chmod(0o755)
+
+
+with harness.fixture_server() as (sport, senv0):
+    tmpd = pathlib.Path(tempfile.mkdtemp(prefix="qbt-argv-"))
+    alog = tmpd / "argv.log"
+    alog.write_text("")
+    for tool in ("curl", "jq", "python3"):
+        argv_shim(tmpd / "bin", tool, shutil.which(tool), alog)
+    senv = dict(senv0, PATH=str(tmpd / "bin") + os.pathsep + senv0["PATH"])
+    slog = pathlib.Path(senv0["QBT_FIXTURE_LOG"])
+
+    def posted(path):
+        entries = json.loads(slog.read_text() or "[]")
+        return [urllib.parse.parse_qs(e["body"]) for e in entries if e["method"] == "POST" and e["path"] == path]
+
+    def via_stdin(args, data):
+        return subprocess.run(["./qbt", *args, "--stdin"], env=senv, input=data.encode(), capture_output=True)
+
+    r = via_stdin(["tracker-add", "a" * 40], SECRET_TRACKER)
+    argv_check("tracker-add --stdin succeeds", r.returncode == 0)
+    argv_check("tracker-add --stdin sends the url",
+               any(q.get("urls") == [SECRET_TRACKER] for q in posted("/api/v2/torrents/addTrackers")))
+    r = via_stdin(["tracker-edit", "a" * 40], SECRET_TRACKER + "\0" + SECRET_TRACKER2)
+    argv_check("tracker-edit --stdin succeeds", r.returncode == 0)
+    argv_check("tracker-edit --stdin sends both urls",
+               any(q.get("origUrl") == [SECRET_TRACKER] and q.get("newUrl") == [SECRET_TRACKER2]
+                   for q in posted("/api/v2/torrents/editTracker")))
+    r = via_stdin(["tracker-remove", "a" * 40], SECRET_TRACKER)
+    argv_check("tracker-remove --stdin succeeds", r.returncode == 0)
+    argv_check("tracker-remove --stdin sends the url",
+               any(q.get("urls") == [SECRET_TRACKER] for q in posted("/api/v2/torrents/removeTrackers")))
+    r = via_stdin(["add", "--stopped", "--category", "iso"], SECRET_MAGNET)
+    argv_check("add --stdin a private magnet succeeds", r.returncode == 0)
+    r = via_stdin(["add"], SECRET_DOWNLOAD)
+    argv_check("add --stdin a passkey download url succeeds", r.returncode == 0)
+    adds = posted("/api/v2/torrents/add")
+    argv_check("add --stdin sends the magnet with its flags",
+               any(q.get("urls") == [SECRET_MAGNET] and q.get("stopped") == ["true"] and q.get("category") == ["iso"]
+                   for q in adds))
+    argv_check("add --stdin sends the download url", any(q.get("urls") == [SECRET_DOWNLOAD] for q in adds))
+    r = via_stdin(["tracker-add", "a" * 40], "")
+    argv_check("tracker-add --stdin refuses an empty url", r.returncode != 0)
+    r = via_stdin(["tracker-edit", "a" * 40], SECRET_TRACKER)
+    argv_check("tracker-edit --stdin refuses a missing new url", r.returncode != 0)
+
+    inbox = pathlib.Path(senv0["QBT_MAGNET_STATE"]) / "magnet-inbox.jsonl"
+    inbox.parent.mkdir(parents=True, exist_ok=True)
+    inbox.write_text(json.dumps({"url": SECRET_INBOX_MAGNET, "ts": 1}) + "\n")
+    r = subprocess.run(["./qbt", "magnet-drain"], env=senv, text=True, capture_output=True)
+    argv_check("magnet-drain of a private magnet succeeds", r.returncode == 0)
+    argv_check("magnet-drain sends the magnet",
+               any(q.get("urls") == [SECRET_INBOX_MAGNET] for q in posted("/api/v2/torrents/add")))
+
+    logged = alog.read_text()
+    argv_check("the shims saw curl, jq and python3 run",
+               "/curl " in logged and "/jq " in logged and "/python3 " in logged)
+    argv_check("no passkey on any curl, jq or python3 argv", PASSKEY not in logged)
+    shutil.rmtree(tmpd, ignore_errors=True)
+
+if argv_failures:
+    raise SystemExit(f"{len(argv_failures)} argv-secrets-contract check(s) failed")
+print("argv-secrets-contract ok")
+
 # State dir hardening: refuse a symlinked state dir, and create the real one 0700.
 # The fixture server is stopped, so the API call fails gracefully; ensure_state_dir
 # runs before that call, which is what we are exercising here.
