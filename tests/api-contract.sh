@@ -323,6 +323,7 @@ denv2 = denv.copy()
 denv2.update({
     "QBT_HOME": str(home2),
     "QBT_CONF": str(home2 / ".config/qBittorrent/qBittorrent.conf"),
+    "QBT_RID_FILE": str(home2 / "state/omaqbt/rid.json"),
     "QBT_LOCK": "none",
 })
 (home2 / ".config/qBittorrent").mkdir(parents=True)
