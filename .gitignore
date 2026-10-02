@@ -11,8 +11,11 @@ tests/fixtures/.rid
 tests/fixtures/.bind
 tests/fixtures/.magnet-state
 tests/fixtures/cookies
+tests/fixtures/auth-header
+tests/fixtures/secure.lock
 __pycache__/
 
 # Personal Claude Code settings and hooks
 .claude/settings.local.json
 .claude/hooks/
+.claude/worktrees/
