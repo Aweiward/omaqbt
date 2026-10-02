@@ -167,8 +167,9 @@ class FirstStatusLineTests(unittest.TestCase):
                     ["type", "installed", "daemon", "lockHolder", "api", "altSpeed",
                      "dlSpeed", "upSpeed", "torrents", "vpnIface", "bindIface",
                      "categories", "categoryPaths", "categoryLimits", "tags",
-                     "defaultSavePath", "relocation", "shareDefaults"],
+                     "defaultSavePath", "relocation", "shareDefaults", "auth", "authRefused"],
                 )
+                self.assertEqual((line["auth"], line["authRefused"]), ("ok", False))
 
 
 class RefreshTests(unittest.TestCase):
@@ -180,6 +181,109 @@ class RefreshTests(unittest.TestCase):
                 sp.send({"cmd": "refresh"})
                 second = sp.read_until(lambda o: o.get("type") == "status", timeout=5)
                 self.assertEqual(second["dlSpeed"], 100)
+
+
+WRONG_KEY = "qbt_WrongKey3456789abcdefghjkmnp"
+
+
+def _conf(path, key=None, bypass=False):
+    """Writes a qBittorrent.conf like the fixture's, with `key` (or none) and,
+    with `bypass`, OmaqBT's old localhost login bypass."""
+    lines = ["[Preferences]"]
+    if key:
+        lines.append(f"WebUI\\APIKey={key}")
+    lines.append(f"WebUI\\LocalHostAuth={'false' if bypass else 'true'}")
+    lines.append("WebUI\\AuthSubnetWhitelistEnabled=false")
+    Path(path).write_text("\n".join(lines) + "\n")
+
+
+class ApiKeyTests(unittest.TestCase):
+    """The sidecar signs every request with the API key from the probe's
+    conf, reports the probe's auth state, and says when qBittorrent refused
+    the key. The key itself never appears in its output."""
+
+    def assert_no_key(self, sp, lines):
+        text = "".join(sp._stderr_lines) + json.dumps(lines)
+        self.assertNotIn(harness.FIXTURE_API_KEY, text)
+        self.assertNotIn(WRONG_KEY, text)
+
+    def test_a_refused_key_is_reported_until_the_conf_has_the_right_one(self):
+        with harness.fixture_server() as (port, env):
+            conf = Path(env["QBT_STATE_DIR"]).parent / "qBittorrent.conf"
+            _conf(conf, WRONG_KEY)
+            env = dict(env, QBT_CONF=str(conf))
+            with ServeProcess(env) as sp:
+                first = sp.readline()
+                self.assertEqual((first["api"], first["auth"], first["authRefused"]), (False, "ok", True))
+                sp.send({"cmd": "files", "id": 1, "hash": "a" * 40})
+                files = sp.read_until(lambda o: o.get("type") == "files")
+                self.assertEqual(files["error"], "qBittorrent refused OmaqBT's API key")
+                # A rotated key is read on the next request, without a restart.
+                _conf(conf, harness.FIXTURE_API_KEY)
+                sp.send({"cmd": "refresh"})
+                second = sp.read_until(lambda o: o.get("type") == "status")
+                self.assertEqual((second["api"], second["authRefused"]), (True, False))
+                self.assertEqual(len(second["torrents"]), 2)
+                self.assertIn("qBittorrent refused OmaqBT's API key\n", sp._stderr_lines)
+                self.assert_no_key(sp, [first, files, second])
+
+    def test_qbt_status_signs_with_the_key_and_reports_a_refusal(self):
+        with harness.fixture_server() as (port, env):
+            conf = Path(env["QBT_STATE_DIR"]).parent / "qBittorrent.conf"
+            for key, expected in ((harness.FIXTURE_API_KEY, (True, False)), (WRONG_KEY, (False, True))):
+                with self.subTest(key=key):
+                    _conf(conf, key)
+                    r = subprocess.run([str(ROOT / "qbt"), "status"], env=dict(env, QBT_CONF=str(conf)),
+                                       capture_output=True, text=True, timeout=30)
+                    self.assertEqual(r.returncode, 0, r.stderr)
+                    status = json.loads(r.stdout)
+                    self.assertEqual((status["api"], status["authRefused"]), expected)
+                    self.assertEqual(status["auth"], "ok")
+                    self.assertNotIn(key, r.stdout + r.stderr)
+
+    def test_no_key_and_the_bypass_pass_through_from_the_probe(self):
+        cases = (({}, ("nokey", False, True)),
+                 ({"key": harness.FIXTURE_API_KEY, "bypass": True}, ("bypass", True, False)))
+        for conf_args, expected in cases:
+            with self.subTest(conf=conf_args), harness.fixture_server() as (port, env):
+                conf = Path(env["QBT_STATE_DIR"]).parent / "qBittorrent.conf"
+                _conf(conf, **conf_args)
+                with ServeProcess(dict(env, QBT_CONF=str(conf))) as sp:
+                    line = sp.readline()
+                    self.assertEqual((line["auth"], line["api"], line["authRefused"]), expected)
+
+    def test_a_reprobe_moves_every_client_to_the_new_conf(self):
+        with harness.fixture_server() as (port, env):
+            tmp = Path(env["QBT_STATE_DIR"]).parent
+            wrong = tmp / "wrong.conf"
+            _conf(wrong, WRONG_KEY)
+            conf_file = tmp / "conf-path"
+            conf_file.write_text(str(wrong))
+            # Stands in for `qbt` so the test controls which conf the probe
+            # names, the way a reprobe can find a different one.
+            stub = tmp / "qbt-stub"
+            stub.write_text(
+                "#!/usr/bin/env bash\n"
+                f"QBT_CONF=$(cat '{conf_file}') exec '{ROOT / 'qbt'}' \"$@\"\n"
+            )
+            stub.chmod(0o700)
+            with ServeProcess(dict(env, QBT_HELPER=str(stub))) as sp:
+                first = sp.readline()
+                self.assertTrue(first["authRefused"])
+                h = "a" * 40
+                sp.send({"cmd": "watch", "hash": h, "tab": "trackers"})
+                refused = sp.read_until(lambda o: o.get("type") == "inspect")
+                self.assertEqual(refused["error"], "qBittorrent refused OmaqBT's API key")
+                conf_file.write_text(str(harness.CONF_PATH))
+                sp.send({"cmd": "watch", "hash": None, "tab": "trackers"})
+                sp.send({"cmd": "refresh"})
+                second = sp.read_until(lambda o: o.get("type") == "status")
+                self.assertEqual((second["api"], second["authRefused"]), (True, False))
+                sp.send({"cmd": "watch", "hash": h, "tab": "trackers"})
+                resp = sp.read_until(lambda o: o.get("type") == "inspect")
+                self.assertNotIn("error", resp)
+                self.assertEqual(resp["trackers"][0]["url"], "** [DHT] **")
+                self.assert_no_key(sp, [first, refused, second, resp])
 
 
 class RefreshSlowTests(unittest.TestCase):

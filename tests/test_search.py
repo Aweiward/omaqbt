@@ -403,7 +403,7 @@ class SearchStartTest(SearchCase):
                          env={"QBT_BASE": "http://127.0.0.2:1"})
         self.refused(r, "refusing non-localhost host (base must be http://127.0.0.1:<port>)")
         self.control({"forbidden": True})
-        self.refused(self.start(), sentence("pluginsUnreadable", why="localhost auth is required"))
+        self.refused(self.start(), sentence("pluginsUnreadable", why="qBittorrent refused OmaqBT's API key"))
 
     def test_cap_and_python_409s_are_told_apart(self):
         self.control({"search": {"finish": None}})
@@ -576,15 +576,20 @@ class SearchStopDeleteTest(SearchCase):
         self.ok(self.run_qbt("search", "stop", "77"))
         self.assertEqual(self.id_path().read_text(), f"{jid}\n")
 
-    def test_jobs_live_in_qbts_session(self):
-        # Search jobs are per WebUI session (Ruling FH): a request with no SID
-        # (a fresh session) can't see qbt's job, and qbt's own stop and
-        # delete reach it through its cookie file.
+    def test_jobs_live_in_the_keys_session(self):
+        # Search jobs are per WebUI session (Ruling FH), and an API-key
+        # session's id is the key: any request with the key (this process's
+        # urlopen sends it) sees qbt's job, one without it is refused, and
+        # qbt's own stop and delete reach it.
         jid = self.job()
+        keyless = urllib.request.build_opener(urllib.request.ProxyHandler({}))
         for path in (f"/api/v2/search/status?id={jid}", f"/api/v2/search/results?id={jid}"):
+            with urllib.request.urlopen(self.url(path), timeout=5) as resp:
+                self.assertEqual(resp.status, 200)
             with self.assertRaises(urllib.error.HTTPError) as cm:
-                urllib.request.urlopen(self.url(path), timeout=5)
-            self.assertEqual(cm.exception.code, 404)
+                keyless.open(self.url(path), timeout=5)
+            self.assertEqual(cm.exception.code, 403)
+            cm.exception.close()
         self.ok(self.run_qbt("search", "stop", str(jid)))
         self.assertEqual([(j["id"], j["status"]) for j in self.jobs()], [(jid, "Stopped")])
         self.ok(self.run_qbt("search", "delete", str(jid)))
@@ -613,7 +618,7 @@ class SearchStopDeleteTest(SearchCase):
         self.control({})
         self.control({"forbidden": True})
         r = self.run_qbt("search", "delete", str(jid))
-        self.refused(r, sentence("refused", why="localhost auth is required"))
+        self.refused(r, sentence("refused", why="qBittorrent refused OmaqBT's API key"))
         self.refused(self.run_qbt("search", "stop", str(jid),
                                   env={"QBT_BASE": f"http://127.0.0.1:{harness._free_port()}"}),
                      sentence("refused", why="couldn't reach qBittorrent"))
@@ -683,7 +688,7 @@ class SearchAddTest(SearchCase):
         self.assertNotIn("SECRET", r.stderr)
         self.control({"forbidden": True})
         r = self.run_qbt("search", "add", MAGNET)
-        self.refused(r, sentence("refused", why="localhost auth is required"))
+        self.refused(r, sentence("refused", why="qBittorrent refused OmaqBT's API key"))
         self.assertNotIn("SID", r.stderr)
 
     def test_download_torrent_with_a_magnet_adds_it_in_the_fixture(self):

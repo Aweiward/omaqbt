@@ -411,7 +411,7 @@ class ItemsTest(RssCase):
         self.control({"preferences": "500"})
         self.refused(self.rss("items"), "qBittorrent refused it (HTTP 500)")
         self.control({"forbidden": True})
-        self.refused(self.rss("items"), "qBittorrent refused it (localhost auth is required)")
+        self.refused(self.rss("items"), "qBittorrent refused it (qBittorrent refused OmaqBT's API key)")
         self.control({})
         r = self.rss("items", env={"QBT_BASE": f"http://127.0.0.1:{harness._free_port()}"})
         self.refused(r, "qBittorrent refused it (couldn't reach qBittorrent)")

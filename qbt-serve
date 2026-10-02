@@ -2,8 +2,8 @@
 """`qbt-serve`: a long-lived sidecar for OmaqBT's QML bar widget.
 
 It runs `qbt probe` once at startup (and again every 10s of ticking, or
-on an explicit `refresh`), holds a single in-memory WebUI session (search
-reads alone go through qbt's session instead: see `_search_load_session`), and
+on an explicit `refresh`), signs every WebUI request with the API key in the
+probe's qBittorrent.conf (so its session is the key's, shared with qbt), and
 polls `lib/qbtsync.build_status` on a cadence a QML `Process` controls
 over stdin. Every stdout line is one
 JSON object (`{"type":...}` first) with a trailing newline; diagnostics
@@ -173,6 +173,9 @@ def do_tick(state, force_probe=False):
         state["last_probe_at"] = now_mono
         if new_probe is not None:
             state["probe"] = new_probe
+            # The probe names the conf the key is read from.
+            for name in ("client", "inspect_client", "search_client"):
+                state[name].conf = new_probe.get("conf") or None
         elif err:
             print(qbtsync.sanitize(err), file=sys.stderr)
 
@@ -303,8 +306,10 @@ def _search_load_session(state):
     new client around it. Search jobs are per session in qBittorrent 5.2.3
     (webapplication.cpp:844, a SearchController per WebSession), and qbt
     starts them in its session, so the sidecar must read through the same
-    SID. Returns False on a failed load (a half-written or unreadable
-    file), which is transient: the client is left as it was.
+    one. Under the API key that session is the key itself, which the client
+    sends, and the jar stays empty. Returns False on a failed load (a
+    half-written or unreadable file), which is transient: the client is
+    left as it was.
 
     Read-only: the jar is never saved (curl rewrites that file on every
     `qbt` run). A missing file is an empty jar -- qbt has made no request
@@ -320,7 +325,8 @@ def _search_load_session(state):
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
                 jar.load(path)
-        client = qbtsync.Client(state["probe"]["base"], jar, timeout=SEARCH_TIMEOUT)
+        client = qbtsync.Client(state["probe"]["base"], jar, timeout=SEARCH_TIMEOUT,
+                                conf=state["probe"].get("conf") or None)
     except Exception:
         return False
     state["search_client"] = client
@@ -615,18 +621,21 @@ def main():
     threading.Thread(target=_heartbeat_thread, daemon=True).start()
 
     jar = http.cookiejar.CookieJar()
-    client = qbtsync.Client(probe["base"], jar)
+    conf = probe.get("conf") or None
+    client = qbtsync.Client(probe["base"], jar, conf=conf)
     # Inspect reads share the status client's cookie jar (same session) but
     # get their own short timeout, so a stalled inspect route can never
     # hold up the status client's much longer 5s budget.
-    inspect_client = qbtsync.Client(probe["base"], jar, timeout=INSPECT_TIMEOUT)
+    inspect_client = qbtsync.Client(probe["base"], jar, timeout=INSPECT_TIMEOUT, conf=conf)
     # Search reads (slice 5a) are the one exception to the in-memory jar:
     # qBittorrent keeps search jobs per WebUI session, so each search watch
     # reads through qbt's own session, loaded read-only from its curl
     # cookie file (Ruling FH, _search_load_session). Torrents, sync and
     # preferences are global state, so the status and inspect clients keep
     # their own session. Until a watch loads, this client has an empty jar.
-    search_client = qbtsync.Client(probe["base"], qbtsync.CurlCookieJar(), timeout=SEARCH_TIMEOUT)
+    # Under the API key every client's session is the key's, so these
+    # sessions are now one and the same.
+    search_client = qbtsync.Client(probe["base"], qbtsync.CurlCookieJar(), timeout=SEARCH_TIMEOUT, conf=conf)
     state = {
         "helper": helper,
         "probe": probe,

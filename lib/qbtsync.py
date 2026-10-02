@@ -2,10 +2,11 @@
 """Shared status engine for OmaqBT.
 
 `qbt status` (bash) pipes a probe (installed/daemon/lockHolder/vpnIface/
-base/stateDir/ridFile/cookieFile) into `python3 lib/qbtsync.py status` on
-stdin, and this module does the rest: talks to qbittorrent-nox's WebUI over
-localhost, merges sync/maindata deltas into the on-disk rid cache, and
-prints the same JSON object `qbt status` has always printed. `qbt-serve`
+base/stateDir/ridFile/cookieFile/conf/auth) into `python3 lib/qbtsync.py
+status` on stdin, and this module does the rest: talks to qbittorrent-nox's
+WebUI over localhost (signed with the API key in `conf`), merges
+sync/maindata deltas into the on-disk rid cache, and prints the same JSON
+object `qbt status` has always printed. `qbt-serve`
 (a later task) reuses these same functions so there is exactly one
 implementation of this logic.
 """
@@ -22,6 +23,10 @@ from urllib.parse import urlparse, urlsplit
 
 _SID_RE = re.compile(r"SID=[^;\s]*", re.IGNORECASE)
 _PASSWORD_RE = re.compile(r"password=[^;\s]*", re.IGNORECASE)
+# qBittorrent 5.2.3's API key: "qbt_" and 28 characters from its own
+# alphabet, which OmaqBT loosens to ASCII letters and digits (as qbt does).
+_API_KEY_RE = re.compile(r"qbt_[A-Za-z0-9]{28}")
+API_KEY_REFUSED = "qBittorrent refused OmaqBT's API key"
 
 
 def sanitize(text):
@@ -36,6 +41,36 @@ def assert_local(base):
     host = urlparse(base).hostname or ""
     if host != "127.0.0.1":
         raise ValueError(f"refusing non-localhost host: {host}")
+
+
+def read_api_key(conf_path):
+    """The valid WebUI\\APIKey from qBittorrent.conf's [Preferences], or None.
+
+    Reads the conf the way qbt's `conf_pref` does: only the [Preferences]
+    section, the last matching line wins, and a trailing CR goes. A missing
+    or unreadable conf, or a key that isn't well-formed, is None.
+    """
+    if not conf_path:
+        return None
+    try:
+        with open(conf_path, "r", encoding="utf-8", errors="replace") as f:
+            lines = f.read().split("\n")
+    except OSError:
+        return None
+    prefix = "WebUI\\APIKey="
+    key = None
+    in_prefs = False
+    for line in lines:
+        if line.startswith("["):
+            in_prefs = re.fullmatch(r"\[Preferences\]\s*", line) is not None
+            continue
+        if in_prefs and line.startswith(prefix):
+            key = line[len(prefix):]
+    if key is None:
+        return None
+    if key.endswith("\r"):
+        key = key[:-1]
+    return key if _API_KEY_RE.fullmatch(key) else None
 
 
 class ApiError(Exception):
@@ -91,13 +126,20 @@ class CurlCookieJar(http.cookiejar.MozillaCookieJar):
 
 
 class Client:
-    """A tiny localhost-only HTTP GET client sharing a cookie jar with curl."""
+    """A tiny localhost-only HTTP GET client sharing a cookie jar with curl.
 
-    def __init__(self, base, cookiejar, timeout=5):
+    With `conf` (the probe's qBittorrent.conf path), every request carries
+    `Authorization: Bearer <key>`. The key is read from the conf on each
+    request, so a rotated key is picked up without a restart. Under the API
+    key qBittorrent sets no cookie, so the jar stays empty.
+    """
+
+    def __init__(self, base, cookiejar, timeout=5, conf=None):
         assert_local(base)
         self.base = base
         self.cookiejar = cookiejar
         self.timeout = timeout
+        self.conf = conf
         # An empty ProxyHandler replaces urllib's default one, so http_proxy
         # and friends can never route a localhost request (or its SID
         # cookie) through a proxy.
@@ -109,6 +151,11 @@ class Client:
     def get(self, path):
         url = self.base + path
         req = urllib.request.Request(url, method="GET")
+        key = read_api_key(self.conf)
+        if key:
+            # Unredirected: urllib copies ordinary headers onto a redirect's
+            # new request, and the key must never leave 127.0.0.1.
+            req.add_unredirected_header("Authorization", f"Bearer {key}")
         try:
             with self.opener.open(req, timeout=self.timeout) as resp:
                 code = resp.status
@@ -120,7 +167,7 @@ class Client:
             except Exception:
                 body = ""
             if code == 403:
-                raise ApiError(403, "localhost auth is required")
+                raise ApiError(403, API_KEY_REFUSED)
             raise ApiError(code, sanitize(f"HTTP {code} {body}"))
         except urllib.error.URLError as exc:
             raise ApiError(None, sanitize(str(exc)))
@@ -434,6 +481,18 @@ def build_status(probe, client, sync, slow, now):
     daemon = bool(probe.get("daemon"))
     lock_holder = probe.get("lockHolder") or "none"
     vpn_iface = probe.get("vpnIface") or ""
+    # qbt's probe reports "ok", "bypass" or "nokey" for the conf; an older
+    # probe without the field counts as "ok".
+    auth = probe.get("auth")
+    if not isinstance(auth, str) or not auth:
+        auth = "ok"
+    auth_refused = False
+
+    def failed(exc):
+        nonlocal auth_refused
+        if exc.code == 403:
+            auth_refused = True
+        errors.append(exc.message)
 
     api = False
     alt_speed = False
@@ -453,7 +512,7 @@ def build_status(probe, client, sync, slow, now):
         try:
             body = client.get(f"/api/v2/sync/maindata?rid={sync.rid}")
         except ApiError as exc:
-            errors.append(exc.message)
+            failed(exc)
         else:
             raw = _try_json_object(body)
             if raw is None:
@@ -482,7 +541,7 @@ def build_status(probe, client, sync, slow, now):
             slow.alt_speed = mode == "1"
         except ApiError as exc:
             slow.alt_speed = False
-            errors.append(exc.message)
+            failed(exc)
         # Read on every slow-timer tick now, not only when a VPN interface is
         # configured: defaultSavePath and relocation come from this same
         # response for every setup. bind_iface/vpn_iface_ok keep resetting
@@ -495,7 +554,7 @@ def build_status(probe, client, sync, slow, now):
         except ApiError as exc:
             slow.bind_iface = ""
             slow.vpn_iface_ok = False
-            errors.append(exc.message)
+            failed(exc)
         else:
             prefs = _try_json_object(body)
             if prefs is None:
@@ -552,6 +611,10 @@ def build_status(probe, client, sync, slow, now):
         "defaultSavePath": default_save_path,
         "relocation": relocation,
         "shareDefaults": share_defaults,
+        "auth": auth,
+        # True when qBittorrent answered 403 to a call in this status: it
+        # refused the key (wrong, missing, or rotated but not yet saved).
+        "authRefused": auth_refused,
     }
     return status, errors
 
@@ -583,7 +646,7 @@ def _main(argv):
             pass
 
     try:
-        client = Client(base, jar)
+        client = Client(base, jar, conf=probe.get("conf") or None)
     except ValueError as exc:
         print(str(exc), file=sys.stderr)
         return 1
