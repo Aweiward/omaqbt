@@ -2661,7 +2661,9 @@ pref_set_secret() {
 # Confirms are window-only by design (eng D4): qbt's gates are the locks and refusals below.
 cmd_pref_set() {
   local api_error_detail=code
-  local usage="usage: qbt pref-set <key> (-- <value> | --value-stdin | --stdin | --clear)"
+  # --value-stdin (the value on stdin, in place of -- <value>) is how the
+  # widget calls it.
+  local usage="usage: qbt pref-set <key> (-- <value> | --stdin | --clear)"
   local mode from_stdin=false
   if [[ $# -eq 3 && $2 == -- ]]; then
     mode=value

@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "aweiward.omaqbt",
   "name": "OmaqBT",
-  "version": "2.1.2",
+  "version": "2.1.3",
   "author": "Aweiward",
   "license": "MIT",
   "description": "OmaqBT: qBittorrent in the Omarchy bar, with a quick popup and a full window for search, RSS and settings.",
