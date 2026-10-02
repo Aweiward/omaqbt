@@ -301,6 +301,8 @@ test("tableState priority: loading, Qt GUI, not installed, daemon, api, empty, n
   assert.equal(V.tableState(Object.assign({}, up, { installed: false, daemon: false })), "notInstalled");
   assert.equal(V.tableState(Object.assign({}, up, { daemon: false, api: false })), "daemon");
   assert.equal(V.tableState(Object.assign({}, up, { api: false })), "api");
+  assert.equal(V.tableState(Object.assign({}, up, { api: false, authRefused: true })), "auth", "a refused key beats api down");
+  assert.equal(V.tableState(Object.assign({}, up, { daemon: false, api: false, authRefused: true })), "daemon");
   assert.equal(V.tableState(Object.assign({}, up, { liveCount: 0, visibleCount: 0 })), "empty");
   assert.equal(V.tableState(Object.assign({}, up, { visibleCount: 0 })), "noMatch");
   assert.equal(V.tableState(up), "rows");
@@ -388,8 +390,14 @@ test("dispatchPane: rows and noMatch keep the real pane", () => {
   assert.equal(V.dispatchPane("filters", "noMatch"), "filters");
 });
 
+test("stateCopy auth: names the refused key and offers the restart that rewrites it", () => {
+  const c = V.stateCopy("auth");
+  assert.equal(c.title, "qBittorrent refused OmaqBT's API key");
+  assert.deepEqual(c.keys, [{ key: "Enter", label: "Restart daemon" }]);
+});
+
 test("dispatchPane: blocking states dispatch as the table pane", () => {
-  for (const st of ["loading", "gui", "notInstalled", "daemon", "api", "empty"]) {
+  for (const st of ["loading", "gui", "notInstalled", "daemon", "auth", "api", "empty"]) {
     for (const pane of ["filters", "inspector", "table"]) {
       // Final fix wave (ruling BS, Important 4): the filters pane in the
       // empty library keeps its keys (see the next tests).
@@ -2208,7 +2216,7 @@ test("settingsSectionStep: moves over the sections, skipping the dimmed RSS row 
 });
 
 test("settingsDownCopy: the torrent view's own blocking copy, else the api-down copy, with keys that work in Settings", () => {
-  for (const st of ["gui", "notInstalled", "daemon", "api"]) {
+  for (const st of ["gui", "notInstalled", "daemon", "auth", "api"]) {
     const c = V.settingsDownCopy(st);
     assert.equal(c.title, V.stateCopy(st).title, st);
     assert.equal(c.body, V.stateCopy(st).body, st);

@@ -1055,7 +1055,8 @@ QtObject {
 
     case "inspector.files":
       // Enter doubles as the primary action of a blocking state.
-      if (isEnterKey(ev) && c.tableState === "daemon") {
+      // "auth" too: start-daemon restarts a running daemon and rewrites its key.
+      if (isEnterKey(ev) && (c.tableState === "daemon" || c.tableState === "auth")) {
         ticket = c.service.startDaemon(c.opts([]))
         if (ticket > 0) c.track(ticket, "daemon", [])
         else c.note(View.progressText("daemon", 0), "muted")

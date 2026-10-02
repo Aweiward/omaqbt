@@ -241,6 +241,7 @@ Item {
     daemon: !!service && service.daemon,
     lockHolder: service ? service.lockHolder : "none",
     api: !!service && service.api,
+    authRefused: !!service && service.authRefused === true,
     liveCount: liveCount,
     visibleCount: tableRows.length
   })
