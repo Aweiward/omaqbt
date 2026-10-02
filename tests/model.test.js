@@ -752,7 +752,7 @@ test("makeActionItem shapes a widget item by default", () => {
   for (const opts of [undefined, null, {}, { origin: "widget" }, { origin: "Window" }, { origin: 1 }]) {
     const item = Model.makeActionItem(3, ["qbt", "start", "a"], "Starting…", opts);
     assert.deepEqual(item, {
-      cmd: ["qbt", "start", "a"], status: "Starting…", ticket: 3, origin: "widget", hashes: []
+      cmd: ["qbt", "start", "a"], status: "Starting…", ticket: 3, origin: "widget", hashes: [], stdin: null
     }, JSON.stringify(opts));
   }
 });
@@ -766,6 +766,15 @@ test("makeActionItem keeps the window origin and copies hashes", () => {
   assert.deepEqual(item.hashes, ["a", "b"]);
   hashes.push("c");
   assert.deepEqual(item.hashes, ["a", "b"]);
+});
+
+test("makeActionItem keeps a string stdin and nulls anything else", () => {
+  const url = "https://t.example/announce?passkey=abc";
+  const item = Model.makeActionItem(2, ["qbt", "tracker-add", "h", "--stdin"], "", {}, url);
+  assert.equal(item.stdin, url);
+  assert.deepEqual(item.cmd, ["qbt", "tracker-add", "h", "--stdin"]);
+  assert.equal(Model.makeActionItem(2, ["x"], "", {}, "").stdin, "");
+  for (const v of [undefined, null, 1, {}, ["a"]]) assert.equal(Model.makeActionItem(2, ["x"], "", {}, v).stdin, null, JSON.stringify(v));
 });
 
 test("makeActionItem drops empty hashes and ignores a non-array", () => {

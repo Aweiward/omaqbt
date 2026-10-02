@@ -34,6 +34,13 @@ TestCase {
     p.exited(code, 0)
   }
 
+  // True when no element of argv carries a URL, a magnet or a passkey.
+  function noSecretIn(argv) {
+    for (var i = 0; i < argv.length; i++) {
+      if (/:\/\/|magnet:|passkey|\.torrent/i.test(String(argv[i]))) return false
+    }
+    return true
+  }
   function hx(i) { var s = i.toString(16); while (s.length < 40) s = "0" + s; return s }
   // actionProcess: the Process whose current command's verb is `verb`.
   function actionProc(svc, verb) {
@@ -612,7 +619,11 @@ TestCase {
       if (o && o.command && o.command[0] === "wl-copy") p = o
     }
     verify(p !== null)
-    compare(p.command, ["wl-copy", "--", "https://tracker.example/announce?passkey=abc123"])
+    compare(p.command, ["wl-copy"], "the text never rides on wl-copy's argv")
+    compare(p.stdinEnabled, true)
+    p.started()
+    compare(p.writes, ["https://tracker.example/announce?passkey=abc123"], "the text goes on stdin")
+    compare(p.stdinEnabled, false, "stdin closed after the one write")
     // copyProcess has no stdout collector (only stderr), unlike finish()'s
     // assumption -- end it directly.
     p.running = false
@@ -631,18 +642,24 @@ TestCase {
     var h = hh("a")
     var url = "https://tracker.example/announce?passkey=abc123&x=1"
     var cases = [
-      { call: function(opts) { return svc.reannounce(h, opts) }, argv: ["reannounce", h] },
-      { call: function(opts) { return svc.addTracker(h, url, opts) }, argv: ["tracker-add", h, url] },
-      { call: function(opts) { return svc.editTracker(h, url, "udp://t2.example:1337/announce", opts) }, argv: ["tracker-edit", h, url, "udp://t2.example:1337/announce"] },
-      { call: function(opts) { return svc.removeTracker(h, url, opts) }, argv: ["tracker-remove", h, url] },
-      { call: function(opts) { return svc.banPeer("203.0.113.42:6881", opts) }, argv: ["ban-peer", "203.0.113.42:6881"] },
-      { call: function(opts) { return svc.fetchMetadata(h, opts) }, argv: ["fetch-metadata", h] }
+      { call: function(opts) { return svc.reannounce(h, opts) }, argv: ["reannounce", h], stdin: null },
+      { call: function(opts) { return svc.addTracker(h, url, opts) }, argv: ["tracker-add", h, "--stdin"], stdin: url },
+      { call: function(opts) { return svc.editTracker(h, url, "udp://t2.example:1337/announce", opts) }, argv: ["tracker-edit", h, "--stdin"], stdin: url + "\u0000udp://t2.example:1337/announce" },
+      { call: function(opts) { return svc.removeTracker(h, url, opts) }, argv: ["tracker-remove", h, "--stdin"], stdin: url },
+      { call: function(opts) { return svc.banPeer("203.0.113.42:6881", opts) }, argv: ["ban-peer", "203.0.113.42:6881"], stdin: null },
+      { call: function(opts) { return svc.fetchMetadata(h, opts) }, argv: ["fetch-metadata", h], stdin: null }
     ]
     svc.actionStatus = "widget status"
     for (var i = 0; i < cases.length; i++) {
+      p.writes = []
       var t = cases[i].call({ origin: "window", hashes: [h] })
       verify(t > 0, cases[i].argv[0] + " returns a ticket")
       compare(p.command, [svc.helperPath].concat(cases[i].argv))
+      compare(noSecretIn(p.command), true, cases[i].argv[0] + ": no URL on argv")
+      compare(p.stdinEnabled, cases[i].stdin !== null, cases[i].argv[0] + ": stdin open exactly when it carries a value")
+      p.started()
+      compare(p.writes, cases[i].stdin === null ? [] : [cases[i].stdin], cases[i].argv[0] + ": the exact stdin")
+      compare(p.stdinEnabled, false, cases[i].argv[0] + ": stdin closed after the one write")
       compare(svc.actionStatus, "widget status", "a window action leaves the widget's status alone")
       finish(p, 0, "{\"ok\":true}", "")
       compare(spy.count, i + 1)
@@ -673,6 +690,121 @@ TestCase {
     compare(svc.fetchMetadata("", w), 0)
     compare(p.running, false, "nothing ran")
     compare(svc.currentAction, null)
+  }
+
+  // --- secrets ride on stdin, never argv (/proc/<pid>/cmdline) --------------
+
+  function test_add_target_puts_the_target_on_stdin_and_flags_on_argv() {
+    var o = idleService(), svc = o.svc, p = o.p
+    var magnet = "magnet:?xt=urn:btih:" + hh("a") + "&tr=https%3A%2F%2Ft.example%2Fannounce%3Fpasskey%3Dabc123"
+    var cases = [
+      { call: function() { return svc.addTarget("  " + magnet + "  ", false, "", { origin: "window" }) }, argv: ["add", "--stdin"], stdin: magnet },
+      { call: function() { return svc.addTarget("https://t.example/dl/1.torrent?passkey=abc123", true, " /dl/x ", { origin: "window" }) }, argv: ["add", "--stopped", "--savepath", "/dl/x", "--stdin"], stdin: "https://t.example/dl/1.torrent?passkey=abc123" },
+      { call: function() { return svc.addTarget("/home/u/Downloads/a.torrent", false, "/dl/y", { origin: "window" }) }, argv: ["add", "--savepath", "/dl/y", "--stdin"], stdin: "/home/u/Downloads/a.torrent" },
+      { call: function() { return svc.addUrl(magnet) }, argv: ["add", "--stdin"], stdin: magnet }
+    ]
+    for (var i = 0; i < cases.length; i++) {
+      p.writes = []
+      var t = cases[i].call()
+      verify(t > 0, "case " + i + " returns a ticket")
+      compare(p.command, [svc.helperPath].concat(cases[i].argv), "case " + i + ": flags on argv, the target off it")
+      compare(noSecretIn(p.command), true, "case " + i + ": no URL or magnet on argv")
+      compare(noSecretIn(svc.currentAction.cmd), true, "case " + i + ": the queued item's cmd holds no secret")
+      compare(p.stdinEnabled, true)
+      p.started()
+      compare(p.writes, [cases[i].stdin], "case " + i + ": the exact stdin")
+      compare(p.stdinEnabled, false, "case " + i + ": stdin closed after the one write")
+      p.started()
+      compare(p.writes.length, 1, "case " + i + ": a second started() writes nothing more")
+      finish(p, 0, "", "")
+      compare(p.stdinEnabled, false)
+    }
+  }
+
+  function test_a_queued_stdin_action_writes_its_own_stdin() {
+    var o = idleService(), svc = o.svc, p = o.p
+    var h = hh("a")
+    var a = "https://a.example/announce?passkey=AAA"
+    var b = "https://b.example/announce?passkey=BBB"
+    p.writes = []
+    svc.addTracker(h, a, { origin: "window", hashes: [h] })
+    svc.removeTracker(h, b, { origin: "window", hashes: [h] })
+    compare(svc.actionQueue.length, 1, "the second one waits")
+    p.started()
+    compare(p.writes, [a])
+    compare(p.stdinEnabled, false)
+    finish(p, 0, "", "")
+    compare(p.command, [svc.helperPath, "tracker-remove", h, "--stdin"], "the queued one runs next")
+    compare(p.stdinEnabled, true, "its stdin opens for its own write")
+    p.started()
+    compare(p.writes, [a, b], "it writes its own URL, not the first one's")
+    compare(p.stdinEnabled, false)
+    finish(p, 0, "", "")
+    // A plain action queued behind a stdin one opens no stdin.
+    p.writes = []
+    svc.addTracker(h, a, { origin: "window", hashes: [h] })
+    svc.reannounce(h, { origin: "window", hashes: [h] })
+    finish(p, 0, "", "")             // ends before its started(): nothing written
+    compare(p.command, [svc.helperPath, "reannounce", h])
+    compare(p.stdinEnabled, false, "no stdin for an action that carries none")
+    p.started()
+    compare(p.writes, [], "the first action's URL is never written to the next one")
+    finish(p, 0, "", "")
+  }
+
+  function test_a_stdin_action_that_never_starts_closes_stdin() {
+    var o = idleService(), svc = o.svc, p = o.p
+    var spy = spyOn(svc)
+    var h = hh("a")
+    p.writes = []
+    var t = svc.addTracker(h, "https://a.example/announce?passkey=AAA", { origin: "window", hashes: [h] })
+    compare(p.stdinEnabled, true)
+    p.running = false                      // no started, no exited
+    tryCompare(spy, "count", 1)
+    compare(spy.signalArguments[0][0], t)
+    compare(spy.signalArguments[0][1], false)
+    compare(spy.signalArguments[0][2], "Could not run the qbt helper", "the error carries no URL")
+    compare(p.stdinEnabled, false, "a failed start closes stdin")
+    compare(p.writes, [])
+    compare(svc.currentAction, null)
+  }
+
+  function test_a_failed_start_hands_the_next_queued_action_its_own_stdin() {
+    var o = idleService(), svc = o.svc, p = o.p
+    var spy = spyOn(svc)
+    var h = hh("a")
+    var b = "https://b.example/announce?passkey=BBB"
+    p.writes = []
+    svc.addTracker(h, "https://a.example/announce?passkey=AAA", { origin: "window", hashes: [h] })
+    p.running = false
+    svc.addTracker(h, b, { origin: "window", hashes: [h] })
+    tryCompare(spy, "count", 1)
+    compare(p.running, true, "the queued one starts")
+    compare(p.command, [svc.helperPath, "tracker-add", h, "--stdin"])
+    compare(p.stdinEnabled, true)
+    p.started()
+    compare(p.writes, [b])
+    compare(p.stdinEnabled, false)
+    finish(p, 0, "", "")
+  }
+
+  function test_copy_magnet_puts_the_magnet_on_stdin() {
+    var svc = createTemporaryObject(serviceComp, tc)
+    var t = svc.copyMagnet({ hash: hh("a"), magnetUri: "magnet:?xt=urn:btih:" + hh("a") + "&tr=https%3A%2F%2Ft.example%2F%3Fpasskey%3Dabc" }, { origin: "window", hashes: [hh("a")] })
+    verify(t > 0)
+    var p = null
+    for (var i = 0; i < svc.data.length; i++) {
+      var o = svc.data[i]
+      if (o && o.command && o.command[0] === "wl-copy") p = o
+    }
+    verify(p !== null)
+    compare(p.command, ["wl-copy"])
+    p.started()
+    compare(p.writes.length, 1)
+    compare(p.writes[0].indexOf("magnet:?xt=urn:btih:"), 0, "the magnet goes on stdin")
+    compare(p.stdinEnabled, false)
+    p.running = false
+    p.exited(0, 0)
   }
 
   function test_inspector_helper_queues_behind_a_running_action() {
