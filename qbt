@@ -1702,8 +1702,9 @@ api_stdin_exec() {
   assert_local_base
   local method=$1 path=$2
   ensure_state_dir "$(dirname "$COOKIE_FILE")"
+  prepare_auth
   (umask 077; api_exec -sS -g --noproxy '*' --max-time 5 -X "$method" -b "$COOKIE_FILE" -c "$COOKIE_FILE" \
-    -H "Content-Type: application/x-www-form-urlencoded" --data-binary @- "$(base_url)$path")
+    "${AUTH_ARGS[@]}" -H "Content-Type: application/x-www-form-urlencoded" --data-binary @- "$(base_url)$path")
 }
 
 # $1 the call's status, $2 its output: the body into API_BODY, or the
