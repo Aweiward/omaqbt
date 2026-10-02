@@ -486,6 +486,7 @@ Scope {
     if (!item || item.stdin === null || item.written === true) return
     item.written = true
     actionProcess.write(item.stdin)
+    item.stdin = null
     actionProcess.stdinEnabled = false
   }
 
@@ -1210,6 +1211,7 @@ Scope {
     if (!item || item.stdin === null || item.stdin === undefined || item.written === true) return
     item.written = true
     p.write(item.stdin)
+    item.stdin = null
     p.stdinEnabled = false
   }
 

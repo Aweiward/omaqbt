@@ -111,6 +111,25 @@ TestCase {
     finish(jobs, 0, "{\"ok\":true}")
   }
 
+  // A search add that never starts hands the queued one its own link, and
+  // writes nothing of its own.
+  function test_a_failed_start_hands_the_next_search_add_its_own_link() {
+    var svc = createTemporaryObject(serviceComp, tc)
+    var jobs = lane(svc, "jobs")
+    var first = "https://tracker.example/download.php?passkey=FIRSTsecret"
+    var second = "https://tracker.example/download.php?passkey=SECONDsecret"
+    svc.searchAdd(first, "")
+    svc.searchAdd(second, "")
+    jobs.running = false
+    wait(0)
+    verify(jobs.running, "the queued add started")
+    verify(jobs.stdinEnabled, "with stdin open")
+    jobs.started()
+    compare(jobs.writes, [second])
+    verify(!jobs.stdinEnabled)
+    finish(jobs, 0, "{\"ok\":true,\"via\":\"add\"}")
+  }
+
   function test_every_verb_has_its_argv() {
     var svc = createTemporaryObject(serviceComp, tc)
     var jobs = lane(svc, "jobs"), plug = lane(svc, "plugins")

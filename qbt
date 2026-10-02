@@ -54,13 +54,19 @@ uri_encode() {
 # Reads stdin to EOF into STDIN_FIELDS, split on NUL: no trailing NUL (a
 # trailing one is one more, empty, field). Anything but exactly $1 fields,
 # or an empty one, dies with the usage line $2. How the widget hands qbt a
-# value that may carry a passkey (`--stdin`), off every argv.
+# value that may carry a passkey (`--stdin`), off every argv. A stdin that
+# never ends (Quickshell leaves the pipe open when nothing is written) is
+# given up after 10 s, so a mistake can't hold the widget's queue forever.
 stdin_fields() {
-  local want=$1 usage=$2 f="" v
+  local want=$1 usage=$2 f="" v rc
   STDIN_FIELDS=()
-  while IFS= read -r -d '' f; do
+  while :; do
+    f="" rc=0
+    IFS= read -t 10 -r -d '' f || rc=$?
+    (( rc == 0 )) || break
     STDIN_FIELDS+=("$f")
   done
+  (( rc > 128 )) && die "$usage"
   STDIN_FIELDS+=("$f")
   (( ${#STDIN_FIELDS[@]} == want )) || die "$usage"
   for v in "${STDIN_FIELDS[@]}"; do
@@ -3049,7 +3055,8 @@ search_stop_delete() {
 # plugin goes through search/downloadTorrent. via:"plugin" only means the
 # request was accepted (downloadTorrent answers an empty 200 at once).
 search_add() {
-  local usage="usage: qbt search add <link> [<plugin>] | --stdin [<plugin>] (the link on stdin)"
+  # --stdin (the link on stdin, in place of <link>) is how the widget calls it.
+  local usage="usage: qbt search add <link> [<plugin>]"
   [[ $# -eq 1 || $# -eq 2 ]] || die "$usage"
   local link=$1 plugin=${2:-}
   # A private plugin's link can carry a passkey: the widget sends it here.
