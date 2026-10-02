@@ -370,9 +370,10 @@ function filterChip(layout, filter) {
 // --- States ---------------------------------------------------------------
 
 // tableState(s) -> what the center pane shows:
-// "loading" | "gui" | "notInstalled" | "daemon" | "api" | "empty" |
+// "loading" | "gui" | "notInstalled" | "daemon" | "auth" | "api" | "empty" |
 // "noMatch" | "rows". s = {loading, installed, daemon, lockHolder, api,
-// liveCount, visibleCount}. The Qt GUI holding the profile wins over
+// authRefused, liveCount, visibleCount}. "auth": the daemon answered 403 to
+// OmaqBT's API key, which a restart (start-daemon) repairs. The Qt GUI holding the profile wins over
 // "daemon down", because starting the daemon can't work until it quits.
 function tableState(s) {
   var st = s || {};
@@ -380,6 +381,7 @@ function tableState(s) {
   if (st.lockHolder === "gui") return "gui";
   if (st.installed !== true) return "notInstalled";
   if (st.daemon !== true) return "daemon";
+  if (st.authRefused === true) return "auth";
   if (st.api !== true) return "api";
   if (!(st.liveCount > 0)) return "empty";
   if (!(st.visibleCount > 0)) return "noMatch";
@@ -442,6 +444,14 @@ function stateCopy(state, ctx) {
       body: "Your library and settings are untouched. Start the daemon to see them.",
       // No ":" "Commands" key yet: the command palette arrives in slice 1b.
       keys: [{ key: "Enter", label: "Start daemon" }]
+    };
+  }
+  if (state === "auth") {
+    return {
+      title: "qBittorrent refused OmaqBT's API key",
+      tone: "fg",
+      body: "The daemon is running but turned OmaqBT's key away. Restarting it re-reads qBittorrent.conf, and writes a key there if it has none.",
+      keys: [{ key: "Enter", label: "Restart daemon" }]
     };
   }
   if (state === "api") {
@@ -1142,7 +1152,7 @@ function settingFailure(label, error) {
 // Settings couldn't read preferences but qBittorrent is up (Ruling DO: the
 // down screen alone would blame the API), else "".
 function settingsReadNote(tableState, failed, error) {
-  if (failed !== true || ["gui", "notInstalled", "daemon", "api", "loading"].indexOf(tableState) !== -1) return "";
+  if (failed !== true || ["gui", "notInstalled", "daemon", "auth", "api", "loading"].indexOf(tableState) !== -1) return "";
   var e = String(error || "").trim();
   return e === "" ? "Couldn't read settings." : "Couldn't read settings: " + refusalDetail(e);
 }
@@ -1169,7 +1179,7 @@ function settingsSectionStep(sections, index, delta) {
 // api-down copy -- never a new screen. Its keys are the one that works in
 // Settings: Esc, back to the torrents (whose screen has the fix).
 function settingsDownCopy(tableState) {
-  var blocking = ["gui", "notInstalled", "daemon", "api"];
+  var blocking = ["gui", "notInstalled", "daemon", "auth", "api"];
   var c = stateCopy(blocking.indexOf(tableState) !== -1 ? tableState : "api");
   return { title: c.title, tone: c.tone, body: c.body, keys: [{ key: "Esc", label: "Back to torrents" }] };
 }

@@ -28,6 +28,13 @@ Scope {
   property real upSpeed: 0
   property string vpnIface: ""
   property string bindIface: ""
+  // The probe's view of qBittorrent.conf: "ok" once the localhost bypass is
+  // off and an API key is set, else "bypass" or "nokey" (secure-daemon fixes
+  // both). authRefused: qBittorrent answered an API call with 403.
+  property string auth: "ok"
+  property bool authRefused: false
+  // Date.now() of the last automatic secure-daemon run (0: none yet).
+  property real secureDaemonAt: 0
   property var torrents: []
   // Status's top-level category and tag names (zero-count ones included),
   // for the window's filter pane.
@@ -199,7 +206,7 @@ Scope {
   readonly property bool ready: installed && daemon && lockHolder !== "gui" && api
   readonly property bool transferring: Model.anyActive(torrents, magnetPendingHashes)
   readonly property bool vpnUnbound: Model.vpnUnbound({ daemon: daemon, api: api, vpnIface: vpnIface, bindIface: bindIface })
-  readonly property bool warning: !installed || !daemon || lockHolder === "gui" || !api || vpnUnbound
+  readonly property bool warning: !installed || !daemon || lockHolder === "gui" || !api || vpnUnbound || authRefused
 
   // Emitted after every queued action ends, once the queue has moved on.
   // error is sanitized and empty on success.
@@ -285,6 +292,8 @@ Scope {
     upSpeed = parsed.upSpeed
     vpnIface = parsed.vpnIface
     bindIface = parsed.bindIface
+    auth = parsed.auth
+    authRefused = parsed.authRefused
     torrents = parsed.torrents
     categories = Array.isArray(parsed.categories) ? parsed.categories : []
     categoryPaths = (parsed.categoryPaths && typeof parsed.categoryPaths === "object") ? parsed.categoryPaths : ({})
@@ -296,6 +305,18 @@ Scope {
     lastError = Model.nextStatusError(parsed, lastError)
     if (finished.length > 0) notify(Model.completionText(finished))
     pruneInspectByKey(torrents)
+    maybeSecureDaemon()
+  }
+
+  // A daemon set up before the API-key fix still lets every local account
+  // in. secure-daemon turns the bypass off and sets a key (one restart), at
+  // most once a minute. The bar widget's fallback Service may try too; qbt's
+  // lock makes the second run a no-op.
+  function maybeSecureDaemon() {
+    if (!installed || !daemon || lockHolder === "gui" || auth === "ok") return
+    if (secureDaemonAt > 0 && Date.now() - secureDaemonAt < 60000) return
+    secureDaemonAt = Date.now()
+    runAction([helperPath, "secure-daemon"], "Securing qBittorrent…")
   }
 
   // Drops any inspectByKey entry whose hash has left torrents (bounded

@@ -29,8 +29,14 @@ COOKIE_FILE="${QBT_COOKIE_FILE:-$(dirname "$RID_FILE")/cookies}"
 UNIT_DIR="$HOME_DIR/.config/systemd/user"
 UNIT_FILE="$UNIT_DIR/omaqbt-nox.service"
 
+# The one refusal message for a 403 (qBittorrent turned the API key away),
+# and the shape of a key qBittorrent 5.2.3 accepts (Utils::APIKey::isValid:
+# "qbt_" plus 28 characters).
+API_KEY_REFUSED="qBittorrent refused OmaqBT's API key"
+API_KEY_PATTERN='^qbt_[A-Za-z0-9]{28}$'
+
 sanitize() {
-  sed -E 's/SID=[^;[:space:]]*/SID=<redacted>/gi; s/password=[^;[:space:]]*/password=<redacted>/gi'
+  sed -E 's/SID=[^;[:space:]]*/SID=<redacted>/gi; s/password=[^;[:space:]]*/password=<redacted>/gi; s/qbt_[A-Za-z0-9]{28}/qbt_<redacted>/g'
 }
 
 die() {
@@ -189,6 +195,110 @@ base_url() {
   printf 'http://127.0.0.1:%s' "$(read_port)"
 }
 
+# The [Preferences] value of a qBittorrent.conf key ("" when absent). The key
+# reaches awk through the environment: -v would read "WebUI\APIKey"'s
+# backslash as an escape.
+conf_pref() {
+  [[ -f $CONF ]] || return 0
+  local val
+  # QSettings trims blanks around the key and the value, so a hand-edited
+  # "WebUI\LocalHostAuth = 0" counts too.
+  val=$(PREF_KEY=$1 awk '
+    /^[ \t]*\[/ { sect = ($0 ~ /^[ \t]*\[Preferences\][ \t\r]*$/); next }
+    sect {
+      line = $0; sub(/^[ \t]+/, "", line)
+      if (index(line, ENVIRON["PREF_KEY"]) != 1) next
+      rest = substr(line, length(ENVIRON["PREF_KEY"]) + 1)
+      if (rest !~ /^[ \t]*=/) next
+      sub(/^[ \t]*=[ \t]*/, "", rest); sub(/[ \t\r]+$/, "", rest)
+      val = rest
+    }
+    END { printf "%s", val }' "$CONF" 2>/dev/null || true)
+  printf '%s' "${val%$'\r'}"
+}
+
+# qBittorrent 5.2.3's Web API key (WebUI\APIKey), when the conf holds a valid
+# one. OmaqBT signs every request with it: the localhost login bypass is off
+# (marketplace review, 2026-10-02), since loopback is shared by every local
+# account.
+api_key() {
+  local key LC_ALL=C
+  key=$(conf_pref 'WebUI\APIKey')
+  [[ $key =~ $API_KEY_PATTERN ]] && printf '%s' "$key"
+  return 0
+}
+
+# A fresh key in qBittorrent's own format and alphabet (no 0, 1, I, O, l, o),
+# from the OS CSPRNG. It comes back on stdout, never through an argv.
+generate_api_key() {
+  local key LC_ALL=C
+  key=$(python3 -c 'import secrets
+alphabet = "23456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz"
+print("qbt_" + "".join(secrets.choice(alphabet) for _ in range(28)), end="")') || true
+  [[ $key =~ $API_KEY_PATTERN ]] || die "cannot generate an API key"
+  printf '%s' "$key"
+}
+
+# qBittorrent rewrites its conf at 0644 on exit, key and all, so every probe
+# and every signed request puts a key-holding conf back to owner-only. Only
+# this user's own regular file; any failure is left to the next run.
+secure_conf_mode() {
+  [[ -f $CONF && ! -L $CONF && -O $CONF && -n $(api_key) ]] || return 0
+  [[ $(stat -c '%a' "$CONF" 2>/dev/null) == 600 ]] || chmod 600 "$CONF" 2>/dev/null || true
+}
+
+# Sets AUTH_ARGS to curl's arguments for the API key: a header file, never the
+# key itself, so it stays off every process's argv (/proc/*/cmdline is world
+# readable). The file lives in the owner-only state dir and is replaced
+# atomically. A process substitution can't stand in for it: its fd is closed
+# by the time curl runs. With no valid key nothing is sent, and qBittorrent
+# answers 403.
+AUTH_ARGS=()
+prepare_auth() {
+  AUTH_ARGS=()
+  local dir file key line tmp
+  dir=$(dirname "$COOKIE_FILE")
+  ensure_state_dir "$dir"
+  file="$dir/auth-header"
+  key=$(api_key)
+  if [[ -z $key ]]; then
+    rm -f "$file"
+    return 0
+  fi
+  secure_conf_mode
+  line="Authorization: Bearer $key"
+  if [[ -L $file || ! -f $file || $(<"$file") != "$line" ]]; then
+    tmp=$(umask 077; mktemp "$dir/.auth-header.XXXXXX") || die "cannot write the API key header"
+    printf '%s\n' "$line" >"$tmp"
+    mv -f "$tmp" "$file"
+  fi
+  AUTH_ARGS=(-H "@$file")
+}
+
+# "bypass" while the conf still skips the login for localhost (OmaqBT's old
+# setup, fixed by `qbt secure-daemon`), "nokey" without a valid API key, else
+# "ok". qBittorrent's defaults: LocalHostAuth on, the subnet whitelist off.
+# A conf value read the way QVariant::toBool reads a string: "", "0" and
+# "false" (any case) are false, anything else is true.
+conf_bool() {
+  local v=${1,,}
+  v=${v#\"}; v=${v%\"}
+  [[ -n $v && $v != 0 && $v != false ]]
+}
+
+auth_state() {
+  local lha wle
+  lha=$(conf_pref 'WebUI\LocalHostAuth')
+  wle=$(conf_pref 'WebUI\AuthSubnetWhitelistEnabled')
+  if { [[ -n $lha ]] && ! conf_bool "$lha"; } || conf_bool "$wle"; then
+    printf 'bypass'
+  elif [[ -z $(api_key) ]]; then
+    printf 'nokey'
+  else
+    printf 'ok'
+  fi
+}
+
 # The whole base must be http://127.0.0.1:<port>, optionally followed by a
 # path. Matching the full prefix (not a sed-extracted "host") is what stops
 # userinfo ("http://127.0.0.1:80@127.0.0.2:1"), a backslash
@@ -201,14 +311,16 @@ assert_local_base() {
     || die "refusing non-localhost host (base must be http://127.0.0.1:<port>)"
 }
 
+# Only this user's processes: another account's qBittorrent holds its own
+# profile, not ours.
 lock_holder() {
   if [[ -n ${QBT_LOCK:-} ]]; then
     printf '%s' "$QBT_LOCK"
     return
   fi
-  if pgrep -x qbittorrent >/dev/null 2>&1; then
+  if pgrep -u "$(id -u)" -x qbittorrent >/dev/null 2>&1; then
     printf 'gui'
-  elif pgrep -x qbittorrent-nox >/dev/null 2>&1; then
+  elif pgrep -u "$(id -u)" -x qbittorrent-nox >/dev/null 2>&1; then
     printf 'nox'
   else
     printf 'none'
@@ -238,7 +350,7 @@ is_daemon() {
     [[ $QBT_DAEMON == 1 ]]
     return
   fi
-  pgrep -x qbittorrent-nox >/dev/null 2>&1
+  pgrep -u "$(id -u)" -x qbittorrent-nox >/dev/null 2>&1
 }
 
 api_exec() {
@@ -260,7 +372,7 @@ api_exec() {
   # As the old $(cat "$tmp") did: trailing newlines go.
   while [[ $resp == *$'\n' ]]; do resp=${resp%$'\n'}; done
   if [[ $code == 403 ]]; then
-    die "localhost auth is required"
+    die "$API_KEY_REFUSED"
   fi
   # B1: torrents/add answers 202 (APIStatus::Async) when a source is a URL
   # qBittorrent must download first (an https .torrent). Only the add call
@@ -291,7 +403,8 @@ api() {
   local url
   url="$(base_url)$path"
   ensure_state_dir "$(dirname "$COOKIE_FILE")"
-  local args=(-sS -g --noproxy '*' --max-time 5 -X "$method" -b "$COOKIE_FILE" -c "$COOKIE_FILE" "$url")
+  prepare_auth
+  local args=(-sS -g --noproxy '*' --max-time 5 -X "$method" -b "$COOKIE_FILE" -c "$COOKIE_FILE" "${AUTH_ARGS[@]}" "$url")
   if [[ -n $body ]]; then
     args+=(-H "Content-Type: application/x-www-form-urlencoded" --data "$body")
   fi
@@ -302,11 +415,13 @@ api_form() {
   assert_local_base
   local method=$1 path=$2
   shift 2
-  api_exec -sS -g --noproxy '*' --max-time 30 -X "$method" "$(base_url)$path" "$@"
+  prepare_auth
+  api_exec -sS -g --noproxy '*' --max-time 30 -X "$method" "${AUTH_ARGS[@]}" "$(base_url)$path" "$@"
 }
 
 cmd_probe() {
   assert_local_base
+  secure_conf_mode
   ensure_state_dir "$(dirname "$RID_FILE")"
   ensure_state_dir "$(dirname "$COOKIE_FILE")"
   local installed=false daemon=false
@@ -327,7 +442,9 @@ cmd_probe() {
     --arg stateDir "$(dirname "$RID_FILE")" \
     --arg ridFile "$RID_FILE" \
     --arg cookieFile "$COOKIE_FILE" \
-    '{installed:$installed, daemon:$daemon, lockHolder:$lock, vpnIface:$vpnIface, base:$base, stateDir:$stateDir, ridFile:$ridFile, cookieFile:$cookieFile, pcre2grep:$pcre2grep}'
+    --arg conf "$CONF" \
+    --arg auth "$(auth_state)" \
+    '{installed:$installed, daemon:$daemon, lockHolder:$lock, vpnIface:$vpnIface, base:$base, stateDir:$stateDir, ridFile:$ridFile, cookieFile:$cookieFile, conf:$conf, auth:$auth, pcre2grep:$pcre2grep}'
 }
 
 # The lib/ directory next to this script (the python modules).
@@ -912,19 +1029,24 @@ cmd_prio() {
   printf '%s\n' '{"ok":true}'
 }
 
+# The value reaches python on stdin, never on argv or in the environment
+# (eng 4b D7): it may be the API key, and /proc/*/cmdline is world readable.
+# So the script goes in -c rather than on stdin.
 set_key() {
   local file=$1 key=$2 value=$3
   local section=${4:-Preferences}
-  mkdir -p "$(dirname "$file")"
-  touch "$file"
-  python3 - "$file" "$key" "$value" "$section" <<'PY'
-import sys
+  local script
+  (umask 077; mkdir -p "$(dirname "$file")")
+  IFS= read -r -d '' script <<'PY' || true
+import os, re, sys, tempfile
 from pathlib import Path
 
-path, key, value, section = Path(sys.argv[1]), sys.argv[2], sys.argv[3], sys.argv[4]
+path, key, section = Path(sys.argv[1]), sys.argv[2], sys.argv[3]
+value = sys.stdin.read()
 header = "[" + section + "]"
 lines = path.read_text().splitlines() if path.exists() else []
-lines = [ln for ln in lines if not ln.startswith(key + "=")]
+# QSettings trims blanks around the key, so " key = v" is the same key.
+lines = [ln for ln in lines if not re.match(r"[ \t]*" + re.escape(key) + r"[ \t]*=", ln)]
 out = []
 inserted = False
 if not any(ln.strip() == header for ln in lines):
@@ -939,8 +1061,20 @@ for ln in lines:
 if not inserted:
     out.append(header)
     out.append(f"{key}={value}")
-path.write_text("\n".join(out) + "\n")
+# Replaced in one rename, owner-only: a crash never leaves a truncated
+# conf, a reader never sees half of one, and the conf holds the API key.
+fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=".qBittorrent.conf.")
+try:
+    with os.fdopen(fd, "w") as f:
+        f.write("\n".join(out) + "\n")
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, path)
+except BaseException:
+    os.unlink(tmp)
+    raise
 PY
+  printf '%s' "$value" | python3 -c "$script" "$file" "$key" "$section"
 }
 
 bind_mullvad() {
@@ -992,35 +1126,105 @@ cmd_install() {
   printf '%s\n' '{"ok":true}'
 }
 
-cmd_start_daemon() {
-  local lock
-  lock=$(lock_holder)
-  if [[ $lock == gui ]]; then
+# Serializes start-daemon and secure-daemon: both Service instances (the
+# popup's and the window's) may ask to secure the daemon at once, and the
+# second must see the first one's conf, not restart nox again. The fd stays
+# open, so the lock holds until qbt exits.
+# With -n it returns 1 at once while another qbt holds the lock.
+take_daemon_lock() {
+  local dir
+  dir=$(dirname "$COOKIE_FILE")
+  ensure_state_dir "$dir"
+  exec 9>"$dir/secure.lock" || die "cannot open the daemon lock"
+  if [[ ${1:-} == -n ]]; then
+    flock -n 9
+    return
+  fi
+  flock -w 60 9 || die "another qbt is still setting up the daemon"
+}
+
+refuse_gui_lock() {
+  if [[ $(lock_holder) == gui ]]; then
     die "Close qBittorrent before starting the daemon."
   fi
+}
+
+# Writes OmaqBT's WebUI setup into a stopped daemon's conf and (re)starts it.
+# The login bypass stays off: loopback is shared by every local account, and
+# the Web API can install search plugins that run as this user. OmaqBT signs
+# in with the API key instead, and keeps a valid one so other tools that use
+# it go on working.
+setup_daemon() {
+  # Everything that can fail without touching the daemon goes first: the
+  # widget runs this on its own, and must never leave torrents stopped.
+  local conf_dir key=""
+  conf_dir=$(dirname "$CONF")
+  if [[ -e $CONF ]]; then
+    [[ -r $CONF && -w $CONF ]] || die "can't read and write $CONF"
+  elif [[ -e $conf_dir ]]; then
+    [[ -w $conf_dir ]] || die "can't write $conf_dir"
+  fi
+  if [[ -z $(api_key) ]]; then
+    key=$(generate_api_key)
+  fi
   # A running nox rewrites qBittorrent.conf from memory on exit, so
-  # write the WebUI keys only while it is stopped.
+  # write the WebUI keys only while it is stopped. Should anything below
+  # fail once it is, the EXIT trap starts it again.
   if [[ ${QBT_SKIP_SYSTEMCTL:-} != 1 ]] && is_daemon; then
+    trap 'systemctl --user start omaqbt-nox.service >/dev/null 2>&1 || true' EXIT
     systemctl --user stop omaqbt-nox.service || true
     local i
     for i in 1 2 3 4 5 6 7 8 9 10; do
       is_daemon || break
       sleep 0.2
     done
+    # A nox started outside omaqbt-nox.service doesn't stop, and would put
+    # its old settings back over these on its way out.
+    is_daemon && die "qbittorrent-nox is still running outside omaqbt-nox.service. Quit it, then try again."
   fi
   write_unit
   set_key "$CONF" 'WebUI\Enabled' 'true'
   set_key "$CONF" 'WebUI\Address' '127.0.0.1'
-  set_key "$CONF" 'WebUI\LocalHostAuth' 'false'
-  set_key "$CONF" 'WebUI\AuthSubnetWhitelistEnabled' 'true'
-  set_key "$CONF" 'WebUI\AuthSubnetWhitelist' '127.0.0.1, ::1'
+  set_key "$CONF" 'WebUI\LocalHostAuth' 'true'
+  set_key "$CONF" 'WebUI\AuthSubnetWhitelistEnabled' 'false'
+  [[ -z $key ]] || set_key "$CONF" 'WebUI\APIKey' "$key"
   ensure_port
   bind_mullvad
+  # The key is in there: owner-only, as qBittorrent keeps it on rewrite.
+  chmod 600 "$CONF"
+  chmod 700 "$conf_dir" 2>/dev/null || true
   if [[ ${QBT_SKIP_SYSTEMCTL:-} != 1 ]]; then
     systemctl --user daemon-reload
     systemctl --user enable --now omaqbt-nox.service
   fi
+  trap - EXIT
+}
+
+cmd_start_daemon() {
+  refuse_gui_lock
+  take_daemon_lock
+  setup_daemon
   printf '%s\n' '{"ok":true}'
+}
+
+# Moves an install off the old login bypass (or one without an API key) with
+# one restart, and does nothing on a conf that's already secured. The widget
+# runs it on its own, so it re-reads the conf under the lock.
+cmd_secure_daemon() {
+  refuse_gui_lock
+  is_installed || die "qbittorrent-nox is not installed."
+  # Another qbt holding the lock is already securing it (the other Service
+  # instance, or a click on Start daemon): nothing to do here.
+  if ! take_daemon_lock -n; then
+    printf '%s\n' '{"ok":true,"changed":false}'
+    return
+  fi
+  if [[ $(auth_state) == ok ]]; then
+    printf '%s\n' '{"ok":true,"changed":false}'
+    return
+  fi
+  setup_daemon
+  printf '%s\n' '{"ok":true,"changed":true}'
 }
 
 cmd_stop_daemon() {
@@ -1574,8 +1778,9 @@ api_stdin_exec() {
   assert_local_base
   local method=$1 path=$2
   ensure_state_dir "$(dirname "$COOKIE_FILE")"
+  prepare_auth
   (umask 077; api_exec -sS -g --noproxy '*' --max-time 5 -X "$method" -b "$COOKIE_FILE" -c "$COOKIE_FILE" \
-    -H "Content-Type: application/x-www-form-urlencoded" --data-binary @- "$(base_url)$path")
+    "${AUTH_ARGS[@]}" -H "Content-Type: application/x-www-form-urlencoded" --data-binary @- "$(base_url)$path")
 }
 
 # $1 the call's status, $2 its output: the body into API_BODY, or the
@@ -1589,8 +1794,8 @@ api_try_result() {
   fi
   if [[ $out =~ \(HTTP\ ([[:digit:]]{3})\) ]]; then
     API_FAIL="HTTP ${BASH_REMATCH[1]}"
-  elif [[ $out == *"localhost auth is required"* ]]; then
-    API_FAIL="localhost auth is required"
+  elif [[ $out == *"$API_KEY_REFUSED"* ]]; then
+    API_FAIL="$API_KEY_REFUSED"
   else
     API_FAIL="couldn't reach qBittorrent"
   fi
@@ -2010,13 +2215,16 @@ PREF_LOCKED_VPN=(
   current_interface_name
 )
 # The WebUI OmaqBT itself talks to: "OmaqBT needs this as it is." The two
-# custom-header keys are eng 4b D8: 5.2.3 adds the headers to every WebUI
-# reply unfiltered (appcontroller.cpp:953), and a bad one cuts qbt and the
-# sidecar off from qBittorrent.
+# login-bypass switches stay off: loopback is shared by every local account
+# (marketplace review, 2026-10-02). The two custom-header keys are eng 4b
+# D8: 5.2.3 adds the headers to every WebUI reply unfiltered
+# (appcontroller.cpp:953), and a bad one cuts qbt and the sidecar off from
+# qBittorrent.
 PREF_LOCKED_WEBUI=(
   web_ui_address
   web_ui_port
   bypass_local_auth
+  bypass_auth_subnet_whitelist_enabled
   use_https
   'web_ui_https_*'
   web_ui_host_header_validation_enabled
@@ -2291,15 +2499,16 @@ utf8_exact() {
 api_stdin() {
   local method=$1 path=$2
   ensure_state_dir "$(dirname "$COOKIE_FILE")"
+  prepare_auth
   (umask 077; curl -sS -g --noproxy '*' --max-time 5 -o /dev/null -w '%{http_code}' -X "$method" \
-    -b "$COOKIE_FILE" -c "$COOKIE_FILE" -H "Content-Type: application/x-www-form-urlencoded" \
+    -b "$COOKIE_FILE" -c "$COOKIE_FILE" "${AUTH_ARGS[@]}" -H "Content-Type: application/x-www-form-urlencoded" \
     --data-binary @- "$(base_url)$path" 2>/dev/null) || true
 }
 
 # api_try's failure reason for an api_stdin status.
 api_stdin_fail() {
   if [[ $1 == 403 ]]; then
-    printf 'localhost auth is required'
+    printf '%s' "$API_KEY_REFUSED"
   elif [[ $1 =~ ^[[:digit:]]{3}$ && $1 != 000 ]]; then
     printf 'HTTP %s' "$1"
   else
@@ -3047,8 +3256,9 @@ rss_post() {
   local path=$1 accept_202=${2:-0} out code resp
   assert_local_base
   ensure_state_dir "$(dirname "$COOKIE_FILE")"
+  prepare_auth
   out=$(umask 077; curl -sS -g --noproxy '*' --max-time 5 -w '\n%{http_code}' -X POST \
-    -b "$COOKIE_FILE" -c "$COOKIE_FILE" -H "Content-Type: application/x-www-form-urlencoded" \
+    -b "$COOKIE_FILE" -c "$COOKIE_FILE" "${AUTH_ARGS[@]}" -H "Content-Type: application/x-www-form-urlencoded" \
     --data-binary @- "$(base_url)$path" 2>/dev/null) || true
   if [[ $out == *$'\n'* ]]; then
     code=${out##*$'\n'}
@@ -3063,7 +3273,7 @@ rss_post() {
   case $code in
     200|204) return 0 ;;
     409) RSS_409=$resp API_FAIL="HTTP 409" ;;
-    403) API_FAIL="localhost auth is required" ;;
+    403) API_FAIL="$API_KEY_REFUSED" ;;
     000) API_FAIL="couldn't reach qBittorrent" ;;
     *) API_FAIL="HTTP $code" ;;
   esac
@@ -3369,8 +3579,9 @@ rss_get() {
   local path=$1 out code
   assert_local_base
   ensure_state_dir "$(dirname "$COOKIE_FILE")"
+  prepare_auth
   out=$(umask 077; curl -sS -g --noproxy '*' --max-time 5 -w '\n%{http_code}' -G \
-    -b "$COOKIE_FILE" -c "$COOKIE_FILE" --data-binary @- "$(base_url)$path" 2>/dev/null) || true
+    -b "$COOKIE_FILE" -c "$COOKIE_FILE" "${AUTH_ARGS[@]}" --data-binary @- "$(base_url)$path" 2>/dev/null) || true
   API_BODY="" API_FAIL=""
   if [[ $out == *$'\n'* ]]; then
     code=${out##*$'\n'}
@@ -3381,7 +3592,7 @@ rss_get() {
   [[ $code =~ ^[[:digit:]]{3}$ ]] || code=000
   case $code in
     200) return 0 ;;
-    403) API_FAIL="localhost auth is required" ;;
+    403) API_FAIL="$API_KEY_REFUSED" ;;
     000) API_FAIL="couldn't reach qBittorrent" ;;
     *) API_FAIL="HTTP $code" ;;
   esac
@@ -3622,6 +3833,7 @@ case ${1:-} in
   share-limits) shift; cmd_share_limits "$@" ;;
   install) shift; cmd_install "$@" ;;
   start-daemon) shift; cmd_start_daemon "$@" ;;
+  secure-daemon) shift; cmd_secure_daemon "$@" ;;
   stop-daemon) shift; cmd_stop_daemon "$@" ;;
   category-add) shift; cmd_category_add "$@" ;;
   category-path) shift; cmd_category_path "$@" ;;
@@ -3647,5 +3859,5 @@ case ${1:-} in
   magnet-pending-drop) shift; cmd_magnet_pending_drop "$@" ;;
   magnet-install-handler) shift; cmd_magnet_install_handler "$@" ;;
   magnet-uninstall-handler) shift; cmd_magnet_uninstall_handler "$@" ;;
-  *) die "usage: qbt status|probe|add|start|stop|recheck|set-location|delete|reannounce|tracker-add|tracker-edit|tracker-remove|ban-peer|fetch-metadata|files|prio|turtle|limit|sequential|first-last|sharelimit|share-limits|category-add|category-path|category-remove|category-rename|set-category|tag-add|tag-remove|tag-rename|tags|prefs|pref-set|ban-list|search|search-plugin|rss|install|start-daemon|stop-daemon|magnet-paths|magnet-inbox|magnet-drain|magnet-pending-list|magnet-pending-drop|magnet-install-handler|magnet-uninstall-handler" ;;
+  *) die "usage: qbt status|probe|add|start|stop|recheck|set-location|delete|reannounce|tracker-add|tracker-edit|tracker-remove|ban-peer|fetch-metadata|files|prio|turtle|limit|sequential|first-last|sharelimit|share-limits|category-add|category-path|category-remove|category-rename|set-category|tag-add|tag-remove|tag-rename|tags|prefs|pref-set|ban-list|search|search-plugin|rss|install|start-daemon|secure-daemon|stop-daemon|magnet-paths|magnet-inbox|magnet-drain|magnet-pending-list|magnet-pending-drop|magnet-install-handler|magnet-uninstall-handler" ;;
 esac

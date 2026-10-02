@@ -425,6 +425,80 @@ TestCase {
     compare(svc.shareDefaults, { ratio: -1, seedingTime: -1, action: "Stop" })
   }
 
+  // --- secure-daemon (the API-key fix) -------------------------------------
+
+  function authStatus(over) {
+    var s = { installed: true, daemon: true, lockHolder: "nox", api: true, auth: "bypass", torrents: [] }
+    for (var k in over) s[k] = over[k]
+    return JSON.stringify(s)
+  }
+
+  function test_status_carries_auth_and_auth_refused() {
+    var svc = createTemporaryObject(serviceComp, tc)
+    compare(svc.auth, "ok")
+    compare(svc.authRefused, false)
+    svc.applyStatus(authStatus({ daemon: false, auth: "nokey", authRefused: true }))
+    compare(svc.auth, "nokey")
+    compare(svc.authRefused, true)
+    svc.applyStatus(JSON.stringify({ torrents: [] }))
+    compare(svc.auth, "ok", "a status without auth reads as ok")
+    compare(svc.authRefused, false)
+  }
+
+  function test_auth_refused_raises_the_bar_warning() {
+    var svc = createTemporaryObject(serviceComp, tc)
+    svc.applyStatus(authStatus({ auth: "ok" }))
+    compare(svc.warning, false, "daemon and api up, key accepted")
+    svc.applyStatus(authStatus({ auth: "ok", authRefused: true }))
+    compare(svc.warning, true, "a refused key warns though daemon and api are up")
+    svc.applyStatus(authStatus({ auth: "ok", authRefused: false }))
+    compare(svc.warning, false, "clearing authRefused lowers it")
+  }
+
+  function test_unsecured_daemon_runs_secure_daemon_once_per_minute() {
+    var o = idleService(), svc = o.svc, p = o.p
+    var spy = spyOn(svc)
+    svc.applyStatus(authStatus({}))
+    compare(actionProc(svc, "secure-daemon"), p, "a bypass conf queues secure-daemon")
+    compare(p.command.length, 2)
+    compare(svc.actionStatus, "Securing qBittorrent…")
+    svc.applyStatus(authStatus({}))
+    compare(svc.actionQueue.length, 0, "a status tick while it runs doesn't queue another")
+    finish(p, 0, "{\"ok\":true,\"changed\":true}", "")
+    compare(spy.count, 1)
+    compare(spy.signalArguments[0][1], true)
+    compare(svc.actionStatus, "")
+    svc.applyStatus(authStatus({ auth: "nokey" }))
+    compare(actionProc(svc, "secure-daemon"), null, "not again within 60 s")
+    compare(svc.actionQueue.length, 0)
+    svc.secureDaemonAt = Date.now() - 61000
+    svc.applyStatus(authStatus({ auth: "nokey" }))
+    compare(actionProc(svc, "secure-daemon"), p, "runs again once 60 s have passed")
+    finish(p, 0, "", "")
+  }
+
+  function test_secure_daemon_failure_shows_like_other_actions() {
+    var o = idleService(), svc = o.svc, p = o.p
+    svc.applyStatus(authStatus({}))
+    compare(actionProc(svc, "secure-daemon"), p)
+    finish(p, 1, "", "Close qBittorrent before starting the daemon")
+    compare(svc.actionStatus, "")
+    compare(svc.lastError, "Close qBittorrent before starting the daemon")
+  }
+
+  function test_secure_daemon_skipped_unless_installed_daemon_up_and_not_gui() {
+    var o = idleService(), svc = o.svc
+    svc.applyStatus(authStatus({ auth: "ok" }))
+    svc.applyStatus(authStatus({ daemon: false }))
+    svc.applyStatus(authStatus({ installed: false, daemon: false }))
+    svc.applyStatus(authStatus({ lockHolder: "gui" }))
+    svc.applyStatus(authStatus({ auth: "ok", authRefused: true }))
+    compare(actionProc(svc, "secure-daemon"), null)
+    compare(svc.currentAction, null)
+    compare(svc.actionQueue.length, 0)
+    compare(svc.secureDaemonAt, 0, "no skipped status used up the minute")
+  }
+
   // --- watch ------------------------------------------------------------
 
   function test_watch_sends_only_when_up_and_is_resent_on_up() {

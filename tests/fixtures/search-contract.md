@@ -41,7 +41,7 @@ Both follow `qbt`'s existing conventions:
 - Response bodies never touch disk: pipe through `printf | jq`.
 - Arguments are checked before any request.
 
-In the sentences, `<why>` is `qbt`'s `API_FAIL`: "HTTP n", "localhost auth is required" or "couldn't reach qBittorrent". A bare `qbt search` with no known subcommand prints "usage: qbt search start|stop|delete|add".
+In the sentences, `<why>` is `qbt`'s `API_FAIL`: "HTTP n", "qBittorrent refused OmaqBT's API key" or "couldn't reach qBittorrent". A bare `qbt search` with no known subcommand prints "usage: qbt search start|stop|delete|add".
 
 ### `qbt search start --pattern <p> --category <c>`
 

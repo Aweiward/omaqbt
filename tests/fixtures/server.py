@@ -30,8 +30,16 @@ ADDED = []
 # An error body carrying a tracker URL with a passkey, for the F12 tests:
 # nothing in it may ever reach qbt's stderr.
 SECRET_ERROR_BODY = b"Conflict: udp://tracker.example:1337/SECRETPASSKEY123/announce 203.0.113.9:6881"
+# qBittorrent 5.2.3's API key (webapplication.cpp apiKeySessionInitialize):
+# "Authorization: Bearer <key>" opens or reuses the session whose id is the
+# key itself, and never sets a cookie. Every /api/v2/ route answers 403
+# without it, as real qBittorrent does once the localhost bypass is off.
+# QBT_FIXTURE_NO_AUTH=1 turns the gate off (the bypass, for the migration
+# tests). The key matches tests/fixtures/qBittorrent.conf.
+FIXTURE_API_KEY = "qbt_FixtureKey23456789abcdefghjk"
+API_KEY = os.environ.get("QBT_FIXTURE_API_KEY") or FIXTURE_API_KEY
 # Real qBittorrent keeps sync rid state per WebUI session: a request without a
-# known SID cookie opens a new session and always gets a full update.
+# known session opens a new one and always gets a full update.
 SESSIONS = set()
 _SESSIONS_LOCK = threading.Lock()
 
@@ -1441,10 +1449,33 @@ class Handler(BaseHTTPRequestHandler):
         n = int(self.headers.get("Content-Length") or 0)
         return self.rfile.read(n).decode("utf-8") if n else ""
 
+    def _bearer(self):
+        """The request's API key when it is the right one, else None."""
+        kind, _, key = (self.headers.get("Authorization") or "").partition(" ")
+        return key.strip() if kind.lower() == "bearer" and key.strip() == API_KEY else None
+
+    def _authorized(self, path):
+        """False (after a 403) for an /api/v2/ route without the API key."""
+        if not path.startswith("/api/v2/") or os.environ.get("QBT_FIXTURE_NO_AUTH") == "1":
+            return True
+        if self._bearer() is not None:
+            return True
+        self.send_response(403)
+        self.send_header("Content-Type", "text/plain")
+        self.end_headers()
+        self.wfile.write(b"Forbidden")
+        return False
+
     def _session(self):
         """Return (sid, is_new) for this request, minting a SID when unknown.
-        Locked: qbt and the sidecar can both be minting at once."""
+        An API-key request's session id is the key. Locked: qbt and the
+        sidecar can both be minting at once."""
         with _SESSIONS_LOCK:
+            key = self._bearer()
+            if key is not None:
+                is_new = key not in SESSIONS
+                SESSIONS.add(key)
+                return key, is_new
             for part in (self.headers.get("Cookie") or "").split(";"):
                 name, _, value = part.strip().partition("=")
                 if name == "SID" and value in SESSIONS:
@@ -1469,7 +1500,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         self.send_response(code)
         self.send_header("Content-Type", content_type)
-        if sid:
+        if sid and self._bearer() is None:
             self.send_header("Set-Cookie", f"SID={sid}; HttpOnly; path=/")
         self.end_headers()
         if body:
@@ -1555,6 +1586,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         parsed = urlparse(self.path)
+        if not self._authorized(parsed.path):
+            return
         if parsed.path == "/fixture/rss-state":
             # Test-only and unrecorded: the tree as it is, without ticking
             # the RSS clock.
@@ -1726,6 +1759,8 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         parsed = urlparse(self.path)
         body = self._read()
+        if not self._authorized(parsed.path):
+            return
         if parsed.path == "/fixture/search-reset":
             # Test-only and unrecorded: every job gone, and the plugin list
             # set to the body's JSON list (empty body: the defaults).

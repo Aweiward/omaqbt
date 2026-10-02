@@ -163,7 +163,7 @@ const RESTART = ["resume_data_storage_type", "disk_io_type", "announce_ip", "ann
 // global.md's locked list (eng D8), which qbt hardcodes.
 const LOCKED = [
   "current_network_interface", "current_interface_address", "current_interface_name",
-  "web_ui_address", "web_ui_port", "bypass_local_auth", "use_https",
+  "web_ui_address", "web_ui_port", "bypass_local_auth", "bypass_auth_subnet_whitelist_enabled", "use_https",
   "web_ui_https_*", "web_ui_host_header_validation_enabled", "web_ui_domain_list",
   "web_ui_reverse_prox*", "alternative_webui_*",
   // eng 4b D8: custom headers go on every Web UI reply unfiltered.

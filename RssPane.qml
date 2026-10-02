@@ -235,7 +235,7 @@ Item {
   readonly property bool pollsRunning: fastTimer.running || slowTimer.running || capTimer.running || retryTimer.running
 
   readonly property bool processingOff: loaded && !!items && items.processing === false
-  readonly property bool downShown: ["gui", "notInstalled", "daemon", "api"].indexOf(tableState) !== -1
+  readonly property bool downShown: ["gui", "notInstalled", "daemon", "auth", "api"].indexOf(tableState) !== -1
 
   readonly property var flags: ({ rssItem: rss.downShown || !rss.currentFeed ? null : rss.currentFeed.rssItem,
     rssFeedRow: rss.currentFeed !== null && rss.currentFeed !== undefined,

@@ -174,9 +174,9 @@ Item {
   // dropped so it can't land over it.
   onTableStateChanged: {
     if (!open) return
-    if (failed && ["gui", "notInstalled", "daemon", "api", "loading"].indexOf(tableState) === -1) {
+    if (failed && ["gui", "notInstalled", "daemon", "auth", "api", "loading"].indexOf(tableState) === -1) {
       reload(false)
-    } else if (!failed && ["gui", "notInstalled", "daemon", "api"].indexOf(tableState) !== -1) {
+    } else if (!failed && ["gui", "notInstalled", "daemon", "auth", "api"].indexOf(tableState) !== -1) {
       readSeq = readSeq + 1
       error = ""
       failed = true

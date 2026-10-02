@@ -1140,6 +1140,47 @@ Panel {
             }
           }
 
+          // qBittorrent answered OmaqBT's API key with 403. start-daemon
+          // stops the daemon, writes a key when the conf has none, and
+          // starts it again.
+          CursorSurface {
+            visible: root.qbt.daemon && root.qbt.authRefused
+            width: parent.width
+            implicitHeight: authCol.implicitHeight + Style.spacing.rowPaddingX
+            hasCursor: false
+            foreground: root.urgent
+            fill: root.hoverFill
+            MouseArea {
+              anchors.fill: parent
+              hoverEnabled: true
+              cursorShape: root.qbt.busy ? Qt.ArrowCursor : Qt.PointingHandCursor
+              enabled: !root.qbt.busy
+              onClicked: root.qbt.startDaemon()
+            }
+            Column {
+              id: authCol
+              width: parent.width
+              spacing: Style.space(8)
+              anchors.verticalCenter: parent.verticalCenter
+              leftPadding: Style.space(10)
+              rightPadding: Style.space(10)
+              Text {
+                width: parent.width - authCol.leftPadding - authCol.rightPadding
+                text: "qBittorrent refused OmaqBT's API key"
+                color: root.dim
+                wrapMode: Text.WordWrap
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.body
+              }
+              Text {
+                text: root.qbt.busy ? "Restarting…" : "Restart daemon"
+                color: root.urgent
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.body
+              }
+            }
+          }
+
           Column {
             visible: root.qbt.ready && root.view === "list"
             width: parent.width

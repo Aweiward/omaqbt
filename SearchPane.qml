@@ -223,7 +223,7 @@ Item {
     pluginsBusy: search.pluginsBusy, running: search.running, category: search.category, down: search.downShown })
 
   // ---- the down screen (OV4) ----------------------------------------------------------
-  readonly property bool downNow: ["gui", "notInstalled", "daemon", "api"].indexOf(tableState) !== -1
+  readonly property bool downNow: ["gui", "notInstalled", "daemon", "auth", "api"].indexOf(tableState) !== -1
   property bool downHold: false
   readonly property bool downShown: downNow && !downHold
   onDownNowChanged: {

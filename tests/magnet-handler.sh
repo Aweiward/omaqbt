@@ -118,8 +118,11 @@ export TMPLOG="$tmp/fixture-log.json"
 
 # Drain against fixture
 python3 - <<'PY'
-import json, os, socket, subprocess, time, urllib.request
+import json, os, socket, subprocess, sys, time, urllib.request
 from pathlib import Path
+
+sys.path.insert(0, "tests/fixtures")
+import harness  # noqa: E402,F401 (its own requests send the fixture API key)
 
 root = Path(".").resolve()
 log = Path(os.environ["TMPLOG"])

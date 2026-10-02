@@ -1525,7 +1525,7 @@ var SCHEMA = {
   "section": "Web UI",
   "group": "Authentication",
   "label": "Skip login for localhost",
-  "help": "OmaqBT connects from localhost without a password. Set by OmaqBT's setup.",
+  "help": "Off: OmaqBT signs in with the API key. Set by OmaqBT's setup.",
   "type": "bool",
   "locked": true
  },
@@ -1533,8 +1533,9 @@ var SCHEMA = {
   "section": "Web UI",
   "group": "Authentication",
   "label": "Skip login for these subnets",
-  "help": "Clients in the subnets below don't log in.",
-  "type": "bool"
+  "help": "Off: turning it on would let every local account in. Set by OmaqBT's setup.",
+  "type": "bool",
+  "locked": true
  },
  "bypass_auth_subnet_whitelist": {
   "section": "Web UI",
@@ -2821,6 +2822,7 @@ var LOCKED = [
  "web_ui_address",
  "web_ui_port",
  "bypass_local_auth",
+ "bypass_auth_subnet_whitelist_enabled",
  "use_https",
  "web_ui_https_*",
  "web_ui_host_header_validation_enabled",
