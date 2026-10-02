@@ -108,7 +108,7 @@ WebUI\APIKey=<generated if missing>
 WebUI\Port=<existing port, or 8080>
 ```
 
-OmaqBT signs in to the Web API with qBittorrent's API key. It reads the key from `qBittorrent.conf` and never puts it on a command line, so other accounts on your machine can't use the Web API without it. Older OmaqBT versions turned localhost login off. If your daemon was set up that way, OmaqBT secures it automatically: it writes the keys above and restarts the daemon once. If qBittorrent ever refuses the key, the popup shows **Restart daemon**.
+OmaqBT signs in to the Web API with qBittorrent's API key. It reads the key from `qBittorrent.conf`, keeps that file readable only by you, and never puts the key on a command line, so other accounts on your machine can't use the Web API without it. Older OmaqBT versions turned localhost login off. If your daemon was set up that way, OmaqBT secures it automatically: it writes the keys above and restarts the daemon once. If qBittorrent ever refuses the key, the popup shows **Restart daemon**. Other tools that relied on the old localhost bypass (scripts, `*arr` apps) now need the API key or a Web UI login.
 
 The browser Web UI at `http://127.0.0.1:<port>` now asks for a username and password. If you haven't set a password, `qbittorrent-nox` prints a temporary one each time it starts; read it with `journalctl --user -u omaqbt-nox`. Sign in with it, then set your own under Tools → Options → Web UI.
 

@@ -136,9 +136,12 @@ def start_fixture_server(extra_env=None):
     ready = False
     deadline = time.monotonic() + 5.0
     url = f"http://127.0.0.1:{port}/api/v2/sync/maindata?rid=0"
+    # The key this server demands (a test may start one with another key).
+    ready_req = urllib.request.Request(url, headers={
+        "Authorization": "Bearer " + env.get("QBT_FIXTURE_API_KEY", FIXTURE_API_KEY)})
     while time.monotonic() < deadline:
         try:
-            urllib.request.urlopen(url, timeout=0.2)
+            urllib.request.urlopen(ready_req, timeout=0.2)
             ready = True
             break
         except Exception:

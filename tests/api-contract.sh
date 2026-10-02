@@ -499,23 +499,131 @@ for label, extra, want in (("the GUI holds the lock", {"QBT_LOCK": "gui"}, "clos
     auth_check(f"secure-daemon refuses when {label}",
                r.returncode != 0 and r.stdout == "" and want in r.stderr.lower() and c.read_bytes() == before)
 
-# Two callers (the popup's and the window's Service) serialize on the lock:
-# while it is held, secure-daemon waits and writes nothing.
+# Two callers (the popup's and the window's Service) may both ask: while one
+# holds the lock, secure-daemon is a no-op that writes nothing (the holder is
+# already securing it), and start-daemon, a click, waits for its turn.
 h, c, e = auth_home(BYPASS)
 state = h / "state/omaqbt"
 state.mkdir(parents=True, mode=0o700)
 with open(state / "secure.lock", "w") as held:
     fcntl.flock(held, fcntl.LOCK_EX)
     before = c.read_bytes()
-    waiting = subprocess.Popen(["./qbt", "secure-daemon"], env=e, text=True,
+    r = subprocess.run(["./qbt", "secure-daemon"], env=e, text=True, capture_output=True, timeout=10)
+    auth_check("secure-daemon is a no-op while another holds the lock",
+               r.returncode == 0 and json.loads(r.stdout) == {"ok": True, "changed": False}
+               and c.read_bytes() == before)
+    waiting = subprocess.Popen(["./qbt", "start-daemon"], env=e, text=True,
                                stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     time.sleep(0.6)
-    auth_check("secure-daemon waits while another holds the lock",
+    auth_check("start-daemon waits while another holds the lock",
                waiting.poll() is None and c.read_bytes() == before)
     fcntl.flock(held, fcntl.LOCK_UN)
 out, err = waiting.communicate(timeout=20)
-auth_check("secure-daemon goes ahead once the lock is free",
-           waiting.returncode == 0 and json.loads(out) == {"ok": True, "changed": True})
+auth_check("start-daemon goes ahead once the lock is free",
+           waiting.returncode == 0 and "WebUI\\LocalHostAuth=true" in c.read_text())
+
+# QSettings reads booleans the QVariant way (trimmed, any case, 0 and 1), so
+# a hand-edited bypass must still read as one, and set_key must replace it.
+for label, prefs in (("LocalHostAuth = 0", ["WebUI\\LocalHostAuth = 0"]),
+                     ("LocalHostAuth=False", ["WebUI\\LocalHostAuth=False"]),
+                     ("AuthSubnetWhitelistEnabled=1", ["WebUI\\AuthSubnetWhitelistEnabled=1"])):
+    h, c, e = auth_home(prefs + [f"WebUI\\APIKey={KEPT_KEY}"])
+    p = json.loads(subprocess.run(["./qbt", "probe"], env=e, text=True, capture_output=True).stdout)
+    auth_check(f"probe reads {label} as the bypass", p.get("auth") == "bypass")
+    subprocess.run(["./qbt", "secure-daemon"], env=e, text=True, capture_output=True)
+    p = json.loads(subprocess.run(["./qbt", "probe"], env=e, text=True, capture_output=True).stdout)
+    auth_check(f"secure-daemon replaces {label}", p.get("auth") == "ok")
+h, c, e = auth_home([f"WebUI\\APIKey = {KEPT_KEY}"])
+p = json.loads(subprocess.run(["./qbt", "probe"], env=e, text=True, capture_output=True).stdout)
+auth_check("a key written with spaces around = still reads", p.get("auth") == "ok")
+
+# The conf holds the key, so the setup leaves it owner-only.
+h, c, e = auth_home(BYPASS)
+c.chmod(0o644)
+c.parent.chmod(0o755)
+subprocess.run(["./qbt", "secure-daemon"], env=e, text=True, capture_output=True)
+auth_check("secure-daemon leaves the conf owner-only", stat.S_IMODE(c.stat().st_mode) == 0o600)
+auth_check("secure-daemon leaves the conf dir owner-only", stat.S_IMODE(c.parent.stat().st_mode) == 0o700)
+
+# The restart path, with a systemctl shim that logs its calls (and starts
+# nothing): a key that can't be made, or a nox that won't stop, leaves the
+# conf as it was and the daemon running.
+def daemon_env(prefs, still_running, extra_shims=()):
+    h, c, e = auth_home(prefs)
+    e.pop("QBT_SKIP_SYSTEMCTL", None)
+    log = h / "systemctl.log"
+    log.write_text("")
+    b = h / "bin"
+    b.mkdir()
+    (b / "systemctl").write_text(f"#!/bin/sh\nprintf '%s\\n' \"$*\" >>'{log}'\n")
+    (b / "systemctl").chmod(0o755)
+    for name, body in extra_shims:
+        (b / name).write_text(body)
+        (b / name).chmod(0o755)
+    e["PATH"] = str(b) + os.pathsep + e["PATH"]
+    e["QBT_DAEMON"] = "1" if still_running else "0"
+    return h, c, e, log
+
+h, c, e, log = daemon_env(BYPASS, still_running=True)
+e["QBT_DAEMON"] = "1"
+before = c.read_bytes()
+r = subprocess.run(["./qbt", "secure-daemon"], env=e, text=True, capture_output=True, timeout=30)
+calls = log.read_text()
+auth_check("a nox that won't stop fails secure-daemon", r.returncode != 0 and "still running" in r.stderr)
+auth_check("a nox that won't stop leaves the conf as it was", c.read_bytes() == before)
+auth_check("a nox that won't stop gets omaqbt-nox started again",
+           "stop omaqbt-nox.service" in calls and "start omaqbt-nox.service" in calls.split("stop omaqbt-nox.service", 1)[1])
+
+fail_py = ("#!/bin/sh\nfor a in \"$@\"; do case $a in *secrets*) exit 1 ;; esac; done\n"
+           f"exec '{REAL_PYTHON}' \"$@\"\n")
+h, c, e, log = daemon_env(["WebUI\\LocalHostAuth=true"], still_running=True,
+                          extra_shims=(("python3", fail_py),))
+before = c.read_bytes()
+r = subprocess.run(["./qbt", "secure-daemon"], env=e, text=True, capture_output=True, timeout=30)
+auth_check("a key that can't be generated fails secure-daemon",
+           r.returncode != 0 and "cannot generate an API key" in r.stderr and r.stdout == "")
+auth_check("a key that can't be generated stops nothing", "stop" not in log.read_text())
+auth_check("a key that can't be generated leaves the conf as it was", c.read_bytes() == before)
+
+# A server that still honours the bypass (an old daemon): status works
+# unsigned and reports it, and secure-daemon moves the conf to the key.
+with harness.fixture_server(extra_env={"QBT_FIXTURE_NO_AUTH": "1"}) as (bport, benv):
+    tmpd = pathlib.Path(tempfile.mkdtemp(prefix="qbt-bypass-"))
+    old = tmpd / "qBittorrent.conf"
+    old.write_text("[Preferences]\n" + "".join(f"{x}\n" for x in BYPASS) + f"WebUI\\Port={bport}\n")
+    benv2 = dict(benv, QBT_CONF=str(old), QBT_SKIP_SYSTEMCTL="1", QBT_HOME=str(tmpd))
+    st = json.loads(subprocess.run(["./qbt", "status"], env=benv2, text=True, capture_output=True).stdout)
+    auth_check("an old daemon's status works and reports the bypass",
+               st.get("api") is True and st.get("auth") == "bypass" and st.get("authRefused") is False)
+    r = subprocess.run(["./qbt", "secure-daemon"], env=benv2, text=True, capture_output=True)
+    p = json.loads(subprocess.run(["./qbt", "probe"], env=benv2, text=True, capture_output=True).stdout)
+    auth_check("secure-daemon moves an old daemon's conf to the key",
+               r.returncode == 0 and p.get("auth") == "ok" and len(keys_in(old)) == 1)
+    shutil.rmtree(tmpd, ignore_errors=True)
+
+# A rotated key is picked up on the next run, and a symlink planted at the
+# header file is replaced, not followed.
+with harness.fixture_server(extra_env={"QBT_FIXTURE_API_KEY": KEPT_KEY}) as (kport, kenv):
+    tmpd = pathlib.Path(tempfile.mkdtemp(prefix="qbt-rotate-"))
+    rot = tmpd / "qBittorrent.conf"
+    rot.write_text(f"[Preferences]\nWebUI\\APIKey={harness.FIXTURE_API_KEY}\nWebUI\\Port={kport}\n")
+    kenv2 = dict(kenv, QBT_CONF=str(rot))
+    r = subprocess.run(["./qbt", "start", "a" * 40], env=kenv2, text=True, capture_output=True)
+    auth_check("the old key is refused by a daemon that rotated it", r.returncode != 0)
+    rot.write_text(f"[Preferences]\nWebUI\\APIKey={KEPT_KEY}\nWebUI\\Port={kport}\n")
+    r = subprocess.run(["./qbt", "start", "a" * 40], env=kenv2, text=True, capture_output=True)
+    hdr = pathlib.Path(kenv["QBT_STATE_DIR"]) / "auth-header"
+    auth_check("the rotated key is picked up on the next run",
+               r.returncode == 0 and KEPT_KEY in hdr.read_text())
+    target = tmpd / "elsewhere"
+    target.write_text("untouched\n")
+    hdr.unlink()
+    hdr.symlink_to(target)
+    r = subprocess.run(["./qbt", "start", "a" * 40], env=kenv2, text=True, capture_output=True)
+    auth_check("a symlinked header file is replaced, not followed",
+               r.returncode == 0 and target.read_text() == "untouched\n" and hdr.is_file() and not hdr.is_symlink()
+               and stat.S_IMODE(hdr.stat().st_mode) == 0o600)
+    shutil.rmtree(tmpd, ignore_errors=True)
 
 # With the fixture server: every curl site signs with the key through a
 # header file, never with the key on curl's argv, and a conf without a key
