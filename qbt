@@ -213,6 +213,17 @@ api_key() {
   return 0
 }
 
+# A fresh key in qBittorrent's own format and alphabet (no 0, 1, I, O, l, o),
+# from the OS CSPRNG. It comes back on stdout, never through an argv.
+generate_api_key() {
+  local key LC_ALL=C
+  key=$(python3 -c 'import secrets
+alphabet = "23456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz"
+print("qbt_" + "".join(secrets.choice(alphabet) for _ in range(28)), end="")') || true
+  [[ $key =~ ^qbt_[A-Za-z0-9]{28}$ ]] || die "cannot generate an API key"
+  printf '%s' "$key"
+}
+
 # Sets AUTH_ARGS to curl's arguments for the API key: a header file, never the
 # key itself, so it stays off every process's argv (/proc/*/cmdline is world
 # readable). The file lives in the owner-only state dir and is replaced
@@ -980,16 +991,21 @@ cmd_prio() {
   printf '%s\n' '{"ok":true}'
 }
 
+# The value reaches python on stdin, never on argv or in the environment
+# (eng 4b D7): it may be the API key, and /proc/*/cmdline is world readable.
+# So the script goes in -c rather than on stdin.
 set_key() {
   local file=$1 key=$2 value=$3
   local section=${4:-Preferences}
+  local script
   mkdir -p "$(dirname "$file")"
   touch "$file"
-  python3 - "$file" "$key" "$value" "$section" <<'PY'
+  IFS= read -r -d '' script <<'PY' || true
 import sys
 from pathlib import Path
 
-path, key, value, section = Path(sys.argv[1]), sys.argv[2], sys.argv[3], sys.argv[4]
+path, key, section = Path(sys.argv[1]), sys.argv[2], sys.argv[3]
+value = sys.stdin.read()
 header = "[" + section + "]"
 lines = path.read_text().splitlines() if path.exists() else []
 lines = [ln for ln in lines if not ln.startswith(key + "=")]
@@ -1009,6 +1025,7 @@ if not inserted:
     out.append(f"{key}={value}")
 path.write_text("\n".join(out) + "\n")
 PY
+  printf '%s' "$value" | python3 -c "$script" "$file" "$key" "$section"
 }
 
 bind_mullvad() {
@@ -1060,12 +1077,30 @@ cmd_install() {
   printf '%s\n' '{"ok":true}'
 }
 
-cmd_start_daemon() {
-  local lock
-  lock=$(lock_holder)
-  if [[ $lock == gui ]]; then
+# Serializes start-daemon and secure-daemon: both Service instances (the
+# popup's and the window's) may ask to secure the daemon at once, and the
+# second must see the first one's conf, not restart nox again. The fd stays
+# open, so the lock holds until qbt exits.
+take_daemon_lock() {
+  local dir
+  dir=$(dirname "$COOKIE_FILE")
+  ensure_state_dir "$dir"
+  exec 9>"$dir/secure.lock" || die "cannot open the daemon lock"
+  flock -w 60 9 || die "another qbt is still setting up the daemon"
+}
+
+refuse_gui_lock() {
+  if [[ $(lock_holder) == gui ]]; then
     die "Close qBittorrent before starting the daemon."
   fi
+}
+
+# Writes OmaqBT's WebUI setup into a stopped daemon's conf and (re)starts it.
+# The login bypass stays off: loopback is shared by every local account, and
+# the Web API can install search plugins that run as this user. OmaqBT signs
+# in with the API key instead, and keeps a valid one so other tools that use
+# it go on working.
+setup_daemon() {
   # A running nox rewrites qBittorrent.conf from memory on exit, so
   # write the WebUI keys only while it is stopped.
   if [[ ${QBT_SKIP_SYSTEMCTL:-} != 1 ]] && is_daemon; then
@@ -1079,16 +1114,41 @@ cmd_start_daemon() {
   write_unit
   set_key "$CONF" 'WebUI\Enabled' 'true'
   set_key "$CONF" 'WebUI\Address' '127.0.0.1'
-  set_key "$CONF" 'WebUI\LocalHostAuth' 'false'
-  set_key "$CONF" 'WebUI\AuthSubnetWhitelistEnabled' 'true'
-  set_key "$CONF" 'WebUI\AuthSubnetWhitelist' '127.0.0.1, ::1'
+  set_key "$CONF" 'WebUI\LocalHostAuth' 'true'
+  set_key "$CONF" 'WebUI\AuthSubnetWhitelistEnabled' 'false'
+  if [[ -z $(api_key) ]]; then
+    local key
+    key=$(generate_api_key)
+    set_key "$CONF" 'WebUI\APIKey' "$key"
+  fi
   ensure_port
   bind_mullvad
   if [[ ${QBT_SKIP_SYSTEMCTL:-} != 1 ]]; then
     systemctl --user daemon-reload
     systemctl --user enable --now omaqbt-nox.service
   fi
+}
+
+cmd_start_daemon() {
+  refuse_gui_lock
+  take_daemon_lock
+  setup_daemon
   printf '%s\n' '{"ok":true}'
+}
+
+# Moves an install off the old login bypass (or one without an API key) with
+# one restart, and does nothing on a conf that's already secured. The widget
+# runs it on its own, so it re-reads the conf under the lock.
+cmd_secure_daemon() {
+  refuse_gui_lock
+  is_installed || die "qbittorrent-nox is not installed."
+  take_daemon_lock
+  if [[ $(auth_state) == ok ]]; then
+    printf '%s\n' '{"ok":true,"changed":false}'
+    return
+  fi
+  setup_daemon
+  printf '%s\n' '{"ok":true,"changed":true}'
 }
 
 cmd_stop_daemon() {
@@ -2078,13 +2138,16 @@ PREF_LOCKED_VPN=(
   current_interface_name
 )
 # The WebUI OmaqBT itself talks to: "OmaqBT needs this as it is." The two
-# custom-header keys are eng 4b D8: 5.2.3 adds the headers to every WebUI
-# reply unfiltered (appcontroller.cpp:953), and a bad one cuts qbt and the
-# sidecar off from qBittorrent.
+# login-bypass switches stay off: loopback is shared by every local account
+# (marketplace review, 2026-10-02). The two custom-header keys are eng 4b
+# D8: 5.2.3 adds the headers to every WebUI reply unfiltered
+# (appcontroller.cpp:953), and a bad one cuts qbt and the sidecar off from
+# qBittorrent.
 PREF_LOCKED_WEBUI=(
   web_ui_address
   web_ui_port
   bypass_local_auth
+  bypass_auth_subnet_whitelist_enabled
   use_https
   'web_ui_https_*'
   web_ui_host_header_validation_enabled
@@ -3693,6 +3756,7 @@ case ${1:-} in
   share-limits) shift; cmd_share_limits "$@" ;;
   install) shift; cmd_install "$@" ;;
   start-daemon) shift; cmd_start_daemon "$@" ;;
+  secure-daemon) shift; cmd_secure_daemon "$@" ;;
   stop-daemon) shift; cmd_stop_daemon "$@" ;;
   category-add) shift; cmd_category_add "$@" ;;
   category-path) shift; cmd_category_path "$@" ;;
@@ -3718,5 +3782,5 @@ case ${1:-} in
   magnet-pending-drop) shift; cmd_magnet_pending_drop "$@" ;;
   magnet-install-handler) shift; cmd_magnet_install_handler "$@" ;;
   magnet-uninstall-handler) shift; cmd_magnet_uninstall_handler "$@" ;;
-  *) die "usage: qbt status|probe|add|start|stop|recheck|set-location|delete|reannounce|tracker-add|tracker-edit|tracker-remove|ban-peer|fetch-metadata|files|prio|turtle|limit|sequential|first-last|sharelimit|share-limits|category-add|category-path|category-remove|category-rename|set-category|tag-add|tag-remove|tag-rename|tags|prefs|pref-set|ban-list|search|search-plugin|rss|install|start-daemon|stop-daemon|magnet-paths|magnet-inbox|magnet-drain|magnet-pending-list|magnet-pending-drop|magnet-install-handler|magnet-uninstall-handler" ;;
+  *) die "usage: qbt status|probe|add|start|stop|recheck|set-location|delete|reannounce|tracker-add|tracker-edit|tracker-remove|ban-peer|fetch-metadata|files|prio|turtle|limit|sequential|first-last|sharelimit|share-limits|category-add|category-path|category-remove|category-rename|set-category|tag-add|tag-remove|tag-rename|tags|prefs|pref-set|ban-list|search|search-plugin|rss|install|start-daemon|secure-daemon|stop-daemon|magnet-paths|magnet-inbox|magnet-drain|magnet-pending-list|magnet-pending-drop|magnet-install-handler|magnet-uninstall-handler" ;;
 esac
