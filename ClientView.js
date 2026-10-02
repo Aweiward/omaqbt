@@ -450,7 +450,7 @@ function stateCopy(state, ctx) {
     return {
       title: "qBittorrent refused OmaqBT's API key",
       tone: "fg",
-      body: "The daemon is running but turned OmaqBT's key away. Restarting it writes a key OmaqBT can read.",
+      body: "The daemon is running but turned OmaqBT's key away. Restarting it re-reads qBittorrent.conf, and writes a key there if it has none.",
       keys: [{ key: "Enter", label: "Restart daemon" }]
     };
   }
