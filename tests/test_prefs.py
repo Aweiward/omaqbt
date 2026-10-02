@@ -178,6 +178,9 @@ class HardcodedListsTest(unittest.TestCase):
         self.assertIn("web_ui_use_custom_http_headers_enabled", mine)
         self.assertEqual(set(qbt_array("PREF_LOCKED_VPN")), set(VPN_LOCKS))
         self.assertIn("web_ui_reverse_prox*", mine)  # Ruling DD
+        # The login bypass stays off (marketplace review, 2026-10-02).
+        self.assertIn("bypass_local_auth", mine)
+        self.assertIn("bypass_auth_subnet_whitelist_enabled", mine)
 
     def test_locked_flags_match_the_globs(self):
         import fnmatch
@@ -1457,6 +1460,8 @@ class LargeBodyTest(FinalFixCase):
 SHIMMED_TOOLS = ("jq", "curl", "sed", "cat", "mktemp", "rm", "readlink", "dirname", "stat", "id", "grep", "cut",
                  "tail", "head", "tr", "wc", "od", "env", "timeout", "sleep", "pgrep", "mkdir", "chmod", "date",
                  "basename", "sort", "uniq", "printf", "tee", "mv", "cp", "ls", "flock", "python3", "base64",
+                 # conf_pref reads the API key from qBittorrent.conf.
+                 "awk",
                  # qbt's own #!/usr/bin/env bash finds bash through PATH.
                  "bash")
 

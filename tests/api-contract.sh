@@ -3,7 +3,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 python3 - <<'PY'
-import json, os, socket, subprocess, sys, time, urllib.request
+import json, os, re, socket, subprocess, sys, time, urllib.request
 from pathlib import Path
 
 sys.path.insert(0, "tests/fixtures")
@@ -268,7 +268,7 @@ try:
     bad = qbt("status")
     text = bad.stdout + bad.stderr
     assert "leaked-secret-value" not in text
-    assert "SID=<redacted>" in text or "localhost auth is required" in text
+    assert "SID=<redacted>" in text or "qBittorrent refused OmaqBT's API key" in text
 finally:
     server2.terminate()
     server2.wait(timeout=5)
@@ -281,6 +281,8 @@ denv = env.copy()
 denv.update({
     "QBT_HOME": str(home),
     "QBT_CONF": str(home / ".config/qBittorrent/qBittorrent.conf"),
+    # start-daemon takes its lock in the state dir: keep it out of tests/fixtures.
+    "QBT_RID_FILE": str(home / "state/omaqbt/rid.json"),
     "QBT_SKIP_SYSTEMCTL": "1",
     "QBT_LOCK": "gui",
 })
@@ -298,7 +300,12 @@ assert ok.returncode == 0, ok.stderr
 conf = (home / ".config/qBittorrent/qBittorrent.conf").read_text()
 assert r"WebUI\Enabled=true" in conf
 assert r"WebUI\Address=127.0.0.1" in conf
-assert r"WebUI\LocalHostAuth=false" in conf
+# The localhost login bypass is off: OmaqBT signs in with the API key.
+assert r"WebUI\LocalHostAuth=true" in conf
+assert r"WebUI\AuthSubnetWhitelistEnabled=false" in conf
+assert r"WebUI\LocalHostAuth=false" not in conf
+assert r"WebUI\AuthSubnetWhitelistEnabled=true" not in conf
+assert re.search(r"^WebUI\\APIKey=qbt_[A-Za-z0-9]{28}$", conf, re.M), "start-daemon generates a key"
 assert r"WebUI\Port=9001" in conf
 assert r"Session\Interface=wg0-mullvad" in conf
 assert r"Session\InterfaceName=wg0-mullvad" in conf
@@ -332,14 +339,224 @@ assert ok2.returncode == 0, ok2.stderr
 conf2 = (home2 / ".config/qBittorrent/qBittorrent.conf").read_text()
 prefs = conf2.split("[TorrentProperties]", 1)[0]
 assert "[Preferences]" in prefs
-assert r"WebUI\LocalHostAuth=false" in prefs
+assert r"WebUI\LocalHostAuth=true" in prefs
+assert r"WebUI\AuthSubnetWhitelistEnabled=false" in prefs
+assert r"WebUI\APIKey=qbt_" in prefs
 assert r"WebUI\Enabled=true" in prefs
 assert r"WebUI\Address=127.0.0.1" in prefs
 assert r"WebUI\Port=9001" in prefs
 later = conf2.split("[TorrentProperties]", 1)[1]
-assert r"WebUI\LocalHostAuth=false" not in later
+assert r"WebUI\LocalHostAuth=true" not in later
+assert r"WebUI\APIKey=" not in later
 assert r"WebUI\Port=9001" not in later
 print("prefs-section-contract ok")
+
+# Auth (marketplace review, 2026-10-02): OmaqBT signs every request with
+# qBittorrent's API key, and the setup turns the localhost login bypass off.
+# The key must never reach a process's argv, the probe or an error message.
+import fcntl, shutil, stat
+API_KEY_MESSAGE = "qBittorrent refused OmaqBT's API key"
+KEY_LINE_RE = re.compile(r"^WebUI\\APIKey=(.*)$", re.M)
+KEPT_KEY = "qbt_KeepMe23456789abcdefghjkmnpq"
+assert re.fullmatch(r"qbt_[A-Za-z0-9]{28}", KEPT_KEY)
+REAL_PYTHON = shutil.which("python3")
+REAL_CURL = shutil.which("curl")
+auth_failures = []
+
+
+def auth_check(label, cond):
+    print(("ok - " if cond else "FAIL - ") + label)
+    if not cond:
+        auth_failures.append(label)
+
+
+def auth_home(prefs):
+    """A throwaway home whose qBittorrent.conf holds `prefs` under
+    [Preferences], plus a fresh state dir. Returns (home, conf, env)."""
+    h = pathlib.Path(tempfile.mkdtemp(prefix="qbt-auth-"))
+    c = h / ".config/qBittorrent/qBittorrent.conf"
+    c.parent.mkdir(parents=True)
+    c.write_text("[Preferences]\n" + "".join(f"{line}\n" for line in prefs) + "WebUI\\Port=9001\n")
+    e = env.copy()
+    e.pop("QBT_BIND_IFACE", None)
+    e.update({
+        "QBT_HOME": str(h),
+        "QBT_CONF": str(c),
+        "QBT_RID_FILE": str(h / "state/omaqbt/rid.json"),
+        "QBT_SKIP_SYSTEMCTL": "1",
+        "QBT_INSTALLED": "1",
+        "QBT_DAEMON": "1",
+        "QBT_LOCK": "none",
+    })
+    return h, c, e
+
+
+def keys_in(conf_path):
+    return KEY_LINE_RE.findall(conf_path.read_text())
+
+
+def shim(dirpath, name, real, log_path):
+    """A `name` first on PATH that logs its argv and environment, then execs
+    the real one."""
+    dirpath.mkdir(exist_ok=True)
+    s = dirpath / name
+    s.write_text(f"#!/bin/sh\nprintf '%s\\n' \"$*\" >>'{log_path}'\n"
+                 f"tr '\\0' '\\n' </proc/$$/environ >>'{log_path}'\nexec '{real}' \"$@\"\n")
+    s.chmod(0o755)
+    return str(dirpath)
+
+
+BYPASS = ["WebUI\\LocalHostAuth=false", "WebUI\\AuthSubnetWhitelistEnabled=true",
+          "WebUI\\AuthSubnetWhitelist=127.0.0.1, ::1"]
+
+# start-daemon keeps an existing valid key and turns the bypass off.
+h, c, e = auth_home(BYPASS + [f"WebUI\\APIKey={KEPT_KEY}"])
+r = subprocess.run(["./qbt", "start-daemon"], env=e, text=True, capture_output=True)
+text = c.read_text()
+auth_check("start-daemon with a valid key succeeds", r.returncode == 0)
+auth_check("start-daemon keeps an existing valid key", keys_in(c) == [KEPT_KEY])
+auth_check("start-daemon turns LocalHostAuth on",
+           "WebUI\\LocalHostAuth=true" in text and "WebUI\\LocalHostAuth=false" not in text)
+auth_check("start-daemon turns the subnet whitelist off",
+           "WebUI\\AuthSubnetWhitelistEnabled=false" in text and "WebUI\\AuthSubnetWhitelistEnabled=true" not in text)
+auth_check("start-daemon prints no key", KEPT_KEY not in r.stdout + r.stderr)
+
+# An invalid key is replaced, and a generated key never reaches an argv
+# (python3 is how qbt writes the conf).
+h, c, e = auth_home(["WebUI\\APIKey=qbt_short"])
+argv_log = h / "argv.log"
+argv_log.write_text("")
+e["PATH"] = shim(h / "bin", "python3", REAL_PYTHON, argv_log) + os.pathsep + e["PATH"]
+r = subprocess.run(["./qbt", "start-daemon"], env=e, text=True, capture_output=True)
+got = keys_in(c)
+auth_check("start-daemon replaces an invalid key", r.returncode == 0 and len(got) == 1
+           and re.fullmatch(r"qbt_[23456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz]{28}", got[0]) is not None)
+logged = argv_log.read_text()
+auth_check("start-daemon ran python3 through the argv shim", logged != "")
+auth_check("the generated key is on no python3 argv or environment", bool(got) and got[0] not in logged)
+auth_check("the generated key is not printed", bool(got) and got[0] not in r.stdout + r.stderr)
+h, c, e = auth_home([])
+subprocess.run(["./qbt", "start-daemon"], env=e, text=True, capture_output=True)
+first = keys_in(c)
+subprocess.run(["./qbt", "start-daemon"], env=e, text=True, capture_output=True)
+auth_check("a conf without a key gets one, and a second start-daemon keeps it",
+           len(first) == 1 and keys_in(c) == first)
+
+# The probe's conf and auth fields, in all three states.
+for label, prefs, want in (
+    ("ok", ["WebUI\\LocalHostAuth=true", "WebUI\\AuthSubnetWhitelistEnabled=false", f"WebUI\\APIKey={KEPT_KEY}"], "ok"),
+    ("qBittorrent's defaults with a key", [f"WebUI\\APIKey={KEPT_KEY}"], "ok"),
+    ("LocalHostAuth=false", ["WebUI\\LocalHostAuth=false", f"WebUI\\APIKey={KEPT_KEY}"], "bypass"),
+    ("the subnet whitelist on", ["WebUI\\AuthSubnetWhitelistEnabled=true", f"WebUI\\APIKey={KEPT_KEY}"], "bypass"),
+    ("bypass wins over nokey", BYPASS, "bypass"),
+    ("no key", ["WebUI\\LocalHostAuth=true"], "nokey"),
+    ("an invalid key", ["WebUI\\APIKey=qbt_tooShort"], "nokey"),
+):
+    h, c, e = auth_home(prefs)
+    r = subprocess.run(["./qbt", "probe"], env=e, text=True, capture_output=True)
+    p = json.loads(r.stdout)
+    auth_check(f"probe auth is {want!r} for {label}", p.get("auth") == want)
+    auth_check(f"probe conf is the conf path ({label})", p.get("conf") == str(c))
+    auth_check(f"probe holds no key ({label})", KEPT_KEY not in r.stdout)
+
+# secure-daemon: a no-op on a secured conf, else the start-daemon flow.
+h, c, e = auth_home(["WebUI\\LocalHostAuth=true", "WebUI\\AuthSubnetWhitelistEnabled=false", f"WebUI\\APIKey={KEPT_KEY}"])
+before = c.read_bytes()
+r = subprocess.run(["./qbt", "secure-daemon"], env=e, text=True, capture_output=True)
+auth_check("secure-daemon on a secured conf is a no-op",
+           r.returncode == 0 and json.loads(r.stdout) == {"ok": True, "changed": False} and c.read_bytes() == before)
+auth_check("secure-daemon writes no unit when nothing changes",
+           not (h / ".config/systemd/user/omaqbt-nox.service").exists())
+
+h, c, e = auth_home(BYPASS + [f"WebUI\\APIKey={KEPT_KEY}"])
+r = subprocess.run(["./qbt", "secure-daemon"], env=e, text=True, capture_output=True)
+text = c.read_text()
+auth_check("secure-daemon on a bypass conf changes it",
+           r.returncode == 0 and json.loads(r.stdout) == {"ok": True, "changed": True})
+auth_check("secure-daemon keeps the existing key", keys_in(c) == [KEPT_KEY])
+auth_check("secure-daemon turns the bypass off",
+           "WebUI\\LocalHostAuth=true" in text and "WebUI\\AuthSubnetWhitelistEnabled=false" in text)
+auth_check("secure-daemon runs the start-daemon setup",
+           "WebUI\\Enabled=true" in text and "WebUI\\Address=127.0.0.1" in text and "WebUI\\Port=9001" in text
+           and (h / ".config/systemd/user/omaqbt-nox.service").exists())
+r = subprocess.run(["./qbt", "secure-daemon"], env=e, text=True, capture_output=True)
+auth_check("a second secure-daemon is a no-op",
+           r.returncode == 0 and json.loads(r.stdout) == {"ok": True, "changed": False})
+
+h, c, e = auth_home(["WebUI\\LocalHostAuth=true"])
+r = subprocess.run(["./qbt", "secure-daemon"], env=e, text=True, capture_output=True)
+auth_check("secure-daemon on a conf without a key generates one",
+           r.returncode == 0 and json.loads(r.stdout) == {"ok": True, "changed": True} and len(keys_in(c)) == 1)
+auth_check("secure-daemon prints no key", keys_in(c)[0] not in r.stdout + r.stderr)
+
+for label, extra, want in (("the GUI holds the lock", {"QBT_LOCK": "gui"}, "close qbittorrent"),
+                           ("qbittorrent-nox isn't installed", {"QBT_INSTALLED": "0"}, "not installed")):
+    h, c, e = auth_home(BYPASS)
+    e.update(extra)
+    before = c.read_bytes()
+    r = subprocess.run(["./qbt", "secure-daemon"], env=e, text=True, capture_output=True)
+    auth_check(f"secure-daemon refuses when {label}",
+               r.returncode != 0 and r.stdout == "" and want in r.stderr.lower() and c.read_bytes() == before)
+
+# Two callers (the popup's and the window's Service) serialize on the lock:
+# while it is held, secure-daemon waits and writes nothing.
+h, c, e = auth_home(BYPASS)
+state = h / "state/omaqbt"
+state.mkdir(parents=True, mode=0o700)
+with open(state / "secure.lock", "w") as held:
+    fcntl.flock(held, fcntl.LOCK_EX)
+    before = c.read_bytes()
+    waiting = subprocess.Popen(["./qbt", "secure-daemon"], env=e, text=True,
+                               stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    time.sleep(0.6)
+    auth_check("secure-daemon waits while another holds the lock",
+               waiting.poll() is None and c.read_bytes() == before)
+    fcntl.flock(held, fcntl.LOCK_UN)
+out, err = waiting.communicate(timeout=20)
+auth_check("secure-daemon goes ahead once the lock is free",
+           waiting.returncode == 0 and json.loads(out) == {"ok": True, "changed": True})
+
+# With the fixture server: every curl site signs with the key through a
+# header file, never with the key on curl's argv, and a conf without a key
+# gets the API key message.
+with harness.fixture_server(extra_env={"QBT_FIXTURE_PREFS": "tests/fixtures/preferences-5.2.3.json"}) as (aport, aenv):
+    tmpd = pathlib.Path(tempfile.mkdtemp(prefix="qbt-curl-"))
+    curl_log = tmpd / "curl.log"
+    curl_log.write_text("")
+    senv = dict(aenv, PATH=shim(tmpd / "bin", "curl", REAL_CURL, curl_log) + os.pathsep + aenv["PATH"])
+    flog = pathlib.Path(aenv["QBT_FIXTURE_LOG"])
+
+    def nreq():
+        return len(json.loads(flog.read_text() or "[]"))
+
+    n0 = nreq()
+    r = subprocess.run(["./qbt", "start", "a" * 40],
+                       env=senv, text=True, capture_output=True)
+    auth_check("qbt start succeeds against the key-enforcing fixture",
+               r.returncode == 0 and json.loads(r.stdout) == {"ok": True} and nreq() > n0)
+    r = subprocess.run(["./qbt", "rss", "items"], env=senv, capture_output=True, input=b"")
+    auth_check("qbt rss items succeeds against the key-enforcing fixture", r.returncode == 0)
+    logged = curl_log.read_text()
+    key = harness.FIXTURE_API_KEY
+    auth_check("curl ran through the argv shim", logged.count("\n") >= 2)
+    auth_check("the API key is on no curl argv or environment", key not in logged)
+    auth_check("curl reads the key from the header file", "@" in logged and "auth-header" in logged)
+    hdr = pathlib.Path(aenv["QBT_STATE_DIR"]) / "auth-header"
+    auth_check("the header file is owner-only",
+               hdr.is_file() and stat.S_IMODE(hdr.stat().st_mode) == 0o600)
+
+    nokey = tmpd / "nokey.conf"
+    nokey.write_text("[Preferences]\nWebUI\\LocalHostAuth=true\nWebUI\\Port=18080\n")
+    r = subprocess.run(["./qbt", "start", "a" * 40], env=dict(aenv, QBT_CONF=str(nokey)),
+                       text=True, capture_output=True)
+    auth_check("a conf without a key gets the API key message",
+               r.returncode != 0 and r.stderr.strip() == API_KEY_MESSAGE)
+    auth_check("a conf without a key leaves no header file behind", not hdr.exists())
+    shutil.rmtree(tmpd, ignore_errors=True)
+
+if auth_failures:
+    raise SystemExit(f"{len(auth_failures)} auth-contract check(s) failed")
+print("auth-contract ok")
 
 # State dir hardening: refuse a symlinked state dir, and create the real one 0700.
 # The fixture server is stopped, so the API call fails gracefully; ensure_state_dir
