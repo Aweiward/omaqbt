@@ -107,10 +107,11 @@ try:
     names = {t["name"] for t in data2["torrents"]}
     assert names == {"debian.iso"}
     assert abs(data2["torrents"][0]["progress"] - 0.5) < 1e-9
-    # The second poll must reuse the WebUI session: qBittorrent only sends a
-    # delta to the session that holds the rid.
+    # Bearer requests reuse the key's WebUI session without a SID cookie.
+    # The fixture rejects unauthenticated requests; the successful delta
+    # with rid=1 proves that both polls used the same Bearer session.
     maindata = [r for r in json.loads(log.read_text()) if r["path"] == "/api/v2/sync/maindata"]
-    assert "SID=fixture-" in maindata[-1]["cookie"], maindata[-1]
+    assert maindata[-1]["query"]["rid"] == ["1"], maindata[-1]
     jar = Path(env["QBT_RID_FILE"]).parent / "cookies"
     assert jar.exists()
     assert oct(jar.stat().st_mode & 0o777) == "0o600", oct(jar.stat().st_mode & 0o777)
