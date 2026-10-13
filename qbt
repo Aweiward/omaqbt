@@ -1305,6 +1305,55 @@ magnet_state_dir() {
 magnet_inbox_path() { printf '%s/magnet-inbox.jsonl' "$(magnet_state_dir)"; }
 magnet_pending_path() { printf '%s/magnet-pending.json' "$(magnet_state_dir)"; }
 magnet_cancel_path() { printf '%s/magnet-cancel.json' "$(magnet_state_dir)"; }
+
+# Serialize consumers for the whole API round trip, but hold the state
+# lock only while reading/writing files. A browser arrival or Esc must
+# still be able to update the inbox while a drain waits for metadata.
+# Always acquire drain.lock before state.lock, never the reverse.
+take_magnet_drain_lock() {
+  local dir
+  dir=$(magnet_state_dir)
+  ensure_state_dir "$dir"
+  exec 8>"$dir/drain.lock" || die "cannot open the magnet drain lock"
+  flock -w 60 8 || die "another qbt is still draining magnets"
+}
+
+take_magnet_state_lock() {
+  local dir
+  dir=$(magnet_state_dir)
+  ensure_state_dir "$dir"
+  exec 7>"$dir/state.lock" || die "cannot open the magnet state lock"
+  flock -w 60 7 || die "another qbt is still updating magnet state"
+}
+
+release_magnet_state_lock() { exec 7>&-; }
+
+# The caller holds state.lock. Remove the URL this drain actually read,
+# not whichever entry happens to be first after an in-flight cancel.
+magnet_remove_inbox() {
+  MAGNET_URL=$1 python3 - "$(magnet_inbox_path)" <<'PY'
+import json, os, sys, tempfile
+path = sys.argv[1]
+url = os.environ["MAGNET_URL"]
+try:
+    with open(path) as f:
+        rows = [json.loads(ln) for ln in f if ln.strip()]
+except FileNotFoundError:
+    sys.exit(0)
+tmp = None
+try:
+    with tempfile.NamedTemporaryFile(mode="w", dir=os.path.dirname(path), delete=False) as f:
+        tmp = f.name
+        for row in rows:
+            if row.get("url") != url:
+                f.write(json.dumps(row) + "\n")
+    os.replace(tmp, path)
+finally:
+    if tmp and os.path.exists(tmp):
+        os.unlink(tmp)
+PY
+}
+
 magnet_desktop_path() {
   printf '%s' "${QBT_MAGNET_DESKTOP:-$HOME_DIR/.local/share/applications/omaqbt-magnet.desktop}"
 }
@@ -1352,12 +1401,13 @@ magnet_read_pending() {
 }
 
 magnet_write_pending() {
-  local path dir
+  local path dir tmp
   path=$(magnet_pending_path)
   dir=$(magnet_state_dir)
   ensure_state_dir "$dir"
-  printf '%s\n' "$1" >"$path"
-  chmod 600 "$path" 2>/dev/null || true
+  tmp=$(mktemp "${path}.XXXXXX")
+  printf '%s\n' "$1" >"$tmp"
+  mv -f -- "$tmp" "$path"
 }
 
 magnet_read_cancel() {
@@ -1371,12 +1421,13 @@ magnet_read_cancel() {
 }
 
 magnet_write_cancel() {
-  local path dir
+  local path dir tmp
   path=$(magnet_cancel_path)
   dir=$(magnet_state_dir)
   ensure_state_dir "$dir"
-  printf '%s\n' "$1" >"$path"
-  chmod 600 "$path" 2>/dev/null || true
+  tmp=$(mktemp "${path}.XXXXXX")
+  printf '%s\n' "$1" >"$tmp"
+  mv -f -- "$tmp" "$path"
 }
 
 magnet_info() {
@@ -1394,6 +1445,7 @@ cmd_magnet_paths() {
 }
 
 cmd_magnet_snapshot() {
+  take_magnet_state_lock
   local inbox='[]' pending
   pending=$(magnet_read_pending)
   if [[ -f $(magnet_inbox_path) ]]; then
@@ -1411,6 +1463,7 @@ print(json.dumps(rows))
 PY
 )
   fi
+  release_magnet_state_lock
   # Both lists hold magnets: they go to jq through the environment.
   JQ_INBOX=$inbox JQ_PENDING=$pending jq -n '{inbox:(env.JQ_INBOX|fromjson),pending:(env.JQ_PENDING|fromjson)}'
   printf '\n'
@@ -1472,6 +1525,7 @@ cmd_magnet_inbox() {
   [[ ${2:-} == --force ]] && force=1
   [[ $url == magnet:* ]] || die "usage: qbt magnet-inbox <magnet-url>"
   export PATH="/usr/bin:$PATH"
+  take_magnet_state_lock
   local dir inbox pending meta
   dir=$(magnet_state_dir)
   ensure_state_dir "$dir"
@@ -1523,10 +1577,12 @@ PY
   local st=$?
   set -e
   if [[ $st -eq 20 ]]; then
+    release_magnet_state_lock
     magnet_notify "Inbox full. Click the mark when the daemon is up."
     die "inbox full"
   fi
   [[ $st -eq 0 ]] || die "magnet-inbox failed"
+  release_magnet_state_lock
   local raised=0
   local raise_cmd
   raise_cmd=${QBT_RAISE_CMD:-omarchy-shell}
@@ -1544,6 +1600,7 @@ PY
     label=$(jq -r '.dn // empty' <<<"$meta")
     [[ -n $label ]] || label=$(jq -r '.ids[0] // "magnet"' <<<"$meta")
     magnet_notify "Click the mark to start ${label}"
+    take_magnet_state_lock
     MAGNET_URL=$url python3 - "$(magnet_inbox_path)" <<'PY'
 import json, os, sys
 path = sys.argv[1]
@@ -1561,44 +1618,51 @@ with open(path, "w") as f:
     for obj in rows:
         f.write(json.dumps(obj) + "\n")
 PY
+    release_magnet_state_lock
   fi
   printf '%s\n' '{"ok":true}'
 }
 
 cmd_magnet_pending_list() {
+  take_magnet_state_lock
   magnet_read_pending
   printf '\n'
+  release_magnet_state_lock
 }
 
 cmd_magnet_pending_drop() {
   local hash=${1:-}
   [[ -n $hash ]] || die "usage: qbt magnet-pending-drop <hash>"
   valid_hashes "$hash" || die "invalid hash list"
+  take_magnet_state_lock
   local next
   next=$(magnet_read_pending | jq -c --arg h "$hash" '[.[] | select((.hash // "") != $h and ((.hashes // []) | index($h) | not))]')
   magnet_write_pending "$next"
+  release_magnet_state_lock
   printf '%s\n' '{"ok":true}'
 }
 
 cmd_magnet_inbox_drop() {
+  take_magnet_state_lock
   local dir inbox first url
   dir=$(magnet_state_dir)
   ensure_state_dir "$dir"
   inbox=$(magnet_inbox_path)
-  [[ -f $inbox ]] || { printf '%s\n' '{"ok":true}'; return 0; }
+  [[ -f $inbox ]] || { release_magnet_state_lock; printf '%s\n' '{"ok":true}'; return 0; }
   first=$(head -1 "$inbox" || true)
-  [[ -n $first ]] || { printf '%s\n' '{"ok":true}'; return 0; }
+  [[ -n $first ]] || { release_magnet_state_lock; printf '%s\n' '{"ok":true}'; return 0; }
   url=$(jq -r '.url // empty' <<<"$first")
-  local rest
-  rest=$(tail -n +2 "$inbox" || true)
-  printf '%s' "$rest" >"$inbox"
+  magnet_remove_inbox "$url"
   local cancel
   cancel=$(magnet_read_cancel | JQ_U=$url jq -c '. + [env.JQ_U] | unique')
   magnet_write_cancel "$cancel"
+  release_magnet_state_lock
   printf '%s\n' '{"ok":true}'
 }
 
 cmd_magnet_drain() {
+  take_magnet_drain_lock
+  take_magnet_state_lock
   local inbox first url
   inbox=$(magnet_inbox_path)
   [[ -f $inbox ]] || die "inbox empty"
@@ -1606,6 +1670,7 @@ cmd_magnet_drain() {
   [[ -n $first ]] || die "inbox empty"
   url=$(jq -r '.url // empty' <<<"$first")
   [[ -n $url ]] || die "inbox empty"
+  release_magnet_state_lock
   local meta ids_json
   meta=$(magnet_meta "$url")
   ids_json=$(jq -c '.ids' <<<"$meta")
@@ -1627,26 +1692,28 @@ print(json.dumps(hits))
 PY
 )
   local pending
+  take_magnet_state_lock
   pending=$(magnet_read_pending)
   local already_pending
   already_pending=$(JQ_U=$url jq -e --argjson ids "$ids_json" '
     [.[] | select(.url == env.JQ_U or ((.hashes // [.hash]) | map(ascii_downcase) | any(. as $h | ($ids | map(ascii_downcase) | index($h)))) ) ] | length > 0
-  ' <<<"$pending" && echo yes || echo no)
+  ' <<<"$pending" >/dev/null && echo yes || echo no)
   if [[ $already_pending == yes ]]; then
-    tail -n +2 "$inbox" >"${inbox}.tmp" || true
-    mv "${inbox}.tmp" "$inbox"
+    magnet_remove_inbox "$url"
+    release_magnet_state_lock
     printf '%s\n' '{"ok":true,"duplicate":"pending"}'
     return 0
   fi
   local n_hits
   n_hits=$(jq 'length' <<<"$match")
   if [[ $n_hits -gt 0 ]]; then
-    tail -n +2 "$inbox" >"${inbox}.tmp" || true
-    mv "${inbox}.tmp" "$inbox"
+    magnet_remove_inbox "$url"
+    release_magnet_state_lock
     magnet_notify "Already in the list"
     printf '%s\n' '{"ok":true,"duplicate":"library"}'
     return 0
   fi
+  release_magnet_state_lock
   local body
   body="urls=$(uri_encode "$url")"
   body+="&stopCondition=MetadataReceived&stopped=false&paused=false"
@@ -1676,21 +1743,23 @@ PY
   hashes=$(jq -c '[.[].hash, .[].v1, .[].v2] | map(select(. != "")) | unique' <<<"$match")
   dn=$(jq -r '.dn // empty' <<<"$meta")
   local cancel
+  take_magnet_state_lock
   cancel=$(magnet_read_cancel)
   if JQ_U=$url jq -e --arg h "$hash" 'index(env.JQ_U) or index($h)' <<<"$cancel" >/dev/null; then
-    api POST "/api/v2/torrents/delete" "hashes=${hash}&deleteFiles=true" >/dev/null || true
-    tail -n +2 "$inbox" >"${inbox}.tmp" || true
-    mv "${inbox}.tmp" "$inbox"
+    magnet_remove_inbox "$url"
     magnet_write_cancel "$(JQ_U=$url jq -c --arg h "$hash" '[.[] | select(. != env.JQ_U and . != $h)]' <<<"$cancel")"
+    release_magnet_state_lock
+    api POST "/api/v2/torrents/delete" "hashes=${hash}&deleteFiles=true" >/dev/null || true
     printf '%s\n' '{"ok":true,"cancelled":true}'
     return 0
   fi
-  tail -n +2 "$inbox" >"${inbox}.tmp" || true
-  mv "${inbox}.tmp" "$inbox"
   local row
   row=$(JQ_U=$url jq -n --arg hash "$hash" --argjson hashes "$hashes" --arg dn "$dn" --argjson addedAt "$(date +%s)" \
     '{hash:$hash,url:env.JQ_U,hashes:$hashes,dn:$dn,addedAt:$addedAt}')
+  pending=$(magnet_read_pending)
   magnet_write_pending "$(JQ_ROW=$row jq -c '. + [env.JQ_ROW|fromjson]' <<<"$pending")"
+  magnet_remove_inbox "$url"
+  release_magnet_state_lock
   printf '%s\n' '{"ok":true}'
 }
 
