@@ -3,6 +3,7 @@ pragma ComponentBehavior: Bound
 import QtQuick
 import QtQuick.Controls
 import qs.Commons
+import qs.Commons as Commons
 import qs.Ui
 import "SettingsView.js" as SettingsView
 import "ClientView.js" as View
@@ -111,8 +112,8 @@ Item {
 
   readonly property int padX: Style.space(12)
   readonly property int rowHeight: Style.space(28)
-  readonly property color dimColor: Util.alpha(Color.foreground, Style.normalBorderAlpha)
-  readonly property color lineColor: Util.alpha(Color.foreground, Style.normalBorderAlpha)
+  readonly property color dimColor: Util.alpha(Commons.Color.foreground, Style.normalBorderAlpha)
+  readonly property color lineColor: Util.alpha(Commons.Color.foreground, Style.normalBorderAlpha)
 
   visible: open
 
@@ -347,7 +348,7 @@ Item {
       anchors.right: parent.right
       anchors.top: parent.top
       height: 1
-      color: Util.alpha(Color.foreground, Style.normalBorderAlpha)
+      color: Util.alpha(Commons.Color.foreground, Style.normalBorderAlpha)
     }
 
     Flow {
@@ -368,14 +369,14 @@ Item {
             textFormat: Text.PlainText
             font.family: Style.fontFamily
             font.pixelSize: Style.font.bodySmall
-            color: Color.foreground
+            color: Commons.Color.foreground
           }
           Text {
             text: " " + hint.modelData.label
             textFormat: Text.PlainText
             font.family: Style.fontFamily
             font.pixelSize: Style.font.bodySmall
-            color: Color.muted
+            color: Commons.Color.muted
           }
         }
       }
@@ -436,7 +437,7 @@ Item {
               anchors.top: parent.top
               anchors.bottom: parent.bottom
               width: Style.space(3)
-              color: Color.accent
+              color: Commons.Color.accent
             }
             Text {
               anchors.left: parent.left
@@ -449,7 +450,7 @@ Item {
               textFormat: Text.PlainText
               font.family: Style.fontFamily
               font.pixelSize: Style.font.body
-              color: sectionItem.dimmed ? settings.dimColor : (sectionItem.current ? Color.accent : Color.foreground)
+              color: sectionItem.dimmed ? settings.dimColor : (sectionItem.current ? Commons.Color.accent : Commons.Color.foreground)
             }
             Text {
               id: sectionCount
@@ -461,7 +462,7 @@ Item {
               textFormat: Text.PlainText
               font.family: Style.fontFamily
               font.pixelSize: Style.font.bodySmall
-              color: Color.muted
+              color: Commons.Color.muted
             }
           }
         }
@@ -511,7 +512,7 @@ Item {
         textFormat: Text.PlainText
         font.family: Style.fontFamily
         font.pixelSize: Style.font.body
-        color: Color.accent
+        color: Commons.Color.accent
       }
       Rectangle {
         anchors.left: parent.left
@@ -582,7 +583,7 @@ Item {
               anchors.bottom: parent.bottom
               anchors.bottomMargin: Style.space(6)
               text: entryItem.modelData.label
-              color: Color.muted
+              color: Commons.Color.muted
               font.bold: false
               font.capitalization: Font.AllUppercase
               font.letterSpacing: Style.font.caption * 0.12
@@ -623,7 +624,7 @@ Item {
           textFormat: Text.PlainText
           font.family: Style.fontFamily
           font.pixelSize: Style.font.body
-          color: Color.muted
+          color: Commons.Color.muted
         }
       }
     }
@@ -658,7 +659,7 @@ Item {
         textFormat: Text.PlainText
         font.family: Style.fontFamily
         font.pixelSize: Style.font.bodySmall
-        color: Color.foreground
+        color: Commons.Color.foreground
       }
       Text {
         id: helpText
@@ -673,7 +674,7 @@ Item {
         textFormat: Text.PlainText
         font.family: Style.fontFamily
         font.pixelSize: Style.font.bodySmall
-        color: Color.muted
+        color: Commons.Color.muted
       }
     }
 

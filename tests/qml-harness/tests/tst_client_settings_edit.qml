@@ -1,6 +1,7 @@
 import QtQuick
 import QtTest
 import qs.Commons
+import qs.Commons as Commons
 import "../../.."
 import "../../../SettingsSchema.js" as Schema
 import "../../../SettingsView.js" as SettingsView
@@ -215,7 +216,7 @@ TestCase {
     key(o.c, "y")
     compare(writes(o), [["upnp", "true"]])
     compare(valueText(o, "upnp"), "saving…")
-    compare(findName(rowItem(o, "upnp"), "settingsValue").color, Color.muted)
+    compare(findName(rowItem(o, "upnp"), "settingsValue").color, Commons.Color.muted)
     var reads = calls(o.svc, "readPrefs").length
     finish(o, true)
     compare(calls(o.svc, "readPrefs").length, reads + 1, "a success re-reads")

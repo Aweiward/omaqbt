@@ -2,6 +2,7 @@ pragma ComponentBehavior: Bound
 
 import QtQuick
 import qs.Commons
+import qs.Commons as Commons
 
 // The inspector pane body: tab strip, pane title, and a switch between the
 // per-tab components: InspectorInfoTab (1), InspectorTrackersTab (2),
@@ -58,7 +59,7 @@ Item {
   signal listRowClicked(string tab, int index)
 
   readonly property int padX: Style.space(12)
-  readonly property color lineColor: Util.alpha(Color.foreground, Style.normalBorderAlpha)
+  readonly property color lineColor: Util.alpha(Commons.Color.foreground, Style.normalBorderAlpha)
 
   function positionFile(index) {
     filesTab.positionAt(index)
@@ -108,14 +109,14 @@ Item {
               textFormat: Text.PlainText
               font.family: Style.fontFamily
               font.pixelSize: Style.font.body
-              color: Color.muted
+              color: Commons.Color.muted
             }
             Text {
               text: tabItem.modelData.tab
               textFormat: Text.PlainText
               font.family: Style.fontFamily
               font.pixelSize: Style.font.body
-              color: tabItem.on ? Color.foreground : Color.muted
+              color: tabItem.on ? Commons.Color.foreground : Commons.Color.muted
             }
           }
 
@@ -125,7 +126,7 @@ Item {
             anchors.right: parent.right
             anchors.bottom: parent.bottom
             height: Style.space(2)
-            color: Color.accent
+            color: Commons.Color.accent
           }
 
           MouseArea {
@@ -163,7 +164,7 @@ Item {
       textFormat: Text.PlainText
       font.family: Style.fontFamily
       font.pixelSize: Style.font.body
-      color: Color.muted
+      color: Commons.Color.muted
     }
 
     InspectorInfoTab {

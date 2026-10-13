@@ -2,6 +2,7 @@ pragma ComponentBehavior: Bound
 
 import QtQuick
 import qs.Commons
+import qs.Commons as Commons
 import "ClientView.js" as View
 import "InspectorView.js" as InspectorView
 
@@ -33,7 +34,7 @@ Item {
   property color lineColor: "transparent"
 
   function toneColor(tone) {
-    return View.toneColor(tone, Color)
+    return View.toneColor(tone, Commons.Color)
   }
 
   function limitCursorItem(item) {
@@ -90,7 +91,7 @@ Item {
         lineHeight: 1.2
         font.family: Style.fontFamily
         font.pixelSize: Style.font.title
-        color: Color.foreground
+        color: Commons.Color.foreground
       }
 
       // Hidden with no cells too: while the sidecar is down, or before
@@ -113,7 +114,7 @@ Item {
         wrapMode: Text.WordWrap
         font.family: Style.fontFamily
         font.pixelSize: Style.font.bodySmall
-        color: Color.muted
+        color: Commons.Color.muted
       }
 
       Column {
@@ -133,7 +134,7 @@ Item {
               textFormat: Text.PlainText
               font.family: Style.fontFamily
               font.pixelSize: Style.font.body
-              color: Color.muted
+              color: Commons.Color.muted
             }
             Text {
               width: field.width - Style.space(96)
@@ -165,7 +166,7 @@ Item {
             font.capitalization: Font.AllUppercase
             font.bold: false
             font.letterSpacing: Style.font.caption * 0.12
-            color: Color.muted
+            color: Commons.Color.muted
           }
 
           Column {
@@ -198,7 +199,7 @@ Item {
                   Rectangle {
                     width: Style.space(3)
                     height: parent.height
-                    color: Color.accent
+                    color: Commons.Color.accent
                   }
                 }
 
@@ -211,7 +212,7 @@ Item {
                     textFormat: Text.PlainText
                     font.family: Style.fontFamily
                     font.pixelSize: Style.font.body
-                    color: Color.muted
+                    color: Commons.Color.muted
                   }
                   Text {
                     id: gvalue
@@ -236,7 +237,7 @@ Item {
                     textFormat: Text.PlainText
                     font.family: Style.fontFamily
                     font.pixelSize: Style.font.body
-                    color: Color.muted
+                    color: Commons.Color.muted
                   }
                 }
               }
@@ -290,14 +291,14 @@ Item {
             textFormat: Text.PlainText
             font.family: Style.fontFamily
             font.pixelSize: Style.font.body
-            color: Color.foreground
+            color: Commons.Color.foreground
           }
           Text {
             text: act.modelData.label
             textFormat: Text.PlainText
             font.family: Style.fontFamily
             font.pixelSize: Style.font.body
-            color: Color.muted
+            color: Commons.Color.muted
           }
         }
       }

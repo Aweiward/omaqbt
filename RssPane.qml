@@ -3,6 +3,7 @@ pragma ComponentBehavior: Bound
 import QtQuick
 import QtQuick.Controls
 import qs.Commons
+import qs.Commons as Commons
 import "ClientView.js" as View
 import "RssView.js" as RssView
 import "LinkRules.js" as Links
@@ -255,8 +256,8 @@ Item {
 
   readonly property int padX: Style.space(12)
   readonly property int rowHeight: Style.space(28)
-  readonly property color lineColor: Util.alpha(Color.foreground, Style.normalBorderAlpha)
-  readonly property color dimColor: Util.alpha(Color.foreground, 0.4)
+  readonly property color lineColor: Util.alpha(Commons.Color.foreground, Style.normalBorderAlpha)
+  readonly property color dimColor: Util.alpha(Commons.Color.foreground, 0.4)
 
   signal leaveRequested()
 
@@ -653,7 +654,7 @@ Item {
 
   Rectangle {
     anchors.fill: parent
-    color: Color.background
+    color: Commons.Color.background
   }
 
   // ---- the footer the columns share -----------------------------------------------------
@@ -671,7 +672,7 @@ Item {
       anchors.right: parent.right
       anchors.top: parent.top
       height: 1
-      color: Util.alpha(Color.foreground, Style.normalBorderAlpha)
+      color: Util.alpha(Commons.Color.foreground, Style.normalBorderAlpha)
     }
 
     Flow {
@@ -692,14 +693,14 @@ Item {
             textFormat: Text.PlainText
             font.family: Style.fontFamily
             font.pixelSize: Style.font.bodySmall
-            color: Color.foreground
+            color: Commons.Color.foreground
           }
           Text {
             text: " " + hint.modelData.label
             textFormat: Text.PlainText
             font.family: Style.fontFamily
             font.pixelSize: Style.font.bodySmall
-            color: Color.muted
+            color: Commons.Color.muted
           }
         }
       }
@@ -735,7 +736,7 @@ Item {
       textFormat: Text.PlainText
       font.family: Style.fontFamily
       font.pixelSize: Style.font.body
-      color: Color.accent
+      color: Commons.Color.accent
     }
     Rectangle {
       anchors.left: parent.left
@@ -792,7 +793,7 @@ Item {
           visible: feedRow.current && feedsPane.focusedPane
           width: Style.space(3)
           height: parent.height
-          color: Color.accent
+          color: Commons.Color.accent
         }
         Text {
           id: feedLabel
@@ -807,7 +808,7 @@ Item {
           font.family: Style.fontFamily
           font.pixelSize: Style.font.body
           font.bold: feedRow.modelData.kind === "folder"
-          color: feedRow.current ? Color.accent : Color.foreground
+          color: feedRow.current ? Commons.Color.accent : Commons.Color.foreground
         }
         Text {
           id: feedState
@@ -818,7 +819,7 @@ Item {
           textFormat: Text.PlainText
           font.family: Style.fontFamily
           font.pixelSize: Style.font.caption
-          color: feedRow.modelData.hasError ? Color.urgent : Color.muted
+          color: feedRow.modelData.hasError ? Commons.Color.urgent : Commons.Color.muted
         }
         Text {
           id: feedCount
@@ -829,7 +830,7 @@ Item {
           textFormat: Text.PlainText
           font.family: Style.fontFamily
           font.pixelSize: Style.font.bodySmall
-          color: Color.muted
+          color: Commons.Color.muted
         }
         MouseArea {
           anchors.fill: parent
@@ -882,7 +883,7 @@ Item {
         textFormat: Text.PlainText
         font.family: Style.fontFamily
         font.pixelSize: Style.font.bodySmall
-        color: Color.accent
+        color: Commons.Color.accent
       }
       MouseArea {
         anchors.fill: parent
@@ -919,7 +920,7 @@ Item {
         textFormat: Text.PlainText
         font.family: Style.fontFamily
         font.pixelSize: Style.font.body
-        color: Color.urgent
+        color: Commons.Color.urgent
       }
     }
 
@@ -955,7 +956,7 @@ Item {
           visible: articleRow.current && articlesPane.focusedPane
           width: Style.space(3)
           height: parent.height
-          color: Color.accent
+          color: Commons.Color.accent
         }
         // Unread: a ● before the title (and bold); the Article pane says
         // "unread" or "read" in words.
@@ -971,7 +972,7 @@ Item {
           textFormat: Text.PlainText
           font.family: Style.fontFamily
           font.pixelSize: Style.font.caption
-          color: Color.accent
+          color: Commons.Color.accent
         }
         Text {
           id: titleText
@@ -985,7 +986,7 @@ Item {
           font.family: Style.fontFamily
           font.pixelSize: Style.font.body
           font.bold: !articleRow.isRead
-          color: articleRow.current ? Color.accent : (articleRow.isRead ? rss.dimColor : Color.foreground)
+          color: articleRow.current ? Commons.Color.accent : (articleRow.isRead ? rss.dimColor : Commons.Color.foreground)
         }
         Rectangle {
           id: libTag
@@ -1005,7 +1006,7 @@ Item {
             textFormat: Text.PlainText
             font.family: Style.fontFamily
             font.pixelSize: Style.font.caption
-            color: Color.muted
+            color: Commons.Color.muted
           }
         }
         Text {
@@ -1017,7 +1018,7 @@ Item {
           textFormat: Text.PlainText
           font.family: Style.fontFamily
           font.pixelSize: Style.font.bodySmall
-          color: Color.muted
+          color: Commons.Color.muted
         }
         MouseArea {
           anchors.fill: parent
@@ -1046,7 +1047,7 @@ Item {
       textFormat: Text.PlainText
       font.family: Style.fontFamily
       font.pixelSize: Style.font.subtitle
-      color: Color.muted
+      color: Commons.Color.muted
     }
 
     KeyFooter {
@@ -1089,7 +1090,7 @@ Item {
       textFormat: Text.PlainText
       font.family: Style.fontFamily
       font.pixelSize: Style.font.body
-      color: Color.urgent
+      color: Commons.Color.urgent
     }
 
     Flickable {
@@ -1121,7 +1122,7 @@ Item {
           font.family: Style.fontFamily
           font.pixelSize: Style.font.subtitle
           font.bold: true
-          color: Color.foreground
+          color: Commons.Color.foreground
         }
         // The feed's own title (OV4), else its name.
         Text {
@@ -1132,7 +1133,7 @@ Item {
           textFormat: Text.PlainText
           font.family: Style.fontFamily
           font.pixelSize: Style.font.bodySmall
-          color: Color.muted
+          color: Commons.Color.muted
         }
         Text {
           width: parent.width
@@ -1141,7 +1142,7 @@ Item {
           textFormat: Text.PlainText
           font.family: Style.fontFamily
           font.pixelSize: Style.font.bodySmall
-          color: Color.muted
+          color: Commons.Color.muted
         }
         Text {
           objectName: "rssArticleState"
@@ -1150,7 +1151,7 @@ Item {
           textFormat: Text.PlainText
           font.family: Style.fontFamily
           font.pixelSize: Style.font.bodySmall
-          color: rss.currentArticle && !rss.currentArticle.isRead ? Color.accent : Color.muted
+          color: rss.currentArticle && !rss.currentArticle.isRead ? Commons.Color.accent : Commons.Color.muted
         }
         Text {
           width: parent.width
@@ -1158,7 +1159,7 @@ Item {
           textFormat: Text.PlainText
           font.family: Style.fontFamily
           font.pixelSize: Style.font.bodySmall
-          color: rss.currentArticle && rss.currentArticle.hasTorrent ? Color.accent : Color.muted
+          color: rss.currentArticle && rss.currentArticle.hasTorrent ? Commons.Color.accent : Commons.Color.muted
         }
         Rectangle {
           width: parent.width
@@ -1179,7 +1180,7 @@ Item {
           textFormat: Text.PlainText
           font.family: Style.fontFamily
           font.pixelSize: Style.font.body
-          color: Color.foreground
+          color: Commons.Color.foreground
         }
       }
     }
