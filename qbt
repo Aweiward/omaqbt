@@ -1152,11 +1152,12 @@ bind_mullvad() {
 }
 
 ensure_port() {
-  local port=8080
-  if grep -F -q 'WebUI\Port=' "$CONF" 2>/dev/null; then
-    port=$(grep -F 'WebUI\Port=' "$CONF" | tail -n1 | cut -d= -f2)
-    [[ -n $port ]] || port=8080
-  fi
+  local port
+  # setup_daemon has stopped nox, so its listener cannot look like a
+  # collision. Keep the configured port when available; persist any
+  # fallback so every helper discovers the same endpoint from the conf.
+  port=$(read_port)
+  port=$(python3 "$(qbt_lib_dir)/webui_port.py" "$port")
   set_key "$CONF" 'WebUI\Port' "$port"
 }
 

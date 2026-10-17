@@ -183,6 +183,45 @@ class RefreshTests(unittest.TestCase):
                 self.assertEqual(second["dlSpeed"], 100)
 
 
+class PortChangeTests(unittest.TestCase):
+    def test_refresh_follows_saved_port_without_restarting_sidecar(self):
+        with harness.fixture_server() as (port_a, env_a), \
+                harness.fixture_server() as (port_b, env_b), \
+                tempfile.TemporaryDirectory() as tmp:
+            conf = Path(tmp) / "qBittorrent.conf"
+
+            def point_at(port):
+                conf.write_text(
+                    "[Preferences]\n"
+                    f"WebUI\\Port={port}\n"
+                    f"WebUI\\APIKey={harness.FIXTURE_API_KEY}\n"
+                    "WebUI\\LocalHostAuth=true\n"
+                )
+
+            point_at(port_a)
+            env = dict(env_a, QBT_CONF=str(conf))
+            env.pop("QBT_BASE")  # Discover the real configured port.
+            with ServeProcess(env) as sp:
+                self.assertTrue(sp.readline()["api"])
+                sp.send({"cmd": "refresh"})
+                self.assertTrue(sp.read_until(lambda o: o.get("type") == "status")["api"])
+                point_at(port_b)
+                sp.send({"cmd": "refresh"})
+                status = sp.read_until(lambda o: o.get("type") == "status")
+                self.assertTrue(status["api"])
+                log = _read_log(env_b["QBT_FIXTURE_LOG"])
+                # Preferences are re-read immediately at the new endpoint.
+                self.assertTrue(any(e["path"] == "/api/v2/app/preferences" for e in log))
+                calls = [e for e in log if e["path"] == "/api/v2/sync/maindata"]
+                # Ignore the harness readiness call; the sidecar starts at 0.
+                self.assertGreaterEqual(len(calls), 2)
+                self.assertEqual(calls[-1]["query"].get("rid"), ["0"])
+                sp.send({"cmd": "watch", "hash": "a" * 40, "tab": "trackers"})
+                sp.read_until(lambda o: o.get("type") == "inspect")
+                log = _read_log(env_b["QBT_FIXTURE_LOG"])
+                self.assertTrue(any(e["path"] == "/api/v2/torrents/trackers" for e in log))
+
+
 WRONG_KEY = "qbt_WrongKey3456789abcdefghjkmnp"
 
 

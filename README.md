@@ -105,8 +105,14 @@ WebUI\Address=127.0.0.1
 WebUI\LocalHostAuth=true
 WebUI\AuthSubnetWhitelistEnabled=false
 WebUI\APIKey=<generated if missing>
-WebUI\Port=<existing port, or 8080>
+WebUI\Port=<available existing port, or 8080; free fallback if occupied>
 ```
+
+Before starting nox, OmaqBT checks whether the configured localhost WebUI port
+(or 8080 by default) can be bound. If another service owns it, OmaqBT chooses a
+free port and saves it in `qBittorrent.conf`. The polling helper follows that
+saved port when it re-probes, without a shell restart. The check does not reserve
+the port until nox starts; another process can still claim it in that interval.
 
 OmaqBT signs in to the Web API with qBittorrent's API key. It reads the key from `qBittorrent.conf`, keeps that file readable only by you, and never puts the key on a command line, so other accounts on your machine can't use the Web API without it. Older OmaqBT versions turned localhost login off. If your daemon was set up that way, OmaqBT secures it automatically: it writes the keys above and restarts the daemon once. If qBittorrent ever refuses the key, the popup shows **Restart daemon**. Other tools that relied on the old localhost bypass (scripts, `*arr` apps) now need the API key or a Web UI login. Tracker URLs, magnets and download links, which can carry a private tracker's passkey, stay off command lines too: the widget hands them over on stdin. There are two exceptions. A magnet your browser opens reaches `qbt magnet-inbox` on its command line for the moment it takes to save it to the inbox. And when you download a search result through its plugin, qBittorrent itself runs the plugin's downloader (`nova2dl.py`) with the link on its command line, as it does from its own interface.
 
