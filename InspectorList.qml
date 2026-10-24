@@ -3,6 +3,7 @@ pragma ComponentBehavior: Bound
 import QtQuick
 import QtQuick.Controls
 import qs.Commons
+import qs.Commons as Commons
 import "ClientView.js" as View
 
 // The inspector pane's shared cursor list: today's Files ListView, generic
@@ -110,8 +111,8 @@ Item {
   }
 
   function toneColor(tone) {
-    if (tone === "dim") return Util.alpha(Color.foreground, Style.normalBorderAlpha)
-    return View.toneColor(tone, Color)
+    if (tone === "dim") return Util.alpha(Commons.Color.foreground, Style.normalBorderAlpha)
+    return View.toneColor(tone, Commons.Color)
   }
 
   function toneFor(column, row) {
@@ -193,7 +194,7 @@ Item {
         anchors.top: parent.top
         anchors.bottom: parent.bottom
         width: Style.space(3)
-        color: Color.accent
+        color: Commons.Color.accent
       }
 
       Row {
@@ -275,7 +276,7 @@ Item {
             textFormat: Text.PlainText
             font.family: Style.fontFamily
             font.pixelSize: Style.font.body
-            color: Color.muted
+            color: Commons.Color.muted
             text: list.headerText(modelData)
           }
         }

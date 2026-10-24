@@ -2,6 +2,7 @@ pragma ComponentBehavior: Bound
 
 import QtQuick
 import qs.Commons
+import qs.Commons as Commons
 import "ClientView.js" as View
 import "InspectorView.js" as InspectorView
 
@@ -37,7 +38,7 @@ Item {
     elide: Text.ElideRight
     font.family: Style.fontFamily
     font.pixelSize: Style.font.bodySmall
-    color: View.toneColor(tone, Color)
+    color: View.toneColor(tone, Commons.Color)
   }
 
   Component {

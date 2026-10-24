@@ -2,6 +2,7 @@ pragma ComponentBehavior: Bound
 
 import QtQuick
 import qs.Commons
+import qs.Commons as Commons
 
 // A tab's non-row state: nothing (blank), "Loading…", the read error (its
 // cause, then "Retrying every 5 s."), "Needs qbt-serve", or the empty
@@ -33,7 +34,7 @@ Item {
       textFormat: Text.PlainText
       font.family: Style.fontFamily
       font.pixelSize: msg.big ? Style.font.title : Style.font.body
-      color: msg.tabState === "error" ? Color.urgent : (msg.tabState === "empty" ? Color.foreground : Color.muted)
+      color: msg.tabState === "error" ? Commons.Color.urgent : (msg.tabState === "empty" ? Commons.Color.foreground : Commons.Color.muted)
       text: {
         if (msg.tabState === "loading") return "Loading " + msg.noun + "…"
         if (msg.tabState === "error") return "Couldn't read " + msg.noun
@@ -50,7 +51,7 @@ Item {
       textFormat: Text.PlainText
       font.family: Style.fontFamily
       font.pixelSize: Style.font.body
-      color: Color.muted
+      color: Commons.Color.muted
       text: msg.tabState === "error" ? msg.error : (msg.copy.body || "")
     }
     Text {
@@ -59,7 +60,7 @@ Item {
       textFormat: Text.PlainText
       font.family: Style.fontFamily
       font.pixelSize: Style.font.body
-      color: Color.muted
+      color: Commons.Color.muted
       text: "Retrying every 5 s."
     }
   }

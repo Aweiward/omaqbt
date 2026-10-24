@@ -3,6 +3,7 @@ pragma ComponentBehavior: Bound
 import QtQuick
 import QtQuick.Controls
 import qs.Commons
+import qs.Commons as Commons
 import "ClientView.js" as View
 import "SearchView.js" as SearchView
 import "Model.js" as Model
@@ -239,8 +240,8 @@ Item {
 
   readonly property int padX: Style.space(12)
   readonly property int rowHeight: Style.space(28)
-  readonly property color lineColor: Util.alpha(Color.foreground, Style.normalBorderAlpha)
-  readonly property color dimColor: Util.alpha(Color.foreground, 0.4)
+  readonly property color lineColor: Util.alpha(Commons.Color.foreground, Style.normalBorderAlpha)
+  readonly property color dimColor: Util.alpha(Commons.Color.foreground, 0.4)
 
   signal leaveRequested()
 
@@ -614,7 +615,7 @@ Item {
 
   Rectangle {
     anchors.fill: parent
-    color: Color.background
+    color: Commons.Color.background
   }
 
   // ---- the footer the columns share -----------------------------------------------------
@@ -632,7 +633,7 @@ Item {
       anchors.right: parent.right
       anchors.top: parent.top
       height: 1
-      color: Util.alpha(Color.foreground, Style.normalBorderAlpha)
+      color: Util.alpha(Commons.Color.foreground, Style.normalBorderAlpha)
     }
 
     Flow {
@@ -653,14 +654,14 @@ Item {
             textFormat: Text.PlainText
             font.family: Style.fontFamily
             font.pixelSize: Style.font.bodySmall
-            color: Color.foreground
+            color: Commons.Color.foreground
           }
           Text {
             text: " " + hint.modelData.label
             textFormat: Text.PlainText
             font.family: Style.fontFamily
             font.pixelSize: Style.font.bodySmall
-            color: Color.muted
+            color: Commons.Color.muted
           }
         }
       }
@@ -687,7 +688,7 @@ Item {
       textFormat: Text.PlainText
       font.family: Style.fontFamily
       font.pixelSize: Style.font.body
-      color: Color.muted
+      color: Commons.Color.muted
     }
 
     Rectangle {
@@ -699,7 +700,7 @@ Item {
       height: Style.space(26)
       color: "transparent"
       border.width: 1
-      border.color: Color.accent
+      border.color: Commons.Color.accent
       Text {
         objectName: "searchQueryText"
         anchors.left: parent.left
@@ -712,7 +713,7 @@ Item {
         textFormat: Text.PlainText
         font.family: Style.fontFamily
         font.pixelSize: Style.font.body
-        color: search.query !== "" ? Color.foreground : Color.muted
+        color: search.query !== "" ? Commons.Color.foreground : Commons.Color.muted
       }
     }
 
@@ -740,7 +741,7 @@ Item {
           textFormat: Text.PlainText
           font.family: Style.fontFamily
           font.pixelSize: Style.font.bodySmall
-          color: Color.accent
+          color: Commons.Color.accent
         }
         MouseArea {
           anchors.fill: parent
@@ -764,7 +765,7 @@ Item {
           textFormat: Text.PlainText
           font.family: Style.fontFamily
           font.pixelSize: Style.font.bodySmall
-          color: Color.accent
+          color: Commons.Color.accent
         }
       }
     }
@@ -782,7 +783,7 @@ Item {
       textFormat: Text.PlainText
       font.family: Style.fontFamily
       font.pixelSize: Style.font.bodySmall
-      color: search.running ? Color.accent : Color.muted
+      color: search.running ? Commons.Color.accent : Commons.Color.muted
     }
 
     // The thin accent bar while a search runs.
@@ -793,7 +794,7 @@ Item {
       anchors.right: parent.right
       anchors.bottom: parent.bottom
       height: Style.space(2)
-      color: Color.accent
+      color: Commons.Color.accent
     }
     Rectangle {
       visible: !search.running
@@ -857,7 +858,7 @@ Item {
               font.family: Style.fontFamily
               font.pixelSize: Style.font.caption
               font.capitalization: Font.AllUppercase
-              color: Color.muted
+              color: Commons.Color.muted
             }
             Item {
               anchors.left: parent.left
@@ -874,7 +875,7 @@ Item {
                 visible: colItem.current && pluginsPane.focusedPane
                 width: Style.space(3)
                 height: parent.height
-                color: Color.accent
+                color: Commons.Color.accent
               }
               Text {
                 anchors.left: parent.left
@@ -887,7 +888,7 @@ Item {
                 textFormat: Text.PlainText
                 font.family: Style.fontFamily
                 font.pixelSize: Style.font.body
-                color: colItem.current ? Color.accent : (colItem.isRecent ? search.dimColor : Color.foreground)
+                color: colItem.current ? Commons.Color.accent : (colItem.isRecent ? search.dimColor : Commons.Color.foreground)
               }
               Text {
                 id: colCount
@@ -899,7 +900,7 @@ Item {
                 textFormat: Text.PlainText
                 font.family: Style.fontFamily
                 font.pixelSize: Style.font.bodySmall
-                color: Color.muted
+                color: Commons.Color.muted
               }
               MouseArea {
                 anchors.fill: parent
@@ -968,7 +969,7 @@ Item {
       textFormat: Text.PlainText
       font.family: Style.fontFamily
       font.pixelSize: Style.font.body
-      color: Color.urgent
+      color: Commons.Color.urgent
     }
 
     Item {
@@ -988,7 +989,7 @@ Item {
           font.family: Style.fontFamily
           font.pixelSize: Style.font.caption
           font.capitalization: Font.AllUppercase
-          color: Color.muted
+          color: Commons.Color.muted
           height: parent.height
           verticalAlignment: Text.AlignVCenter
         }
@@ -1039,7 +1040,7 @@ Item {
           visible: resultRow.current && resultsPane.focusedPane
           width: Style.space(3)
           height: parent.height
-          color: Color.accent
+          color: Commons.Color.accent
         }
         Row {
           anchors.fill: parent
@@ -1049,7 +1050,7 @@ Item {
             textFormat: Text.PlainText
             font.family: Style.fontFamily
             font.pixelSize: Style.font.body
-            color: Color.foreground
+            color: Commons.Color.foreground
             height: parent.height
             verticalAlignment: Text.AlignVCenter
             elide: Text.ElideRight
@@ -1062,7 +1063,7 @@ Item {
               objectName: "searchResultName"
               width: Math.min(implicitWidth, parent.width - (libTag.visible ? libTag.width + Style.space(8) : 0) - Style.space(8))
               text: resultRow.name
-              color: resultRow.current ? Color.accent : Color.foreground
+              color: resultRow.current ? Commons.Color.accent : Commons.Color.foreground
             }
             Rectangle {
               id: libTag
@@ -1082,15 +1083,15 @@ Item {
                 textFormat: Text.PlainText
                 font.family: Style.fontFamily
                 font.pixelSize: Style.font.caption
-                color: Color.muted
+                color: Commons.Color.muted
               }
             }
           }
           CellText { text: resultRow.size; width: resultsPane.sizeWidth; horizontalAlignment: Text.AlignRight }
           CellText { text: resultRow.seeds; width: resultsPane.numWidth; horizontalAlignment: Text.AlignRight }
           CellText { text: resultRow.peers; width: resultsPane.numWidth; horizontalAlignment: Text.AlignRight; visible: !resultsPane.hidePeers }
-          CellText { text: resultRow.plugin; width: resultsPane.pluginWidth; leftPadding: Style.space(12); color: Color.muted; visible: !resultsPane.hidePlugin }
-          CellText { text: resultRow.published; width: resultsPane.dateWidth; horizontalAlignment: Text.AlignRight; color: Color.muted; visible: !resultsPane.hidePublished }
+          CellText { text: resultRow.plugin; width: resultsPane.pluginWidth; leftPadding: Style.space(12); color: Commons.Color.muted; visible: !resultsPane.hidePlugin }
+          CellText { text: resultRow.published; width: resultsPane.dateWidth; horizontalAlignment: Text.AlignRight; color: Commons.Color.muted; visible: !resultsPane.hidePublished }
         }
         MouseArea {
           anchors.fill: parent
@@ -1121,7 +1122,7 @@ Item {
       textFormat: Text.PlainText
       font.family: Style.fontFamily
       font.pixelSize: Style.font.subtitle
-      color: text === SearchView.WINDOW.noPlugins ? Color.accent : Color.muted
+      color: text === SearchView.WINDOW.noPlugins ? Commons.Color.accent : Commons.Color.muted
     }
 
     // Ruling FD: what plugins are, under "No search plugins yet".
@@ -1139,7 +1140,7 @@ Item {
       textFormat: Text.PlainText
       font.family: Style.fontFamily
       font.pixelSize: Style.font.body
-      color: Color.muted
+      color: Commons.Color.muted
     }
 
     // The cursor row's help line: name · host · size · plugin.
@@ -1171,7 +1172,7 @@ Item {
         textFormat: Text.PlainText
         font.family: Style.fontFamily
         font.pixelSize: Style.font.bodySmall
-        color: Color.muted
+        color: Commons.Color.muted
       }
     }
 

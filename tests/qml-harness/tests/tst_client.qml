@@ -1,6 +1,7 @@
 import QtQuick
 import QtTest
 import qs.Commons
+import qs.Commons as Commons
 import "../../.."
 
 TestCase {
@@ -1412,8 +1413,8 @@ TestCase {
     verify(otherItem !== null)
     // a column's tone can be a function of the row: it survives being
     // handed to a Repeater through `columns` and isn't dropped/coerced
-    compare(findByObjectName(cursorItem, "cell").color, Color.muted, "row b's tone function resolves to muted")
-    compare(findByObjectName(otherItem, "cell").color, Color.foreground, "row a's tone function resolves to fg")
+    compare(findByObjectName(cursorItem, "cell").color, Commons.Color.muted, "row b's tone function resolves to muted")
+    compare(findByObjectName(otherItem, "cell").color, Commons.Color.foreground, "row a's tone function resolves to fg")
     compare(findByObjectName(otherItem, "detailText"), null, "no detail under a non-cursor row")
     var detailText = findByObjectName(cursorItem, "detailText")
     verify(detailText !== null, "the detail shows under the cursor row")

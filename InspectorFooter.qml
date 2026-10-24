@@ -1,5 +1,6 @@
 import QtQuick
 import qs.Commons
+import qs.Commons as Commons
 
 // The key hints pinned at the bottom of a list tab. Extracted out of
 // InspectorPane.qml (slice 2b, Task 1: pure refactor, no behaviour
@@ -16,7 +17,7 @@ Item {
     anchors.right: parent.right
     anchors.top: parent.top
     height: 1
-    color: Util.alpha(Color.foreground, Style.normalBorderAlpha)
+    color: Util.alpha(Commons.Color.foreground, Style.normalBorderAlpha)
   }
   Text {
     anchors.left: parent.left
@@ -26,6 +27,6 @@ Item {
     textFormat: Text.PlainText
     font.family: Style.fontFamily
     font.pixelSize: Style.font.bodySmall
-    color: Color.muted
+    color: Commons.Color.muted
   }
 }

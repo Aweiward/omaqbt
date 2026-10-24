@@ -3,6 +3,7 @@ pragma ComponentBehavior: Bound
 import QtQuick
 import QtQuick.Controls
 import qs.Commons
+import qs.Commons as Commons
 import qs.Ui
 import "ClientView.js" as View
 
@@ -32,8 +33,8 @@ Item {
 
   readonly property int padX: Style.space(12)
   readonly property int itemHeight: Style.space(26)
-  readonly property color dimColor: Util.alpha(Color.foreground, Style.normalBorderAlpha)
-  readonly property color mutedColor: Color.muted
+  readonly property color dimColor: Util.alpha(Commons.Color.foreground, Style.normalBorderAlpha)
+  readonly property color mutedColor: Commons.Color.muted
 
   // Scrolls just enough to show the entry at index.
   function positionAt(index) {
@@ -87,7 +88,7 @@ Item {
             anchors.bottom: parent.bottom
             anchors.bottomMargin: Style.space(6)
             text: entry.modelData.label
-            color: Color.muted
+            color: Commons.Color.muted
             font.bold: false
             font.capitalization: Font.AllUppercase
             font.letterSpacing: Style.font.caption * 0.12
@@ -98,7 +99,7 @@ Item {
             anchors.fill: parent
             color: entry.isActive ? Style.selectedAccentFill : "transparent"
             border.width: entry.isCursor ? 1 : 0
-            border.color: Color.accent
+            border.color: Commons.Color.accent
           }
 
           Text {
@@ -110,7 +111,7 @@ Item {
             textFormat: Text.PlainText
             font.family: Style.fontFamily
             font.pixelSize: Style.font.body
-            color: Color.accent
+            color: Commons.Color.accent
           }
 
           Text {
@@ -126,7 +127,7 @@ Item {
             textFormat: Text.PlainText
             font.family: Style.fontFamily
             font.pixelSize: entry.isItem ? Style.font.body : Style.font.bodySmall
-            color: !entry.isItem ? Color.muted : (entry.isActive ? Color.accent : (entry.modelData.zero ? pane.dimColor : Color.foreground))
+            color: !entry.isItem ? Commons.Color.muted : (entry.isActive ? Commons.Color.accent : (entry.modelData.zero ? pane.dimColor : Commons.Color.foreground))
           }
 
           Text {
@@ -139,7 +140,7 @@ Item {
             textFormat: Text.PlainText
             font.family: Style.fontFamily
             font.pixelSize: Style.font.body
-            color: entry.urgentCount ? Color.urgent : (entry.modelData.zero ? pane.dimColor : Color.muted)
+            color: entry.urgentCount ? Commons.Color.urgent : (entry.modelData.zero ? pane.dimColor : Commons.Color.muted)
           }
 
           MouseArea {
@@ -190,14 +191,14 @@ Item {
             textFormat: Text.PlainText
             font.family: Style.fontFamily
             font.pixelSize: Style.font.bodySmall
-            color: Color.foreground
+            color: Commons.Color.foreground
           }
           Text {
             text: " " + hint.modelData.label
             textFormat: Text.PlainText
             font.family: Style.fontFamily
             font.pixelSize: Style.font.bodySmall
-            color: Color.muted
+            color: Commons.Color.muted
           }
         }
       }

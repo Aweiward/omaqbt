@@ -3,6 +3,7 @@ pragma ComponentBehavior: Bound
 import QtQuick
 import QtQuick.Controls
 import qs.Commons
+import qs.Commons as Commons
 
 // The list editor's column (slice 4b): the lines of a list setting
 // (SettingsView.listItems: banned IPs, add_trackers, excluded_file_names),
@@ -26,7 +27,7 @@ Item {
   signal rowClicked(int index)
 
   readonly property int rowHeight: Style.space(28)
-  readonly property color dim: Util.alpha(Color.foreground, Style.normalBorderAlpha)
+  readonly property color dim: Util.alpha(Commons.Color.foreground, Style.normalBorderAlpha)
 
   // Scrolls the cursor row into view (after a j/k or a click).
   function reveal() {
@@ -76,7 +77,7 @@ Item {
             anchors.top: parent.top
             anchors.bottom: parent.bottom
             width: Style.space(3)
-            color: Color.accent
+            color: Commons.Color.accent
           }
           Text {
             objectName: "settingsListText"
@@ -91,7 +92,7 @@ Item {
             textFormat: Text.PlainText
             font.family: Style.fontFamily
             font.pixelSize: Style.font.body
-            color: listView.saving ? Color.muted : (lineItem.quiet ? listView.dim : Color.foreground)
+            color: listView.saving ? Commons.Color.muted : (lineItem.quiet ? listView.dim : Commons.Color.foreground)
           }
           MouseArea {
             anchors.fill: parent
@@ -113,7 +114,7 @@ Item {
         textFormat: Text.PlainText
         font.family: Style.fontFamily
         font.pixelSize: Style.font.body
-        color: Color.muted
+        color: Commons.Color.muted
       }
     }
   }

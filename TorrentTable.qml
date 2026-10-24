@@ -3,6 +3,7 @@ pragma ComponentBehavior: Bound
 import QtQuick
 import QtQuick.Controls
 import qs.Commons
+import qs.Commons as Commons
 import "Model.js" as Model
 import "ClientView.js" as View
 
@@ -54,16 +55,16 @@ Item {
   readonly property int ratioWidth: hideColumns.indexOf("ratio") < 0 ? Style.space(62) : 0
   readonly property int fixedWidth: glyphWidth + sizeWidth + progressWidth + dlWidth + ulWidth + etaWidth + ratioWidth
   readonly property int nameWidth: Math.max(Style.space(80), width - fixedWidth)
-  readonly property color lineColor: Util.alpha(Color.foreground, Style.normalBorderAlpha)
+  readonly property color lineColor: Util.alpha(Commons.Color.foreground, Style.normalBorderAlpha)
   readonly property string sortedColumn: View.sortColumn(sortMode)
   readonly property bool showRows: tableState === "rows"
 
   function toneColor(tone) {
-    return View.toneColor(tone, Color)
+    return View.toneColor(tone, Commons.Color)
   }
 
   function valueColor(text) {
-    return text === "—" || text === "∞" ? Color.muted : Color.foreground
+    return text === "—" || text === "∞" ? Commons.Color.muted : Commons.Color.foreground
   }
 
   function headerLabel(column, label) {
@@ -114,7 +115,7 @@ Item {
     textFormat: Text.PlainText
     font.family: Style.fontFamily
     font.pixelSize: Style.font.subtitle
-    color: Color.foreground
+    color: Commons.Color.foreground
   }
 
   component HeaderCell: Text {
@@ -131,7 +132,7 @@ Item {
     font.pixelSize: Style.font.bodySmall
     font.capitalization: Font.AllUppercase
     font.letterSpacing: Style.font.bodySmall * 0.08
-    color: sorted ? Color.foreground : Color.muted
+    color: sorted ? Commons.Color.foreground : Commons.Color.muted
   }
 
   Item {
@@ -213,7 +214,7 @@ Item {
         anchors.top: parent.top
         anchors.bottom: parent.bottom
         width: Style.space(3)
-        color: Color.accent
+        color: Commons.Color.accent
       }
 
       Row {
@@ -279,7 +280,7 @@ Item {
     textFormat: Text.PlainText
     font.family: Style.fontFamily
     font.pixelSize: Style.font.body
-    color: Color.muted
+    color: Commons.Color.muted
   }
 
   // Every other non-row state: a title, a paragraph and its keys.
@@ -311,7 +312,7 @@ Item {
       lineHeight: 1.4
       font.family: Style.fontFamily
       font.pixelSize: Style.font.body
-      color: Color.muted
+      color: Commons.Color.muted
     }
 
     Column {
@@ -327,14 +328,14 @@ Item {
             textFormat: Text.PlainText
             font.family: Style.fontFamily
             font.pixelSize: Style.font.body
-            color: Color.accent
+            color: Commons.Color.accent
           }
           Text {
             text: keyRow.modelData.label
             textFormat: Text.PlainText
             font.family: Style.fontFamily
             font.pixelSize: Style.font.body
-            color: Color.foreground
+            color: Commons.Color.foreground
           }
         }
       }

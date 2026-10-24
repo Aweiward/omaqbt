@@ -2,6 +2,7 @@ pragma ComponentBehavior: Bound
 
 import QtQuick
 import qs.Commons
+import qs.Commons as Commons
 
 // A titled, bordered pane. A focused pane gets a 1 px accent outline and
 // an accent title; the others a normalBorderAlpha line and a muted title.
@@ -24,7 +25,7 @@ Item {
   property bool swappedOut: false
   readonly property bool overlay: collapsed && focusedPane
   default property alias content: paneBody.data
-  readonly property color lineColor: Util.alpha(Color.foreground, Style.normalBorderAlpha)
+  readonly property color lineColor: Util.alpha(Commons.Color.foreground, Style.normalBorderAlpha)
 
   visible: !swappedOut && (!collapsed || overlay)
   z: overlay ? 1 : 0
@@ -32,7 +33,7 @@ Item {
   Rectangle {
     visible: paneItem.overlay
     anchors.fill: parent
-    color: Color.background
+    color: Commons.Color.background
 
     // Clicks on the overlay's empty space must not reach the table rows
     // underneath it.
@@ -60,7 +61,7 @@ Item {
       font.pixelSize: Style.font.bodySmall
       font.capitalization: Font.AllUppercase
       font.letterSpacing: Style.font.bodySmall * 0.1
-      color: paneItem.focusedPane ? Color.accent : Color.muted
+      color: paneItem.focusedPane ? Commons.Color.accent : Commons.Color.muted
     }
 
     Text {
@@ -75,7 +76,7 @@ Item {
       textFormat: Text.PlainText
       font.family: Style.fontFamily
       font.pixelSize: Style.font.bodySmall
-      color: paneItem.focusedPane ? Color.accent : Color.muted
+      color: paneItem.focusedPane ? Commons.Color.accent : Commons.Color.muted
     }
 
     Rectangle {
@@ -109,6 +110,6 @@ Item {
     anchors.fill: parent
     color: "transparent"
     border.width: 1
-    border.color: Color.accent
+    border.color: Commons.Color.accent
   }
 }
