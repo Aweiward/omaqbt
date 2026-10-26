@@ -1153,20 +1153,18 @@ bind_mullvad() {
 
 ensure_port() {
   local port
-  # setup_daemon has stopped nox, so its listener cannot look like a
-  # collision. Keep the configured port when available; persist any
+  # Setup and the service preflight run with nox stopped, so its listener
+  # cannot look like a collision. Keep the configured port when available; persist any
   # fallback so every helper discovers the same endpoint from the conf.
-  port=$(read_port)
+  port=$(read_port 2>/dev/null) || port=8080
   port=$(python3 "$(qbt_lib_dir)/webui_port.py" "$port")
   set_key "$CONF" 'WebUI\Port' "$port"
 }
 
 write_unit() {
   mkdir -p "$UNIT_DIR"
-  if [[ -f $UNIT_FILE ]]; then
-    return
-  fi
-  cat >"$UNIT_FILE" <<'UNIT'
+  if [[ ! -f $UNIT_FILE ]]; then
+    cat >"$UNIT_FILE" <<'UNIT'
 [Unit]
 Description=qBittorrent-nox for OmaqBT
 After=network-online.target
@@ -1178,6 +1176,31 @@ Restart=on-failure
 [Install]
 WantedBy=default.target
 UNIT
+  fi
+  # A drop-in upgrades existing units without replacing user customizations.
+  python3 - "$UNIT_FILE.d" "$(qbt_lib_dir)/../qbt" <<'PY'
+import sys
+from pathlib import Path
+
+directory = Path(sys.argv[1])
+directory.mkdir(parents=True, exist_ok=True)
+script = str(Path(sys.argv[2]).resolve())
+# systemd expands specifiers and environment variables even inside quotes.
+script = script.replace("\\", "\\\\").replace('"', '\\"')
+script = script.replace("%", "%%").replace("$", "$$")
+(directory / "webui-port.conf").write_text(
+    '[Service]\nExecStartPre=/usr/bin/bash "' + script + '" prepare-daemon-port\n'
+)
+PY
+}
+
+cmd_prepare_daemon_port() {
+  # systemd serializes service starts. Do not take the setup lock here:
+  # start-daemon holds it while waiting for systemctl enable --now.
+  refuse_gui_lock
+  is_daemon && die "qbittorrent-nox is already running outside omaqbt-nox.service."
+  ensure_state_dir "$STATE_DIR"
+  ensure_port
 }
 
 cmd_install() {
@@ -3991,6 +4014,7 @@ case ${1:-} in
   share-limits) shift; cmd_share_limits "$@" ;;
   install) shift; cmd_install "$@" ;;
   start-daemon) shift; cmd_start_daemon "$@" ;;
+  prepare-daemon-port) shift; cmd_prepare_daemon_port "$@" ;;
   secure-daemon) shift; cmd_secure_daemon "$@" ;;
   stop-daemon) shift; cmd_stop_daemon "$@" ;;
   category-add) shift; cmd_category_add "$@" ;;

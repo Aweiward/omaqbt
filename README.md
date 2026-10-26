@@ -173,6 +173,7 @@ systemctl --user stop omaqbt-nox.service
 - Runs `qbt` from the plugin folder. That helper is the only process that talks HTTP, and only to `127.0.0.1`.
 - Installs the Arch extra package `qbittorrent-nox` through `omarchy pkg add` when you click Install. Privilege is `pkexec`, not a sudoers rule.
 - Writes `~/.config/systemd/user/omaqbt-nox.service` and enables it as your user.
+- Adds a service pre-start drop-in that checks the WebUI port on every start, including login. It keeps an available configured port, repairs malformed values using 8080, and saves a free port from 18080–18999 when the preferred port is occupied. Existing service customizations are preserved.
 - Writes the localhost Web UI keys listed under Configure, including an API key when there isn't one. It stops the daemon first so qBittorrent does not overwrite those keys on exit.
 - If `wg0-mullvad` is up, also writes the `[BitTorrent]` interface keys so qBittorrent binds the tunnel, not a single relay IP.
 - Stores sync state in `$XDG_RUNTIME_DIR/omaqbt/` (private, mode 700). If that variable is unset it falls back to a uid-scoped `/tmp/omaqbt-<uid>`, created with `umask 077`, and refuses to write through a symlink or a directory it does not own.
