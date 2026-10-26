@@ -172,10 +172,23 @@ def do_tick(state, force_probe=False):
         new_probe, err = run_probe(state["helper"])
         state["last_probe_at"] = now_mono
         if new_probe is not None:
-            state["probe"] = new_probe
-            # The probe names the conf the key is read from.
-            for name in ("client", "inspect_client", "search_client"):
-                state[name].conf = new_probe.get("conf") or None
+            base = new_probe.get("base") or ""
+            try:
+                qbtsync.assert_local(base)
+            except ValueError as exc:
+                print(qbtsync.sanitize(str(exc)), file=sys.stderr)
+            else:
+                if base != state["client"].base:
+                    # A new endpoint needs a full sync and fresh prefs.
+                    # Never carry a previous endpoint's session into it.
+                    for name in ("client", "inspect_client", "search_client"):
+                        state[name].base = base
+                        state[name].cookiejar.clear()
+                    state["sync"] = qbtsync.SyncState()
+                    state["slow"] = qbtsync.SlowCache(interval=state["slow"].interval)
+                state["probe"] = new_probe
+                for name in ("client", "inspect_client", "search_client"):
+                    state[name].conf = new_probe.get("conf") or None
         elif err:
             print(qbtsync.sanitize(err), file=sys.stderr)
 
