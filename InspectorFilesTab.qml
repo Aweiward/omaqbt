@@ -2,6 +2,7 @@ pragma ComponentBehavior: Bound
 
 import QtQuick
 import qs.Commons
+import qs.Commons as Commons
 import "InspectorView.js" as InspectorView
 
 // The Files tab: the cursor row's files with their priority; Space (or a
@@ -53,7 +54,7 @@ Item {
     textFormat: Text.PlainText
     font.family: Style.fontFamily
     font.pixelSize: Style.font.body
-    color: root.files.state === "error" ? Color.urgent : Color.muted
+    color: root.files.state === "error" ? Commons.Color.urgent : Commons.Color.muted
   }
 
   Column {
@@ -74,7 +75,7 @@ Item {
       wrapMode: Text.WordWrap
       font.family: Style.fontFamily
       font.pixelSize: Style.font.body
-      color: Color.foreground
+      color: Commons.Color.foreground
     }
     Text {
       width: parent.width
@@ -83,7 +84,7 @@ Item {
       wrapMode: Text.WordWrap
       font.family: Style.fontFamily
       font.pixelSize: Style.font.body
-      color: Color.muted
+      color: Commons.Color.muted
     }
     Flow {
       width: parent.width
@@ -99,14 +100,14 @@ Item {
             textFormat: Text.PlainText
             font.family: Style.fontFamily
             font.pixelSize: Style.font.body
-            color: Color.foreground
+            color: Commons.Color.foreground
           }
           Text {
             text: noMetaKey.modelData.label
             textFormat: Text.PlainText
             font.family: Style.fontFamily
             font.pixelSize: Style.font.body
-            color: Color.muted
+            color: Commons.Color.muted
           }
         }
       }

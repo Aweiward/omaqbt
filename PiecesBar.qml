@@ -2,6 +2,7 @@ pragma ComponentBehavior: Bound
 
 import QtQuick
 import qs.Commons
+import qs.Commons as Commons
 
 // The Info tab's pieces bar (mockup row 1, col 1): InspectorView.binPieces'
 // output as one line of glyphs -- have/partial in accent, missing dim --
@@ -18,8 +19,8 @@ Column {
 
   spacing: Style.space(4)
 
-  readonly property color accentColor: Color.accent
-  readonly property color dimColor: Util.alpha(Color.foreground, Style.normalBorderAlpha)
+  readonly property color accentColor: Commons.Color.accent
+  readonly property color dimColor: Util.alpha(Commons.Color.foreground, Style.normalBorderAlpha)
 
   function toneColor(tone) {
     return tone === "accent" ? bar.accentColor : bar.dimColor
@@ -60,6 +61,6 @@ Column {
     text: bar.legend
     font.family: Style.fontFamily
     font.pixelSize: Style.font.bodySmall
-    color: Color.muted
+    color: Commons.Color.muted
   }
 }

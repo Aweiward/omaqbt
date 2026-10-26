@@ -3,6 +3,7 @@ pragma ComponentBehavior: Bound
 import QtQuick
 import QtQuick.Controls
 import qs.Commons
+import qs.Commons as Commons
 import "ClientView.js" as View
 import "RssRules.js" as Rules
 
@@ -278,7 +279,7 @@ Item {
 
   readonly property int padX: Style.space(12)
   readonly property int rowHeight: Style.space(28)
-  readonly property color lineColor: Util.alpha(Color.foreground, Style.normalBorderAlpha)
+  readonly property color lineColor: Util.alpha(Commons.Color.foreground, Style.normalBorderAlpha)
 
   visible: open
   z: 2
@@ -583,7 +584,7 @@ Item {
   Rectangle {
     visible: !(rules.view && rules.view.downShown)
     anchors.fill: parent
-    color: Color.background
+    color: Commons.Color.background
 
     MouseArea {
       anchors.fill: parent
@@ -609,7 +610,7 @@ Item {
       anchors.right: parent.right
       anchors.top: parent.top
       height: 1
-      color: Util.alpha(Color.foreground, Style.normalBorderAlpha)
+      color: Util.alpha(Commons.Color.foreground, Style.normalBorderAlpha)
     }
 
     Flow {
@@ -631,14 +632,14 @@ Item {
             textFormat: Text.PlainText
             font.family: Style.fontFamily
             font.pixelSize: Style.font.bodySmall
-            color: Color.foreground
+            color: Commons.Color.foreground
           }
           Text {
             text: " " + hint.modelData.label
             textFormat: Text.PlainText
             font.family: Style.fontFamily
             font.pixelSize: Style.font.bodySmall
-            color: Color.muted
+            color: Commons.Color.muted
           }
         }
       }
@@ -658,7 +659,7 @@ Item {
       textFormat: Text.PlainText
       font.family: Style.fontFamily
       font.pixelSize: Style.font.bodySmall
-      color: Color.muted
+      color: Commons.Color.muted
     }
   }
 
@@ -706,7 +707,7 @@ Item {
           visible: ruleRow.current && listPane.focusedPane
           width: Style.space(3)
           height: parent.height
-          color: Color.accent
+          color: Commons.Color.accent
         }
         Text {
           anchors.left: parent.left
@@ -719,7 +720,7 @@ Item {
           textFormat: Text.PlainText
           font.family: Style.fontFamily
           font.pixelSize: Style.font.body
-          color: ruleRow.current ? Color.accent : Color.foreground
+          color: ruleRow.current ? Commons.Color.accent : Commons.Color.foreground
         }
         Text {
           id: ruleState
@@ -730,7 +731,7 @@ Item {
           textFormat: Text.PlainText
           font.family: Style.fontFamily
           font.pixelSize: Style.font.bodySmall
-          color: ruleRow.modelData.enabled === true ? Color.accent : Color.muted
+          color: ruleRow.modelData.enabled === true ? Commons.Color.accent : Commons.Color.muted
         }
       }
     }
@@ -749,7 +750,7 @@ Item {
       textFormat: Text.PlainText
       font.family: Style.fontFamily
       font.pixelSize: Style.font.subtitle
-      color: Color.muted
+      color: Commons.Color.muted
     }
 
     RulesFooter {
@@ -793,7 +794,7 @@ Item {
         textFormat: Text.PlainText
         font.family: Style.fontFamily
         font.pixelSize: Style.font.bodySmall
-        color: Color.accent
+        color: Commons.Color.accent
       }
       MouseArea {
         anchors.fill: parent
@@ -870,7 +871,7 @@ Item {
         textFormat: Text.PlainText
         font.family: Style.fontFamily
         font.pixelSize: Style.font.bodySmall
-        color: Color.muted
+        color: Commons.Color.muted
       }
     }
 
@@ -922,7 +923,7 @@ Item {
           textFormat: Text.PlainText
           font.family: Style.fontFamily
           font.pixelSize: Style.font.bodySmall
-          color: rules.previewState.failed && !rules.previewState.updating ? Color.urgent : Color.muted
+          color: rules.previewState.failed && !rules.previewState.updating ? Commons.Color.urgent : Commons.Color.muted
         }
         Repeater {
           model: rules.previewState.failed ? [] : rules.previewState.lines
@@ -938,7 +939,7 @@ Item {
             font.family: Style.fontFamily
             font.pixelSize: previewLine.modelData.head ? Style.font.body : Style.font.bodySmall
             font.bold: previewLine.modelData.head && !previewLine.modelData.muted
-            color: previewLine.modelData.muted ? Color.muted : Color.foreground
+            color: previewLine.modelData.muted ? Commons.Color.muted : Commons.Color.foreground
           }
         }
       }

@@ -2,6 +2,7 @@ pragma ComponentBehavior: Bound
 
 import QtQuick
 import qs.Commons
+import qs.Commons as Commons
 import "ClientView.js" as View
 
 // The window's browser-magnet confirm (spec D3): the row pinned at the top
@@ -110,7 +111,7 @@ Item {
     anchors.top: parent.top
     anchors.bottom: parent.bottom
     width: Style.space(3)
-    color: Color.accent
+    color: Commons.Color.accent
   }
 
   Rectangle {
@@ -118,7 +119,7 @@ Item {
     anchors.right: parent.right
     anchors.bottom: parent.bottom
     height: 1
-    color: Util.alpha(Color.foreground, Style.normalBorderAlpha)
+    color: Util.alpha(Commons.Color.foreground, Style.normalBorderAlpha)
   }
 
   Text {
@@ -131,7 +132,7 @@ Item {
     textFormat: Text.PlainText
     font.family: Style.fontFamily
     font.pixelSize: Style.font.subtitle
-    color: Color.accent
+    color: Commons.Color.accent
   }
 
   Text {
@@ -144,7 +145,7 @@ Item {
     textFormat: Text.PlainText
     font.family: Style.fontFamily
     font.pixelSize: Style.font.subtitle
-    color: magnetRow.ms.isError ? Color.urgent : Color.foreground
+    color: magnetRow.ms.isError ? Commons.Color.urgent : Commons.Color.foreground
   }
 
   Text {
@@ -156,6 +157,6 @@ Item {
     textFormat: Text.PlainText
     font.family: Style.fontFamily
     font.pixelSize: Style.font.subtitle
-    color: Color.muted
+    color: Commons.Color.muted
   }
 }

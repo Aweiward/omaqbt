@@ -1,5 +1,6 @@
 import QtQuick
 import qs.Commons
+import qs.Commons as Commons
 
 // One settings row (28 px), shared by SettingsPane.qml and the RSS rules'
 // fields (slice 5b2): the label (with its section in a search), the value,
@@ -21,7 +22,7 @@ Item {
   // keeps its width while the label truncates first.
   property bool compact: false
   signal clicked()
-  readonly property color dim: Util.alpha(Color.foreground, Style.normalBorderAlpha)
+  readonly property color dim: Util.alpha(Commons.Color.foreground, Style.normalBorderAlpha)
   readonly property int labelWidth: compact
     ? Math.max(Math.round(width * 0.25), Math.min(rowLabel.implicitWidth + Style.space(12) + (showSection ? rowSection.implicitWidth : 0) + Style.space(8),
       width - rowValue.implicitWidth - Style.space(32)))
@@ -40,7 +41,7 @@ Item {
     anchors.top: parent.top
     anchors.bottom: parent.bottom
     width: Style.space(3)
-    color: Color.accent
+    color: Commons.Color.accent
   }
   Text {
     id: rowLabel
@@ -53,7 +54,7 @@ Item {
     textFormat: Text.PlainText
     font.family: Style.fontFamily
     font.pixelSize: Style.font.body
-    color: rowItem.row.locked ? rowItem.dim : Color.foreground
+    color: rowItem.row.locked ? rowItem.dim : Commons.Color.foreground
   }
   Text {
     id: rowSection
@@ -66,7 +67,7 @@ Item {
     textFormat: Text.PlainText
     font.family: Style.fontFamily
     font.pixelSize: Style.font.body
-    color: Color.muted
+    color: Commons.Color.muted
   }
   Text {
     id: rowValue
@@ -80,7 +81,7 @@ Item {
     textFormat: Text.PlainText
     font.family: Style.fontFamily
     font.pixelSize: Style.font.body
-    color: rowItem.saving ? Color.muted : (rowItem.row.locked || rowItem.row.dimmed ? rowItem.dim : (rowItem.row.muted ? Color.muted : Color.foreground))
+    color: rowItem.saving ? Commons.Color.muted : (rowItem.row.locked || rowItem.row.dimmed ? rowItem.dim : (rowItem.row.muted ? Commons.Color.muted : Commons.Color.foreground))
   }
   Text {
     id: rowRestart
@@ -93,7 +94,7 @@ Item {
     textFormat: Text.PlainText
     font.family: Style.fontFamily
     font.pixelSize: Style.font.bodySmall
-    color: Color.muted
+    color: Commons.Color.muted
   }
   Text {
     id: rowTag
@@ -109,7 +110,7 @@ Item {
     textFormat: Text.PlainText
     font.family: Style.fontFamily
     font.pixelSize: Style.font.bodySmall
-    color: rowItem.row.locked ? rowItem.dim : Color.muted
+    color: rowItem.row.locked ? rowItem.dim : Commons.Color.muted
   }
   MouseArea {
     anchors.fill: parent

@@ -3,6 +3,7 @@ pragma ComponentBehavior: Bound
 import QtQuick
 import Quickshell
 import qs.Commons
+import qs.Commons as Commons
 import "Model.js" as Model
 import "CommandRegistry.js" as Registry
 import "ClientView.js" as View
@@ -695,7 +696,7 @@ Item {
   FloatingWindow {
     id: window
     title: "OmaqBT"
-    color: Color.background
+    color: Commons.Color.background
     implicitWidth: 1600
     implicitHeight: 900
     minimumSize: Qt.size(640, 400)

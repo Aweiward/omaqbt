@@ -2,6 +2,7 @@ pragma ComponentBehavior: Bound
 
 import QtQuick
 import qs.Commons
+import qs.Commons as Commons
 
 // The inspector's chart tab (mockup row 1 col 4, "Chart A"; row 2 col 4 is
 // the idle state): a legend row, a 190px Canvas line chart, a fixed time
@@ -24,10 +25,10 @@ Column {
   // itself, never on drawn pixels.
   property int paintCount: 0
 
-  readonly property color lineColor: Util.alpha(Color.foreground, Style.normalBorderAlpha)
+  readonly property color lineColor: Util.alpha(Commons.Color.foreground, Style.normalBorderAlpha)
   // Gridlines read fainter than the axes: the same token, half the alpha,
   // never a new colour.
-  readonly property color gridColor: Util.alpha(Color.foreground, Style.normalBorderAlpha / 2)
+  readonly property color gridColor: Util.alpha(Commons.Color.foreground, Style.normalBorderAlpha / 2)
 
   spacing: Style.space(10)
 
@@ -55,7 +56,7 @@ Column {
         textFormat: Text.PlainText
         font.family: Style.fontFamily
         font.pixelSize: Style.font.bodySmall
-        color: Color.accent
+        color: Commons.Color.accent
       }
       Text {
         objectName: "chartLegendUp"
@@ -63,7 +64,7 @@ Column {
         textFormat: Text.PlainText
         font.family: Style.fontFamily
         font.pixelSize: Style.font.bodySmall
-        color: Color.foreground
+        color: Commons.Color.foreground
       }
     }
     Text {
@@ -73,7 +74,7 @@ Column {
       textFormat: Text.PlainText
       font.family: Style.fontFamily
       font.pixelSize: Style.font.bodySmall
-      color: Color.muted
+      color: Commons.Color.muted
     }
   }
 
@@ -109,8 +110,8 @@ Column {
         ctx.lineTo(width, height * 2 / 3)
         ctx.stroke()
 
-        canvas.drawLine(ctx, chart.series.up, Color.foreground, 1.2)
-        canvas.drawLine(ctx, chart.series.down, Color.accent, 1.6)
+        canvas.drawLine(ctx, chart.series.up, Commons.Color.foreground, 1.2)
+        canvas.drawLine(ctx, chart.series.down, Commons.Color.accent, 1.6)
       }
 
       // No fill, no points: a plain stroked polyline. `points` is
@@ -139,7 +140,7 @@ Column {
       textFormat: Text.PlainText
       font.family: Style.fontFamily
       font.pixelSize: Style.font.bodySmall
-      color: Color.muted
+      color: Commons.Color.muted
     }
   }
 
@@ -153,7 +154,7 @@ Column {
       textFormat: Text.PlainText
       font.family: Style.fontFamily
       font.pixelSize: Style.font.bodySmall
-      color: Color.muted
+      color: Commons.Color.muted
     }
     Text {
       anchors.horizontalCenter: parent.horizontalCenter
@@ -161,7 +162,7 @@ Column {
       textFormat: Text.PlainText
       font.family: Style.fontFamily
       font.pixelSize: Style.font.bodySmall
-      color: Color.muted
+      color: Commons.Color.muted
     }
     Text {
       anchors.right: parent.right
@@ -169,7 +170,7 @@ Column {
       textFormat: Text.PlainText
       font.family: Style.fontFamily
       font.pixelSize: Style.font.bodySmall
-      color: Color.muted
+      color: Commons.Color.muted
     }
   }
 
@@ -186,7 +187,7 @@ Column {
         textFormat: Text.PlainText
         font.family: Style.fontFamily
         font.pixelSize: Style.font.body
-        color: Color.muted
+        color: Commons.Color.muted
       }
       Text {
         objectName: "chartPeakText"
@@ -194,7 +195,7 @@ Column {
         textFormat: Text.PlainText
         font.family: Style.fontFamily
         font.pixelSize: Style.font.body
-        color: Color.foreground
+        color: Commons.Color.foreground
       }
     }
     Row {
@@ -205,7 +206,7 @@ Column {
         textFormat: Text.PlainText
         font.family: Style.fontFamily
         font.pixelSize: Style.font.body
-        color: Color.muted
+        color: Commons.Color.muted
       }
       Text {
         objectName: "chartAvgText"
@@ -213,7 +214,7 @@ Column {
         textFormat: Text.PlainText
         font.family: Style.fontFamily
         font.pixelSize: Style.font.body
-        color: Color.foreground
+        color: Commons.Color.foreground
       }
     }
   }
@@ -227,6 +228,6 @@ Column {
     wrapMode: Text.WordWrap
     font.family: Style.fontFamily
     font.pixelSize: Style.font.body
-    color: Color.muted
+    color: Commons.Color.muted
   }
 }

@@ -3,6 +3,7 @@ pragma ComponentBehavior: Bound
 import QtQuick
 import QtQuick.Controls
 import qs.Commons
+import qs.Commons as Commons
 
 // The `?` overlay: the keys for the current mode and pane, generated from
 // CommandRegistry.helpFor through View.helpRows, so it can never drift
@@ -19,11 +20,11 @@ Item {
 
   signal dismissed()
 
-  readonly property color lineColor: Util.alpha(Color.foreground, Style.normalBorderAlpha)
+  readonly property color lineColor: Util.alpha(Commons.Color.foreground, Style.normalBorderAlpha)
 
   Rectangle {
     anchors.fill: parent
-    color: Util.alpha(Qt.darker(Color.background, 1.6), 0.55)
+    color: Util.alpha(Qt.darker(Commons.Color.background, 1.6), 0.55)
     MouseArea {
       anchors.fill: parent
       onClicked: overlay.dismissed()
@@ -36,9 +37,9 @@ Item {
     y: Math.min(Style.space(90), Math.round(overlay.height / 6))
     width: Math.min(Style.space(640), overlay.width - Style.space(32))
     height: Math.max(0, Math.min(head.height + flick.contentHeight + foot.height, overlay.height - y - Style.space(24)))
-    color: Color.background
+    color: Commons.Color.background
     border.width: 1
-    border.color: Color.accent
+    border.color: Commons.Color.accent
 
     // Swallow clicks so they don't reach the scrim.
     MouseArea { anchors.fill: parent }
@@ -58,7 +59,7 @@ Item {
         textFormat: Text.PlainText
         font.family: Style.fontFamily
         font.pixelSize: Style.font.title
-        color: Color.accent
+        color: Commons.Color.accent
       }
 
       Text {
@@ -69,7 +70,7 @@ Item {
         textFormat: Text.PlainText
         font.family: Style.fontFamily
         font.pixelSize: Style.font.body
-        color: Color.muted
+        color: Commons.Color.muted
       }
 
       Rectangle {
@@ -115,7 +116,7 @@ Item {
               font.pixelSize: Style.font.caption
               font.capitalization: Font.AllUppercase
               font.letterSpacing: Style.font.caption * 0.12
-              color: Color.muted
+              color: Commons.Color.muted
             }
 
             Repeater {
@@ -137,7 +138,7 @@ Item {
                   textFormat: Text.PlainText
                   font.family: Style.fontFamily
                   font.pixelSize: Style.font.body
-                  color: Color.accent
+                  color: Commons.Color.accent
                 }
 
                 Text {
@@ -150,7 +151,7 @@ Item {
                   textFormat: Text.PlainText
                   font.family: Style.fontFamily
                   font.pixelSize: Style.font.body
-                  color: Color.foreground
+                  color: Commons.Color.foreground
                 }
               }
             }
@@ -182,7 +183,7 @@ Item {
         textFormat: Text.PlainText
         font.family: Style.fontFamily
         font.pixelSize: Style.font.bodySmall
-        color: Color.muted
+        color: Commons.Color.muted
       }
     }
   }

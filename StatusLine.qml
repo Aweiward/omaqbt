@@ -2,6 +2,7 @@ pragma ComponentBehavior: Bound
 
 import QtQuick
 import qs.Commons
+import qs.Commons as Commons
 import qs.Ui
 import "ClientView.js" as View
 
@@ -51,7 +52,7 @@ Rectangle {
   // Every edit of the INSERT field, as the user types.
   signal inputEdited(string text)
 
-  readonly property color lineColor: Util.alpha(Color.foreground, Style.normalBorderAlpha)
+  readonly property color lineColor: Util.alpha(Commons.Color.foreground, Style.normalBorderAlpha)
   readonly property int gap: Style.space(14)
   readonly property bool badgeFilled: mode !== "NORMAL"
 
@@ -72,19 +73,19 @@ Rectangle {
   }
 
   function toneColor(tone) {
-    return View.toneColor(tone, Color)
+    return View.toneColor(tone, Commons.Color)
   }
 
   // No bg-dark token exists; Panel.qml already derives shades with
-  // Qt.darker, so this stays a pure function of Color.background.
-  color: Qt.darker(Color.background, 1.12)
+  // Qt.darker, so this stays a pure function of Commons.Color.background.
+  color: Qt.darker(Commons.Color.background, 1.12)
   height: Style.space(30)
 
   component Part: Text {
     textFormat: Text.PlainText
     font.family: Style.fontFamily
     font.pixelSize: Style.font.body
-    color: Color.foreground
+    color: Commons.Color.foreground
   }
 
   Rectangle {
@@ -102,9 +103,9 @@ Rectangle {
     anchors.bottom: parent.bottom
     width: badgeText.implicitWidth + Style.space(24)
     color: {
-      if (line.magnetParts !== null) return Color.accent
-      if (line.mode === "CONFIRM") return Color.urgent
-      if (line.badgeFilled) return Color.accent
+      if (line.magnetParts !== null) return Commons.Color.accent
+      if (line.mode === "CONFIRM") return Commons.Color.urgent
+      if (line.badgeFilled) return Commons.Color.accent
       return "transparent"
     }
 
@@ -117,7 +118,7 @@ Rectangle {
       font.pixelSize: Style.font.body
       font.bold: line.badgeFilled
       font.letterSpacing: Style.font.body * 0.06
-      color: line.badgeFilled ? Color.background : Color.muted
+      color: line.badgeFilled ? Commons.Color.background : Commons.Color.muted
     }
 
     Rectangle {
@@ -145,9 +146,9 @@ Rectangle {
     Row {
       visible: line.mode === "CONFIRM" && line.confirmParts !== null
       anchors.verticalCenter: parent.verticalCenter
-      Part { text: line.confirmParts ? line.confirmParts.lead : ""; color: Color.urgent }
-      Part { text: line.confirmParts ? line.confirmParts.strong : ""; color: Color.foreground; font.bold: true }
-      Part { text: line.confirmParts ? line.confirmParts.tail : ""; color: Color.urgent }
+      Part { text: line.confirmParts ? line.confirmParts.lead : ""; color: Commons.Color.urgent }
+      Part { text: line.confirmParts ? line.confirmParts.strong : ""; color: Commons.Color.foreground; font.bold: true }
+      Part { text: line.confirmParts ? line.confirmParts.tail : ""; color: Commons.Color.urgent }
     }
 
     // MAGNET: Start "Big Buck Bunny"? +2 more, then a note ("Still
@@ -160,9 +161,9 @@ Rectangle {
         Part { text: line.magnetParts ? line.magnetParts.lead : "" }
         Part { text: line.magnetParts ? line.magnetParts.title : ""; font.bold: true }
         Part { text: line.magnetParts ? line.magnetParts.tail : "" }
-        Part { text: line.magnetParts ? line.magnetParts.error : ""; color: Color.urgent }
+        Part { text: line.magnetParts ? line.magnetParts.error : ""; color: Commons.Color.urgent }
       }
-      Part { visible: text !== ""; text: line.magnetParts ? line.magnetParts.more : ""; color: Color.muted }
+      Part { visible: text !== ""; text: line.magnetParts ? line.magnetParts.more : ""; color: Commons.Color.muted }
       Part { visible: line.message !== ""; text: line.message; color: line.toneColor(line.messageTone) }
     }
 
@@ -185,7 +186,7 @@ Rectangle {
         id: insertPrompt
         objectName: "insertPrompt"
         text: line.inputPrompt.prompt
-        color: Color.accent
+        color: Commons.Color.accent
         elide: Text.ElideMiddle
         width: insertRow.fitted
           ? Math.max(0, Math.min(implicitWidth, body.width - Style.space(160) - insertRow.spacing - insertRow.messageRoom))
@@ -219,7 +220,7 @@ Rectangle {
       Part {
         visible: line.filterChip !== ""
         text: line.filterChip
-        color: Color.accent
+        color: Commons.Color.accent
       }
       Part {
         visible: line.message !== ""
@@ -229,25 +230,25 @@ Rectangle {
       Part {
         visible: line.message === "" && line.loading
         text: "Connecting to qbittorrent-nox…"
-        color: Color.muted
+        color: Commons.Color.muted
       }
       Row {
         visible: line.message === "" && !line.loading
         spacing: line.gap
         Part { text: line.countText }
-        Part { visible: line.selectedCount > 0; text: "·"; color: Color.muted }
-        Part { visible: line.selectedCount > 0; text: line.selectedCount + " selected"; color: Color.accent }
-        Part { text: "·"; color: Color.muted }
+        Part { visible: line.selectedCount > 0; text: "·"; color: Commons.Color.muted }
+        Part { visible: line.selectedCount > 0; text: line.selectedCount + " selected"; color: Commons.Color.accent }
+        Part { text: "·"; color: Commons.Color.muted }
         Part { text: line.speedText }
-        Part { text: "·"; color: Color.muted }
-        Part { text: line.turtle ? "turtle on" : "turtle off"; color: line.turtle ? Color.accent : Color.muted }
-        Part { visible: line.vpn !== null; text: "·"; color: Color.muted }
+        Part { text: "·"; color: Commons.Color.muted }
+        Part { text: line.turtle ? "turtle on" : "turtle off"; color: line.turtle ? Commons.Color.accent : Commons.Color.muted }
+        Part { visible: line.vpn !== null; text: "·"; color: Commons.Color.muted }
         Part {
           visible: line.vpn !== null
           text: line.vpn ? line.vpn.text : ""
           color: line.toneColor(line.vpn ? line.vpn.tone : "fg")
         }
-        Part { visible: line.sidecarDown; text: "· slow polling (qbt-serve down)"; color: Color.muted }
+        Part { visible: line.sidecarDown; text: "· slow polling (qbt-serve down)"; color: Commons.Color.muted }
       }
     }
   }
@@ -263,9 +264,9 @@ Rectangle {
         id: hint
         required property var modelData
         required property int index
-        Part { visible: hint.index > 0; text: " · "; color: Color.muted }
-        Part { text: hint.modelData.key; color: Color.foreground }
-        Part { text: " " + hint.modelData.label; color: Color.muted }
+        Part { visible: hint.index > 0; text: " · "; color: Commons.Color.muted }
+        Part { text: hint.modelData.key; color: Commons.Color.foreground }
+        Part { text: " " + hint.modelData.label; color: Commons.Color.muted }
       }
     }
   }

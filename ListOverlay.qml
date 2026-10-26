@@ -2,6 +2,7 @@ pragma ComponentBehavior: Bound
 
 import QtQuick
 import qs.Commons
+import qs.Commons as Commons
 import qs.Ui
 import "ClientView.js" as View
 
@@ -59,7 +60,7 @@ Item {
 
   // The query field (WmFocus hands the keys back to it).
   readonly property var inputField: field
-  readonly property color lineColor: Util.alpha(Color.foreground, Style.normalBorderAlpha)
+  readonly property color lineColor: Util.alpha(Commons.Color.foreground, Style.normalBorderAlpha)
 
   function focusField() {
     field.forceActiveFocus()
@@ -83,7 +84,7 @@ Item {
 
   Rectangle {
     anchors.fill: parent
-    color: Util.alpha(Color.background, 0.55)
+    color: Util.alpha(Commons.Color.background, 0.55)
     MouseArea {
       anchors.fill: parent
       onClicked: overlay.dismissed()
@@ -96,9 +97,9 @@ Item {
     y: Math.min(Style.space(90), Math.round(overlay.height / 6))
     width: Math.min(Style.space(640), overlay.width - Style.space(32))
     height: head.height + body.height + foot.height
-    color: Color.background
+    color: Commons.Color.background
     border.width: 1
-    border.color: Color.accent
+    border.color: Commons.Color.accent
 
     // Swallow clicks so they don't reach the scrim.
     MouseArea { anchors.fill: parent }
@@ -119,7 +120,7 @@ Item {
         textFormat: Text.PlainText
         font.family: Style.fontFamily
         font.pixelSize: Style.font.title
-        color: Color.accent
+        color: Commons.Color.accent
       }
 
       TextField {
@@ -152,7 +153,7 @@ Item {
         textFormat: Text.PlainText
         font.family: Style.fontFamily
         font.pixelSize: Style.font.body
-        color: Color.muted
+        color: Commons.Color.muted
       }
 
       Rectangle {
@@ -181,7 +182,7 @@ Item {
         textFormat: Text.PlainText
         font.family: Style.fontFamily
         font.pixelSize: Style.font.subtitle
-        color: Color.muted
+        color: Commons.Color.muted
       }
 
       ListView {
@@ -220,7 +221,7 @@ Item {
             visible: row.isCursor
             width: 3
             height: parent.height
-            color: Color.accent
+            color: Commons.Color.accent
           }
 
           Row {
@@ -241,7 +242,7 @@ Item {
               textFormat: Text.PlainText
               font.family: Style.fontFamily
               font.pixelSize: Style.font.subtitle
-              color: row.dim ? Util.alpha(Color.foreground, 0.4) : Color.foreground
+              color: row.dim ? Util.alpha(Commons.Color.foreground, 0.4) : Commons.Color.foreground
             }
 
             Repeater {
@@ -253,8 +254,8 @@ Item {
                 font.family: Style.fontFamily
                 font.pixelSize: Style.font.subtitle
                 font.underline: modelData.matched
-                color: modelData.matched ? Color.accent
-                  : (row.dim ? Util.alpha(Color.foreground, 0.4) : Color.foreground)
+                color: modelData.matched ? Commons.Color.accent
+                  : (row.dim ? Util.alpha(Commons.Color.foreground, 0.4) : Commons.Color.foreground)
               }
             }
 
@@ -265,7 +266,7 @@ Item {
               textFormat: Text.PlainText
               font.family: Style.fontFamily
               font.pixelSize: Style.font.bodySmall
-              color: Util.alpha(Color.muted, 0.7)
+              color: Util.alpha(Commons.Color.muted, 0.7)
             }
           }
 
@@ -279,7 +280,7 @@ Item {
             textFormat: Text.PlainText
             font.family: Style.fontFamily
             font.pixelSize: Style.font.body
-            color: row.dim ? Util.alpha(Color.muted, 0.7) : Color.muted
+            color: row.dim ? Util.alpha(Commons.Color.muted, 0.7) : Commons.Color.muted
           }
 
           MouseArea {
@@ -318,7 +319,7 @@ Item {
         textFormat: Text.PlainText
         font.family: Style.fontFamily
         font.pixelSize: Style.font.bodySmall
-        color: Color.muted
+        color: Commons.Color.muted
       }
     }
   }
