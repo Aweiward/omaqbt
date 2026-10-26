@@ -1361,15 +1361,25 @@ path = sys.argv[1]
 url = os.environ["MAGNET_URL"]
 try:
     with open(path) as f:
-        rows = [json.loads(ln) for ln in f if ln.strip()]
+        lines = [ln for ln in f if ln.strip()]
 except FileNotFoundError:
     sys.exit(0)
+rows = []
+for ln in lines:
+    try:
+        row = json.loads(ln)
+    except ValueError:
+        row = None
+    # A line that is not a JSON object is not ours to judge: keep it as is.
+    rows.append(row if isinstance(row, dict) else ln.rstrip("\n"))
 tmp = None
 try:
     with tempfile.NamedTemporaryFile(mode="w", dir=os.path.dirname(path), delete=False) as f:
         tmp = f.name
         for row in rows:
-            if row.get("url") != url:
+            if isinstance(row, str):
+                f.write(row + "\n")
+            elif row.get("url") != url:
                 f.write(json.dumps(row) + "\n")
     os.replace(tmp, path)
 finally:
@@ -1626,7 +1636,7 @@ PY
     magnet_notify "Click the mark to start ${label}"
     take_magnet_state_lock
     MAGNET_URL=$url python3 - "$(magnet_inbox_path)" <<'PY'
-import json, os, sys
+import json, os, sys, tempfile
 path = sys.argv[1]
 url = os.environ["MAGNET_URL"]
 rows = []
@@ -1638,9 +1648,16 @@ if os.path.isfile(path):
         if obj.get("url") == url:
             obj["notified"] = True
         rows.append(obj)
-with open(path, "w") as f:
-    for obj in rows:
-        f.write(json.dumps(obj) + "\n")
+tmp = None
+try:
+    with tempfile.NamedTemporaryFile(mode="w", dir=os.path.dirname(path), delete=False) as f:
+        tmp = f.name
+        for obj in rows:
+            f.write(json.dumps(obj) + "\n")
+    os.replace(tmp, path)
+finally:
+    if tmp and os.path.exists(tmp):
+        os.unlink(tmp)
 PY
     release_magnet_state_lock
   fi

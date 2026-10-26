@@ -161,5 +161,65 @@ class MagnetConcurrencyTest(unittest.TestCase):
         self.assertEqual([row["hash"] for row in json.loads(self.pending.read_text())], [self.a])
 
 
+    def test_malformed_inbox_line_does_not_fail_the_drain(self):
+        self.release_add.set()
+        junk = "{not json"
+        self.inbox.write_text(json.dumps({"url": self.magnet(self.a), "ts": 1}) + "\n"
+                              + junk + "\n"
+                              + json.dumps({"url": self.magnet(self.b), "ts": 1}) + "\n")
+        self.finish(self.start_drain())
+        self.assertEqual(self.adds, [self.a])
+        self.assertEqual({row["hash"] for row in json.loads(self.pending.read_text())}, {self.a})
+        # The drained entry is gone; the line we cannot read is kept, not destroyed.
+        lines = self.inbox.read_text().splitlines()
+        self.assertEqual(lines[0], junk)
+        self.assertEqual([json.loads(ln)["url"] for ln in lines[1:]], [self.magnet(self.b)])
+        # A later drain still works around the junk line once it is not first.
+        self.inbox.write_text(json.dumps({"url": self.magnet(self.c), "ts": 1}) + "\n" + junk + "\n")
+        self.finish(self.start_drain())
+        self.assertEqual(self.adds, [self.a, self.c])
+        self.assertEqual(self.inbox.read_text(), junk + "\n")
+
+    def inbox_env(self, **extra):
+        env = dict(self.env)
+        env["QBT_RAISE_CMD"] = "/bin/false"  # no shell to raise: magnet-inbox marks the entry notified
+        env.update(extra)
+        return env
+
+    def run_inbox(self, h, env):
+        return subprocess.run([str(ROOT / "qbt"), "magnet-inbox", self.magnet(h)], env=env,
+                              text=True, capture_output=True, timeout=15)
+
+    def test_notified_flag_rewrite_leaves_no_partial_inbox(self):
+        self.seed(self.a, self.b)
+        shim = Path(self.tmp.name) / "shim"
+        shim.mkdir()
+        # Make the rewrite die after the inbox has been opened for writing.
+        (shim / "sitecustomize.py").write_text(
+            "import json\n"
+            "_dumps = json.dumps\n"
+            "def dumps(obj, *a, **k):\n"
+            "    if isinstance(obj, dict) and obj.get('notified') is True:\n"
+            "        raise OSError('simulated write failure')\n"
+            "    return _dumps(obj, *a, **k)\n"
+            "json.dumps = dumps\n")
+        result = self.run_inbox(self.c, self.inbox_env(PYTHONPATH=str(shim)))
+        self.assertNotEqual(result.returncode, 0, "the simulated failure never reached the rewrite")
+        rows = [json.loads(ln) for ln in self.inbox.read_text().splitlines()]
+        self.assertEqual([r["url"] for r in rows],
+                         [self.magnet(self.a), self.magnet(self.b), self.magnet(self.c)])
+        self.assertEqual([p.name for p in self.state.iterdir() if p.name.startswith("tmp")], [])
+
+    def test_notified_flag_rewrite_marks_only_the_new_entry(self):
+        self.seed(self.a)
+        result = self.run_inbox(self.c, self.inbox_env())
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        rows = [json.loads(ln) for ln in self.inbox.read_text().splitlines()]
+        self.assertEqual([(r["url"], r.get("notified")) for r in rows],
+                         [(self.magnet(self.a), None), (self.magnet(self.c), True)])
+        self.assertEqual(self.inbox.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(sorted(p.name for p in self.state.iterdir() if p.name.startswith("tmp")), [])
+
+
 if __name__ == "__main__":
     unittest.main()
