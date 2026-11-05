@@ -403,8 +403,8 @@ QtObject {
   property Connections serviceLink: Connections {
     target: cmds.service
     ignoreUnknownSignals: true
-    function onSearchFinished(ticket, ok, error, data) { cmds.finished(ticket, ok, error, data) }
-    function onSearchReply(reply) { cmds.reply(reply) }
+    function onSearchFinished(ticket, ok, error, data) { cmds.finished(ticket, ok, error, View.plain(data)) }
+    function onSearchReply(reply) { cmds.reply(View.plain(reply)) }
     function onSearchWatchLost() { cmds.watchLost() }
   }
 }

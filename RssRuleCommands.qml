@@ -656,6 +656,6 @@ QtObject {
   property Connections serviceLink: Connections {
     target: cmds.service || null
     ignoreUnknownSignals: true
-    function onRssFinished(ticket, ok, error, data) { cmds.finished(ticket, ok, error, data) }
+    function onRssFinished(ticket, ok, error, data) { cmds.finished(ticket, ok, error, View.plain(data)) }
   }
 }

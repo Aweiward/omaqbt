@@ -17,6 +17,14 @@ var MOD = {
   Alt: 0x08000000
 };
 
+// plain(x) -> x with every array a real JS array again. Qt 6.12 hands a
+// `var` signal parameter's arrays (nested ones too) over as V4Sequence
+// objects, for which Array.isArray is false. The payloads are parsed qbt
+// JSON, so a JSON round trip loses nothing.
+function plain(x) {
+  return x !== null && typeof x === "object" ? JSON.parse(JSON.stringify(x)) : x;
+}
+
 // keyEvent(key, text, modifiers, now) -> exactly the event shape
 // CommandRegistry.dispatch takes: {key, text, modifiers:{ctrl,shift,alt}, now}.
 function keyEvent(key, text, modifiers, now) {
@@ -2712,6 +2720,7 @@ function isAbsolutePath(path) {
 
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
+    plain: plain,
     MOD: MOD,
     settingsNarrow: settingsNarrow,
     settingsChip: settingsChip,
