@@ -671,6 +671,61 @@ with harness.fixture_server(extra_env={"QBT_FIXTURE_PREFS": "tests/fixtures/pref
     auth_check("a conf without a key leaves no header file behind", not hdr.exists())
     shutil.rmtree(tmpd, ignore_errors=True)
 
+# qBittorrent 5.3.0 (conf MigrationVersion 11 and up) keeps the Web UI
+# settings in [WebUI] under bare names, and ignores [Preferences] WebUI\*.
+# The stale [Preferences] lines here are what OmaqBT wrote after the
+# migration; they must not count.
+WEBUI_KEY = "qbt_NewLayout23456789abcdefghjkm"
+assert re.fullmatch(r"qbt_[A-Za-z0-9]{28}", WEBUI_KEY)
+
+
+def webui_home(webui, migration=12):
+    h, c, e = auth_home([])
+    e.pop("QBT_BASE", None)
+    c.write_text(
+        f"[Meta]\nMigrationVersion={migration}\n\n"
+        f"[Preferences]\nWebUI\\APIKey={KEPT_KEY}\nWebUI\\LocalHostAuth=false\nWebUI\\Port=9999\n\n"
+        "[Other]\nEnabled=keep\nPort=1234\n\n"
+        "[WebUI]\n" + "".join(f"{line}\n" for line in webui))
+    return h, c, e
+
+
+def webui_section(conf_path):
+    return conf_path.read_text().split("[WebUI]", 1)[1].split("\n[", 1)[0]
+
+
+h, c, e = webui_home([f"APIKey={WEBUI_KEY}", "LocalHostAuth=true", "Port=9001"])
+p = json.loads(subprocess.run(["./qbt", "probe"], env=e, text=True, capture_output=True).stdout)
+auth_check("5.3 layout: probe auth is 'ok' from [WebUI]", p.get("auth") == "ok")
+auth_check("5.3 layout: the port comes from [WebUI]", p.get("base") == "http://127.0.0.1:9001")
+h, c, e = webui_home([f"APIKey={WEBUI_KEY}", "LocalHostAuth=false"])
+p = json.loads(subprocess.run(["./qbt", "probe"], env=e, text=True, capture_output=True).stdout)
+auth_check("5.3 layout: [WebUI] LocalHostAuth=false is a bypass", p.get("auth") == "bypass")
+h, c, e = webui_home([])
+p = json.loads(subprocess.run(["./qbt", "probe"], env=e, text=True, capture_output=True).stdout)
+auth_check("5.3 layout: a [Preferences] key alone is no key", p.get("auth") == "nokey")
+h, c, e = webui_home([f"APIKey={WEBUI_KEY}"], migration=10)
+p = json.loads(subprocess.run(["./qbt", "probe"], env=e, text=True, capture_output=True).stdout)
+auth_check("MigrationVersion 10 still reads [Preferences]",
+           p.get("auth") == "bypass" and p.get("base") == "http://127.0.0.1:9999")
+
+h, c, e = webui_home([f"APIKey={WEBUI_KEY}", "LocalHostAuth=false", "Port=9001"])
+r = subprocess.run(["./qbt", "start-daemon"], env=e, text=True, capture_output=True)
+w = webui_section(c)
+text = c.read_text()
+auth_check("5.3 layout: start-daemon succeeds", r.returncode == 0)
+auth_check("5.3 layout: start-daemon keeps the [WebUI] key", re.findall(r"^APIKey=(.*)$", w, re.M) == [WEBUI_KEY])
+auth_check("5.3 layout: start-daemon writes the bare names into [WebUI]",
+           all(f"{k}\n" in w for k in ("Enabled=true", "Address=127.0.0.1", "LocalHostAuth=true",
+                                        "AuthSubnetWhitelistEnabled=false", "Port=9001"))
+           and "LocalHostAuth=false" not in w)
+auth_check("5.3 layout: start-daemon leaves same-named keys in other sections alone",
+           "[Other]\nEnabled=keep\nPort=1234\n" in text and "MigrationVersion=12" in text)
+h, c, e = webui_home([])
+subprocess.run(["./qbt", "start-daemon"], env=e, text=True, capture_output=True)
+got = re.findall(r"^APIKey=(qbt_[A-Za-z0-9]{28})$", webui_section(c), re.M)
+auth_check("5.3 layout: start-daemon puts a new key in [WebUI]", len(got) == 1 and got[0] != KEPT_KEY)
+
 if auth_failures:
     raise SystemExit(f"{len(auth_failures)} auth-contract check(s) failed")
 print("auth-contract ok")

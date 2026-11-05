@@ -445,7 +445,7 @@ QtObject {
   property Connections serviceLink: Connections {
     target: cmds.service
     ignoreUnknownSignals: true
-    function onRssFinished(ticket, ok, error, data) { cmds.finished(ticket, ok, error, data) }
+    function onRssFinished(ticket, ok, error, data) { cmds.finished(ticket, ok, error, View.plain(data)) }
     function onActionFinished(ticket, ok, error, origin, hashes) { cmds.actionFinished(ticket, ok, error) }
   }
 }

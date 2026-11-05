@@ -833,6 +833,15 @@ class ReadApiKeyTests(unittest.TestCase):
     def test_reads_the_key_from_preferences(self):
         self.assertEqual(self.read(f"[Preferences]\nWebUI\\APIKey={KEY_A}\nWebUI\\Port=8080\n"), KEY_A)
 
+    def test_qbittorrent_53_reads_the_key_from_webui(self):
+        stale = "qbt_StaleKey23456789abcdefghjkmn"
+        body = (f"[Meta]\nMigrationVersion=12\n[Preferences]\nWebUI\\APIKey={stale}\n"
+                f"[WebUI]\nAPIKey={KEY_A}\n")
+        self.assertEqual(self.read(body), KEY_A)
+        self.assertIsNone(self.read(f"[Meta]\nMigrationVersion=11\n[Preferences]\nWebUI\\APIKey={KEY_A}\n"))
+        self.assertEqual(self.read(f"[Meta]\nMigrationVersion=10\n[Preferences]\nWebUI\\APIKey={KEY_A}\n"
+                                   f"[WebUI]\nAPIKey={stale}\n"), KEY_A)
+
     def test_the_fixture_conf_holds_the_fixture_key(self):
         self.assertEqual(qbtsync.read_api_key(str(FIXTURES / "qBittorrent.conf")), KEY_A)
 

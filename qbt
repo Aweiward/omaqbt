@@ -30,8 +30,8 @@ UNIT_DIR="$HOME_DIR/.config/systemd/user"
 UNIT_FILE="$UNIT_DIR/omaqbt-nox.service"
 
 # The one refusal message for a 403 (qBittorrent turned the API key away),
-# and the shape of a key qBittorrent 5.2.3 accepts (Utils::APIKey::isValid:
-# "qbt_" plus 28 characters).
+# and the shape of a key qBittorrent 5.2.3 and 5.3.0 accept
+# (Utils::APIKey::isValid: "qbt_" plus 28 characters).
 API_KEY_REFUSED="qBittorrent refused OmaqBT's API key"
 API_KEY_PATTERN='^qbt_[A-Za-z0-9]{28}$'
 
@@ -215,11 +215,8 @@ ensure_state_dir() {
 # conf line like "WebUI\Port=80@example.invalid" would otherwise turn the
 # port into userinfo and send every request to a foreign host.
 read_port() {
-  local port=""
-  if [[ -f $CONF ]]; then
-    port=$(grep -E '^WebUI\\Port=' "$CONF" | tail -n1 | cut -d= -f2 || true)
-    port=${port%$'\r'}
-  fi
+  local port
+  port=$(conf_port)
   [[ -n $port ]] || port=8080
   local LC_ALL=C
   [[ $port =~ ^[[:digit:]]{1,5}$ ]] && (( 10#$port >= 1 && 10#$port <= 65535 )) \
@@ -235,16 +232,19 @@ base_url() {
   printf 'http://127.0.0.1:%s' "$(read_port)"
 }
 
-# The [Preferences] value of a qBittorrent.conf key ("" when absent). The key
-# reaches awk through the environment: -v would read "WebUI\APIKey"'s
+# The value of a qBittorrent.conf key in one section ("" when absent). The
+# key reaches awk through the environment: -v would read "WebUI\APIKey"'s
 # backslash as an escape.
-conf_pref() {
+conf_get() {
   [[ -f $CONF ]] || return 0
   local val
   # QSettings trims blanks around the key and the value, so a hand-edited
   # "WebUI\LocalHostAuth = 0" counts too.
-  val=$(PREF_KEY=$1 awk '
-    /^[ \t]*\[/ { sect = ($0 ~ /^[ \t]*\[Preferences\][ \t\r]*$/); next }
+  val=$(PREF_SECT="[$1]" PREF_KEY=$2 awk '
+    /^[ \t]*\[/ {
+      h = $0; sub(/^[ \t]+/, "", h); sub(/[ \t\r]+$/, "", h)
+      sect = (h == ENVIRON["PREF_SECT"]); next
+    }
     sect {
       line = $0; sub(/^[ \t]+/, "", line)
       if (index(line, ENVIRON["PREF_KEY"]) != 1) next
@@ -257,13 +257,51 @@ conf_pref() {
   printf '%s' "${val%$'\r'}"
 }
 
-# qBittorrent 5.2.3's Web API key (WebUI\APIKey), when the conf holds a valid
+# qBittorrent 5.3.0 moved the Web UI settings from [Preferences] "WebUI\Name"
+# to [WebUI] "Name" (upgrade.cpp, migration 11), and ignores the old lines
+# since. The conf's own MigrationVersion says which layout it is in: a conf
+# 5.3 hasn't migrated yet keeps the old one, which 5.3 moves on its start.
+webui_migrated() {
+  local v LC_ALL=C
+  v=$(conf_get Meta MigrationVersion)
+  [[ $v =~ ^[0-9]{1,9}$ ]] && (( 10#$v >= 11 ))
+}
+
+conf_webui() {
+  if webui_migrated; then
+    conf_get WebUI "$1"
+  else
+    conf_get Preferences "WebUI\\$1"
+  fi
+}
+
+set_webui_key() {
+  if webui_migrated; then
+    set_key "$CONF" "$1" "$2" WebUI section
+  else
+    set_key "$CONF" "WebUI\\$1" "$2"
+  fi
+}
+
+# The raw Web UI port ("" when absent). The old layout reads the last
+# "WebUI\Port=" line in any section, as OmaqBT always has.
+conf_port() {
+  if webui_migrated; then
+    conf_get WebUI Port
+  elif [[ -f $CONF ]]; then
+    local port
+    port=$(grep -E '^WebUI\\Port=' "$CONF" | tail -n1 | cut -d= -f2 || true)
+    printf '%s' "${port%$'\r'}"
+  fi
+}
+
+# qBittorrent's Web API key (WebUI\APIKey), when the conf holds a valid
 # one. OmaqBT signs every request with it: the localhost login bypass is off
 # (marketplace review, 2026-10-02), since loopback is shared by every local
 # account.
 api_key() {
   local key LC_ALL=C
-  key=$(conf_pref 'WebUI\APIKey')
+  key=$(conf_webui APIKey)
   [[ $key =~ $API_KEY_PATTERN ]] && printf '%s' "$key"
   return 0
 }
@@ -328,8 +366,8 @@ conf_bool() {
 
 auth_state() {
   local lha wle
-  lha=$(conf_pref 'WebUI\LocalHostAuth')
-  wle=$(conf_pref 'WebUI\AuthSubnetWhitelistEnabled')
+  lha=$(conf_webui LocalHostAuth)
+  wle=$(conf_webui AuthSubnetWhitelistEnabled)
   if { [[ -n $lha ]] && ! conf_bool "$lha"; } || conf_bool "$wle"; then
     printf 'bypass'
   elif [[ -z $(api_key) ]]; then
@@ -1099,18 +1137,29 @@ cmd_prio() {
 set_key() {
   local file=$1 key=$2 value=$3
   local section=${4:-Preferences}
+  # "section" drops the old value only inside the section: the bare [WebUI]
+  # names (Port, Enabled) would match keys elsewhere. Else in every section.
+  local scope=${5:-all}
   local script
   (umask 077; mkdir -p "$(dirname "$file")")
   IFS= read -r -d '' script <<'PY' || true
 import os, re, sys, tempfile
 from pathlib import Path
 
-path, key, section = Path(sys.argv[1]), sys.argv[2], sys.argv[3]
+path, key, section, scope = Path(sys.argv[1]), sys.argv[2], sys.argv[3], sys.argv[4]
 value = sys.stdin.read()
 header = "[" + section + "]"
 lines = path.read_text().splitlines() if path.exists() else []
 # QSettings trims blanks around the key, so " key = v" is the same key.
-lines = [ln for ln in lines if not re.match(r"[ \t]*" + re.escape(key) + r"[ \t]*=", ln)]
+same = re.compile(r"[ \t]*" + re.escape(key) + r"[ \t]*=")
+kept, here = [], False
+for ln in lines:
+    if ln.lstrip().startswith("["):
+        here = ln.strip() == header
+    if same.match(ln) and (scope != "section" or here):
+        continue
+    kept.append(ln)
+lines = kept
 out = []
 inserted = False
 if not any(ln.strip() == header for ln in lines):
@@ -1138,7 +1187,7 @@ except BaseException:
     os.unlink(tmp)
     raise
 PY
-  printf '%s' "$value" | python3 -c "$script" "$file" "$key" "$section"
+  printf '%s' "$value" | python3 -c "$script" "$file" "$key" "$section" "$scope"
 }
 
 bind_mullvad() {
@@ -1158,7 +1207,7 @@ ensure_port() {
   # fallback so every helper discovers the same endpoint from the conf.
   port=$(read_port 2>/dev/null) || port=8080
   port=$(python3 "$(qbt_lib_dir)/webui_port.py" "$port")
-  set_key "$CONF" 'WebUI\Port' "$port"
+  set_webui_key Port "$port"
 }
 
 write_unit() {
@@ -1271,11 +1320,11 @@ setup_daemon() {
     is_daemon && die "qbittorrent-nox is still running outside omaqbt-nox.service. Quit it, then try again."
   fi
   write_unit
-  set_key "$CONF" 'WebUI\Enabled' 'true'
-  set_key "$CONF" 'WebUI\Address' '127.0.0.1'
-  set_key "$CONF" 'WebUI\LocalHostAuth' 'true'
-  set_key "$CONF" 'WebUI\AuthSubnetWhitelistEnabled' 'false'
-  [[ -z $key ]] || set_key "$CONF" 'WebUI\APIKey' "$key"
+  set_webui_key Enabled true
+  set_webui_key Address 127.0.0.1
+  set_webui_key LocalHostAuth true
+  set_webui_key AuthSubnetWhitelistEnabled false
+  [[ -z $key ]] || set_webui_key APIKey "$key"
   ensure_port
   bind_mullvad
   # The key is in there: owner-only, as qBittorrent keeps it on rewrite.

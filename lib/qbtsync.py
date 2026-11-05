@@ -23,7 +23,7 @@ from urllib.parse import urlparse, urlsplit
 
 _SID_RE = re.compile(r"SID=[^;\s]*", re.IGNORECASE)
 _PASSWORD_RE = re.compile(r"password=[^;\s]*", re.IGNORECASE)
-# qBittorrent 5.2.3's API key: "qbt_" and 28 characters from its own
+# qBittorrent's API key (5.2.3 and 5.3.0): "qbt_" and 28 characters from its own
 # alphabet, which OmaqBT loosens to ASCII letters and digits (as qbt does).
 _API_KEY_RE = re.compile(r"qbt_[A-Za-z0-9]{28}")
 API_KEY_REFUSED = "qBittorrent refused OmaqBT's API key"
@@ -45,12 +45,15 @@ def assert_local(base):
 
 
 def read_api_key(conf_path):
-    """The valid WebUI\\APIKey from qBittorrent.conf's [Preferences], or None.
+    """The valid Web UI API key from qBittorrent.conf, or None.
 
-    Reads the conf the way qbt's `conf_pref` does: only the [Preferences]
-    section, the last matching line wins, and a trailing CR goes. Spaces and
-    tabs around the name and the value go too, as QSettings trims them. A
-    missing or unreadable conf, or a key that isn't well-formed, is None.
+    Reads the conf the way qbt's `conf_webui` does. A conf at MigrationVersion
+    11 or later (qBittorrent 5.3.0 moved the Web UI settings) holds it as
+    [WebUI] APIKey, an older one as [Preferences] WebUI\\APIKey; only that
+    section counts. The last matching line wins, and a trailing CR goes.
+    Spaces and tabs around the name and the value go too, as QSettings trims
+    them. A missing or unreadable conf, or a key that isn't well-formed, is
+    None.
     """
     if not conf_path:
         return None
@@ -59,17 +62,22 @@ def read_api_key(conf_path):
             lines = f.read().split("\n")
     except OSError:
         return None
-    key = None
-    in_prefs = False
+    values = {}
+    section = None
     for line in lines:
-        if line.startswith("["):
-            in_prefs = re.fullmatch(r"\[Preferences\]\s*", line) is not None
-            continue
         if line.endswith("\r"):
             line = line[:-1]
+        if line.lstrip(" \t").startswith("["):
+            section = line.strip(" \t")
+            continue
         name, sep, value = line.partition("=")
-        if in_prefs and sep and name.strip(" \t") == "WebUI\\APIKey":
-            key = value.strip(" \t")
+        if sep:
+            values[(section, name.strip(" \t"))] = value.strip(" \t")
+    migration = values.get(("[Meta]", "MigrationVersion"), "")
+    if re.fullmatch(r"[0-9]{1,9}", migration) and int(migration) >= 11:
+        key = values.get(("[WebUI]", "APIKey"))
+    else:
+        key = values.get(("[Preferences]", "WebUI\\APIKey"))
     if key is None:
         return None
     return key if _API_KEY_RE.fullmatch(key) else None
